@@ -240,7 +240,7 @@ impl DaemonInvocationBuilder {
             ));
         }
         let descriptor_ref =
-            crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
                 &callee_ura,
                 &descriptor_ref,
             )

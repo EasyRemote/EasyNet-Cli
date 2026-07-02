@@ -21,7 +21,7 @@
 // Use this binary as a manual reproducer when you want to
 // confirm the end-to-end paths work on a fresh checkout. The
 // assertions also live as unit tests in
-// runtime::system_abilities::real_invoke_tests for the deterministic
+// daemon::ability::builtins::real_invoke_tests for the deterministic
 // CI-runnable subset.
 //
 //   cargo run --bin real-user-smoke
@@ -37,6 +37,7 @@ use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+use easynet_cli::daemon::ability::builtins::agents::chat::ContextLoader;
 use easynet_cli::daemon::ability::catalog::{
     build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
     RegistryDaemonBuildConfig,
@@ -47,7 +48,6 @@ use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_lo
 use easynet_cli::runtime::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
-use easynet_cli::runtime::system_abilities::agents::chat::ContextLoader;
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
@@ -78,7 +78,7 @@ impl RuntimeSmoke {
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
         config.pages_identity =
-            easynet_cli::runtime::system_abilities::resources::pages::PagesIdentity::from_env();
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
         config.local_runtime = Some(Arc::clone(&runtime));
         let catalog = build_registry_for_daemon(config);
         Self { runtime, catalog }
@@ -413,7 +413,7 @@ fn main() -> anyhow::Result<()> {
         let schedule_svc =
             Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
         let default_loaders = Arc::new(
-            easynet_cli::runtime::system_abilities::resources::context::loaders::default_loaders(
+            easynet_cli::daemon::ability::builtins::resources::context::loaders::default_loaders(
                 Arc::clone(&schedule_svc),
             ),
         );

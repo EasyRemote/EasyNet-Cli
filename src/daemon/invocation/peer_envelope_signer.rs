@@ -19,14 +19,14 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity, CallerSignature, Envelope, InvokeRequest, SubjectIdentity,
 };
 
+use crate::daemon::axon_bridge::wire_descriptor::{
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
+};
 use crate::daemon::invocation::invocation_wire::{
     try_entity_ref, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::session_initiator::SessionSigningSeed;
-use crate::runtime::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
-};
 
 pub(crate) struct PeerInvokeRequest<'a> {
     caller_envelope: Option<&'a Envelope>,
@@ -234,7 +234,7 @@ pub(crate) fn sign_peer_request_envelope(
         ));
     }
     let descriptor_ref =
-        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
             &callee_ura,
             descriptor_ref,
         )
@@ -299,7 +299,7 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
         .ok_or_else(|| {
             Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
         })?;
-    crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+    crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         callee_ura,
         ability,
         crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,

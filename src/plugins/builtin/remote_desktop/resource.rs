@@ -6,11 +6,11 @@
 
 use serde_json::Value;
 
-use crate::persistence::resources::{ResourceEntry, ResourceType};
-use crate::runtime::ability_dispatch::EnvelopeContext;
-use crate::runtime::system_abilities::resources::media::resource_subject::{
+use crate::daemon::ability::builtins::resources::media::resource_subject::{
     resolve_required_resource_subject, resolve_resource_ura_subject, ResourceSubjectSpec,
 };
+use crate::persistence::resources::{ResourceEntry, ResourceType};
+use crate::runtime::ability_dispatch::EnvelopeContext;
 
 pub(in crate::plugins::builtin::remote_desktop) fn resolve_screen_resource_from_envelope(
     ability: &'static str,

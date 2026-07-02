@@ -366,7 +366,7 @@ impl StreamDispatcher {
                     true,
                     ability,
                 )?;
-                crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     request.arguments.clone(),
@@ -380,7 +380,7 @@ impl StreamDispatcher {
                     false,
                     ability,
                 )?;
-                crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     request.arguments.clone(),
@@ -395,7 +395,7 @@ impl StreamDispatcher {
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, *err))?;
         let mut handle =
-            crate::runtime::axon_bridge::dispatch_shim::open_stream_admitted(runtime, wire)
+            crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(runtime, wire)
                 .await
                 .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
 

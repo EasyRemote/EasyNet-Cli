@@ -13,12 +13,13 @@ make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
     mkdir -p \
-        "$sandbox/src/runtime/system_abilities" \
+        "$sandbox/src/daemon/ability/builtins" \
         "$sandbox/src/daemon/ability/catalog" \
         "$sandbox/src/runtime/executors" \
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/ability" \
         "$sandbox/src/daemon/ability/names" \
+        "$sandbox/src/daemon/axon_bridge" \
         "$sandbox/src/daemon/context" \
         "$sandbox/src/daemon/control" \
         "$sandbox/src/daemon/federation/client" \
@@ -43,9 +44,11 @@ make_sandbox() {
     printf '%s\n' '// cli root' > "$sandbox/src/cli/mod.rs"
     printf '%s\n' '// daemon root' > "$sandbox/src/daemon/mod.rs"
     printf '%s\n' '// daemon ability root' > "$sandbox/src/daemon/ability/mod.rs"
+    printf '%s\n' '// daemon ability builtins root' > "$sandbox/src/daemon/ability/builtins/mod.rs"
     printf '%s\n' '// daemon ability catalog root' > "$sandbox/src/daemon/ability/catalog/mod.rs"
     printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
     printf '%s\n' '// daemon ability names root' > "$sandbox/src/daemon/ability/names/mod.rs"
+    printf '%s\n' '// daemon axon bridge root' > "$sandbox/src/daemon/axon_bridge/mod.rs"
     printf '%s\n' '// daemon context root' > "$sandbox/src/daemon/context/mod.rs"
     printf '%s\n' '// daemon clipboard tracker' > "$sandbox/src/daemon/context/clipboard_tracker.rs"
     printf '%s\n' '// daemon control root' > "$sandbox/src/daemon/control/mod.rs"
@@ -123,6 +126,22 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/ability_names directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/axon_bridge"
+printf '%s\n' '// retired axon bridge root' > "$SB/src/runtime/axon_bridge/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/axon_bridge directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/system_abilities"
+printf '%s\n' '// retired system abilities root' > "$SB/src/runtime/system_abilities/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/system_abilities directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/system_ability_catalog"
 printf '%s\n' '// retired system ability catalog root' > "$SB/src/runtime/system_ability_catalog/mod.rs"
 rc=0
@@ -157,6 +176,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::ability_names import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::axon_bridge::runtime_factory::build_local_runtime; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::axon_bridge import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::system_abilities::agents::chat::register; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::system_abilities import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::system_ability_catalog::build_registry; }' > "$SB/src/lib.rs"

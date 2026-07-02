@@ -8,11 +8,11 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::ability::builtins::resources::media;
 use crate::runtime::plugin_host::manifest::{
     PluginPackageManifest, PluginRealtimeCapability, PluginRealtimeKind, PluginRealtimeMode,
     PluginRealtimeTransport,
 };
-use crate::runtime::system_abilities::resources::media;
 
 /// Runtime readiness for one plugin realtime capability declaration.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]

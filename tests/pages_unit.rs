@@ -33,15 +33,15 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use easynet_axon::invocation::LocalRuntime;
 use serde_json::{json, Value};
 
-use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::runtime::system_abilities::resources::pages::fetch::handle_fetch;
-use easynet_cli::runtime::system_abilities::resources::pages::list_get_unpublish::{
+use easynet_cli::daemon::ability::builtins::resources::pages::fetch::handle_fetch;
+use easynet_cli::daemon::ability::builtins::resources::pages::list_get_unpublish::{
     handle_get, handle_list, handle_unpublish, handle_unpublish_with_registry,
 };
-use easynet_cli::runtime::system_abilities::resources::pages::publish::handle_publish;
-use easynet_cli::runtime::system_abilities::resources::pages::state::PUBLISHED_PROJECTS;
-use easynet_cli::runtime::system_abilities::resources::pages::{self, PagesConfig};
+use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_publish;
+use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
+use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
+use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
+use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::ura;
 use std::sync::Arc;
 

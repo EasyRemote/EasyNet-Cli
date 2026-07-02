@@ -99,6 +99,9 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
+use crate::daemon::axon_bridge::wire_descriptor::{
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
+};
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::federated_key_resolver::{
@@ -120,9 +123,6 @@ use crate::daemon::trust::cell::SharedTrustAnchor;
 use crate::runtime::ability::canonical_json_bytes;
 use crate::runtime::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
-};
-use crate::runtime::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
 use easynet_axon::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvokeRequest, InvokeServerStreamRequest, RateLimitInfo,
@@ -1539,22 +1539,20 @@ fn ensure_signed_descriptor_ref_matches_route(
             Status::invalid_argument("signed descriptor ref route check requires envelope callee")
         })?;
     let signed_ability_ura =
-        crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
             callee_ura,
             descriptor_ref,
         )
         .map_err(axon_error_to_status)
         .and_then(|canonical_ref| {
-            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+            crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
                 &canonical_ref,
             )
             .map_err(axon_error_to_status)
         })?;
-    let routed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
-        callee_ura,
-        route_ability,
-    )
-    .map_err(axon_error_to_status)?;
+    let routed_ability_ura =
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, route_ability)
+            .map_err(axon_error_to_status)?;
     if signed_ability_ura != routed_ability_ura {
         return Err(Status::invalid_argument(format!(
             "signed descriptor ref `{descriptor_ref}` does not match route `{route_ability}` \
@@ -1711,7 +1709,7 @@ mod tests {
     }
 
     fn descriptor_ref_for(callee_ura: &str, ability: &str) -> String {
-        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura, ability, "1.0.0",
         )
         .expect("test descriptor ref")

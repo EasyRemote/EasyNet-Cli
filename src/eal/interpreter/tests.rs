@@ -518,7 +518,7 @@ mod cases {
 
         let agent_id = crate::core::agent_id::AgentId::parse("alice").expect("valid agent id");
         let ability =
-            AbilityName::parse(crate::runtime::system_abilities::agents::chat::ABILITY_VERB)
+            AbilityName::parse(crate::daemon::ability::builtins::agents::chat::ABILITY_VERB)
                 .expect("valid chat ability");
         let err = dispatch_to_agent(
             &registry,

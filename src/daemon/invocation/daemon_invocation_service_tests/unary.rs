@@ -2072,7 +2072,7 @@ async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
     // No SDK admin installed: the runtime admin path must report the
     // missing handler, never fabricate a CLI-side ack. No catalog
     // route is published — `runtime.*` bypasses owner resolution.
-    let rt = crate::runtime::axon_bridge::runtime_factory::build_local_runtime(None, None);
+    let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     let args = r#"{
         "tenant_id":"tenant-a",
@@ -2112,7 +2112,7 @@ async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installe
     // dispatches directly on the LocalRuntime, proving it bypasses
     // owner-presence resolution (the production bug was a hub-owner
     // callee resolving to NXDOMAIN on the device daemon).
-    let rt = crate::runtime::axon_bridge::runtime_factory::build_local_runtime(None, None);
+    let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
     rt.install_bootstrap_self_identity_admin().await.unwrap();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
     let key = SigningKey::from_bytes(&[0x44; 32]);

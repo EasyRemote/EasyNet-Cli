@@ -2,7 +2,7 @@
 //!
 //! This module owns descriptor rendering and descriptor-path resolution for
 //! daemon-owned system abilities. Handler bodies live under
-//! `runtime::system_abilities`; control-plane registration stays under
+//! `daemon::ability::builtins`; control-plane registration stays under
 //! `runtime::ability`.
 
 pub mod ability_toml;

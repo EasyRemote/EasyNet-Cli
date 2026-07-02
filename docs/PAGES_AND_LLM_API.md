@@ -299,9 +299,9 @@ The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat
 
 ### 4.2 Daemon-side runtime
 
-  - `src/runtime/system_abilities/resources/pages/{api.rs, fetch.rs, mod.rs, publish.rs, sandbox.rs, state.rs, mime.rs, list_get_unpublish.rs, identity.rs}` — Pages reference system.
-  - `src/runtime/system_abilities/governance/api_key.rs` — `<user>.api_key.{create,list,revoke}` capability mint/revoke.
-  - `src/runtime/system_abilities/integrations/openai_compat.rs` — `01HUB.openai.{chat_completions,list_models}` adapters.
+  - `src/daemon/ability/builtins/resources/pages/{api.rs, fetch.rs, mod.rs, publish.rs, sandbox.rs, state.rs, mime.rs, list_get_unpublish.rs, identity.rs}` — Pages reference system.
+  - `src/daemon/ability/builtins/governance/api_key.rs` — `<user>.api_key.{create,list,revoke}` capability mint/revoke.
+  - `src/daemon/ability/builtins/integrations/openai_compat.rs` — `01HUB.openai.{chat_completions,list_models}` adapters.
   - `src/runtime/hub/{pages_listener.rs, pages_serve_ability.rs}` — HTTP boundary on axum, routes `/v1/*` and `*.*.pages.<realm>/*`.
   - `src/runtime/ability_dispatch.rs` — `chain_rpc_fallback` (resolver chaining), `list_rpc_names` (used by `list_models`), `resolve_rpc` (used by adapter).
   - `src/runtime/workspace.rs` — `write_pages_author_seed` + `write_ability_author_seed` (skill seeding into every agent workspace).

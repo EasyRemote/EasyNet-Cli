@@ -488,7 +488,7 @@ pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
 // logic without a corresponding gain.
 //
 // The former MCP mission handler bypass has been collapsed onto this entry:
-// `runtime::system_abilities::automation::mission` and `runtime::executors::eal` both
+// `daemon::ability::builtins::automation::mission` and `runtime::executors::eal` both
 // delegate here. Keep this comment in sync with the grep invariant above; a
 // second production mission execution path is a release blocker, not a TODO.
 

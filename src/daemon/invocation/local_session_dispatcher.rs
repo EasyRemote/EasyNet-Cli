@@ -299,7 +299,7 @@ impl LocalAxonSessionDispatcher {
                 .descriptor_ref_for_mode("carrier-v1 DispatchCall", &target_ura, call_mode, None)
                 .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?,
         };
-        let wire = crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+        let wire = crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
             envelope,
             descriptor_ref.into_descriptor_ref(),
             request.arguments,
@@ -327,7 +327,7 @@ impl LocalAxonSessionDispatcher {
         }
 
         let outcome =
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_admitted(&runtime, wire).await;
+            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(&runtime, wire).await;
 
         if outbound.carrier_v1() {
             let failure = outcome
@@ -365,9 +365,7 @@ impl LocalAxonSessionDispatcher {
                 })?;
         } else {
             let (payload, error) =
-                crate::runtime::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(
-                    outcome,
-                );
+                crate::daemon::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
             let result = SessionDispatch::Result {
                 call_id,
                 payload,
@@ -406,7 +404,7 @@ impl LocalAxonSessionDispatcher {
     async fn handle_carrier_v1_stream_open(
         &self,
         call_id: u64,
-        wire: crate::runtime::axon_bridge::dispatch_shim::WireDispatch,
+        wire: crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
         use easynet_axon::pb::axon::v1::DispatchResult as PbDispatchResult;
@@ -417,7 +415,7 @@ impl LocalAxonSessionDispatcher {
             ));
         };
         let handle =
-            match crate::runtime::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
+            match crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
                 .await
             {
                 Ok(handle) => handle,
@@ -819,7 +817,7 @@ impl LocalAxonSessionDispatcher {
         let runtime = self.local_runtime.as_ref()?;
         let callee = Self::non_empty_ura(callee_ura)?;
         let runtime_ability =
-            crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee, ability)
+            crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee, ability)
                 .ok()?;
         if !runtime.has_ability(&runtime_ability).await {
             return None;
@@ -901,7 +899,7 @@ impl LocalAxonSessionDispatcher {
                     ));
                 }
             };
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc(runtime, wire).await
+            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc(runtime, wire).await
         } else {
             let Some(callee) = Self::non_empty_ura(callee_ura) else {
                 return Some(Self::session_error_result(
@@ -913,7 +911,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(subject) => subject,
                 Err(err) => return Some(Self::session_error_result(call_id, err)),
             };
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
+            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
                 runtime,
                 callee,
                 subject.as_str(),
@@ -924,7 +922,7 @@ impl LocalAxonSessionDispatcher {
         };
         let request_id = outcome.invocation_id.clone();
         let (payload, error) =
-            crate::runtime::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
+            crate::daemon::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
         let failure = error.as_ref().map(|reason| Self::session_failure(reason));
         Some(SessionDispatch::Result {
             call_id,
@@ -954,7 +952,7 @@ impl LocalAxonSessionDispatcher {
             Err(err) => return Some(Err(err)),
         };
         let runtime_ability =
-            match crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee, ability)
+            match crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee, ability)
             {
                 Ok(runtime_ability) => runtime_ability,
                 Err(err) => return Some(Err(format!("open_stream_via_axon: {err}"))),
@@ -969,7 +967,7 @@ impl LocalAxonSessionDispatcher {
             ability = ability,
             runtime_ability = runtime_ability.as_str(),
         );
-        let opened = crate::runtime::axon_bridge::dispatch_shim::open_stream_local_with_subject(
+        let opened = crate::daemon::axon_bridge::dispatch_shim::open_stream_local_with_subject(
             runtime,
             callee,
             subject.as_str(),
@@ -1266,7 +1264,7 @@ impl LocalAxonSessionDispatcher {
         ability: &str,
         value: &Value,
     ) -> Result<Option<SessionDispatch>, SessionDispatchError> {
-        if ability == crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
+        if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
             return Self::map_remote_pty_output(call_id, value);
         }
         if Self::is_json_frame_bidi_with(registry, ability) {
@@ -1408,7 +1406,7 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let wire = match crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+        let wire = match crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
             envelope,
             descriptor_ref.into_descriptor_ref(),
             request.arguments,
@@ -1427,23 +1425,24 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let handle =
-            match crate::runtime::axon_bridge::dispatch_shim::open_bidi_admitted(runtime, wire)
-                .await
-            {
-                Ok(handle) => handle,
-                Err(err) => {
-                    return Self::send_bidi_result(
-                        outbound,
-                        &Self::session_error_result(
-                            call_id,
-                            format!("session.open: remote bidi open failed: {err}"),
-                        ),
-                        None,
-                    )
-                    .await;
-                }
-            };
+        let handle = match crate::daemon::axon_bridge::dispatch_shim::open_bidi_admitted(
+            runtime, wire,
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                return Self::send_bidi_result(
+                    outbound,
+                    &Self::session_error_result(
+                        call_id,
+                        format!("session.open: remote bidi open failed: {err}"),
+                    ),
+                    None,
+                )
+                .await;
+            }
+        };
         self.register_remote_bidi(call_id, &ability, handle, outbound);
         Ok(())
     }
@@ -1572,7 +1571,7 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_local_with_subject(
+        let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_local_with_subject(
             runtime,
             callee,
             subject.as_str(),
@@ -1780,7 +1779,7 @@ impl LocalAxonSessionDispatcher {
                 json!({"type": "eof"})
             }
         } else if active.ability
-            == crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH
+            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH
             || self.is_json_frame_bidi(&active.ability)
         {
             serde_json::from_slice::<Value>(&payload).map_err(|err| {
@@ -2107,7 +2106,7 @@ mod tests {
     fn session_bidi_gate_recognizes_core_browser_attach_wire() {
         let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
         let ability =
-            crate::runtime::system_abilities::device_control::browser::ABILITY_ATTACH_SESSION;
+            crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
 
         assert!(local_is_bidi_wire_ability(&registry, ability));
         assert!(LocalAxonSessionDispatcher::is_json_frame_bidi_with(
@@ -2129,7 +2128,7 @@ mod tests {
     const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
 
     fn runtime_ability_for(callee_ura: &str, ability: &str) -> String {
-        crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
             .expect("test ability must resolve to canonical Ability URA")
     }
 
@@ -2258,18 +2257,18 @@ mod tests {
         .expect("valid carrier-v1 envelope")
         .into_inner();
         let signed_descriptor_ref =
-            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 TEST_DEVICE_URA,
                 signed_ability,
                 TEST_DESCRIPTOR_VERSION,
             )
             .expect("carrier-v1 test signed ability must resolve to a descriptor ref");
         let descriptor_bound =
-            crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
                 signed_descriptor_ref.clone(),
                 &args,
-                crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+                crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
             )
             .expect("descriptor-bound carrier-v1 envelope");
         let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
@@ -2338,7 +2337,7 @@ mod tests {
         disp.handle_down(
             carrier_v1_bidi_open(
                 77,
-                crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER,
+                crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
                 args,
             ),
             &session_tx,
@@ -2523,7 +2522,7 @@ mod tests {
         let session_tx = SessionUpSender::new(tx);
         session_tx.set_negotiated_contract(1);
         let signed_ability =
-            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 TEST_DEVICE_URA,
                 "test.echo",
                 TEST_DESCRIPTOR_VERSION_V2,
@@ -3538,7 +3537,7 @@ mod tests {
                 call_id: 77,
                 callee_ura: Some("easynet:///r/t/device/d1".to_string()),
                 subject_ura: Some("easynet:///r/t/device/d1".to_string()),
-                ability: crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER
+                ability: crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "upload",
@@ -3752,7 +3751,7 @@ mod tests {
                 call_id: 88,
                 callee_ura: Some("easynet:///r/t/device/d1".to_string()),
                 subject_ura: Some("easynet:///r/t/device/d1".to_string()),
-                ability: crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER
+                ability: crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "download",
@@ -3839,7 +3838,7 @@ mod tests {
                 call_id: 89,
                 callee_ura: Some("easynet:///r/t/device/d1".to_string()),
                 subject_ura: Some("easynet:///r/t/device/d1".to_string()),
-                ability: crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER
+                ability: crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
                     .to_string(),
                 args: serde_json::to_vec(&json!({
                     "mode": "download",

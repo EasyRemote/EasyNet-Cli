@@ -24,7 +24,7 @@ runtime semantics, these sources are higher priority:
    directory/listing complexity, facade rules, and aggregate fan-out state
    machines.
 3. `src/runtime/ability/mod.rs`, `src/runtime/ability_dispatch.rs`,
-   `src/runtime/ability_wire.rs`, and `src/runtime/axon_bridge/` for the current
+   `src/runtime/ability_wire.rs`, and `src/daemon/axon_bridge/` for the current
    daemon-side split among AbilityDescriptor, AuthorityBinding, AbilityImpl,
    dispatch compatibility, wire-profile lookup, and Axon glue.
 4. `src/daemon/control/` for local boot/status IPC, `src/daemon/invocation/`
@@ -55,7 +55,7 @@ owners already exist:
   handler registration path, not a new protocol layer.
 - `runtime/ability_wire.rs` owns daemon wire-profile lookup for bidi/session
   bridges.
-- `runtime/axon_bridge/` is glue to Axon SDK types and must not grow EasyNet
+- `daemon/axon_bridge/` is glue to Axon SDK types and must not grow EasyNet
   product policy.
 
 Fix: this spec now treats product handler grouping as source organization only.
@@ -71,9 +71,9 @@ that module name and blurred two concepts:
 
 - agent-published ability specs, now in `runtime/agent_ability_specs.rs`;
 - daemon-owned/system ability handler implementations, now in
-  `runtime/system_abilities/`.
+  `daemon/ability/builtins/`.
 
-Fix: the migration product-handler directory is `runtime/system_abilities/`,
+Fix: the migration product-handler directory is `daemon/ability/builtins/`,
 not `runtime/abilities/`. Clean Final uses `src/daemon/ability/builtins/`.
 The old `runtime/abilities.rs` compatibility re-export has been retired; new
 production code must import `runtime/agent_ability_specs.rs` directly.
@@ -172,7 +172,7 @@ stable cross-module core contract.
    daemon product/device policy and local execution.
 5. `runtime/ability/` remains the owner of daemon-local AbilityDescriptor,
    AuthorityBinding, and AbilityImpl registration.
-6. `runtime/system_abilities/` owns daemon-owned ability handlers only.
+6. `daemon/ability/builtins/` owns daemon-owned ability handlers only.
 7. `runtime/agents/` was the temporary compatibility facade during migration;
    it is now retired and must not return.
 8. `runtime/agent_ability_specs.rs` owns locally registered agent ability specs;
@@ -200,12 +200,12 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `runtime/ability_dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
 | `runtime/ability_wire.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
 | `daemon/ability/catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
-| `runtime/system_abilities/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
+| `daemon/ability/builtins/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
 | `runtime/executors/` | reusable execution engines used by handlers or manifest-bound abilities | public ability registration |
 | `runtime/execution/` | stateful runtime services such as PTY, schedule, loop, permission, session, MCP execution state | descriptor identity, facade rendering |
 | `runtime/resources/` | resource models and shared resource projection helpers | product ability handler bodies |
 | `runtime/plugin_host/` | plugin manifest parsing, install/activation, sidecar protocol, runtime contribution registration | core Ability ontology |
-| `runtime/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
+| `daemon/axon_bridge/` | Axon SDK glue and wire/type adapters | EasyNet product policy, plugin lifecycle decisions |
 | `daemon/federation/read_model/` | federation resolver/catalog read models such as advertised agents, owner ability projections, and hub-published abilities | Axon protocol authority, transport dialing, product handler bodies |
 | `daemon/ability/` | daemon-owned ability support services such as manifest ability health monitoring | AbilityDescriptor ontology, handler implementation bodies, plugin process ownership |
 | `daemon/ability/names/` | stable public Ability wire-name constants and stable public metadata keys | private reason strings, test fixtures, env vars |
@@ -475,16 +475,6 @@ src/runtime/
 ├─ ability_dispatch.rs
 ├─ ability_descriptor.rs
 ├─ ability_wire.rs
-├─ axon_bridge/
-├─ system_abilities/
-│  ├─ mod.rs
-│  ├─ agents/
-│  ├─ device_control/
-│  ├─ resources/
-│  ├─ automation/
-│  ├─ integrations/
-│  └─ governance/
-├─ agents/
 ├─ agent_ability_specs.rs
 ├─ executors/
 ├─ execution/
@@ -497,28 +487,37 @@ src/runtime/
 
 ```text
 src/daemon/
-└─ ability/
-   ├─ catalog/
-   │  ├─ mod.rs
-   │  ├─ build.rs
-   │  ├─ catalog_metadata.rs
-   │  ├─ profiles/
-   │  ├─ ability_toml.rs
-   │  └─ system_manifest.rs
-   ├─ health.rs
-   └─ names/
+├─ ability/
+│  ├─ catalog/
+│  │  ├─ mod.rs
+│  │  ├─ build.rs
+│  │  ├─ catalog_metadata.rs
+│  │  ├─ profiles/
+│  │  ├─ ability_toml.rs
+│  │  └─ system_manifest.rs
+│  ├─ builtins/
+│  │  ├─ mod.rs
+│  │  ├─ agents/
+│  │  ├─ device_control/
+│  │  ├─ resources/
+│  │  ├─ automation/
+│  │  ├─ integrations/
+│  │  └─ governance/
+│  ├─ health.rs
+│  └─ names/
+└─ axon_bridge/
 ```
 
 Notes:
 
 - `runtime/ability_runtime/` must not be introduced. It duplicates the existing
   `runtime/ability/`, `ability_dispatch.rs`, `ability_wire.rs`, and
-  `axon_bridge/` ownership split.
-- `runtime/system_abilities/` is used instead of `runtime/abilities/` to avoid
+  `daemon/axon_bridge/` ownership split.
+- `daemon/ability/builtins/` is used instead of `runtime/abilities/` to avoid
   reintroducing the retired agent-ability-specs module name and to state that
   these are daemon-owned/system handlers.
 - `runtime/agents/` is retired after handlers move. New handlers must land in
-  `runtime/system_abilities/`.
+  `daemon/ability/builtins/`.
 - `runtime/abilities.rs` has become `runtime/agent_ability_specs.rs`; the
   `runtime::abilities` compatibility export is retired and must not return.
 
@@ -616,12 +615,12 @@ Rules:
 
 ## System Ability Handler Boundaries
 
-`runtime/system_abilities/` owns daemon-owned/system ability handlers.
+`daemon/ability/builtins/` owns daemon-owned/system ability handlers.
 
 Target grouping:
 
 ```text
-src/runtime/system_abilities/
+src/daemon/ability/builtins/
 ├─ agents/
 │  ├─ chat.rs
 │  ├─ chat_history.rs
@@ -718,7 +717,7 @@ Disallowed content:
 - Axon Invocation tuple construction;
 - plugin sidecar process ownership.
 
-The catalog may depend on `runtime/system_abilities/*` registration functions.
+The catalog may depend on `daemon/ability/builtins/*` registration functions.
 Handlers may not depend back on `daemon/ability/catalog/` except through narrow
 types needed for registration.
 
@@ -1000,28 +999,28 @@ These can move with compatibility re-exports and local tests:
 
 ```text
 src/runtime/agents/ping.rs
-  -> src/runtime/system_abilities/governance/health.rs
+  -> src/daemon/ability/builtins/governance/health.rs
 
 src/runtime/agents/admin_status_ability.rs
-  -> src/runtime/system_abilities/governance/admin_status.rs
+  -> src/daemon/ability/builtins/governance/admin_status.rs
 
 src/runtime/agents/network_health_ability.rs
-  -> src/runtime/system_abilities/governance/network_health.rs
+  -> src/daemon/ability/builtins/governance/network_health.rs
 
 src/runtime/agents/agent_list_ability.rs
-  -> src/runtime/system_abilities/agents/list.rs
+  -> src/daemon/ability/builtins/agents/list.rs
 
 src/runtime/agents/a2a_bridge_ability.rs
-  -> src/runtime/system_abilities/integrations/a2a/bridge.rs
+  -> src/daemon/ability/builtins/integrations/a2a/bridge.rs
 
 src/runtime/agents/a2a_client_ability.rs
-  -> src/runtime/system_abilities/integrations/a2a/client.rs
+  -> src/daemon/ability/builtins/integrations/a2a/client.rs
 
 src/runtime/agents/mcp_client_ability.rs
-  -> src/runtime/system_abilities/integrations/mcp/client.rs
+  -> src/daemon/ability/builtins/integrations/mcp/client.rs
 
 src/runtime/agents/federation_probe.rs
-  -> src/runtime/system_abilities/integrations/federation_probe.rs
+  -> src/daemon/ability/builtins/integrations/federation_probe.rs
 ```
 
 Catalog-only moves:
@@ -1249,7 +1248,7 @@ Do not move descriptor contract files while code still hard-codes
    `daemon::ability::names`.
 5. Rename `runtime/abilities.rs` to `runtime/agent_ability_specs.rs`, then
    retire the `runtime::abilities` compatibility re-export after callers move.
-6. Add `runtime/system_abilities/` and `daemon/ability/catalog/`
+6. Add `daemon/ability/builtins/` and `daemon/ability/catalog/`
    skeletons.
 7. Freeze `runtime/agents/` as compatibility facade, move callers, then retire
    the compatibility module once production imports stop using it.
@@ -1329,7 +1328,7 @@ Code and structure:
    phase.
 4. New production imports do not use compatibility paths.
 5. `runtime/ability_runtime/` is not introduced.
-6. `runtime/system_abilities/` does not collide with or reintroduce the retired
+6. `daemon/ability/builtins/` does not collide with or reintroduce the retired
    `runtime/abilities.rs` path.
 7. `runtime/agents/` is absent after the retirement phase.
 

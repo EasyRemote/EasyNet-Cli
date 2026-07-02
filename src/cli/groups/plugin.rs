@@ -407,14 +407,14 @@ fn notify_daemon_reload() -> anyhow::Result<()> {
 
 fn invoke_plugin_reload() -> anyhow::Result<Option<serde_json::Value>> {
     invoke_plugin_control_ability(
-        crate::runtime::system_abilities::integrations::plugins::RELOAD_ABILITY,
+        crate::daemon::ability::builtins::integrations::plugins::RELOAD_ABILITY,
         serde_json::json!({}),
     )
 }
 
 fn invoke_plugin_status() -> anyhow::Result<Option<PluginSurfaceReport>> {
     let Some(value) = invoke_plugin_control_ability(
-        crate::runtime::system_abilities::integrations::plugins::STATUS_ABILITY,
+        crate::daemon::ability::builtins::integrations::plugins::STATUS_ABILITY,
         serde_json::json!({}),
     )?
     else {
@@ -432,7 +432,7 @@ fn invoke_plugin_activate_realtime(
         body["package_version"] = serde_json::json!(version);
     }
     let Some(value) = invoke_plugin_control_ability(
-        crate::runtime::system_abilities::integrations::plugins::ACTIVATE_REALTIME_ABILITY,
+        crate::daemon::ability::builtins::integrations::plugins::ACTIVATE_REALTIME_ABILITY,
         body,
     )?
     else {

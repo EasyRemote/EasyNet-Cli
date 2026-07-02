@@ -11,13 +11,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    capture_rgb_with_xcap, rgba_bytes_to_rgb_frame, ScreenCaptureOptions,
+};
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::media::encode::{
     build_openh264_encoder, even_rgb_frame, latest_recorder_frame, write_h264_sample,
     BuiltinH264Config,
-};
-use crate::runtime::system_abilities::resources::media::screen_snapshot::{
-    capture_rgb_with_xcap, rgba_bytes_to_rgb_frame, ScreenCaptureOptions,
 };
 
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;

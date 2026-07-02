@@ -18,7 +18,7 @@
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::runtime::system_abilities::governance::api_key;
+use crate::daemon::ability::builtins::governance::api_key;
 use crate::support::local_invoke::invoke_local_ability;
 
 #[derive(Debug, Args)]

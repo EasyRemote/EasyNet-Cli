@@ -14,6 +14,7 @@ use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::PeerConnection;
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::plugins::remote_desktop::media::native::{
@@ -27,7 +28,6 @@ use crate::plugins::remote_desktop::screencapturekit_capture::{
 use crate::plugins::remote_desktop::session::now_ms;
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
-use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenCaptureOptions;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
 ///

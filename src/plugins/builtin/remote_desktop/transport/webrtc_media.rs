@@ -12,6 +12,9 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::Track;
 use webrtc::peer_connection::PeerConnection;
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    open_display_recorder_with_xcap, ScreenCaptureOptions,
+};
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -21,9 +24,6 @@ use crate::plugins::remote_desktop::transport::webrtc_baseline_media::{
 #[cfg(target_os = "macos")]
 use crate::plugins::remote_desktop::transport::webrtc_native_media::{
     run_direct_webrtc_native_stream, NativeMediaInputs,
-};
-use crate::runtime::system_abilities::resources::media::screen_snapshot::{
-    open_display_recorder_with_xcap, ScreenCaptureOptions,
 };
 
 /// Owned per-session context handed to the media loop's dedicated thread.

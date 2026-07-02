@@ -146,7 +146,7 @@ echo "Rule 3 — MCP only inside profile projection, integration modules, and CL
 #   * daemon/ability/catalog/profiles/mcp.rs
 #                                               — owns InvokeMcpProvider
 #                                                 + tool spec projection.
-#   * runtime/system_abilities/integrations/mcp/**
+#   * daemon/ability/builtins/integrations/mcp/**
 #                                               — owns MCP bridge/client
 #                                                 ability handlers and
 #                                                 reflective registry.
@@ -158,7 +158,7 @@ count_pattern "MCP keyword in CLI src (case-insensitive)" \
   '(?i)\bmcp\b' \
   "$SRC" \
   "**/daemon/ability/catalog/profiles/mcp.rs" \
-  "**/runtime/system_abilities/integrations/mcp/**" \
+  "**/daemon/ability/builtins/integrations/mcp/**" \
   "**/cli/mcp_server.rs" \
   "**/cli/start.rs"
 

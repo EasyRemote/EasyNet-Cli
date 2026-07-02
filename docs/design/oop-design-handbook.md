@@ -321,7 +321,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 ## 4. 能力层
 
-本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。当前实现落在 `src/runtime/system_abilities/`、`src/runtime/system_ability_catalog/`、`src/runtime/executors/` 与 `src/runtime/ability_dispatch.rs`；旧 `runtime::agents` 兼容 facade 已退休。
+本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。当前实现落在 `src/daemon/ability/builtins/`、`src/daemon/ability/catalog/`、`src/runtime/executors/` 与 `src/runtime/ability_dispatch.rs`；旧 `runtime::agents` 兼容 facade 已退休。
 
 ### 4.1 中央派发枢纽
 
@@ -358,10 +358,10 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | trait | 角色 | 实现 | 文件:行 |
 |---|---|---|---|
-| `ContextLoader` | 可插拔 chat 上下文贡献者：`name()` + `load(agent, session) -> Option<String>` | UserProfileLoader / ScheduleLoader / MemoryLoader | `src/runtime/system_abilities/agents/chat.rs:132` |
-| `DiscoverFederationResolver` | discover ladder 与 realm directory 之间的依赖边界 | Bridge / Deferred / LocalDirectory 三实现 | `src/runtime/system_abilities/agents/discover.rs:110` |
-| `TeachClock` | teach grant 事务的确定性时间 seam | —— | `src/runtime/system_abilities/governance/teach.rs:59` |
-| `DeviceOpsClock` | device op 事务的 boot-timestamp seam | —— | `src/runtime/system_abilities/device_control/ability_management/ops.rs:72` |
+| `ContextLoader` | 可插拔 chat 上下文贡献者：`name()` + `load(agent, session) -> Option<String>` | UserProfileLoader / ScheduleLoader / MemoryLoader | `src/daemon/ability/builtins/agents/chat.rs:132` |
+| `DiscoverFederationResolver` | discover ladder 与 realm directory 之间的依赖边界 | Bridge / Deferred / LocalDirectory 三实现 | `src/daemon/ability/builtins/agents/discover.rs:110` |
+| `TeachClock` | teach grant 事务的确定性时间 seam | —— | `src/daemon/ability/builtins/governance/teach.rs:59` |
+| `DeviceOpsClock` | device op 事务的 boot-timestamp seam | —— | `src/daemon/ability/builtins/device_control/ability_management/ops.rs:72` |
 | `AcquiringArtifactTxn` | 两阶段 descriptor 暂存 commit/rollback | manifest provisioning | `src/persistence/teach_grants.rs:266` |
 
 **ContextLoader 是正确的扩展点：** 未来 loader（memory、project folders）实现它即可，无需改 `chat_ability.rs`。Registry 把 `Arc<Vec<Arc<dyn ContextLoader>>>` 传进每个 chat handler。
@@ -374,9 +374,9 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/runtime/system_ability_catalog/build.rs:243` |
-| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `src/runtime/system_ability_catalog/build.rs:155` |
-| `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/runtime/axon_bridge/hot_agent_registrar.rs:160` |
+| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/daemon/ability/catalog/build.rs:243` |
+| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `src/daemon/ability/catalog/build.rs:155` |
+| `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/daemon/axon_bridge/hot_agent_registrar.rs:160` |
 
 **late-binding 解决 bootstrap 鸡生蛋：** `local_registry_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>`——handler 闭合在 `OnceLock` 而非 `Arc` 本身，使 handler 注册可以先于 catalog 被 `Arc::new` 包裹。`HotAgentRegistrar` 是 phase-5c"内存里注册 agent"与 phase-6"持久化 descriptor 元数据"之间的桥；把它放在 `axon_bridge/` 强调 **LocalRuntime 才是可用性的真理源，AxonAbilityCatalog 是元数据 + 派发**。
 
@@ -386,7 +386,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 > **本章诚实声明：** 传输层是 pre-refactor 状态。生命周期逻辑在三种几何形态（unary / stream / bidi）间**重复**；`InvocationLifecycle` sink 收敛重构**仍在飞行中**。本章描述今日代码，不是终局。这正是第 9 章"坏味道"的最大一条。
 
-落在 `src/services/invocation_transport/`。
+落在 `src/daemon/invocation/`。
 
 ### 5.1 根服务与依赖平面
 
@@ -661,7 +661,7 @@ CLI 的 `axon-pb` feature（默认开）门控 `easynet-axon/grpc`。Cargo 注�
 
 ### 8.2 re-export / import 面
 
-CLI 从 `easynet_axon::invocation::{LocalRuntime, CausalContext, ReceiptRef, CallerSignature, CallMode, AgentIdentity, SubjectIdentity, UraProfile, InvocationState, InvocationLedger, AbilityChangeEvent, axiom::{AuthorityBinding, CanonicalAbilityDescriptor, InvocationUsage}, audit::{HostedAgentReceiptHeader, SigningModel}, persistence::PersistentLog}` 以及 crate-root `easynet_axon::{AxonError, AxonResult}` import 一切线缆形类型。~40+ import site 散布于 `runtime/`（ability_dispatch、kernel、dispatch_receipt、axon_bridge/*）、`services/invocation_transport/`、`daemon/`、`ffi/`。
+CLI 从 `easynet_axon::invocation::{LocalRuntime, CausalContext, ReceiptRef, CallerSignature, CallMode, AgentIdentity, SubjectIdentity, UraProfile, InvocationState, InvocationLedger, AbilityChangeEvent, axiom::{AuthorityBinding, CanonicalAbilityDescriptor, InvocationUsage}, audit::{HostedAgentReceiptHeader, SigningModel}, persistence::PersistentLog}` 以及 crate-root `easynet_axon::{AxonError, AxonResult}` import 一切线缆形类型。~40+ import site 散布于 `runtime/`（ability_dispatch、kernel、dispatch_receipt）、`daemon/axon_bridge/`、`daemon/invocation/`、`daemon/`、`ffi/`。
 
 ### 8.3 投影方法（CLI 类型 → Axon 类型，重算规范哈希）
 

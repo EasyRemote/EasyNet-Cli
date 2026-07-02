@@ -12,7 +12,7 @@ fail() {
     exit 1
 }
 
-SKILL_RS="src/runtime/system_abilities/resources/skills/list.rs"
+SKILL_RS="src/daemon/ability/builtins/resources/skills/list.rs"
 
 [[ -f "$SKILL_RS" ]] || fail "missing $SKILL_RS"
 

@@ -25,7 +25,7 @@
 #
 # Why a daemon-level smoke instead of just a Rust integration test?
 # -----------------------------------------------------------------
-# The Rust tests in src/runtime/system_abilities/agents/chat.rs cover the
+# The Rust tests in src/daemon/ability/builtins/agents/chat.rs cover the
 # handler logic in isolation. This script exercises the entire IPC
 # plane — CLI argument mapping, daemon.sock admission, Axon
 # LocalRuntime dispatch, and the daemon-hosted chat ability. A

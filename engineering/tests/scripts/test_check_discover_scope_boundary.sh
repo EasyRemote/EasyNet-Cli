@@ -12,8 +12,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/runtime/system_abilities/agents"
-    cp "$REPO_ROOT/src/runtime/system_abilities/agents/discover.rs" "$sandbox/src/runtime/system_abilities/agents/discover.rs"
+    mkdir -p "$sandbox/src/daemon/ability/builtins/agents"
+    cp "$REPO_ROOT/src/daemon/ability/builtins/agents/discover.rs" "$sandbox/src/daemon/ability/builtins/agents/discover.rs"
     echo "$sandbox"
 }
 
@@ -27,28 +27,28 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: discover scope b
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/&\["self", "device", "user", "public"\]/&["self", "device", "user", "public", "easynet"]/' "$SB/src/runtime/system_abilities/agents/discover.rs"
+perl -0pi -e 's/&\["self", "device", "user", "public"\]/&["self", "device", "user", "public", "easynet"]/' "$SB/src/daemon/ability/builtins/agents/discover.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "scope enum with easynet alias should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/"user" => Ok\(Scope::User\),/"easynet" | "user" => Ok(Scope::User),/' "$SB/src/runtime/system_abilities/agents/discover.rs"
+perl -0pi -e 's/"user" => Ok\(Scope::User\),/"easynet" | "user" => Ok(Scope::User),/' "$SB/src/daemon/ability/builtins/agents/discover.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "parser accepting easynet alias should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-echo '// `easynet` is retained as a back-compat alias for `user`.' >> "$SB/src/runtime/system_abilities/agents/discover.rs"
+echo '// `easynet` is retained as a back-compat alias for `user`.' >> "$SB/src/daemon/ability/builtins/agents/discover.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "schema description advertising alias should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -ni -e 'print unless /parse_scope\(&json!\(\{"scope": "easynet"\}\)\)\.is_err\(\)/' "$SB/src/runtime/system_abilities/agents/discover.rs"
+perl -ni -e 'print unless /parse_scope\(&json!\(\{"scope": "easynet"\}\)\)\.is_err\(\)/' "$SB/src/daemon/ability/builtins/agents/discover.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

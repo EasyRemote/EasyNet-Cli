@@ -207,12 +207,12 @@ impl RemoteAbilityInvocationTarget {
         let canonical = easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref)
             .map_err(|err| anyhow!("invalid descriptor-bound Ability ref: {err}"))?;
         let ability_ura =
-            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
-                &canonical,
-            )
-            .map_err(|err| anyhow!("descriptor-bound Ability ref is missing ability URA: {err}"))?;
+            crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(&canonical)
+                .map_err(|err| {
+                    anyhow!("descriptor-bound Ability ref is missing ability URA: {err}")
+                })?;
         let descriptor_version =
-            crate::runtime::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref(
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref(
                 &canonical,
             )
             .map_err(|err| {
@@ -735,7 +735,7 @@ fn device_origin_claim(
         Err(_) => crate::ura::owner_ability_ura(&callee_ura, &public_ability)?,
     };
     let subject = SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
-    let ability = crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+    let ability = crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         &callee_ura,
         &public_ability,
         descriptor_version,
@@ -1068,7 +1068,7 @@ mod tests {
             .try_into()
             .expect("32 bytes");
         let verifying = VerifyingKey::from_bytes(&pubkey).expect("verifying key");
-        let crate::runtime::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(
+        let crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(
             caller_signature,
         ) = &wire.ingress
         else {

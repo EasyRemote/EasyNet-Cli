@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend,
+};
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED,
@@ -25,9 +28,6 @@ use crate::plugins::remote_desktop::request::AttachEncoding;
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::plugins::remote_desktop::transport::BidiTerminalGuard;
 use crate::runtime::ability_dispatch::BidiOutputFrame;
-use crate::runtime::system_abilities::resources::media::screen_snapshot::{
-    EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend,
-};
 
 pub(in crate::plugins::builtin::remote_desktop) struct BidiCaptureWorkerConfig {
     pub(in crate::plugins::builtin::remote_desktop) session_store: Arc<RemoteDesktopSessionStore>,

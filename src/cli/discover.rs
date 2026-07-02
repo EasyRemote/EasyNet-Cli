@@ -543,7 +543,7 @@ struct DiscoverLadderTarget {
 impl DiscoverLadderTarget {
     fn device_aggregate() -> Self {
         Self {
-            ability: crate::runtime::system_abilities::agents::discover::DEVICE_DISCOVER_ABILITY
+            ability: crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY
                 .to_string(),
             callee_agent: None,
         }
@@ -551,7 +551,7 @@ impl DiscoverLadderTarget {
 
     fn hosted_agent(agent: impl Into<String>) -> Self {
         Self {
-            ability: crate::runtime::system_abilities::agents::discover::ABILITY_VERB.to_string(),
+            ability: crate::daemon::ability::builtins::agents::discover::ABILITY_VERB.to_string(),
             callee_agent: Some(agent.into()),
         }
     }
@@ -949,7 +949,7 @@ fn fetch_invocation_record_by_request_id(request_id: &str) -> anyhow::Result<Opt
     // in-process ledger and writes no row, so realm-anchor resolution does not
     // append a second invocation to the trail it is anchoring against.
     let response = invoke_local_ability(
-        crate::runtime::system_abilities::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
+        crate::daemon::ability::builtins::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
         serde_json::json!({ "request_id": request_id }),
     )
     .with_context(|| format!("poll invocation ledger for request_id {request_id}"))?;

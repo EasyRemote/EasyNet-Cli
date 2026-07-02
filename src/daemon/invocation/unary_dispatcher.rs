@@ -91,9 +91,9 @@ use tokio_stream::wrappers::ReceiverStream;
 fn rpc_dispatch_outcome_response(
     ability: &str,
     failure_prefix: &str,
-    outcome: crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome,
+    outcome: crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome,
 ) -> (Result<Response<InvokeResponse>, Status>, bool) {
-    let crate::runtime::axon_bridge::dispatch_shim::RpcDispatchOutcome {
+    let crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome {
         invocation_id,
         payload_bytes,
         error,
@@ -499,7 +499,7 @@ impl UnaryDispatcher {
                     Ok(metadata) => metadata,
                     Err(status) => return (Err(status), false),
                 };
-                crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     arguments.to_vec(),
@@ -516,7 +516,7 @@ impl UnaryDispatcher {
                     Ok(metadata) => metadata,
                     Err(status) => return (Err(status), false),
                 };
-                crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
                     selected_descriptor_ref,
                     arguments.to_vec(),
@@ -539,7 +539,7 @@ impl UnaryDispatcher {
             }
         };
         let outcome =
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_admitted(runtime, wire).await;
+            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(runtime, wire).await;
         rpc_dispatch_outcome_response(ability, "ability", outcome)
     }
 
@@ -577,7 +577,7 @@ impl UnaryDispatcher {
         // proof). Dispatch by the bare registered name — the descriptor-
         // bound wire path would canonicalize to a device-owned URA the
         // runtime never registered and demand a proof the handler lacks.
-        let outcome = crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_admin_bare(
+        let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_admin_bare(
             runtime,
             ability,
             request.arguments.clone(),
@@ -1831,7 +1831,7 @@ impl UnaryDispatcher {
             call_id = correlation_call_id,
         );
 
-        let outcome = crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
+        let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
             runtime,
             &selected_route.callee_ura,
             &descriptor_subject_ura,
@@ -1982,9 +1982,9 @@ impl UnaryDispatcher {
                     ));
                 }
             };
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc(runtime, wire).await
+            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc(runtime, wire).await
         } else {
-            crate::runtime::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
+            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
                 runtime,
                 &selected_route.callee_ura,
                 inner_subject.as_str(),
@@ -1995,7 +1995,7 @@ impl UnaryDispatcher {
         };
         let request_id = outcome.invocation_id.clone();
         let (payload, error) =
-            crate::runtime::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
+            crate::daemon::axon_bridge::dispatch_shim::outcome_to_invoke_remote_result(outcome);
 
         let down = InvokeRemoteDown::Result {
             payload,

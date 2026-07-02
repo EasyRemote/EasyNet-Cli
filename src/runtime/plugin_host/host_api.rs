@@ -441,7 +441,7 @@ fn eal_rpc_handler(spec: EalExec) -> LocalRpcHandlerWithEnvelope {
 fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
     Arc::new(move |env, args: Value| {
         let invocation_context = invocation_context_from_envelope(&env).to_json_value();
-        crate::runtime::system_abilities::integrations::mcp::executor::run_mcp_exec_with_invocation_context(
+        crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec_with_invocation_context(
             &spec,
             &args,
             Some(invocation_context),

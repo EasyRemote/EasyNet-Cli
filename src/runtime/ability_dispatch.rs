@@ -1339,7 +1339,7 @@ fn local_runtime_ability_key_for_authority(
     authority_root: &str,
     ability: &str,
 ) -> anyhow::Result<String> {
-    crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(authority_root, ability)
+    crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(authority_root, ability)
         .map_err(|err| anyhow::anyhow!("{err}"))
 }
 

@@ -12,7 +12,7 @@ fail() {
     exit 1
 }
 
-INVOKE_RS="src/runtime/system_abilities/agents/invoke.rs"
+INVOKE_RS="src/daemon/ability/builtins/agents/invoke.rs"
 [[ -f "$INVOKE_RS" ]] || fail "missing $INVOKE_RS"
 
 grep -q 'get("ability_ura")' "$INVOKE_RS" \

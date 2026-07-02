@@ -125,7 +125,7 @@ impl RuntimeBoundAbility {
             )));
         }
         let descriptor_ref =
-            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 callee_ura,
                 &self.runtime_ability_ura,
                 descriptor_version,
@@ -154,7 +154,7 @@ impl RuntimeBoundAbility {
         wire_target: &str,
         route_ura: &str,
     ) -> Result<String, Status> {
-        let signed_ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        let signed_ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
             callee_ura,
             wire_target,
         )
@@ -198,7 +198,7 @@ impl RuntimeBoundAbility {
             return Ok(None);
         };
         let descriptor_ref =
-            crate::runtime::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
                 callee_ura, raw,
             )
             .map_err(|err| {
@@ -208,7 +208,7 @@ impl RuntimeBoundAbility {
                 ))
             })?;
         let signed_ability_ura =
-            crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+            crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
                 &descriptor_ref,
             )
             .map_err(|err| {
@@ -247,7 +247,7 @@ fn runtime_ability_ura(
     callee_ura: &str,
     ability: &str,
 ) -> Result<String, easynet_axon::invocation::AxonError> {
-    crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
+    crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
 }
 
 fn route_context(route_ura: Option<&str>, runtime_ability_ura: &str) -> String {

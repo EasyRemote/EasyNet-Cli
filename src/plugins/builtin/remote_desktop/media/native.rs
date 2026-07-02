@@ -17,9 +17,9 @@ use serde_json::{json, Value};
 use webrtc::peer_connection::PeerConnection;
 
 #[cfg(target_os = "macos")]
-use crate::plugins::remote_desktop::constants::NATIVE_MIN_BITRATE_KBPS;
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::VideoResolution;
 #[cfg(target_os = "macos")]
-use crate::runtime::system_abilities::resources::media::screen_snapshot::VideoResolution;
+use crate::plugins::remote_desktop::constants::NATIVE_MIN_BITRATE_KBPS;
 
 #[cfg(target_os = "macos")]
 const NATIVE_BITRATE_STEP_KBPS: u32 = 500;
@@ -341,7 +341,7 @@ pub(in crate::plugins::builtin::remote_desktop) fn native_rtp_sample_duration(
 
 #[cfg(target_os = "macos")]
 pub(in crate::plugins::builtin::remote_desktop) fn native_capture_dimensions(
-    options: &crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenCaptureOptions,
+    options: &crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions,
     native_dimensions: impl FnOnce() -> anyhow::Result<(usize, usize)>,
 ) -> anyhow::Result<(usize, usize)> {
     let native = native_dimensions()?;
@@ -397,8 +397,8 @@ pub(in crate::plugins::builtin::remote_desktop) fn webrtc_cmtime(
 mod tests {
     use super::*;
 
+    use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
     use crate::plugins::remote_desktop::videotoolbox_encoder::EncodedAccessUnit;
-    use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenCaptureOptions;
 
     fn native_unit(pts_ms: u64, is_keyframe: bool) -> EncodedAccessUnit {
         EncodedAccessUnit {

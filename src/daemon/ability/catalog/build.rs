@@ -6,15 +6,7 @@
 // Catalog build owner for daemon-owned system abilities.
 
 use super::profiles;
-use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::execution::discuss::DiscussService;
-use crate::runtime::execution::loop_instance::LoopService;
-use crate::runtime::execution::permission::PermissionService;
-use crate::runtime::execution::pty::PtyService;
-use crate::runtime::execution::schedule::ScheduleService;
-use crate::runtime::execution::session::SessionService;
-use crate::runtime::system_abilities::{
+use crate::daemon::ability::builtins::{
     agents::{
         chat as chat_ability, chat_history as chat_history_ability, discover as discover_ability,
         lifecycle as agent_lifecycle_ability, list as agent_list_ability,
@@ -55,6 +47,14 @@ use crate::runtime::system_abilities::{
         voice as voice_call_ability,
     },
 };
+use crate::registry::agents::AgentRegistry;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::runtime::execution::discuss::DiscussService;
+use crate::runtime::execution::loop_instance::LoopService;
+use crate::runtime::execution::permission::PermissionService;
+use crate::runtime::execution::pty::PtyService;
+use crate::runtime::execution::schedule::ScheduleService;
+use crate::runtime::execution::session::SessionService;
 use std::sync::Arc;
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
@@ -569,7 +569,7 @@ fn build_registry_with_services_result_inner(
     // populated cell as soon as registration completes.
     {
         let hot_registrar =
-            crate::runtime::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
                 Arc::clone(&loaders),
                 Arc::clone(&local_registry_handle),
                 Arc::clone(&discover_federation_resolver),
@@ -833,7 +833,7 @@ fn build_registry_with_services_result_inner(
     // `mcp.client.*`, reflective registry below, and exec —
     // shares one connection pool, one config snapshot, one `next_id`
     // sequence per upstream. No silent divergence between surfaces.
-    crate::runtime::system_abilities::integrations::mcp::executor::set_process_client(
+    crate::daemon::ability::builtins::integrations::mcp::executor::set_process_client(
         mcp_client_svc.clone(),
     );
 
@@ -870,8 +870,8 @@ fn build_registry_with_services_result_inner(
         .realm
         .clone()
         .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string());
-    let reflection_plan = crate::runtime::system_abilities::integrations::mcp::reflective_registry::PostArcReflection::plan(
-        crate::runtime::system_abilities::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
+    let reflection_plan = crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
+        crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
         pages_identity.user.as_deref(),
         &reflection_realm,
         &mcp_client_svc,

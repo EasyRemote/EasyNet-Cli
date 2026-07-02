@@ -154,7 +154,7 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     // codex reads `<root>/.agents/skills/`. Earlier code wrote to
     // `<root>/skills/` for both, which Claude Code's loader did not
     // scan — the seed existed but never activated. Same path-routing
-    // pattern as `skill.publish` in `runtime::system_abilities::resources::skills::publish`.
+    // pattern as `skill.publish` in `daemon::ability::builtins::resources::skills::publish`.
     write_collaborate_seed(&root, runtime)?;
 
     // RFC-006-B v0.6 — seed the `easynet-pages-author` skill so
@@ -280,7 +280,7 @@ fn write_codex_config(ws: &Path, model: Option<&str>, agent_name: &str) -> anyho
 /// loader never matched it.
 ///
 /// Mirrors the routing in
-/// `runtime::system_abilities::resources::skills::publish::skills_dir_for` so a
+/// `daemon::ability::builtins::resources::skills::publish::skills_dir_for` so a
 /// curator-published skill and a freshly-seeded skill both land in
 /// the location the runtime actually scans.
 fn write_collaborate_seed(ws: &Path, runtime: RuntimeKind) -> anyhow::Result<()> {

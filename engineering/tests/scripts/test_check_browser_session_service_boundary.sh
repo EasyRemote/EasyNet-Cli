@@ -12,9 +12,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/runtime/system_abilities/device_control"
-    cp "$REPO_ROOT/src/runtime/system_abilities/device_control/browser.rs" "$sandbox/src/runtime/system_abilities/device_control/browser.rs"
-    cp "$REPO_ROOT/src/runtime/system_abilities/real_invoke_tests.rs" "$sandbox/src/runtime/system_abilities/real_invoke_tests.rs"
+    mkdir -p "$sandbox/src/daemon/ability/builtins/device_control"
+    cp "$REPO_ROOT/src/daemon/ability/builtins/device_control/browser.rs" "$sandbox/src/daemon/ability/builtins/device_control/browser.rs"
+    cp "$REPO_ROOT/src/daemon/ability/builtins/real_invoke_tests.rs" "$sandbox/src/daemon/ability/builtins/real_invoke_tests.rs"
     echo "$sandbox"
 }
 
@@ -28,7 +28,7 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: browser service 
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/struct BrowserSessionService/struct RetiredBrowserSessionService/' "$SB/src/runtime/system_abilities/device_control/browser.rs"
+perl -0pi -e 's/struct BrowserSessionService/struct RetiredBrowserSessionService/' "$SB/src/daemon/ability/builtins/device_control/browser.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -38,21 +38,21 @@ SB="$(make_sandbox)"
 {
     echo 'use std::sync::OnceLock;'
     echo 'fn store() {}'
-} >> "$SB/src/runtime/system_abilities/device_control/browser.rs"
+} >> "$SB/src/daemon/ability/builtins/device_control/browser.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "global store compatibility path should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/let service = Arc::new\(BrowserSessionService::default\(\)\);/let service = BrowserSessionService::default();/' "$SB/src/runtime/system_abilities/device_control/browser.rs"
+perl -0pi -e 's/let service = Arc::new\(BrowserSessionService::default\(\)\);/let service = BrowserSessionService::default();/' "$SB/src/daemon/ability/builtins/device_control/browser.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "registry without shared service Arc should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/service\.capture_viewport/capture_viewport_handler/' "$SB/src/runtime/system_abilities/device_control/browser.rs"
+perl -0pi -e 's/service\.capture_viewport/capture_viewport_handler/' "$SB/src/daemon/ability/builtins/device_control/browser.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

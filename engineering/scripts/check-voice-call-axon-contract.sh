@@ -12,8 +12,8 @@ fail() {
     exit 1
 }
 
-VOICE_RS="src/runtime/system_abilities/resources/voice.rs"
-REAL_TESTS_RS="src/runtime/system_abilities/real_invoke_tests.rs"
+VOICE_RS="src/daemon/ability/builtins/resources/voice.rs"
+REAL_TESTS_RS="src/daemon/ability/builtins/real_invoke_tests.rs"
 JOIN_TOML="ability-descriptors/system/voice.join_call.ability.toml"
 
 for file in "$VOICE_RS" "$REAL_TESTS_RS" "$JOIN_TOML"; do

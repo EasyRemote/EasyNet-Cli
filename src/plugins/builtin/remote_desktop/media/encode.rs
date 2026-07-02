@@ -19,6 +19,10 @@ use serde_json::json;
 use tokio::sync::{mpsc, watch};
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    capture_rgb_with_xcap, open_display_recorder_with_xcap, rgba_bytes_to_rgb_frame, RawRgbFrame,
+    ScreenCaptureOptions,
+};
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::config::MIN_FRAME_QUEUE_DEPTH;
 use crate::plugins::remote_desktop::constants::{
@@ -32,10 +36,6 @@ use crate::plugins::remote_desktop::media::{
 };
 use crate::plugins::remote_desktop::transport::BidiTerminalGuard;
 use crate::runtime::ability_dispatch::BidiOutputFrame;
-use crate::runtime::system_abilities::resources::media::screen_snapshot::{
-    capture_rgb_with_xcap, open_display_recorder_with_xcap, rgba_bytes_to_rgb_frame, RawRgbFrame,
-    ScreenCaptureOptions,
-};
 
 const H264_ANNEX_B_CONTENT_TYPE: &str = "video/h264; stream-format=annexb";
 pub(in crate::plugins::builtin::remote_desktop) const DIAGNOSTIC_RELAY_GOP_MAX_FRAMES: u32 = 15;

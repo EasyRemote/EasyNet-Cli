@@ -694,7 +694,7 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             )
             .expect("test daemon URI is a valid device authority root"),
         );
-    crate::runtime::system_abilities::device_control::file_transfer::register(&mut catalog);
+    crate::daemon::ability::builtins::device_control::file_transfer::register(&mut catalog);
 
     let path = std::env::temp_dir().join(format!(
         "easynet-external-signed-bidi-download-{}-{}.bin",
@@ -718,13 +718,12 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     .unwrap();
     let file_transfer_descriptor_ref = test_descriptor_ref(
         TEST_DAEMON_URI,
-        crate::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER,
+        crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
     );
     let open = make_envelope_open(&file_transfer_descriptor_ref, args);
-    let wire =
-        crate::runtime::axon_bridge::dispatch_shim::external_signed_from_envelope_open(&open)
-            .expect("wire dispatch");
-    let handle = crate::runtime::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
+    let wire = crate::daemon::axon_bridge::dispatch_shim::external_signed_from_envelope_open(&open)
+        .expect("wire dispatch");
+    let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
         .await
         .expect("open external-signed bidi");
     let (input, mut output) = handle.split();

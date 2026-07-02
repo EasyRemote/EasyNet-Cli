@@ -27,6 +27,7 @@ use webrtc::peer_connection::{
 };
 use webrtc::runtime::{channel, default_runtime};
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::constants::{
     ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX, REASON_RESOURCE_TYPE_MISMATCH,
@@ -42,7 +43,6 @@ use crate::plugins::remote_desktop::transport::{
     apply_pending_remote_ice_candidates, run_direct_webrtc_media_loop, DirectWebRtcEndpoint,
     DirectWebRtcHandler, DirectWebRtcSession, RemoteDesktopTransportManager,
 };
-use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenCaptureOptions;
 
 const DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS: u64 = 2_500;
 

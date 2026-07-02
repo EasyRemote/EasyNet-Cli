@@ -204,7 +204,7 @@ impl RuntimeInvocation {
             self.subject.clone(),
             easynet_axon::invocation::UraProfile::EasynetStrictV2,
         );
-        let ability = crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        let ability = crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             &self.callee,
             &self.ability,
             descriptor_version,

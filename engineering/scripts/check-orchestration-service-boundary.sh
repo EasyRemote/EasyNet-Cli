@@ -12,7 +12,7 @@ fail() {
     exit 1
 }
 
-ORCH_RS="src/runtime/system_abilities/automation/orchestration.rs"
+ORCH_RS="src/daemon/ability/builtins/automation/orchestration.rs"
 
 [[ -f "$ORCH_RS" ]] || fail "missing $ORCH_RS"
 

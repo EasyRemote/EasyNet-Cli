@@ -293,7 +293,7 @@ fn next_test_invocation_nonce() -> [u8; 16] {
 }
 
 fn test_descriptor_ref(callee_ura: &str, ability: &str) -> String {
-    crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+    crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         callee_ura,
         ability,
         crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
@@ -318,11 +318,11 @@ fn signed_test_envelope(
     envelope.invocation_nonce = nonce.to_vec();
     let descriptor_ref = test_descriptor_ref(callee_ura, ability);
     let descriptor_bound =
-        crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+        crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
             envelope.clone(),
             descriptor_ref,
             arguments,
-            crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .expect("descriptor-bound signed test envelope");
     let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
@@ -428,7 +428,7 @@ fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
 }
 
 fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
-    let ability = crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH;
+    let ability = crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH;
     let signing_key = test_device_signing_key();
     EnvelopeOpen {
         envelope: Some(signed_test_envelope(

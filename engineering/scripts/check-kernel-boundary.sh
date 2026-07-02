@@ -23,20 +23,15 @@
 #                            federation_client, abilities.
 #
 # (The former Rule 3 for `services/axon_bridge/` was retired on
-# 2026-05-29 when that subtree moved to `runtime/axon_bridge/`. Its
-# imports went almost entirely to `runtime/*` — keeping it under
-# `services/` was a false hierarchy. Rule 5 below enforces the
-# inverse direction for the moved tree.)
+# 2026-05-29 when that subtree moved out of `services/`. It now lives
+# in `daemon/axon_bridge/`, which is the Clean Final daemon-owned Axon
+# SDK adapter home.)
 #
 # Rule 3 (renumbered): Execution → GatewayApi only.
 #
-# Rules 4–5 cover the reverse direction (runtime/* → daemon/*).
-# Most of `runtime/` is daemon-agnostic in-process plumbing; the
-# only legitimate upward references are the few cells that hold
-# cross-cutting daemon state (trust anchor).
+# Rules 4–5 reject retired runtime compatibility trees.
 # Rule 4 rejects the retired `runtime/agents/` compatibility tree.
-# Rule 5 bounds `runtime/axon_bridge/` with a tiny explicit allowlist
-# so a new upward reference surfaces in code review.
+# Rule 5 rejects the retired `runtime/axon_bridge/` adapter tree.
 #
 # Exit codes
 #   0 — all rules satisfied
@@ -133,10 +128,6 @@ fi
 #                           canonical JSON bytes, and conformance
 #                           metadata used to validate and project
 #                           daemon Invocation requests.
-#   * system_abilities    — terminal/file-transfer and governance
-#                           handlers reached by the daemon
-#                           Invocation server as in-process ability
-#                           implementations.
 #   * agent_ability_specs — hosted-agent ability specs advertised in
 #                           prelude/publication flows.
 #   * keyring             — sign/verify for cross-realm receipts
@@ -197,7 +188,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|system_abilities|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|ability_wire|plugin_host'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|ability_wire|plugin_host'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '
@@ -234,45 +225,23 @@ fi
 
 # ── Rule 4 ────────────────────────────────────────────────────────
 # runtime/agents/ was the old daemon-owned ability handler grouping.
-# Handler implementations now live in `runtime/system_abilities`,
+# Handler implementations now live in `daemon/ability/builtins`,
 # descriptor/catalog projection lives in `daemon/ability/catalog`,
 # and reusable execution engines live in `runtime/executors`.
 if [ -d "src/runtime/agents" ]; then
     echo "ERROR: retired runtime agents directory exists."
-    echo "  Use runtime/system_abilities, daemon/ability/catalog, or runtime/executors."
+    echo "  Use daemon/ability/builtins, daemon/ability/catalog, or runtime/executors."
     violations=$((violations + 1))
 fi
 
 # ── Rule 5 ────────────────────────────────────────────────────────
-# runtime/axon_bridge/ — the Axon-SDK glue. Lives in `runtime/`
-# direction is into runtime. The only legitimate upward references
-# are the daemon trust adapters the bridge reads at boot:
-#
-#   * daemon::trust::cell — `SharedTrustAnchor` typed cell the
-#     `RealmTrustAnchorKeyResolver` snapshots on resolve.
-#   * daemon::trust::anchor — concrete `RealmTrustAnchor` /
-#     `TrustedAgent` types used in unit tests; in production
-#     the bridge depends only on the cell.
+# runtime/axon_bridge/ is retired. Axon SDK adapters are daemon-owned
+# because they wire daemon trust, invocation, and built-in ability
+# registration into Axon LocalRuntime.
 if [ -d "src/runtime/axon_bridge" ]; then
-    bridge_up_allowed='trust'
-    bridge_up_files=$(find src/runtime/axon_bridge -name '*.rs' | sort)
-    for f in $bridge_up_files; do
-        awk '
-            /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/ { in_test = 1 }
-            in_test { next }
-            { print FILENAME ":" NR ":" $0 }
-        ' "$f"
-    done \
-        | grep -E "crate::daemon::([a-zA-Z_][a-zA-Z0-9_]*)" \
-        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
-        | grep -vE "crate::daemon::(${bridge_up_allowed})\b" > /tmp/kb_bridge_up.$$ || true
-    if [ -s /tmp/kb_bridge_up.$$ ]; then
-        echo "ERROR: runtime/axon_bridge/ may not import these daemon modules:"
-        cat /tmp/kb_bridge_up.$$
-        echo "  Permitted: crate::daemon::{${bridge_up_allowed}}"
-        violations=$((violations + 1))
-    fi
-    rm -f /tmp/kb_bridge_up.$$
+    echo "ERROR: retired runtime axon_bridge directory exists."
+    echo "  Use daemon/axon_bridge for Axon SDK adapters."
+    violations=$((violations + 1))
 fi
 
 if [ "$violations" -eq 0 ]; then

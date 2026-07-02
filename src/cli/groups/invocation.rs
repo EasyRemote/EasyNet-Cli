@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::cli::receipt_verification::CliReceiptChainVerification;
-use crate::runtime::system_abilities::governance::invocation_history::{
+use crate::daemon::ability::builtins::governance::invocation_history::{
     ABILITY_HISTORY_GET, ABILITY_HISTORY_LIST, ABILITY_HISTORY_PATH, ABILITY_TRACE_GET,
 };
 use crate::support::output::{self, OutputFormat};

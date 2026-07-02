@@ -135,7 +135,7 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
         Arc::clone(&runtime),
     );
     let owner_ura = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
-    let result = easynet_cli::runtime::system_abilities::integrations::mcp::reflective_registry::reflect_all(
+    let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc, &mut reg, &owner_ura,
     )
     .await;
@@ -284,7 +284,7 @@ async fn mcp_bench_translation_round_trips_into_live_reflection() {
     let svc = Arc::new(McpClientService::from_file(parsed));
 
     let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new();
-    let result = easynet_cli::runtime::system_abilities::integrations::mcp::reflective_registry::reflect_all(
+    let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
         "easynet:///r/test/agent/u.mcp",
@@ -331,7 +331,7 @@ async fn broken_upstream_does_not_block_other_servers() {
     }));
 
     let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new();
-    let result = easynet_cli::runtime::system_abilities::integrations::mcp::reflective_registry::reflect_all(
+    let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
         "easynet:///r/test/agent/u.mcp",

@@ -623,10 +623,9 @@ impl HostedAgentDelegationContext {
 pub(crate) fn public_route_ability_from_descriptor_ref(
     descriptor_ref: &str,
 ) -> anyhow::Result<String> {
-    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
-        descriptor_ref,
-    )
-    .map_err(|err| anyhow::anyhow!("invalid runtime ability descriptor ref: {err}"))?;
+    let ability_ura =
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(descriptor_ref)
+            .map_err(|err| anyhow::anyhow!("invalid runtime ability descriptor ref: {err}"))?;
     let selector = crate::ura::AbilitySelector::parse(&ability_ura)?;
     Ok(selector.public_name().to_string())
 }

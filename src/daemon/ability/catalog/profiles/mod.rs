@@ -19,7 +19,7 @@
 //!   llm      — conversation.* plus private per-skill abilities advertised by
 //!              each LLM sub-agent projection (claude / codex / etc.)
 //!
-//! Handler bodies live under `runtime::system_abilities` or remaining
+//! Handler bodies live under `daemon::ability::builtins` or remaining
 //! migration-phase agent modules. Profile files only declare WHICH
 //! abilities each profile advertises.
 //!

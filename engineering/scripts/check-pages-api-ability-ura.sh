@@ -12,7 +12,7 @@ fail() {
     exit 1
 }
 
-API_RS="src/runtime/system_abilities/resources/pages/api.rs"
+API_RS="src/daemon/ability/builtins/resources/pages/api.rs"
 DOC_MD="docs/PAGES_AND_LLM_API.md"
 [[ -f "$API_RS" ]] || fail "missing $API_RS"
 [[ -f "$DOC_MD" ]] || fail "missing $DOC_MD"

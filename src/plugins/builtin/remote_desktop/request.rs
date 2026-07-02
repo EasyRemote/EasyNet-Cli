@@ -7,6 +7,9 @@
 use rand::RngCore as _;
 use serde_json::{json, Value};
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    ScreenCaptureOptions, VideoResolution,
+};
 use crate::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_SET_DESCRIPTION,
     ATTACH_ENCODING_ANNEXB_H264, ATTACH_ENCODING_JPEG_BINARY, DEFAULT_FRAME_QUEUE_DEPTH,
@@ -16,9 +19,6 @@ use crate::plugins::remote_desktop::constants::{
     REASON_INVALID_ARGUMENT, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::plugins::remote_desktop::session::RemoteDesktopSession;
-use crate::runtime::system_abilities::resources::media::screen_snapshot::{
-    ScreenCaptureOptions, VideoResolution,
-};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteDesktopVideoConstraints {

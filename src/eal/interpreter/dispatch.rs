@@ -403,7 +403,7 @@ pub(super) fn dispatch_to_agent(
                 }
                 crate::core::ability_spec::AbilityExec::Mcp(spec) => {
                     let _ = timeout;
-                    crate::runtime::system_abilities::integrations::mcp::executor::run_mcp_exec(
+                    crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
                         spec, arguments,
                     )
                     .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
@@ -433,8 +433,8 @@ pub(super) fn dispatch_to_agent(
     // the daemon process and reduce the caller to a final snapshot.
     // Keep chat local by reusing the daemon handler's own parsing /
     // context / resume logic directly in-process.
-    if bare_ability == crate::runtime::system_abilities::agents::chat::ABILITY_VERB {
-        return crate::runtime::system_abilities::agents::chat::invoke_direct_with_progress(
+    if bare_ability == crate::daemon::ability::builtins::agents::chat::ABILITY_VERB {
+        return crate::daemon::ability::builtins::agents::chat::invoke_direct_with_progress(
             &agent_id.name,
             entry,
             &[],

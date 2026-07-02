@@ -695,7 +695,7 @@ fn sign_descriptor_bound_prelude_request(
     // site passing the bare name — the egress/ingress asymmetry that wedged
     // session.open into an advertise_abilities reconnect loop.)
     let descriptor_ref =
-        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             callee_ura,
             function_name,
             crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
@@ -706,11 +706,11 @@ fn sign_descriptor_bound_prelude_request(
             ))
         })?;
     let descriptor_bound =
-        crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+        crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
             envelope.clone(),
             descriptor_ref.clone(),
             &request.arguments,
-            crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .map_err(|err| {
             Status::internal(format!(
@@ -1063,7 +1063,7 @@ fn build_hosted_agent_ability_descriptors(
 }
 
 pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {
-    crate::runtime::system_abilities::resources::pages::management_ability_specs()
+    crate::daemon::ability::builtins::resources::pages::management_ability_specs()
         .into_iter()
         .filter_map(|spec| {
             let descriptor_name = format!("pages.{}", spec.relative_name);

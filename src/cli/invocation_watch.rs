@@ -46,7 +46,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::cli::receipt_verification::CliReceiptChainVerification;
-use crate::runtime::system_abilities::governance::invocation_history::ABILITY_TRACE_GET;
+use crate::daemon::ability::builtins::governance::invocation_history::ABILITY_TRACE_GET;
 use crate::support::local_invoke::invoke_local_ability;
 use crate::support::output;
 
@@ -572,7 +572,7 @@ fn fetch_causal_set(args: &WatchArgs) -> anyhow::Result<CausalSet> {
         anyhow::anyhow!("invocation watch requires either an invocation URA or --trace <trace_id>")
     })?;
     let resp = invoke_local_ability(
-        crate::runtime::system_abilities::governance::invocation_history::ABILITY_HISTORY_GET,
+        crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_GET,
         json!({ "key": { "ura": ura } }),
     )
     .context("read the invocation's ledger record")?;

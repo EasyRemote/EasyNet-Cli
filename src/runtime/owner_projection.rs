@@ -85,7 +85,7 @@ impl AbilityCallableSummary {
 ///     `federation.advertise_abilities` invocation envelope.
 ///   * CONSUMED CROSS-PROCESS: a peer daemon's discover ladder reads
 ///     `summary.callable_summary.description` in
-///     `runtime::system_abilities::agents::discover` after a `federation.resolve`
+///     `daemon::ability::builtins::agents::discover` after a `federation.resolve`
 ///     round-trip — written by daemon A, read by daemon B.
 ///   * TOLERATED BY NON-Rust CONSUMERS: it rides as `serde_json` with
 ///     `#[serde(default)]`; the Go backend decodes with `DiscardUnknown`, so
@@ -724,10 +724,10 @@ mod tests {
         let owner = "easynet:///r/acme/device/01DEV";
         let descriptor = descriptor("fs.read", owner)
             .with_description(
-                crate::runtime::system_abilities::device_control::files::description_read(),
+                crate::daemon::ability::builtins::device_control::files::description_read(),
             )
             .with_input_schema(
-                crate::runtime::system_abilities::device_control::files::input_schema_read(),
+                crate::daemon::ability::builtins::device_control::files::input_schema_read(),
             );
         let summary = summary_from_descriptor(&descriptor).expect("summary");
 
@@ -929,7 +929,7 @@ mod tests {
     /// change drops `callable_summary` from the wire shape or makes it
     /// non-defaultable, exactly one of these assertions breaks, surfacing
     /// the drift instead of silently regressing the cross-process read at
-    /// `runtime::system_abilities::agents::discover` (`summary.callable_summary`).
+    /// `daemon::ability::builtins::agents::discover` (`summary.callable_summary`).
     #[test]
     fn callable_summary_survives_projection_wire_roundtrip() {
         let summary = AbilityProjectionSummary {

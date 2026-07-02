@@ -47,7 +47,7 @@ use easynet_axon::pb::axon::v1::{
     Envelope, InvokeRequest, InvokeResponse, SubjectIdentity,
 };
 
-use crate::runtime::axon_bridge::wire_descriptor::{
+use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
 

@@ -26,7 +26,7 @@
 use clap::Args;
 use serde_json::{json, Value};
 
-use crate::runtime::system_abilities::governance::api_key;
+use crate::daemon::ability::builtins::governance::api_key;
 use crate::support::local_invoke::invoke_local_ability;
 
 #[derive(Debug, Args)]
@@ -64,7 +64,7 @@ fn pick_token(arg: Option<String>) -> Option<String> {
 
 fn pick_model(arg: Option<String>) -> anyhow::Result<String> {
     if let Some(m) = arg {
-        crate::runtime::system_abilities::integrations::openai_compat::validate_chat_model_id(&m)?;
+        crate::daemon::ability::builtins::integrations::openai_compat::validate_chat_model_id(&m)?;
         return Ok(m);
     }
     // Ask the device-local OpenAI shim what chat-base abilities

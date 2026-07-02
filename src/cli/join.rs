@@ -506,7 +506,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
     )
     .ok_or_else(|| anyhow::anyhow!("derive federation.resolve_key subject URA"))?;
     let descriptor_ref =
-        crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
             &target.hub_ura,
             crate::runtime::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
             crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,

@@ -21,7 +21,7 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::runtime::system_abilities::governance::teach::{ACQUIRE, FORGET, TEACH};
+use crate::daemon::ability::builtins::governance::teach::{ACQUIRE, FORGET, TEACH};
 use crate::support::local_invoke::invoke_local_ability_with_hosted_agent_delegation;
 use crate::support::output;
 

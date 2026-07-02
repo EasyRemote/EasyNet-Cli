@@ -556,13 +556,13 @@ fn invoke_agent_management_in_process(
     payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let mut catalog = crate::runtime::ability_dispatch::AxonAbilityCatalog::new();
-    crate::runtime::system_abilities::agents::list::register(&mut catalog, || {
+    crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
         crate::registry::agents::load_agents().unwrap_or_default()
     });
     let hot_registrar: std::sync::Arc<
-        crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell,
+        crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
     > = std::sync::Arc::new(std::sync::OnceLock::new());
-    crate::runtime::system_abilities::agents::lifecycle::register(&mut catalog, hot_registrar);
+    crate::daemon::ability::builtins::agents::lifecycle::register(&mut catalog, hot_registrar);
     catalog.invoke_rpc_json(function_name, payload_json)
 }
 
@@ -1572,7 +1572,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     let mut ledger_record = Value::Null;
     for _ in 0..10 {
         let response = record_reader.invoke(
-            crate::runtime::system_abilities::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
+            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
             serde_json::json!({ "request_id": request_id }),
         )?;
         if let Some(record) = response.get("record").filter(|record| !record.is_null()) {

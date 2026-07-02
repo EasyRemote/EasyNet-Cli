@@ -19,7 +19,7 @@
 
 use serde_json::{json, Value};
 
-use crate::runtime::system_abilities::resources::pages::fetch;
+use crate::daemon::ability::builtins::resources::pages::fetch;
 
 /// Output of an HTTP serve invocation. The Hub listener consumes
 /// this and translates each field into HTTP response shape.

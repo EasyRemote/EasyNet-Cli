@@ -103,6 +103,9 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::daemon::ability::builtins::governance::invocation_history::{
+    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
+};
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::admission_facade::AdmissionFacade;
@@ -133,9 +136,6 @@ use crate::daemon::invocation::stream_dispatcher::StreamDispatcher;
 use crate::daemon::invocation::target_gate::TargetGate;
 use crate::daemon::invocation::unary_dispatcher::{is_runtime_admin_ability, UnaryDispatcher};
 use crate::runtime::ability::conformance::BaselineCallMode;
-use crate::runtime::system_abilities::governance::invocation_history::{
-    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
-};
 
 use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::invocation::state::pending_dispatch::{
@@ -286,7 +286,7 @@ fn descriptor_ref_public_name_for_callee(
         .filter(|callee| !callee.is_empty())?;
     let descriptor_ref =
         easynet_axon::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
-    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
         &descriptor_ref,
     )
     .ok()?;

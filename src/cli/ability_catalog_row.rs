@@ -25,7 +25,7 @@
 // Architectural Position
 // ----------------------
 // CLI facade only. Runtime catalogue generation lives under
-// `runtime::system_abilities::governance::meta` / owner projections.
+// `daemon::ability::builtins::governance::meta` / owner projections.
 
 use serde_json::Value;
 

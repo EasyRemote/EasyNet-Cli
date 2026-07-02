@@ -67,7 +67,7 @@ pub fn build_session_envelope_open_with_seed(
     let mut session_metadata = std::collections::HashMap::new();
     let mac = if let Some(seed) = signing_seed {
         let descriptor_ref =
-            crate::runtime::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 caller_ura,
                 ABILITY_SESSION_OPEN,
                 crate::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
@@ -79,11 +79,11 @@ pub fn build_session_envelope_open_with_seed(
             envelope.invocation_nonce = nonce.to_vec();
         }
         let descriptor_bound =
-            crate::runtime::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
                 descriptor_ref.clone(),
                 &initial_args,
-                crate::runtime::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+                crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
             )
             .expect("session.open descriptor-bound envelope is complete");
         let signing_key = SigningKey::from_bytes(&seed);

@@ -32,12 +32,12 @@
 
 use std::sync::Arc;
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenSnapshotBackend;
 use crate::plugins::remote_desktop::config::RemoteDesktopRuntimeConfig;
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::plugins::remote_desktop::transport::{
     DirectWebRtcEndpoint, RemoteDesktopTransportManager,
 };
-use crate::runtime::system_abilities::resources::media::screen_snapshot::ScreenSnapshotBackend;
 
 /// Runtime-owned state for the remote desktop plugin.
 ///

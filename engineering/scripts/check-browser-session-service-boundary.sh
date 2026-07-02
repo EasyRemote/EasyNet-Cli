@@ -12,8 +12,8 @@ fail() {
     exit 1
 }
 
-BROWSER_RS="src/runtime/system_abilities/device_control/browser.rs"
-REAL_TESTS_RS="src/runtime/system_abilities/real_invoke_tests.rs"
+BROWSER_RS="src/daemon/ability/builtins/device_control/browser.rs"
+REAL_TESTS_RS="src/daemon/ability/builtins/real_invoke_tests.rs"
 
 for file in "$BROWSER_RS" "$REAL_TESTS_RS"; do
     [[ -f "$file" ]] || fail "missing $file"

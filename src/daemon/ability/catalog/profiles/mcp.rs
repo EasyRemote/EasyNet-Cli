@@ -773,22 +773,22 @@ fn per_agent_workspace_descriptors(
     {
         let discover_name = format!(
             "{agent_name}.{}",
-            crate::runtime::system_abilities::agents::discover::ABILITY_VERB
+            crate::daemon::ability::builtins::agents::discover::ABILITY_VERB
         );
         let invoke_name = format!(
             "{agent_name}.{}",
-            crate::runtime::system_abilities::agents::invoke::ABILITY_VERB
+            crate::daemon::ability::builtins::agents::invoke::ABILITY_VERB
         );
         for (name, schema, description) in [
             (
                 discover_name,
-                crate::runtime::system_abilities::agents::discover::input_schema(),
-                crate::runtime::system_abilities::agents::discover::description(),
+                crate::daemon::ability::builtins::agents::discover::input_schema(),
+                crate::daemon::ability::builtins::agents::discover::description(),
             ),
             (
                 invoke_name,
-                crate::runtime::system_abilities::agents::invoke::input_schema(),
-                crate::runtime::system_abilities::agents::invoke::description(),
+                crate::daemon::ability::builtins::agents::invoke::input_schema(),
+                crate::daemon::ability::builtins::agents::invoke::description(),
             ),
         ] {
             if let Ok(d) = AbilityDescriptor::new(name, &own_owner_ura, Visibility::Scoped) {
@@ -1140,8 +1140,8 @@ mod tests {
         let desc = AbilityDescriptor::new("claude.discover", "agent://claude", Visibility::Scoped)
             .unwrap()
             .with_source("kernel:built-in:self-bundle")
-            .with_input_schema(crate::runtime::system_abilities::agents::discover::input_schema())
-            .with_description(crate::runtime::system_abilities::agents::discover::description());
+            .with_input_schema(crate::daemon::ability::builtins::agents::discover::input_schema())
+            .with_description(crate::daemon::ability::builtins::agents::discover::description());
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({
             "candidates": [],
             "scope": "device",

@@ -10,6 +10,7 @@ use serde_json::json;
 
 use easynet_axon::invocation::{CausalContext, ReceiptRef};
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
 use crate::persistence::resources::{
     upsert_resource, ResourceBinding, ResourceType, ResourceUpsert, ResourcesFile,
 };
@@ -18,7 +19,6 @@ use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::runtime::ability_dispatch::EnvelopeContext;
 use crate::runtime::plugin_host::PluginRuntimeLimits;
-use crate::runtime::system_abilities::resources::media::screen_snapshot::SyntheticScreenBackend;
 
 static REMOTE_DESKTOP_TEST_LOCK: Mutex<()> = Mutex::new(());
 

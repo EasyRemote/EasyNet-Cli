@@ -132,26 +132,12 @@ pub mod ability_descriptor;
 pub mod ability_dispatch;
 pub mod ability_wire;
 pub mod advertise;
-/// Bridge layer between daemon-owned state (trust anchors,
-/// InvocationLedger, etc.) and `easynet_axon::invocation`'s SDK
-/// types (`KeyResolver`, `LedgerSink`, `LocalRuntime`). Phase 1-5
-/// of the "use Axon SDK directly, stop reinventing" migration lives
-/// here. Everything in this module is glue: it carries no
-/// independent state of its own beyond holding `Arc` handles to
-/// daemon state + the constructed Axon objects.
-///
-/// Lives under `runtime/` because it imports only Axon SDK types and
-/// runtime ability dispatch, system abilities, and invocation_target
-/// glue. Daemon-owned state is adapted in its semantic daemon domain
-/// and injected through traits.
-pub mod axon_bridge;
 pub mod dispatch_receipt;
 pub mod federation_client;
 pub(crate) mod owner_projection;
 pub mod plugin_host;
 pub mod provisional_ura;
 pub mod publish;
-pub mod system_abilities;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
 // RFC-002 tenant suffix resolver: maps tenant_id to admission mode +

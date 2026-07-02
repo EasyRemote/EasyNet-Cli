@@ -24,6 +24,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    ScreenSnapshotBackend, XcapBackend,
+};
 use crate::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
     ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE, ABILITY_REQUEST_PERMISSION,
@@ -38,9 +41,6 @@ use crate::runtime::plugin_host::package::BuiltinPluginAbilitySpec;
 use crate::runtime::plugin_host::{
     PluginAbilityLayer, PluginBidiWireKind, PluginCallMode, PluginContributionBuilder,
     PluginRuntimeLimits, Result,
-};
-use crate::runtime::system_abilities::resources::media::screen_snapshot::{
-    ScreenSnapshotBackend, XcapBackend,
 };
 
 type PluginRpcHandler =
@@ -294,12 +294,12 @@ pub(in crate::plugins::builtin::remote_desktop) fn contribute_with_screen_backen
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
     use crate::runtime::ability::CallMode as DescriptorCallMode;
     use crate::runtime::ability_dispatch::AxonAbilityCatalog;
     use crate::runtime::plugin_host::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
-    use crate::runtime::system_abilities::resources::media::screen_snapshot::SyntheticScreenBackend;
 
     #[test]
     fn every_remote_desktop_spec_is_projected_from_binding_table() {

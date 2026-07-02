@@ -12,6 +12,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub mod builtins;
 pub mod catalog;
 pub mod health;
 pub mod names;

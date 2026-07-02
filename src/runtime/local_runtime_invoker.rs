@@ -17,10 +17,10 @@ use easynet_axon::invocation::{
 };
 use serde_json::Value;
 
-use crate::runtime::axon_bridge::descriptor_ref::{
+use crate::daemon::axon_bridge::descriptor_ref::{
     ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_version,
 };
-use crate::runtime::axon_bridge::local_runtime_request::{
+use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
 use crate::runtime::invocation_target::{InvocationTarget, TargetScope};

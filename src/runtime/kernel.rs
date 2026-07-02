@@ -29,7 +29,7 @@ use crate::core::domain::{
     PermissionRequest, PermissionSensitivity, RoomId, ScheduleEntry, ScheduleId, Session,
     SessionId, TenantId,
 };
-use crate::runtime::axon_bridge::local_runtime_request::{
+use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
 };
 use crate::runtime::execution::{
@@ -350,14 +350,13 @@ impl Kernel {
         // block alongside the rest of the descriptor-bound construction.
         let dispatch_invocation = invocation.clone();
         let result = block_on_axon_dispatch(move || async move {
-            let runtime_ability =
-                crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
-                    &dispatch_invocation.callee,
-                    dispatch_invocation.ability.as_str(),
-                )
-                .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let runtime_ability = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+                &dispatch_invocation.callee,
+                dispatch_invocation.ability.as_str(),
+            )
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
             let descriptor_version =
-                crate::runtime::axon_bridge::descriptor_ref::registered_descriptor_version(
+                crate::daemon::axon_bridge::descriptor_ref::registered_descriptor_version(
                     &runtime,
                     &runtime_ability,
                     AxonInvocationCallMode::Rpc,
@@ -952,7 +951,7 @@ mod tests {
         let k = Kernel::new(Arc::new(NoopGateway));
         let runtime = easynet_axon::invocation::LocalRuntime::new();
         let device_ura = crate::ura::device_ura("localhost", "a");
-        let runtime_ability = crate::runtime::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        let runtime_ability = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
             &device_ura,
             "observe.health",
         )

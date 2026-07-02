@@ -8,16 +8,7 @@
 use super::{build_registry, build_system_registry};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::daemon::ability::catalog::{ability_toml, system_ability_descriptor_path};
-use crate::daemon::ability::names::{
-    agents as agent_names, automation as automation_names, device_control as device_names,
-    federation as federation_names, governance as governance_names,
-    integrations as integration_names, resources as resource_names,
-};
-use crate::runtime::ability::CallMode as DescriptorCallMode;
-use crate::runtime::ability_descriptor::AbilityHints;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::system_abilities::{
+use crate::daemon::ability::builtins::{
     agents::{
         chat_history as chat_history_ability, discover as discover_ability,
         lifecycle as agent_lifecycle_ability, list as agent_list_ability,
@@ -53,6 +44,15 @@ use crate::runtime::system_abilities::{
         voice as voice_call_ability,
     },
 };
+use crate::daemon::ability::catalog::{ability_toml, system_ability_descriptor_path};
+use crate::daemon::ability::names::{
+    agents as agent_names, automation as automation_names, device_control as device_names,
+    federation as federation_names, governance as governance_names,
+    integrations as integration_names, resources as resource_names,
+};
+use crate::runtime::ability::CallMode as DescriptorCallMode;
+use crate::runtime::ability_descriptor::AbilityHints;
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Public list of every v1 system-ability *name*. Used by
 /// `registry::a2a_labels` to populate the top-level
@@ -259,7 +259,7 @@ fn discovery_hints_from_modes(
         // yet wired for generic stream fallback.
         return Default::default();
     }
-    if name == crate::runtime::system_abilities::resources::media::ABILITY_CAMERA_SUBSCRIBE {
+    if name == crate::daemon::ability::builtins::resources::media::ABILITY_CAMERA_SUBSCRIBE {
         // Camera preview has a unary compatibility path for older
         // app shells that still call Invoke for the first frame.
         // Discovery must continue to advertise the canonical stream

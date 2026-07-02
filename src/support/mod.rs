@@ -111,7 +111,7 @@ pub mod async_bridge;
 
 /// `append_cleanup_error()` — fold a best-effort cleanup outcome into a
 /// primary error so transactional rollback paths report both what failed
-/// and whether compensation completed. Shared by `runtime::system_abilities`
+/// and whether compensation completed. Shared by `daemon::ability::builtins`
 /// and `persistence` rollback sites; see `errors.rs` for the rationale.
 pub(crate) mod errors;
 

@@ -32,6 +32,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod ability;
+pub mod axon_bridge;
 #[cfg(feature = "axon-pb")]
 mod client;
 pub mod context;

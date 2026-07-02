@@ -31,6 +31,9 @@ use std::time::Duration;
 
 use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
+use easynet_cli::daemon::ability::builtins::agents::{
+    discover as discover_ability, lifecycle as agent_lifecycle_ability,
+};
 use easynet_cli::daemon::ability::catalog as ability_catalog;
 use easynet_cli::daemon::ability::health as ability_health;
 use easynet_cli::daemon::context::clipboard_tracker;
@@ -57,15 +60,12 @@ use easynet_cli::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
 use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::runtime::kernel::Kernel;
 use easynet_cli::runtime::kernel_api::KernelApi;
-use easynet_cli::runtime::system_abilities::agents::{
-    discover as discover_ability, lifecycle as agent_lifecycle_ability,
-};
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
 fn device_ability_replay_fatal_message(
-    report: &easynet_cli::runtime::system_abilities::device_control::ability_management::registrar::ReplayReport,
+    report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> Option<String> {
     if report.runtime_not_ready || report.store_unreadable || report.stale > 0 || report.errored > 0
     {
@@ -79,7 +79,7 @@ fn device_ability_replay_fatal_message(
 }
 
 fn report_device_ability_replay(
-    report: &easynet_cli::runtime::system_abilities::device_control::ability_management::registrar::ReplayReport,
+    report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> anyhow::Result<()> {
     if let Some(message) = device_ability_replay_fatal_message(report) {
         anyhow::bail!(message);
@@ -218,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
         match config::load_credentials() {
             Ok(creds) => {
                 let owner_agent = easynet_cli::ura::device_ura(creds.realm_str(), &creds.node_id);
-                match easynet_cli::runtime::system_abilities::resources::media::resource_bootstrap::seed_default_device_resources(
+                match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
                     creds.realm_str(),
                     &owner_agent,
                 ) {
@@ -281,7 +281,7 @@ async fn main() -> anyhow::Result<()> {
     // state.
     boot_bus.emit_started("ability-registry");
     let pages_identity =
-        easynet_cli::runtime::system_abilities::resources::pages::PagesIdentity::from_env();
+        easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
     let hub_published_abilities = HubPublishedAbilityStore::new();
@@ -764,7 +764,7 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_cli::runtime::system_abilities::device_control::ability_management::registrar::ReplayReport;
+    use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport;
 
     #[test]
     fn device_replay_boot_policy_rejects_stale_rows() {

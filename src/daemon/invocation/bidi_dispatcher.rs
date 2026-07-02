@@ -117,7 +117,7 @@ fn local_bidi_wire_kind_for_registry_key(
 fn descriptor_ref_local_registry_key(ability: &str) -> Option<String> {
     let descriptor_ref =
         easynet_axon::invocation::canonical_ability_descriptor_ref(ability).ok()?;
-    let ability_ura = crate::runtime::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
         &descriptor_ref,
     )
     .ok()?;
@@ -544,7 +544,7 @@ impl BidiDispatcher {
                     }
                     UpPayload::Control(control)
                         if ability_owned
-                            == crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH =>
+                            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH =>
                     {
                         let Some(easynet_axon::pb::axon::v1::bidi_control::Control::PtyResize(
                             resize,
@@ -758,7 +758,7 @@ impl BidiDispatcher {
                 true,
                 &dispatch_ability,
             )?;
-            crate::runtime::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+            crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                 wire_envelope,
                 dispatch_descriptor_ref,
                 envelope_open.initial_args.clone(),
@@ -771,7 +771,7 @@ impl BidiDispatcher {
                 false,
                 &dispatch_ability,
             )?;
-            crate::runtime::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+            crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                 wire_envelope,
                 dispatch_descriptor_ref,
                 envelope_open.initial_args.clone(),
@@ -790,7 +790,7 @@ impl BidiDispatcher {
             ))
         })?;
         let handle =
-            crate::runtime::axon_bridge::dispatch_shim::open_bidi_external_signed(runtime, wire)
+            crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(runtime, wire)
                 .await
                 .map_err(|err| {
                     status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, err)
@@ -3306,7 +3306,7 @@ fn build_remote_bidi_input_frame_for_ability(
     if eof {
         return Ok(build_remote_bidi_input_dispatch_frame(call_id, &[], true));
     }
-    if ability == crate::runtime::system_abilities::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
+    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
         use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
         let frame = if let Some((cols, rows)) = pty_resize {
             serde_json::json!({"type": "resize", "cols": cols, "rows": rows})
@@ -3354,7 +3354,7 @@ mod tests {
     fn invoke_bidi_gate_recognizes_core_browser_attach_wire() {
         let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
         let ability =
-            crate::runtime::system_abilities::device_control::browser::ABILITY_ATTACH_SESSION;
+            crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
 
         assert!(local_is_bidi_wire_ability(&registry, ability));
         assert_eq!(
@@ -3367,7 +3367,7 @@ mod tests {
     fn invoke_bidi_gate_recognizes_descriptor_ref_wire_target() {
         let registry = crate::runtime::ability_wire::AbilityWireRegistry::core();
         let ability =
-            crate::runtime::system_abilities::device_control::browser::ABILITY_ATTACH_SESSION;
+            crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
         let owner_ura = crate::ura::device_ura("test-realm", "dev-a");
         let ability_ura = crate::ura::owner_ability_ura(&owner_ura, ability).unwrap();
         let descriptor_ref = format!(

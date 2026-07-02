@@ -77,10 +77,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::daemon::invocation::invoke_remote_initiator::{RequestOutcome, SessionRequestError};
-use crate::runtime::axon_bridge::hot_agent_registrar::{
+use crate::daemon::axon_bridge::hot_agent_registrar::{
     HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser, HotAgentRevokeRequest,
 };
+use crate::daemon::invocation::invoke_remote_initiator::{RequestOutcome, SessionRequestError};
 
 use crate::daemon::invocation::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
@@ -181,14 +181,14 @@ pub fn start_daemon_invocation_transport(
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
     hot_agent_registrar_cell: Arc<
-        crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell,
+        crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
     >,
     plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
     hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
     >,
     discover_federation_resolver: Option<
-        Arc<crate::runtime::system_abilities::agents::discover::DeferredDiscoverFederationResolver>,
+        Arc<crate::daemon::ability::builtins::agents::discover::DeferredDiscoverFederationResolver>,
     >,
 ) -> anyhow::Result<SessionShutdown> {
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
@@ -258,7 +258,7 @@ pub fn start_daemon_invocation_transport(
     );
     if let Some(resolver_cell) = discover_federation_resolver {
         let resolver = Arc::new(
-            crate::runtime::system_abilities::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
+            crate::daemon::ability::builtins::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
                 Arc::clone(&presence),
                 Arc::clone(&advertised_agents),
                 Arc::clone(&ability_catalog),
@@ -436,7 +436,7 @@ pub fn start_daemon_invocation_transport(
     //     through Axon, terminal records get persisted via the
     //     SDK-canonical path (one writer, not two).
     //
-    crate::runtime::axon_bridge::runtime_factory::configure_local_runtime(
+    crate::daemon::axon_bridge::runtime_factory::configure_local_runtime(
         &local_runtime,
         Some(Arc::new(
             crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
@@ -1796,7 +1796,7 @@ mod tests {
             easynet_axon::invocation::LocalRuntime::new(),
             None,
             Arc::new(
-                crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell::new(),
+                crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
             ),
             None,
             crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
@@ -1826,7 +1826,7 @@ mod tests {
             easynet_axon::invocation::LocalRuntime::new(),
             None,
             Arc::new(
-                crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell::new(),
+                crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
             ),
             None,
             crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
@@ -1972,7 +1972,7 @@ tls_key_pem = {key:?}
                 easynet_axon::invocation::LocalRuntime::new(),
                 None,
                 Arc::new(
-                    crate::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell::new(),
+                    crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
                 ),
                 None,
                 crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),

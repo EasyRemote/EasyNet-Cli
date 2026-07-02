@@ -22,7 +22,7 @@
 //   favorites.json   [{"id","kind","label","reference","added_at"}]
 //
 // Clipboard capture itself lives in `daemon::context::clipboard_tracker`;
-// the `context.*` abilities in `runtime::system_abilities::resources::context` are
+// the `context.*` abilities in `daemon::ability::builtins::resources::context` are
 // read/toggle surfaces over this store.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>

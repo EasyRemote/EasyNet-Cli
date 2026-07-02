@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
+use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::{
+    refresh_server_dynamic, RegistryRefreshSink,
+};
 use easynet_cli::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_cli::runtime::execution::mcp_client::{
     McpClientService, McpClientsFile, McpServerSpec,
-};
-use easynet_cli::runtime::system_abilities::integrations::mcp::reflective_registry::{
-    refresh_server_dynamic, RegistryRefreshSink,
 };
 
 /// Build a Python stdio MCP server whose tools/list answer toggles

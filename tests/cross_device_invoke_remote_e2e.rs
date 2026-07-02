@@ -367,7 +367,7 @@ added_at_unix_ms = 0
         Arc::clone(&runtime),
         authority_context,
     );
-    easynet_cli::runtime::system_abilities::device_control::file_transfer::register(&mut catalog);
+    easynet_cli::daemon::ability::builtins::device_control::file_transfer::register(&mut catalog);
     let service =
         DaemonInvocationService::new(Arc::clone(&presence), admission).with_local_runtime(runtime);
 
@@ -979,9 +979,9 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
 
         let args = serde_json::to_vec(&json!({
             "mode": "download",
-            "resource_ref": easynet_cli::runtime::system_abilities::device_control::files::resource_ref_for_local_path(
+            "resource_ref": easynet_cli::daemon::ability::builtins::device_control::files::resource_ref_for_local_path(
                 &path,
-                easynet_cli::runtime::system_abilities::device_control::files::FilesystemResourceCapability::Read,
+                easynet_cli::daemon::ability::builtins::device_control::files::FilesystemResourceCapability::Read,
             )
             .expect("local fs ResourceRef"),
         }))
@@ -991,7 +991,7 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
             DEVICE_A_URI,
             DEVICE_A_URI,
             DEVICE_A_URI,
-            easynet_cli::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER,
+            easynet_cli::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
             &args,
         );
         up_tx
@@ -1002,7 +1002,7 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
                     envelope: Some(signed.envelope),
                     target: Some(InvocationTarget {
                         ability_name:
-                            easynet_cli::runtime::system_abilities::device_control::file_transfer::ABILITY_FILE_TRANSFER
+                            easynet_cli::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
                                 .to_string(),
                         ..InvocationTarget::default()
                     }),

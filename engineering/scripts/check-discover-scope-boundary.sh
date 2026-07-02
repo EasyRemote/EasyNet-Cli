@@ -12,7 +12,7 @@ fail() {
     exit 1
 }
 
-DISCOVER_RS="src/runtime/system_abilities/agents/discover.rs"
+DISCOVER_RS="src/daemon/ability/builtins/agents/discover.rs"
 
 [[ -f "$DISCOVER_RS" ]] || fail "missing $DISCOVER_RS"
 

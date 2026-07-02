@@ -836,7 +836,7 @@ fn start_daemon_at(
     // Production sink wiring (`configure_local_runtime`, same as
     // daemon boot): Axon-routed unary invokes persist their terminal
     // records through the SDK-canonical `LedgerSink` — one writer.
-    easynet_cli::runtime::axon_bridge::runtime_factory::configure_local_runtime(
+    easynet_cli::daemon::axon_bridge::runtime_factory::configure_local_runtime(
         &runtime,
         Some(Arc::new(RealmTrustAnchorKeyResolver::new(
             shared_trust_anchor,
@@ -851,7 +851,7 @@ fn start_daemon_at(
         easynet_cli::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
     );
     let discover_resolver = Arc::new(
-        easynet_cli::runtime::system_abilities::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
+        easynet_cli::daemon::ability::builtins::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
             Arc::clone(&presence),
             Arc::clone(&advertised_agents),
             Arc::clone(&ability_catalog),
@@ -862,7 +862,7 @@ fn start_daemon_at(
         RegistryBuildServices::fresh().with_discover_federation_resolver(discover_resolver);
     let mut config = RegistryBuildConfig::new(services, &agents);
     let hot_agent_registrar_cell: Arc<
-        easynet_cli::runtime::system_abilities::agents::lifecycle::SharedHotRegistrarCell,
+        easynet_cli::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
     > = Arc::new(std::sync::OnceLock::new());
     config.hot_agent_registrar_cell = Arc::clone(&hot_agent_registrar_cell);
     config.local_runtime = Some(Arc::clone(&runtime));

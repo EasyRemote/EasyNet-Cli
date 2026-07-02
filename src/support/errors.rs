@@ -7,7 +7,7 @@
 //              that may itself fail.
 //
 // This lives in `support` (the leaf plumbing layer) because both the
-// `runtime::system_abilities` rollback paths and the `persistence`
+// `daemon::ability::builtins` rollback paths and the `persistence`
 // store-write paths need it, and `support` is the only module both are
 // allowed to depend on. It takes `anyhow::Error` values in and out — no
 // upward dependency on `persistence`, `registry`, or `runtime`.

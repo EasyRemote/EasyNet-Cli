@@ -12,8 +12,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/runtime/system_abilities/automation"
-    cp "$REPO_ROOT/src/runtime/system_abilities/automation/orchestration.rs" "$sandbox/src/runtime/system_abilities/automation/orchestration.rs"
+    mkdir -p "$sandbox/src/daemon/ability/builtins/automation"
+    cp "$REPO_ROOT/src/daemon/ability/builtins/automation/orchestration.rs" "$sandbox/src/daemon/ability/builtins/automation/orchestration.rs"
     echo "$sandbox"
 }
 
@@ -27,7 +27,7 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: orchestration se
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/struct OrchestrationService/struct RetiredOrchestrationService/' "$SB/src/runtime/system_abilities/automation/orchestration.rs"
+perl -0pi -e 's/struct OrchestrationService/struct RetiredOrchestrationService/' "$SB/src/daemon/ability/builtins/automation/orchestration.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -37,21 +37,21 @@ SB="$(make_sandbox)"
 {
     echo 'static MAP: OnceLock<Mutex<HashMap<(String, String), String>>> = OnceLock::new();'
     echo 'fn agent_sessions() {}'
-} >> "$SB/src/runtime/system_abilities/automation/orchestration.rs"
+} >> "$SB/src/daemon/ability/builtins/automation/orchestration.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "global agent session map should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/struct AgentCycleRequest/struct RetiredAgentCycleRequest/' "$SB/src/runtime/system_abilities/automation/orchestration.rs"
+perl -0pi -e 's/struct AgentCycleRequest/struct RetiredAgentCycleRequest/' "$SB/src/daemon/ability/builtins/automation/orchestration.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing AgentCycleRequest should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-echo '#[allow(clippy::too_many_arguments)]' >> "$SB/src/runtime/system_abilities/automation/orchestration.rs"
+echo '#[allow(clippy::too_many_arguments)]' >> "$SB/src/daemon/ability/builtins/automation/orchestration.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
