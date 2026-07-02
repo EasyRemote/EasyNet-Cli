@@ -48,6 +48,7 @@ use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapt
 use easynet_cli::daemon::control::{discovery, runtime_dispatch, server};
 use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
+use easynet_cli::daemon::federation::gateway::NoopGateway;
 use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use easynet_cli::daemon::invocation::runtime_record::{RuntimeCausalContext, RuntimeInvocation};
 use easynet_cli::daemon::invocation::target::{LocalNodeResolver, TargetResolver};
@@ -57,7 +58,6 @@ use easynet_cli::persistence::config;
 use easynet_cli::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
 };
-use easynet_cli::runtime::gateway::NoopGateway;
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;

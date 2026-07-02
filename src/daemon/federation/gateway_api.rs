@@ -1,17 +1,16 @@
-// EasyNet CLI — GatewayApi (runtime ↔ network boundary)
-// ======================================================
+// EasyNet CLI — GatewayApi (daemon kernel ↔ federation boundary)
+// ==============================================================
 //
-// File: src/runtime/gateway_api.rs
+// File: src/daemon/federation/gateway_api.rs
 // Description: The trait that is the *only* surface by which the
-//              Execution layer reaches the Axon network — pair,
-//              heartbeat, remote ability invocation, stream
-//              subscription. All federation concerns live behind
-//              this trait.
+//              daemon kernel reaches federation lifecycle/discovery
+//              surfaces. Invocation dispatch itself goes through
+//              daemon Invocation, not this trait.
 //
 // Why two trait boundaries, not one
 // ---------------------------------
-// KernelApi is "who is allowed to ask the runtime to do things".
-// GatewayApi is "how does the runtime talk to the world". Keeping
+// KernelApi is "who is allowed to ask the daemon kernel to do things".
+// GatewayApi is "how does the daemon kernel talk to federation". Keeping
 // them separate makes mocking trivial for tests: a test that
 // exercises `Kernel::invoke` can inject an in-memory GatewayApi
 // mock without spinning up Axon; a test that exercises the
@@ -20,11 +19,10 @@
 // v1 surface is small on purpose
 // ------------------------------
 // The plan does not try to enumerate every Axon SDK call the
-// runtime might make — only the ones that cross the runtime
-// boundary today: publish an ability, invoke a remote ability,
-// subscribe to a remote ability stream, list peers, and send a
-// heartbeat. Anything else stays inside `runtime::gateway.rs`
-// where the DendriteBridge actually lives.
+// daemon kernel might make — only lifecycle/discovery calls that cross
+// the daemon-kernel/federation boundary today: publish an ability, list
+// peers, and send a heartbeat. Anything else stays inside
+// `daemon::federation::gateway.rs` where the DendriteBridge actually lives.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -73,6 +71,11 @@ pub trait GatewayApi: Send + Sync {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
-    fn _gateway_api_is_object_safe(_g: &dyn GatewayApi) {}
+    #[test]
+    fn noop_gateway_can_be_used_through_gateway_api_trait_object() {
+        let gateway = crate::daemon::federation::gateway::NoopGateway::new();
+        let object: &dyn GatewayApi = &gateway;
+
+        assert!(object.list_peers().unwrap().is_empty());
+    }
 }

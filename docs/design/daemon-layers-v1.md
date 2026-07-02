@@ -51,9 +51,9 @@ Inside `easynet-daemon`:
     ├── schedule/        cron store + tick runner          (PR-SCHED)
     └── loop_instance/   EAL loop wrapper store            (PR-LOOP)
     ↓  (only via GatewayApi trait)
-[GatewayApi]             src/runtime/gateway_api.rs       ← NETWORK BOUNDARY
+[GatewayApi]             src/daemon/federation/gateway_api.rs       ← NETWORK BOUNDARY
     ↓
-[Gateway]                src/runtime/gateway.rs           (holds DendriteBridge)
+[Gateway]                src/daemon/federation/gateway.rs           (holds DendriteBridge)
 ```
 
 ### Two hard trait boundaries
@@ -85,8 +85,8 @@ The layering is enforced at CI time:
   execute already-loaded plugin-backed abilities; install/load policy stays in
   `runtime/plugin_host`. See `docs/design/plugin-contribution-boundary.md`.
 - `engineering/scripts/check-kernel-boundary.sh` (rule 3) — Execution may
-  only touch the network via `crate::runtime::gateway_api`, not
-  the concrete `runtime::gateway`.
+  only touch the network via `crate::daemon::federation::gateway_api`, not
+  the concrete `daemon::federation::gateway`.
 - `engineering/scripts/check-subservice-isolation.sh` — Execution
   sub-services cannot import each other.
 - `engineering/scripts/check-invocation-unity.sh` — IPC/Kernel/Gateway

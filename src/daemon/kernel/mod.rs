@@ -41,12 +41,12 @@ use crate::daemon::execution::{
     schedule::ScheduleService,
     session::SessionService,
 };
+use crate::daemon::federation::gateway_api::GatewayApi;
 use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::invocation::runtime_record::{
     runtime_invocation_id, PriorChain, Receipt, ReceiptEvent, RuntimeInvocation, TerminalState,
 };
 use crate::daemon::kernel::api::KernelApi;
-use crate::runtime::gateway_api::GatewayApi;
 
 /// The runtime kernel. Holds one sub-service per feature and one
 /// Gateway handle for federation calls. Feature PRs extend the
@@ -755,8 +755,8 @@ impl KernelApi for Kernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::federation::gateway_api::PeerInfo;
     use crate::daemon::invocation::runtime_record::{RuntimeCausalContext, RuntimeInvocation};
-    use crate::runtime::gateway_api::PeerInfo;
     use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions};
     use serde_json::json;
 

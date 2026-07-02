@@ -4899,7 +4899,7 @@ fn runtime_bidi_source(
 mod tests {
     use super::*;
     use crate::core::domain::NodeId;
-    use crate::runtime::gateway_api::PeerInfo;
+    use crate::daemon::federation::gateway_api::PeerInfo;
     use serde_json::json;
 
     fn empty_registry() -> Arc<AxonAbilityCatalog> {

@@ -112,6 +112,8 @@ require_path "src/daemon/execution/mod.rs"
 require_path "src/daemon/federation/client"
 require_path "src/daemon/federation/directory.rs"
 require_path "src/daemon/federation/directory_reader.rs"
+require_path "src/daemon/federation/gateway.rs"
+require_path "src/daemon/federation/gateway_api.rs"
 require_path "src/daemon/federation/peers.rs"
 require_path "src/daemon/federation/read_model/ability_catalog.rs"
 require_path "src/daemon/federation/read_model/advertised_agents.rs"
@@ -156,6 +158,8 @@ reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
+reject_path "src/runtime/gateway.rs"
+reject_path "src/runtime/gateway_api.rs"
 reject_path "src/runtime/invocation.rs"
 reject_path "src/runtime/invocation_target.rs"
 reject_path "src/runtime/kernel.rs"
@@ -252,6 +256,16 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not import through retired runtime::execution paths" \
     '(^|[^[:alnum:]_])(crate::runtime::execution::|easynet_cli::runtime::execution::|runtime::execution::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::gateway paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::gateway::|easynet_cli::runtime::gateway::|runtime::gateway::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::gateway_api paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::gateway_api::|easynet_cli::runtime::gateway_api::|runtime::gateway_api::)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
@@ -352,6 +366,16 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/execution physical path" \
     'src/runtime/execution(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/gateway.rs physical path" \
+    'src/runtime/gateway\.rs|runtime/gateway\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/gateway_api.rs physical path" \
+    'src/runtime/gateway_api\.rs|runtime/gateway_api\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

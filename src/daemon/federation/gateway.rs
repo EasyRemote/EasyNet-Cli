@@ -1,7 +1,7 @@
 // EasyNet CLI — Gateway (Axon-facing implementation)
 // ===================================================
 //
-// File: src/runtime/gateway.rs
+// File: src/daemon/federation/gateway.rs
 // Description: Concrete `GatewayApi` implementation backed by a
 //              DendriteBridge. v1 ships a no-op placeholder so the
 //              Kernel can be constructed without a live Axon
@@ -21,7 +21,7 @@
 
 use serde_json::Value;
 
-use crate::runtime::gateway_api::{GatewayApi, PeerInfo};
+use crate::daemon::federation::gateway_api::{GatewayApi, PeerInfo};
 
 /// v1 no-op Gateway. Every method returns an empty / success value.
 /// Suitable for tests and for CLI tooling that needs a Kernel but

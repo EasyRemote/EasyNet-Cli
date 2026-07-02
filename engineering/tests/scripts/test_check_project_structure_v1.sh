@@ -74,6 +74,8 @@ make_sandbox() {
     printf '%s\n' '// daemon federation client root' > "$sandbox/src/daemon/federation/client/mod.rs"
     printf '%s\n' '// daemon federation directory' > "$sandbox/src/daemon/federation/directory.rs"
     printf '%s\n' '// daemon federation directory reader' > "$sandbox/src/daemon/federation/directory_reader.rs"
+    printf '%s\n' '// daemon federation gateway' > "$sandbox/src/daemon/federation/gateway.rs"
+    printf '%s\n' '// daemon federation gateway api' > "$sandbox/src/daemon/federation/gateway_api.rs"
     printf '%s\n' '// daemon federation peers' > "$sandbox/src/daemon/federation/peers.rs"
     printf '%s\n' '// daemon federation read model root' > "$sandbox/src/daemon/federation/read_model/mod.rs"
     printf '%s\n' '// ability catalog read model' > "$sandbox/src/daemon/federation/read_model/ability_catalog.rs"
@@ -196,6 +198,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/execution directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired gateway' > "$SB/src/runtime/gateway.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/gateway.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired gateway api' > "$SB/src/runtime/gateway_api.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/gateway_api.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// retired local invocation identity' > "$SB/src/runtime/local_invocation_identity.rs"
@@ -347,6 +363,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::execution import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::gateway::NoopGateway::new; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::gateway import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::gateway_api::GatewayApi; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::gateway_api import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::local_invocation_identity::LOCAL_SYSTEM_AGENT_URA; }' > "$SB/src/lib.rs"
@@ -622,6 +652,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/federation/directory_reader.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/gateway.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/gateway.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/federation/gateway_api.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/federation/gateway_api.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/federation/peers.rs"

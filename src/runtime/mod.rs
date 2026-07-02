@@ -68,25 +68,12 @@ pub fn enter_mission_context_for_current_thread(
 pub mod failure_codes;
 pub mod join_connection_state;
 
-// Runtime→Network boundary: GatewayApi is the trait the Execution
-// layer uses when it needs to touch federation (publish an ability,
-// invoke remotely, enumerate peers, heartbeat). The implementation
-// in `gateway.rs` holds the DendriteBridge; Execution code never
-// imports `gateway` directly, only `gateway_api`. This is the remaining
-// runtime network boundary until Gateway/GatewayApi move under daemon
-// federation.
-pub mod gateway_api;
-
-// Gateway implementation. `gateway` is the Axon-facing lifecycle/discovery
-// adapter; invocation dispatch flows through daemon Invocation.
-pub mod gateway;
-
 pub mod executors;
 
 // Stage-2 dispatch executor for daemon-owned and agent-owned abilities.
 // `ability_dispatch` consumes `InvocationTarget` (from the daemon
 // stage-1 resolver in `daemon::invocation::target`) and routes either to
-// the in-process `AxonAbilityCatalog` or via `GatewayApi`.
+// the in-process `AxonAbilityCatalog` or via daemon federation `GatewayApi`.
 // `daemon::ability::catalog::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).

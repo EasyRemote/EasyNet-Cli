@@ -57,10 +57,6 @@ echo "== check-kernel-boundary.sh =="
 #
 # Allowlist (final v1 set):
 #   * domain              — typed ids + handles
-#   * gateway_api         — Gateway trait (interface)
-#   * gateway             — NoopGateway used as the v1 default
-#                           when the proxy is constructed without
-#                           an injected Gateway
 #   * system              — build_registry() factory the convenience
 #                           proxy constructor calls to materialise
 #                           the local handler set
@@ -79,7 +75,7 @@ echo "== check-kernel-boundary.sh =="
 # struct, and runtime::session (a legacy path that pre-dates the
 # Kernel boundary).
 if [ -d "src/daemon/control" ]; then
-    control_allowed='domain|gateway_api|gateway|system|hosted_receipt|ability_names'
+    control_allowed='domain|system|hosted_receipt|ability_names'
     control_files=$(find src/daemon/control -name '*.rs' | sort)
     for f in $control_files; do
         awk '
@@ -139,7 +135,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='domain|gateway_api|gateway|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
+    serve_allowed='domain|system|hosted_receipt|agent_ability_specs|keyring|publish|failure_codes|owner_projection|join_connection_state|provisional_ura|federation_init|advertise|federation_client'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '
@@ -164,12 +160,12 @@ fi
 # Execution layer must not reach into the concrete gateway impl.
 # Execution → GatewayApi trait only.
 if [ -d "src/daemon/execution" ]; then
-    offending=$(grep -rnE "crate::runtime::gateway\b" src/daemon/execution \
-        | grep -v "crate::runtime::gateway_api" || true)
+    offending=$(grep -rnE "crate::daemon::federation::gateway\b" src/daemon/execution \
+        | grep -v "crate::daemon::federation::gateway_api" || true)
     if [ -n "$offending" ]; then
-        echo "ERROR: Execution layer must not import crate::runtime::gateway directly."
+        echo "ERROR: Execution layer must not import crate::daemon::federation::gateway directly."
         echo "$offending"
-        echo "  Use crate::runtime::gateway_api::GatewayApi trait instead."
+        echo "  Use crate::daemon::federation::gateway_api::GatewayApi trait instead."
         violations=$((violations + 1))
     fi
 fi
