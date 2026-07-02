@@ -42,7 +42,7 @@ Inside `easynet-daemon`:
     ↓
 [Control]                src/daemon/control/              (local boot/status IPC)
     ↓  (only via KernelApi trait)
-[KernelApi]              src/runtime/kernel_api.rs        ← SYSCALL BOUNDARY
+[KernelApi]              src/daemon/kernel/api.rs        ← SYSCALL BOUNDARY
     ↓  (trait impl on the Kernel)
 [Execution]              src/daemon/execution/
     ├── session/         one session per agent run         (PR-ATTACH)
@@ -60,9 +60,10 @@ Inside `easynet-daemon`:
 
 The layering is enforced at CI time:
 
-- `engineering/scripts/check-kernel-boundary.sh` — Control layer may only
-  import syscall-boundary runtime modules plus stable ability-name constants
-  from `crate::runtime`. Anything else is rejected.
+- `engineering/scripts/check-kernel-boundary.sh` — Control layer reaches
+  daemon execution through `crate::daemon::kernel::api`; any remaining
+  `crate::runtime::*` import must be on the narrow allowlist and justified
+  as a not-yet-migrated adapter.
 - `engineering/scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
   transport may import the explicitly listed runtime adapters it
   needs to translate Axon `Invocation` frames into daemon-local

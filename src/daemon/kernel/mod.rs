@@ -1,12 +1,12 @@
 // EasyNet CLI — Kernel (single execution entry point)
 // =====================================================
 //
-// File: src/runtime/kernel.rs
+// File: src/daemon/kernel/mod.rs
 // Description: The Kernel holds one handle per Execution sub-service
 //              plus a Gateway handle; every KernelApi method routes
 //              through the Kernel. Kernel::invoke is the single
-//              execution entry that v10.3 C* pins as the only path
-//              into the runtime.
+//              execution entry that v10.3 C* pins as the only daemon
+//              kernel path into local execution.
 //
 // Invocation state
 // ----------------
@@ -18,6 +18,8 @@
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
+
+pub mod api;
 
 use std::sync::{Arc, OnceLock};
 
@@ -43,8 +45,8 @@ use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::invocation::runtime_record::{
     runtime_invocation_id, PriorChain, Receipt, ReceiptEvent, RuntimeInvocation, TerminalState,
 };
+use crate::daemon::kernel::api::KernelApi;
 use crate::runtime::gateway_api::GatewayApi;
-use crate::runtime::kernel_api::KernelApi;
 
 /// The runtime kernel. Holds one sub-service per feature and one
 /// Gateway handle for federation calls. Feature PRs extend the

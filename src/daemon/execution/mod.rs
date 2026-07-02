@@ -19,7 +19,7 @@
 // boundaries at the module level so the CI grep can enforce them.
 //
 // Communication between sub-services always goes through the
-// Kernel (`runtime::kernel`), which holds one handle per sub-
+// Kernel (`daemon::kernel`), which holds one handle per sub-
 // service and brokers every cross-module call. The execution
 // services own daemon state; the Kernel remains the chokepoint
 // for cross-service orchestration and Invocation entry.

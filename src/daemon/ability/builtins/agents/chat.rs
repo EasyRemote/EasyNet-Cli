@@ -2373,9 +2373,9 @@ mod tests {
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
         use crate::daemon::invocation::runtime_record::{RuntimeCausalContext, RuntimeInvocation};
+        use crate::daemon::kernel::api::KernelApi;
+        use crate::daemon::kernel::Kernel;
         use crate::runtime::gateway::NoopGateway;
-        use crate::runtime::kernel::Kernel;
-        use crate::runtime::kernel_api::KernelApi;
         use easynet_axon::invocation::{
             make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes, AxonError,
             KeyResolver, LocalRuntime,

@@ -49,7 +49,7 @@ violations=0
 # declare the trait). Handler implementations may still operate
 # on raw JSON internally because the `Invocation.args` field is
 # typed `serde_json::Value` in v1.
-for f in src/runtime/kernel_api.rs src/runtime/gateway_api.rs; do
+for f in src/daemon/kernel/api.rs src/runtime/gateway_api.rs; do
     [ -f "$f" ] || continue
     bad=$(grep -nE 'args_json|payload: *(serde_json::)?Value|args: *(serde_json::)?Value' "$f" || true)
     if [ -n "$bad" ]; then

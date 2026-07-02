@@ -8,7 +8,7 @@
 #
 # Execution sub-services under `src/daemon/execution/<name>/` must
 # not import each other directly. All cross-sub-service calls are
-# routed through the Kernel (`src/runtime/kernel.rs`) so that a bug
+# routed through the Kernel (`src/daemon/kernel/mod.rs`) so that a bug
 # in one sub-service does not corrupt the others' state and so that
 # the future isolation model (scheduler fairness, resource quotas)
 # has a single chokepoint to instrument.

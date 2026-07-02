@@ -65,30 +65,21 @@ pub fn enter_mission_context_for_current_thread(
     ))
 }
 
-// v10.5 R1 (PR-DAEMON) — runtime-adjacent contracts that still
-// await full daemon/kernel classification. `kernel_api` is the trait
-// the Control layer consumes; its implementation lives in `kernel.rs`.
 pub mod failure_codes;
 pub mod join_connection_state;
-pub mod kernel_api;
 
 // Runtime→Network boundary: GatewayApi is the trait the Execution
 // layer uses when it needs to touch federation (publish an ability,
 // invoke remotely, enumerate peers, heartbeat). The implementation
 // in `gateway.rs` holds the DendriteBridge; Execution code never
-// imports `gateway` directly, only `gateway_api`. This split is the
-// second hard boundary (the first being KernelApi above) enforced
-// by engineering/scripts/check-kernel-boundary.sh.
+// imports `gateway` directly, only `gateway_api`. This is the remaining
+// runtime network boundary until Gateway/GatewayApi move under daemon
+// federation.
 pub mod gateway_api;
 
-// Kernel + Gateway implementations.
-// - `kernel` provides the single execution entry Kernel::invoke that
-//   schedule tick / loop controller / permission broker / Client FFI
-//   all converge on (U1 invariant, v10.3 C*).
-// - `gateway` is the AxonGateway impl that fronts federation calls;
-//   in PR-DAEMON it is a thin skeleton and later PRs flesh it out.
+// Gateway implementation. `gateway` is the Axon-facing lifecycle/discovery
+// adapter; invocation dispatch flows through daemon Invocation.
 pub mod gateway;
-pub mod kernel;
 
 pub mod executors;
 

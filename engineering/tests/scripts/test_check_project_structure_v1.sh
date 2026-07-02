@@ -33,6 +33,7 @@ make_sandbox() {
         "$sandbox/src/daemon/invocation" \
         "$sandbox/src/daemon/invocation/state" \
         "$sandbox/src/daemon/keyring" \
+        "$sandbox/src/daemon/kernel" \
         "$sandbox/src/daemon/plugins" \
         "$sandbox/src/daemon/resources" \
         "$sandbox/src/daemon/trust" \
@@ -93,6 +94,8 @@ make_sandbox() {
     printf '%s\n' '// daemon invocation runtime record' > "$sandbox/src/daemon/invocation/runtime_record.rs"
     printf '%s\n' '// daemon invocation target resolver' > "$sandbox/src/daemon/invocation/target.rs"
     printf '%s\n' '// daemon keyring root' > "$sandbox/src/daemon/keyring/mod.rs"
+    printf '%s\n' '// daemon kernel root' > "$sandbox/src/daemon/kernel/mod.rs"
+    printf '%s\n' '// daemon kernel api' > "$sandbox/src/daemon/kernel/api.rs"
     printf '%s\n' '// daemon plugins root' > "$sandbox/src/daemon/plugins/mod.rs"
     printf '%s\n' '// daemon resources root' > "$sandbox/src/daemon/resources/mod.rs"
     printf '%s\n' '// daemon trust root' > "$sandbox/src/daemon/trust/mod.rs"
@@ -200,6 +203,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/local_invocation_identity.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired kernel' > "$SB/src/runtime/kernel.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/kernel.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired kernel api' > "$SB/src/runtime/kernel_api.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/kernel_api.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' '// retired invocation target resolver' > "$SB/src/runtime/invocation_target.rs"
@@ -351,6 +368,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::invocation import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::kernel::Kernel::new; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::kernel import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::kernel_api::KernelApi; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::kernel_api import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::local_runtime_invoker::invoke_local_rpc_sync; }' > "$SB/src/lib.rs"
@@ -626,6 +657,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing src/daemon/keyring/mod.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/kernel/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/kernel/mod.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+rm -f "$SB/src/daemon/kernel/api.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing src/daemon/kernel/api.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 rm -f "$SB/src/daemon/invocation/state/nonce_replay.rs"

@@ -35,16 +35,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 echo "== check-dag-invariants.sh =="
-echo "Running daemon::invocation::runtime_record::tests + runtime::kernel::tests..."
+echo "Running daemon::invocation::runtime_record::tests + daemon::kernel::tests..."
 
 # `daemon::invocation::runtime_record::tests` exercises the canonical-bytes
 # invariant + invocation_id stability (D1's content-addressing
-# precondition). `runtime::kernel::tests` exercises Kernel::invoke
+# precondition). `daemon::kernel::tests` exercises Kernel::invoke
 # returning a Receipt whose invocation_id matches the input (D2's
 # "one Receipt per Invocation" half).
 cargo test --lib --quiet -- \
     daemon::invocation::runtime_record \
-    runtime::kernel:: \
+    daemon::kernel:: \
     2>&1 | tail -20
 
 echo "ok (D1 + D2 invariants hold for v1 construction)"

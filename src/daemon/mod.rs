@@ -43,6 +43,7 @@ pub mod federation;
 pub mod identity;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
+pub mod kernel;
 pub mod keyring;
 pub mod plugins;
 mod process;

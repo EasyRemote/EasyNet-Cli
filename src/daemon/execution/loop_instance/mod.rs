@@ -24,7 +24,7 @@ use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, Sess
 use crate::daemon::invocation::runtime_record::{
     runtime_invocation_id, RuntimeCausalContext, RuntimeInvocation, TerminalState,
 };
-use crate::runtime::kernel_api::KernelApi;
+use crate::daemon::kernel::api::KernelApi;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopInvocationKind {

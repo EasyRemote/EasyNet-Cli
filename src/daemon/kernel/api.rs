@@ -1,30 +1,30 @@
 // EasyNet CLI — KernelApi (syscall boundary)
 // ===========================================
 //
-// File: src/runtime/kernel_api.rs
+// File: src/daemon/kernel/api.rs
 // Description: The trait that is the *only* surface by which the
-//              Control layer (future IPC server) and the future
-//              planner reach into the runtime. Every method is the
-//              runtime analogue of a Linux syscall: a narrow,
+//              Control layer and daemon schedulers reach into the
+//              daemon execution kernel. Every method is the daemon
+//              analogue of a Linux syscall: a narrow,
 //              typed, audited entry point.
 //
 // Layering rule
 // -------------
 // The plan v10.1–v10.3 pins two hard trait boundaries:
-//   * KernelApi      — Control ↔ runtime  (this file)
-//   * GatewayApi     — runtime ↔ network  (see gateway_api.rs)
+//   * KernelApi      — daemon control/schedulers ↔ daemon kernel
+//   * GatewayApi     — daemon kernel ↔ federation/network adapter
 //
 // CI enforcement lives in `engineering/scripts/check-kernel-boundary.sh`:
 // anything under `src/daemon/control/` may import
-// `crate::runtime::kernel_api`, `crate::daemon::invocation::runtime_record`,
+// `crate::daemon::kernel::api`, `crate::daemon::invocation::runtime_record`,
 // `crate::core::domain`, and nothing else from `crate::runtime`.
 //
 // Why v1 KernelApi is still thin
 // ------------------------------
-// The feature PRs will fill in the method bodies; the trait itself
-// is the immovable surface. A reviewer checking "does this PR keep
-// the Control boundary clean?" reads this file, counts the methods,
-// confirms their domain-object signatures, and moves on.
+// The trait itself is the immovable daemon-kernel surface. A reviewer
+// checking "does this PR keep the Control boundary clean?" reads this
+// file, counts the methods, confirms their domain-object signatures,
+// and moves on.
 //
 // v10.3 C* unity: every execution entry point ultimately funnels
 // through `invoke`. Schedule tick, loop iteration, permission
@@ -42,7 +42,7 @@ use crate::core::domain::{
 use crate::daemon::invocation::runtime_record::{Receipt, RuntimeInvocation};
 use serde_json::Value;
 
-/// v1 KernelApi surface. Each method is the runtime analogue of a
+/// v1 KernelApi surface. Each method is the daemon-kernel analogue of a
 /// Linux syscall; the feature PRs add implementations on the Kernel
 /// struct that owns sub-service handles.
 ///

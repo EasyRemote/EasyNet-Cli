@@ -129,6 +129,8 @@ require_path "src/daemon/invocation/receipt_subscriber.rs"
 require_path "src/daemon/invocation/runtime_record.rs"
 require_path "src/daemon/invocation/target.rs"
 require_path "src/daemon/keyring/mod.rs"
+require_path "src/daemon/kernel/mod.rs"
+require_path "src/daemon/kernel/api.rs"
 require_path "src/daemon/plugins/mod.rs"
 require_path "src/daemon/resources/mod.rs"
 require_path "src/daemon/trust/anchor.rs"
@@ -156,6 +158,8 @@ reject_path "src/runtime/axon_bridge"
 reject_path "src/runtime/execution"
 reject_path "src/runtime/invocation.rs"
 reject_path "src/runtime/invocation_target.rs"
+reject_path "src/runtime/kernel.rs"
+reject_path "src/runtime/kernel_api.rs"
 reject_path "src/runtime/local_invocation_identity.rs"
 reject_path "src/runtime/local_runtime_invoker.rs"
 reject_path "src/runtime/plugin_host"
@@ -266,6 +270,16 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::kernel paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::kernel::|easynet_cli::runtime::kernel::|runtime::kernel::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::kernel_api paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::kernel_api::|easynet_cli::runtime::kernel_api::|runtime::kernel_api::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::local_runtime_invoker paths" \
     '(^|[^[:alnum:]_])(crate::runtime::local_runtime_invoker::|easynet_cli::runtime::local_runtime_invoker::|runtime::local_runtime_invoker::)' \
     "${SCAN_ROOTS[@]}"
@@ -353,6 +367,16 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/invocation.rs physical path" \
     'src/runtime/invocation\.rs|runtime/invocation\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/kernel.rs physical path" \
+    'src/runtime/kernel\.rs|runtime/kernel\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/kernel_api.rs physical path" \
+    'src/runtime/kernel_api\.rs|runtime/kernel_api\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
