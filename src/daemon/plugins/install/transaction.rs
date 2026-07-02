@@ -1,13 +1,13 @@
 // EasyNet CLI — plugin install directory transactions
 // ===================================================
 //
-// File: src/runtime/plugin_host/install/transaction.rs
+// File: src/daemon/plugins/install/transaction.rs
 // Description: Staging, rollback, and package tree movement helpers.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
+use crate::daemon::plugins::errors::{PluginHostError, Result};
 
 const STAGING_DIR: &str = ".staging";
 const ROLLBACK_DIR: &str = ".rollback";

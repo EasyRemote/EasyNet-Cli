@@ -209,7 +209,7 @@ fn published_abilities_from_registry_for_owner(
 /// runtime plugin abilities own their descriptor TOMLs inside their package
 /// directory.
 pub fn descriptor_path_for(name: &str) -> String {
-    crate::runtime::plugin_host::ability_descriptor_path(name).unwrap_or_else(|| {
+    crate::daemon::plugins::ability_descriptor_path(name).unwrap_or_else(|| {
         system_ability_descriptor_path(name)
             .to_string_lossy()
             .into_owned()
@@ -306,7 +306,7 @@ fn discovery_hints_from_modes(
 /// handlers when called from the daemon registry (the `published_abilities`
 /// filter strips them, but other callers may not).
 pub fn description_for(name: &str) -> &'static str {
-    if let Some(description) = crate::runtime::plugin_host::description_for(name) {
+    if let Some(description) = crate::daemon::plugins::description_for(name) {
         return description;
     }
 
@@ -487,7 +487,7 @@ pub fn description_for(name: &str) -> &'static str {
 /// Plugin packages own descriptor text that may come from TOML at runtime.
 /// Builtin system abilities still use the static `description_for` table.
 pub fn description_for_owned(name: &str) -> String {
-    crate::runtime::plugin_host::builtin_description_for_owned(name)
+    crate::daemon::plugins::builtin_description_for_owned(name)
         .unwrap_or_else(|| description_for(name).to_string())
 }
 
@@ -502,10 +502,10 @@ pub fn description_for_owned(name: &str) -> String {
 /// as schema-less in MCP `ListTools`; a CI test pins the table
 /// against the live registry to surface that drift.
 pub fn input_schema_for(name: &str) -> serde_json::Value {
-    if let Some(schema) = crate::runtime::plugin_host::builtin_input_schema_for(name) {
+    if let Some(schema) = crate::daemon::plugins::builtin_input_schema_for(name) {
         return schema;
     }
-    if let Some(schema) = crate::runtime::plugin_host::input_schema_for(name) {
+    if let Some(schema) = crate::daemon::plugins::input_schema_for(name) {
         return schema;
     }
 
@@ -775,18 +775,14 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         return Some(AbilityLayer::Operational);
     }
 
-    if let Some(layer) = crate::runtime::plugin_host::ability_layer_for(name) {
+    if let Some(layer) = crate::daemon::plugins::ability_layer_for(name) {
         return Some(match layer {
-            crate::runtime::plugin_host::PluginAbilityLayer::Introspection => {
+            crate::daemon::plugins::PluginAbilityLayer::Introspection => {
                 AbilityLayer::Introspection
             }
-            crate::runtime::plugin_host::PluginAbilityLayer::Control => AbilityLayer::Control,
-            crate::runtime::plugin_host::PluginAbilityLayer::Observation => {
-                AbilityLayer::Observation
-            }
-            crate::runtime::plugin_host::PluginAbilityLayer::Operational => {
-                AbilityLayer::Operational
-            }
+            crate::daemon::plugins::PluginAbilityLayer::Control => AbilityLayer::Control,
+            crate::daemon::plugins::PluginAbilityLayer::Observation => AbilityLayer::Observation,
+            crate::daemon::plugins::PluginAbilityLayer::Operational => AbilityLayer::Operational,
         });
     }
 

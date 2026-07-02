@@ -1450,11 +1450,11 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     #[test]
     fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
-        use crate::persistence::local_agents::{save, LocalAgentsFile};
-        use crate::runtime::plugin_host::{
+        use crate::daemon::plugins::{
             DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
             PluginRequirementSet, PluginRuntimeLimits,
         };
+        use crate::persistence::local_agents::{save, LocalAgentsFile};
         use std::sync::OnceLock;
 
         let _home = crate::cli::test_support::HomeGuard::new();

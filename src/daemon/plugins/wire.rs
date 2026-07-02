@@ -1,11 +1,11 @@
 // EasyNet CLI — plugin ability wire registry
 // ==========================================
 //
-// File: src/runtime/plugin_host/wire.rs
+// File: src/daemon/plugins/wire.rs
 // Description: Ability-layer and bidi wire profile lookup from package index.
 
-use crate::runtime::plugin_host::index::PluginPackageIndex;
-use crate::runtime::plugin_host::manifest::{PluginAbilityLayer, PluginBidiWireKind};
+use crate::daemon::plugins::index::PluginPackageIndex;
+use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginBidiWireKind};
 
 /// Registry over plugin wire metadata.
 pub struct PluginWireRegistry<'a> {

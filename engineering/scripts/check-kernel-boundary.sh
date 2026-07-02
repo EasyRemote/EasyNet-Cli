@@ -174,16 +174,10 @@ fi
 #                           translates each wire frame into an
 #                           Axon LocalRuntime invocation through
 #                           the bridge.
-#   * plugin_host         — daemon plugin runtime manager handle
-#                           injected at boot so Invocation dispatch
-#                           can execute already-loaded plugin-backed
-#                           abilities. Package install/load policy
-#                           remains in runtime/plugin_host.
-#
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|plugin_host'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '

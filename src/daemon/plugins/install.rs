@@ -1,7 +1,7 @@
 // EasyNet CLI — plugin install transactions
 // =========================================
 //
-// File: src/runtime/plugin_host/install.rs
+// File: src/daemon/plugins/install.rs
 // Description: Transactional install/update/remove core for local plugins.
 
 mod state;
@@ -12,13 +12,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::index::PluginPackageIndex;
-use crate::runtime::plugin_host::install::state::PluginStateStore;
-pub use crate::runtime::plugin_host::install::state::{InstalledPluginRecord, PluginStateToml};
-use crate::runtime::plugin_host::install::transaction::{copy_tree, rollback_dir, txn_dir};
-use crate::runtime::plugin_host::install::validation::validate_installable_in_this_release;
-use crate::runtime::plugin_host::package::PluginPackage;
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::index::PluginPackageIndex;
+use crate::daemon::plugins::install::state::PluginStateStore;
+pub use crate::daemon::plugins::install::state::{InstalledPluginRecord, PluginStateToml};
+use crate::daemon::plugins::install::transaction::{copy_tree, rollback_dir, txn_dir};
+use crate::daemon::plugins::install::validation::validate_installable_in_this_release;
+use crate::daemon::plugins::package::PluginPackage;
 
 const INSTALLED_DIR: &str = "installed";
 
@@ -217,7 +217,7 @@ impl PluginInstaller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::plugin_host::package::tests::write_test_package;
+    use crate::daemon::plugins::package::tests::write_test_package;
 
     #[test]
     fn plugin_host_install_rejects_not_loadable_declarative_packages() {

@@ -4,7 +4,7 @@
 // File: src/plugins/builtin/remote_desktop/config.rs
 // Description: Host manifest limits projected into plugin-local runtime knobs.
 
-use crate::runtime::plugin_host::PluginRuntimeLimits;
+use crate::daemon::plugins::PluginRuntimeLimits;
 
 const MIN_REMOTE_DESKTOP_SESSIONS: usize = 1;
 pub(in crate::plugins::builtin::remote_desktop) const MIN_FRAME_QUEUE_DEPTH: usize = 1;

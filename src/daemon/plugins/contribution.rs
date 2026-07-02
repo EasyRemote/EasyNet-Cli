@@ -1,19 +1,19 @@
 // EasyNet CLI — plugin contribution boundary
 // ==========================================
 //
-// File: src/runtime/plugin_host/contribution.rs
+// File: src/daemon/plugins/contribution.rs
 // Description: Daemon-owned binding layer for plugin-provided AbilityImpls.
 
 use std::collections::BTreeSet;
 
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::manifest::{
+    PluginCallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
+};
 use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
 use crate::runtime::ability_dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalBidiHandlerWithEnvelope,
     LocalRpcHandlerWithEnvelope, LocalStreamHandlerWithEnvelope, OwnerKind,
-};
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::manifest::{
-    PluginCallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
 };
 
 /// Resource and permission declarations supplied by a plugin package.

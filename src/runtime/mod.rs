@@ -134,7 +134,6 @@ pub mod advertise;
 pub mod dispatch_receipt;
 pub mod federation_client;
 pub(crate) mod owner_projection;
-pub mod plugin_host;
 pub mod provisional_ura;
 pub mod publish;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.

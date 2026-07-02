@@ -1,20 +1,20 @@
 // EasyNet CLI — daemon plugin resource and policy brokers
 // =======================================================
 //
-// File: src/runtime/plugin_host/broker.rs
+// File: src/daemon/plugins/broker.rs
 // Description: Daemon-owned readiness brokers for plugin activation metadata.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::persistence::resources::ResourcesFile;
-use crate::runtime::plugin_host::manifest::PluginRealtimeCapability;
-use crate::runtime::plugin_host::realtime::{
+use crate::daemon::plugins::manifest::PluginRealtimeCapability;
+use crate::daemon::plugins::realtime::{
     PluginRealtimeActivationPlan, PluginRealtimeActivationStatus, PluginRealtimeTransportReadiness,
     PluginRealtimeTransportReadinessStatus,
 };
-use crate::runtime::plugin_host::surface::{PluginPackageSurfaceRecord, PluginSurfaceReport};
+use crate::daemon::plugins::surface::{PluginPackageSurfaceRecord, PluginSurfaceReport};
+use crate::persistence::resources::ResourcesFile;
 
 /// Package-level activation broker for plugin realtime capabilities.
 ///
@@ -230,7 +230,7 @@ pub struct PluginRealtimeActivationOutcome {
     pub canonical_abilities: Vec<String>,
     pub available_abilities: Vec<String>,
     pub missing_abilities: Vec<String>,
-    pub unsupported_modes: Vec<crate::runtime::plugin_host::PluginRealtimeMode>,
+    pub unsupported_modes: Vec<crate::daemon::plugins::PluginRealtimeMode>,
     pub transport: PluginRealtimeTransportReadiness,
     pub resources: PluginRealtimeResourceReadiness,
     pub permissions: PluginRealtimePermissionReadiness,
@@ -331,13 +331,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
-    use crate::runtime::plugin_host::surface::PluginKindView;
-    use crate::runtime::plugin_host::{
+    use crate::daemon::plugins::surface::PluginKindView;
+    use crate::daemon::plugins::{
         activation_plans_for_manifest, PluginPackageManifest, PluginRealtimePermissionStatus,
         PluginRealtimeTransportReadinessStatus, PluginRealtimeTransportRoleStatus,
         PluginSurfaceReport,
     };
+    use crate::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use std::collections::BTreeSet;
 
     #[test]

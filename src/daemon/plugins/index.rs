@@ -1,16 +1,16 @@
 // EasyNet CLI — plugin package index
 // ==================================
 //
-// File: src/runtime/plugin_host/index.rs
+// File: src/daemon/plugins/index.rs
 // Description: Builtin + installed package discovery without load policy.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::install::PluginStateToml;
-use crate::runtime::plugin_host::package::{PluginPackage, SharedPluginPackage};
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::install::PluginStateToml;
+use crate::daemon::plugins::package::{PluginPackage, SharedPluginPackage};
 
 const INSTALLED_DIR: &str = "installed";
 const STATE_DIR: &str = "state";
@@ -336,8 +336,8 @@ impl PluginPackageUniqueness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::plugin_host::install::{InstalledPluginRecord, PluginStateToml};
-    use crate::runtime::plugin_host::package::tests::write_test_package;
+    use crate::daemon::plugins::install::{InstalledPluginRecord, PluginStateToml};
+    use crate::daemon::plugins::package::tests::write_test_package;
 
     #[test]
     fn plugin_index_reads_active_versions_from_lockfile_only() {

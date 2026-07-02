@@ -1,14 +1,14 @@
 // EasyNet CLI — plugin install validation
 // =======================================
 //
-// File: src/runtime/plugin_host/install/validation.rs
+// File: src/daemon/plugins/install/validation.rs
 // Description: Release-supported package validation before activation.
 
 use std::path::Path;
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
-use crate::runtime::plugin_host::package::PluginPackage;
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::package::PluginPackage;
 
 /// Validate that a package kind can be installed by this release.
 ///

@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar plugin host boundary
 // ==========================================
 //
-// File: src/runtime/plugin_host/sidecar.rs
+// File: src/daemon/plugins/sidecar.rs
 // Description: Public facade for sidecar plugin process execution.
 
 mod bidi;
@@ -15,8 +15,8 @@ mod tests;
 
 use serde_json::Value;
 
+use crate::daemon::plugins::errors::Result;
 use crate::runtime::ability_dispatch::EnvelopeContext;
-use crate::runtime::plugin_host::errors::Result;
 
 pub use command::{SidecarCommand, SidecarExecutionModel};
 pub use frame::{SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame};

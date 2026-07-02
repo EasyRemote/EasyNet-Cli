@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use crate::runtime::plugin_host::{
+use crate::daemon::plugins::{
     PluginBidiWireKind, PluginCallMode, PluginHostError, PluginRuntimeState,
 };
 
@@ -84,8 +84,7 @@ impl AbilityWireRegistry {
     /// snapshot reads) — the write paths publish refreshed state, so this
     /// never re-indexes packages from disk on a warm process.
     pub fn load_default_profile() -> std::result::Result<Self, PluginHostError> {
-        crate::runtime::plugin_host::default_state()
-            .map(|state| Self::from_plugin_runtime_state(&state))
+        crate::daemon::plugins::default_state().map(|state| Self::from_plugin_runtime_state(&state))
     }
 
     /// Return the declared bidi wire profile for a locally hosted ability.
@@ -206,12 +205,12 @@ mod tests {
         let root = tempfile::tempdir().expect("package root");
         write_bidi_sidecar_package(root.path(), "device.test.bidi");
         let package =
-            crate::runtime::plugin_host::package::PluginPackage::from_installed(root.path(), None)
+            crate::daemon::plugins::package::PluginPackage::from_installed(root.path(), None)
                 .expect("package");
         let index =
-            crate::runtime::plugin_host::PluginPackageIndex::from_packages(vec![Arc::new(package)])
+            crate::daemon::plugins::PluginPackageIndex::from_packages(vec![Arc::new(package)])
                 .expect("index");
-        let state = crate::runtime::plugin_host::PluginRuntimeState::from_index(index);
+        let state = crate::daemon::plugins::PluginRuntimeState::from_index(index);
 
         registry.replace_from_plugin_runtime_state(&state);
 

@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar stream contract
 // =====================================
 //
-// File: src/runtime/plugin_host/sidecar/stream.rs
+// File: src/daemon/plugins/sidecar/stream.rs
 // Description: Stream-frame validation and live pump for sidecar streams.
 
 use std::io::{BufRead, BufReader};
@@ -14,15 +14,15 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-use crate::runtime::ability_dispatch::{StreamSource, BIDI_CHANNEL_BOUND};
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::sidecar::io::{
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::sidecar::io::{
     collect_stderr, duration_millis, spawn_stderr_reader, wait_child_with_timeout,
     write_sidecar_frame,
 };
-use crate::runtime::plugin_host::sidecar::{
+use crate::daemon::plugins::sidecar::{
     SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame,
 };
+use crate::runtime::ability_dispatch::{StreamSource, BIDI_CHANNEL_BOUND};
 
 /// Open a live sidecar stream and return immediately with a daemon-owned
 /// broadcast receiver.

@@ -1,12 +1,12 @@
 // EasyNet CLI — sidecar command model
 // ===================================
 //
-// File: src/runtime/plugin_host/sidecar/command.rs
+// File: src/daemon/plugins/sidecar/command.rs
 // Description: Executable command projection for sidecar plugin packages.
 
 use std::path::{Path, PathBuf};
 
-use crate::runtime::plugin_host::package::PluginPackage;
+use crate::daemon::plugins::package::PluginPackage;
 
 /// Process lifecycle model used by a process-backed plugin binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

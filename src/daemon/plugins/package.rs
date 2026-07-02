@@ -1,7 +1,7 @@
 // EasyNet CLI — plugin package identity
 // =====================================
 //
-// File: src/runtime/plugin_host/package.rs
+// File: src/daemon/plugins/package.rs
 // Description: Package ids, versions, hashes, and compiled builtin bindings.
 
 use std::collections::BTreeMap;
@@ -12,8 +12,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::manifest::{
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::manifest::{
     validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginCallMode,
     PluginPackageManifest, PluginRuntimeLimits,
 };
@@ -186,7 +186,7 @@ pub struct BuiltinPluginBinding {
     pub enabled_env_var: Option<&'static str>,
     pub ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
     pub contribute: fn(
-        &mut crate::runtime::plugin_host::contribution::PluginContributionBuilder,
+        &mut crate::daemon::plugins::contribution::PluginContributionBuilder,
         PluginRuntimeLimits,
     ) -> Result<()>,
 }
@@ -643,7 +643,7 @@ fn validate_package_child_path(root: &Path, allowed_root: &Path, path: &Path) ->
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::runtime::plugin_host::manifest::{PluginAbilityLayer, PluginCallMode};
+    use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginCallMode};
 
     #[test]
     fn plugin_host_package_rejects_hash_mismatch() {
@@ -665,7 +665,7 @@ pub(crate) mod tests {
             serde_json::json!({"type": "object", "additionalProperties": false})
         }
         fn contribute(
-            _: &mut crate::runtime::plugin_host::PluginContributionBuilder,
+            _: &mut crate::daemon::plugins::PluginContributionBuilder,
             _: PluginRuntimeLimits,
         ) -> Result<()> {
             Ok(())

@@ -183,7 +183,7 @@ pub fn start_daemon_invocation_transport(
     hot_agent_registrar_cell: Arc<
         crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
     >,
-    plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
+    plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
     hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
     >,
@@ -928,7 +928,7 @@ struct SessionSupervisorConfig {
     escalation_state: Option<DeviceEscalationState>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
-    plugin_runtime_manager: Option<Arc<crate::runtime::plugin_host::PluginRuntimeManager>>,
+    plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
     hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
     >,
@@ -1051,7 +1051,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
 
 fn device_owner_session_descriptors(
     owner_ura: &str,
-    plugin_runtime_manager: Option<&crate::runtime::plugin_host::PluginRuntimeManager>,
+    plugin_runtime_manager: Option<&crate::daemon::plugins::PluginRuntimeManager>,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 
@@ -1064,7 +1064,7 @@ fn device_owner_session_descriptors(
         return descriptors;
     };
     let Ok(plugin_descriptors) =
-        crate::runtime::plugin_host::PluginDescriptorProjector::project(state.index())
+        crate::daemon::plugins::PluginDescriptorProjector::project(state.index())
     else {
         return descriptors;
     };
@@ -1464,13 +1464,13 @@ mod tests {
     #[test]
     #[cfg(feature = "remote-desktop")]
     fn device_owner_session_descriptors_include_builtin_plugin_abilities() {
-        let index = crate::runtime::plugin_host::PluginPackageIndex::builtin()
+        let index = crate::daemon::plugins::PluginPackageIndex::builtin()
             .expect("builtin plugin index loads");
-        let state = crate::runtime::plugin_host::PluginRuntimeState::from_index_with_planner(
+        let state = crate::daemon::plugins::PluginRuntimeState::from_index_with_planner(
             index,
-            crate::runtime::plugin_host::PluginLoadPlanner::current_without_env_gates(),
+            crate::daemon::plugins::PluginLoadPlanner::current_without_env_gates(),
         );
-        let manager = crate::runtime::plugin_host::PluginRuntimeManager::from_state(state);
+        let manager = crate::daemon::plugins::PluginRuntimeManager::from_state(state);
         let descriptors =
             device_owner_session_descriptors("easynet:///r/acme/device/dev-1", Some(&manager));
         let names = descriptors

@@ -154,7 +154,7 @@ pub fn build_registry_with_runtime(
 /// same snapshot that registered plugin abilities.
 pub struct BuiltAbilityRegistry {
     pub catalog: Arc<AxonAbilityCatalog>,
-    pub plugin_runtime_manager: Arc<crate::runtime::plugin_host::PluginRuntimeManager>,
+    pub plugin_runtime_manager: Arc<crate::daemon::plugins::PluginRuntimeManager>,
     /// Late-wired device-ability registrar cell. Populated during the
     /// build with a pending registrar; boot calls `set_runtime` on it
     /// (and may `replay_from_store`) once the `LocalRuntime` exists, so
@@ -322,23 +322,21 @@ enum PluginRegistryMode {
 
 fn build_plugin_runtime_manager(
     mode: PluginRegistryMode,
-) -> Arc<crate::runtime::plugin_host::PluginRuntimeManager> {
+) -> Arc<crate::daemon::plugins::PluginRuntimeManager> {
     match mode {
-        PluginRegistryMode::None => Arc::new(
-            crate::runtime::plugin_host::PluginRuntimeManager::from_state(
-                crate::runtime::plugin_host::PluginRuntimeState::from_index(
-                    crate::runtime::plugin_host::PluginPackageIndex::default(),
+        PluginRegistryMode::None => {
+            Arc::new(crate::daemon::plugins::PluginRuntimeManager::from_state(
+                crate::daemon::plugins::PluginRuntimeState::from_index(
+                    crate::daemon::plugins::PluginPackageIndex::default(),
                 ),
-            ),
-        ),
+            ))
+        }
         PluginRegistryMode::BuiltinOnlyDeterministic => {
-            let state = match crate::runtime::plugin_host::PluginPackageIndex::builtin() {
-                Ok(index) => {
-                    crate::runtime::plugin_host::PluginRuntimeState::from_index_with_planner(
-                        index,
-                        crate::runtime::plugin_host::PluginLoadPlanner::current_without_env_gates(),
-                    )
-                }
+            let state = match crate::daemon::plugins::PluginPackageIndex::builtin() {
+                Ok(index) => crate::daemon::plugins::PluginRuntimeState::from_index_with_planner(
+                    index,
+                    crate::daemon::plugins::PluginLoadPlanner::current_without_env_gates(),
+                ),
                 Err(err) => {
                     let error = err.to_string();
                     crate::op_event!(
@@ -347,15 +345,17 @@ fn build_plugin_runtime_manager(
                         error = error.as_str(),
                         message = "deterministic builtin plugin index failed; daemon core abilities remain registered",
                     );
-                    crate::runtime::plugin_host::PluginRuntimeState::from_index(
-                        crate::runtime::plugin_host::PluginPackageIndex::default(),
+                    crate::daemon::plugins::PluginRuntimeState::from_index(
+                        crate::daemon::plugins::PluginPackageIndex::default(),
                     )
                 }
             };
-            Arc::new(crate::runtime::plugin_host::PluginRuntimeManager::from_state(state))
+            Arc::new(crate::daemon::plugins::PluginRuntimeManager::from_state(
+                state,
+            ))
         }
         PluginRegistryMode::DefaultDaemon => {
-            Arc::new(crate::runtime::plugin_host::PluginRuntimeManager::new())
+            Arc::new(crate::daemon::plugins::PluginRuntimeManager::new())
         }
     }
 }

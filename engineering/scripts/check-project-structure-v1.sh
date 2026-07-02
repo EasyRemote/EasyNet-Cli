@@ -115,6 +115,7 @@ require_path "src/daemon/invocation/state/presence.rs"
 require_path "src/daemon/invocation/state/session_failure.rs"
 require_path "src/daemon/invocation/state/usage_quota.rs"
 require_path "src/daemon/keyring/mod.rs"
+require_path "src/daemon/plugins/mod.rs"
 require_path "src/daemon/trust/anchor.rs"
 require_path "src/daemon/trust/cell.rs"
 require_path "src/daemon/trust/key_resolver.rs"
@@ -134,6 +135,7 @@ reject_path "src/runtime/agents"
 reject_path "src/runtime/ability_names"
 reject_path "src/runtime/ability_wire.rs"
 reject_path "src/runtime/axon_bridge"
+reject_path "src/runtime/plugin_host"
 reject_path "src/runtime/system_abilities"
 reject_path "src/runtime/system_ability_catalog"
 reject_path "src/runtime/abilities"
@@ -204,6 +206,11 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::plugin_host paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::plugin_host::|easynet_cli::runtime::plugin_host::|runtime::plugin_host::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::system_abilities paths" \
     '(^|[^[:alnum:]_])(crate::runtime::system_abilities::|easynet_cli::runtime::system_abilities::|runtime::system_abilities::)' \
     "${SCAN_ROOTS[@]}"
@@ -236,6 +243,11 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/axon_bridge physical path" \
     'src/runtime/axon_bridge(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/plugin_host physical path" \
+    'src/runtime/plugin_host(/|$)' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

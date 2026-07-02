@@ -1,7 +1,7 @@
 // EasyNet CLI — daemon plugin host
 // =================================
 //
-// File: src/runtime/plugin_host/mod.rs
+// File: src/daemon/plugins/mod.rs
 // Description: Ability extension host for installed and builtin plugins.
 
 pub mod broker;
@@ -150,7 +150,7 @@ pub fn plugin_bidi_wire_kind(name: &str) -> Option<PluginBidiWireKind> {
 
 fn default_loaded_package_for_ability(
     name: &str,
-) -> Result<crate::runtime::plugin_host::package::SharedPluginPackage> {
+) -> Result<crate::daemon::plugins::package::SharedPluginPackage> {
     let state = default_state()?;
     let load_plan = state.load_plan();
     load_plan
@@ -217,7 +217,7 @@ pub(crate) fn publish_default_state(state: &PluginRuntimeState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::plugin_host::manifest::PluginRuntimeLimits;
+    use crate::daemon::plugins::manifest::PluginRuntimeLimits;
 
     #[test]
     fn plugin_host_manifest_rejects_duplicate_abilities() {

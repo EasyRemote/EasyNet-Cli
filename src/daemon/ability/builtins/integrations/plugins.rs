@@ -9,10 +9,10 @@ use std::sync::{Arc, OnceLock};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::runtime::plugin_host::{
+use crate::daemon::plugins::{
     PluginActivationBroker, PluginRealtimeActivationReport, PluginRuntimeManager,
 };
+use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 /// Daemon-local ability used by `easynet plugin install/update/remove` after
 /// the filesystem transaction commits.
@@ -220,13 +220,13 @@ fn parse_activate_realtime_args(args: Value) -> anyhow::Result<ActivateRealtimeR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persistence::resources::{
-        ResourceBinding, ResourceEntry, ResourceType, ResourcesFile,
-    };
-    use crate::runtime::plugin_host::surface::PluginKindView;
-    use crate::runtime::plugin_host::{
+    use crate::daemon::plugins::surface::PluginKindView;
+    use crate::daemon::plugins::{
         activation_plans_for_manifest, PluginPackageManifest, PluginPackageSurfaceRecord,
         PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus, PluginSurfaceReport,
+    };
+    use crate::persistence::resources::{
+        ResourceBinding, ResourceEntry, ResourceType, ResourcesFile,
     };
     use std::collections::BTreeSet;
 

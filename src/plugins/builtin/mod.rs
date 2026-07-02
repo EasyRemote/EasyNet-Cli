@@ -4,7 +4,7 @@
 // File: src/plugins/builtin/mod.rs
 // Description: Compile-time bindings for builtin plugin packages.
 
-use crate::runtime::plugin_host::package::BuiltinPluginBinding;
+use crate::daemon::plugins::package::BuiltinPluginBinding;
 
 #[cfg(feature = "remote-desktop")]
 pub mod remote_desktop;

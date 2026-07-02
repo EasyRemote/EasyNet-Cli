@@ -1,7 +1,7 @@
 // EasyNet CLI — plugin install state files
 // ========================================
 //
-// File: src/runtime/plugin_host/install/state.rs
+// File: src/daemon/plugins/install/state.rs
 // Description: Atomic state/lock persistence for installed plugin packages.
 
 use std::fs;
@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::package::PluginPackage;
 use crate::persistence::config;
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::package::PluginPackage;
 
 const STATE_DIR: &str = "state";
 const PLUGINS_STATE_FILE: &str = "plugins.toml";

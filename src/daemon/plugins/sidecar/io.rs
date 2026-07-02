@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar process I/O
 // =================================
 //
-// File: src/runtime/plugin_host/sidecar/io.rs
+// File: src/daemon/plugins/sidecar/io.rs
 // Description: Low-level stdin/stdout/stderr and child-process wait helpers.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
 use std::time::{Duration, Instant};
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::sidecar::{SidecarRequestFrame, SidecarResponseFrame};
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::sidecar::{SidecarRequestFrame, SidecarResponseFrame};
 
 const SIDECAR_WAIT_POLL: Duration = Duration::from_millis(10);
 

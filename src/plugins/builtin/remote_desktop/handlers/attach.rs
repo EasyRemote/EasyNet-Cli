@@ -84,6 +84,10 @@ mod tests {
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
         EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend, SyntheticScreenBackend,
     };
+    use crate::daemon::plugins::{
+        DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
+        PluginRequirementSet,
+    };
     use crate::persistence::resources::{self, ResourceEntry, ResourcesFile};
     use crate::plugins::remote_desktop::constants::{
         ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, REASON_PREVIEW_CAPTURE_FAILED,
@@ -96,10 +100,6 @@ mod tests {
     };
     use crate::runtime::ability_dispatch::AxonAbilityCatalog;
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-    use crate::runtime::plugin_host::{
-        DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
-        PluginRequirementSet,
-    };
 
     #[derive(Debug)]
     struct FailingScreenBackend;

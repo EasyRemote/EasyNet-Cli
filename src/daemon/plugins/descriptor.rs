@@ -1,16 +1,16 @@
 // EasyNet CLI — plugin descriptor projection
 // ==========================================
 //
-// File: src/runtime/plugin_host/descriptor.rs
+// File: src/daemon/plugins/descriptor.rs
 // Description: Project package-index metadata into ability descriptors.
 
 use serde_json::Value;
 
+use crate::daemon::plugins::errors::PluginHostError;
+use crate::daemon::plugins::errors::Result;
+use crate::daemon::plugins::index::PluginPackageIndex;
+use crate::daemon::plugins::manifest::PluginCallMode;
 use crate::runtime::ability_descriptor::AbilityHints;
-use crate::runtime::plugin_host::errors::PluginHostError;
-use crate::runtime::plugin_host::errors::Result;
-use crate::runtime::plugin_host::index::PluginPackageIndex;
-use crate::runtime::plugin_host::manifest::PluginCallMode;
 
 /// Descriptor-generation metadata for one plugin-owned ability.
 #[derive(Debug, Clone)]
@@ -72,8 +72,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::runtime::plugin_host::package::tests::write_test_package;
-    use crate::runtime::plugin_host::package::PluginPackage;
+    use crate::daemon::plugins::package::tests::write_test_package;
+    use crate::daemon::plugins::package::PluginPackage;
 
     #[test]
     fn plugin_host_descriptor_projector_uses_installed_ability_toml() {
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     #[cfg(feature = "remote-desktop")]
     fn plugin_host_descriptor_projector_preserves_manifest_call_modes() {
-        let index = crate::runtime::plugin_host::PluginPackageIndex::builtin()
+        let index = crate::daemon::plugins::PluginPackageIndex::builtin()
             .expect("builtin plugin index loads");
         let descriptors = PluginDescriptorProjector::project(&index).expect("descriptors");
         let watch_events = descriptors

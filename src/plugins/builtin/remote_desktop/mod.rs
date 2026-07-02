@@ -4,8 +4,8 @@
 // File: src/plugins/builtin/remote_desktop/mod.rs
 // Description: Compiled binding for the `easynet.remote_desktop` plugin.
 
-use crate::runtime::plugin_host::package::{BuiltinPluginAbilitySpec, BuiltinPluginBinding};
-use crate::runtime::plugin_host::{PluginContributionBuilder, PluginRuntimeLimits, Result};
+use crate::daemon::plugins::package::{BuiltinPluginAbilitySpec, BuiltinPluginBinding};
+use crate::daemon::plugins::{PluginContributionBuilder, PluginRuntimeLimits, Result};
 
 pub(crate) mod config;
 pub(crate) mod constants;

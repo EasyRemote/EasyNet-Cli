@@ -1,23 +1,23 @@
 // EasyNet CLI — daemon plugin runtime manager
 // ===========================================
 //
-// File: src/runtime/plugin_host/runtime_manager.rs
+// File: src/daemon/plugins/runtime_manager.rs
 // Description: Owns the default plugin package/load/runtime pipeline.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
 use crate::daemon::ability::wire::AbilityWireRegistry;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::plugin_host::contribution::DaemonPluginBinder;
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::host_api::{
+use crate::daemon::plugins::contribution::DaemonPluginBinder;
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::host_api::{
     PluginHotReloadReport, PluginRealtimeActivationHint, PluginRuntimeHost,
 };
-use crate::runtime::plugin_host::index::{PluginPackageIndex, PluginPackageIndexError};
-use crate::runtime::plugin_host::load_plan::{PluginLoadPlan, PluginLoadPlanner};
-use crate::runtime::plugin_host::realtime::activation_plans_for_manifest;
-use crate::runtime::plugin_host::surface::{PluginSurfaceProjector, PluginSurfaceReport};
+use crate::daemon::plugins::index::{PluginPackageIndex, PluginPackageIndexError};
+use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadPlanner};
+use crate::daemon::plugins::realtime::activation_plans_for_manifest;
+use crate::daemon::plugins::surface::{PluginSurfaceProjector, PluginSurfaceReport};
+use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Snapshot of package index and load-plan state for one daemon profile.
 ///
@@ -333,7 +333,7 @@ impl Default for PluginRuntimeManager {
 }
 
 fn reject_catalog_collisions(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     existing: &BTreeSet<String>,
 ) -> Result<()> {
     let second = format!("{}@{}", package.id().as_str(), package.version().as_str());
@@ -350,7 +350,7 @@ fn reject_catalog_collisions(
 }
 
 fn reject_static_catalog_collisions(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     static_abilities: &BTreeSet<String>,
 ) -> Result<()> {
     let second = format!("{}@{}", package.id().as_str(), package.version().as_str());

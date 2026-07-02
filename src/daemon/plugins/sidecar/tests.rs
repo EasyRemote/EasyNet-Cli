@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar host tests
 // ================================
 //
-// File: src/runtime/plugin_host/sidecar/tests.rs
+// File: src/daemon/plugins/sidecar/tests.rs
 // Description: Contract tests for sidecar frames, process RPC, stream, and bidi.
 
 use std::fs;
@@ -14,8 +14,8 @@ use super::{
     SidecarCommand, SidecarExecutionModel, SidecarInvocationEnvelope, SidecarRequestFrame,
     SidecarRuntimeHost, SidecarRuntimeLimits,
 };
+use crate::daemon::plugins::errors::PluginHostError;
 use crate::runtime::ability_dispatch::StreamSource;
-use crate::runtime::plugin_host::errors::PluginHostError;
 
 #[test]
 fn sidecar_open_frame_carries_daemon_invocation_envelope() {

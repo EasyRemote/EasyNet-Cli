@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use crate::runtime::plugin_host::index::default_plugin_root;
-use crate::runtime::plugin_host::{
+use crate::daemon::plugins::index::default_plugin_root;
+use crate::daemon::plugins::{
     PluginInstaller, PluginLoadPlanner, PluginPackageIndex, PluginPackageSurfaceRecord,
     PluginRealtimeActivationOutcome, PluginRealtimeActivationReport, PluginRealtimeKind,
     PluginRealtimeMode, PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus,

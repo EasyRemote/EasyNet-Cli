@@ -1,7 +1,7 @@
 // EasyNet CLI — plugin host errors
 // =================================
 //
-// File: src/runtime/plugin_host/errors.rs
+// File: src/daemon/plugins/errors.rs
 // Description: Typed failure surface for package install, indexing, and load.
 
 use std::path::PathBuf;

@@ -62,7 +62,7 @@ use easynet_cli::daemon::ability::catalog::{
     ability_toml, descriptor_path_for, published_system_abilities, system_ability_descriptor_root,
     SYSTEM_ABILITY_DESCRIPTOR_ROOT,
 };
-use easynet_cli::runtime::plugin_host::{
+use easynet_cli::daemon::plugins::{
     PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
 };
 

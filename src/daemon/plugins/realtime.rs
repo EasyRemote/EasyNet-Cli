@@ -1,7 +1,7 @@
 // EasyNet CLI — plugin realtime activation planning
 // =================================================
 //
-// File: src/runtime/plugin_host/realtime.rs
+// File: src/daemon/plugins/realtime.rs
 // Description: Runtime read model for plugin-declared realtime capabilities.
 
 use std::collections::BTreeSet;
@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::ability::builtins::resources::media;
-use crate::runtime::plugin_host::manifest::{
+use crate::daemon::plugins::manifest::{
     PluginPackageManifest, PluginRealtimeCapability, PluginRealtimeKind, PluginRealtimeMode,
     PluginRealtimeTransport,
 };
@@ -478,7 +478,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::plugin_host::PluginPackageManifest;
+    use crate::daemon::plugins::PluginPackageManifest;
 
     #[test]
     fn activation_plan_uses_declared_plugin_activation_abilities() {

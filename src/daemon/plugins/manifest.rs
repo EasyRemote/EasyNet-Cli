@@ -1,12 +1,12 @@
 // EasyNet CLI — plugin manifest model
 // ===================================
 //
-// File: src/runtime/plugin_host/manifest.rs
+// File: src/daemon/plugins/manifest.rs
 // Description: Typed `plugin.toml` package model and validation.
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
+use crate::daemon::plugins::errors::{PluginHostError, Result};
 
 /// Axon invocation mode required by one plugin-owned ability.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

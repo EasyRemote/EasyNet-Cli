@@ -1,12 +1,12 @@
 // EasyNet CLI — plugin load planner
 // =================================
 //
-// File: src/runtime/plugin_host/load_plan.rs
+// File: src/daemon/plugins/load_plan.rs
 // Description: Convert package index entries into per-boot load decisions.
 
-use crate::runtime::plugin_host::index::PluginPackageIndex;
-use crate::runtime::plugin_host::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
-use crate::runtime::plugin_host::package::SharedPluginPackage;
+use crate::daemon::plugins::index::PluginPackageIndex;
+use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::package::SharedPluginPackage;
 
 /// Per-boot load state for one package.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar JSON frame model
 // ======================================
 //
-// File: src/runtime/plugin_host/sidecar/frame.rs
+// File: src/daemon/plugins/sidecar/frame.rs
 // Description: Protocol values exchanged across the sidecar process boundary.
 
 use serde::{Deserialize, Serialize};

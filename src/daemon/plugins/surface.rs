@@ -1,18 +1,18 @@
 // EasyNet CLI — plugin product surface projection
 // ===============================================
 //
-// File: src/runtime/plugin_host/surface.rs
+// File: src/daemon/plugins/surface.rs
 // Description: Operator-visible plugin package and ability state.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::plugin_host::index::PluginPackageIndex;
-use crate::runtime::plugin_host::index::PluginPackageIndexError;
-use crate::runtime::plugin_host::load_plan::{PluginLoadPlan, PluginLoadStatus};
-use crate::runtime::plugin_host::manifest::{PluginAbilityLayer, PluginCallMode, PluginKind};
-use crate::runtime::plugin_host::realtime::{
+use crate::daemon::plugins::index::PluginPackageIndex;
+use crate::daemon::plugins::index::PluginPackageIndexError;
+use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadStatus};
+use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginCallMode, PluginKind};
+use crate::daemon::plugins::realtime::{
     activation_plans_for_manifest, PluginRealtimeActivationPlan,
 };
 
@@ -46,7 +46,7 @@ pub struct PluginPackageSurfaceRecord {
 /// Product policy for where a plugin-owned ability may be shown.
 ///
 /// What this is NOT: a runtime registration decision. Registration is still
-/// owned by [`PluginLoadPlan`] and [`crate::runtime::plugin_host::host_api`].
+/// owned by [`PluginLoadPlan`] and [`crate::daemon::plugins::host_api`].
 /// This type exists so CLI discovery and descriptor generation do not silently
 /// disagree about what "published" means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -374,9 +374,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::runtime::plugin_host::package::tests::write_test_package;
-    use crate::runtime::plugin_host::package::PluginPackage;
-    use crate::runtime::plugin_host::{PluginLoadPlanner, PluginPackageIndex};
+    use crate::daemon::plugins::package::tests::write_test_package;
+    use crate::daemon::plugins::package::PluginPackage;
+    use crate::daemon::plugins::{PluginLoadPlanner, PluginPackageIndex};
 
     #[test]
     fn plugin_host_surface_keeps_descriptor_independent_from_load_status() {
@@ -453,7 +453,7 @@ mod tests {
         assert!(package.realtime_activation_plans[0].is_quick_add());
         assert_eq!(
             package.realtime_activation_plans[0].status,
-            crate::runtime::plugin_host::PluginRealtimeActivationStatus::Unknown
+            crate::daemon::plugins::PluginRealtimeActivationStatus::Unknown
         );
     }
 
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(package.realtime_activation_plans.len(), 1);
         assert_eq!(
             package.realtime_activation_plans[0].status,
-            crate::runtime::plugin_host::PluginRealtimeActivationStatus::Ready
+            crate::daemon::plugins::PluginRealtimeActivationStatus::Ready
         );
         assert_eq!(
             package.realtime_activation_plans[0].available_abilities,
@@ -550,7 +550,7 @@ quick_add = true
         .expect("manifest");
         std::fs::write(
             root.join("abilities/test.camera.ability.toml"),
-            crate::runtime::plugin_host::package::tests::test_descriptor("test.camera"),
+            crate::daemon::plugins::package::tests::test_descriptor("test.camera"),
         )
         .expect("descriptor");
     }

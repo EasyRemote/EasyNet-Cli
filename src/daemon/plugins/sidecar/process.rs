@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar process runtime
 // =====================================
 //
-// File: src/runtime/plugin_host/sidecar/process.rs
+// File: src/daemon/plugins/sidecar/process.rs
 // Description: Process spawning and unary/stream dispatch for sidecar plugins.
 
 use std::process::{Child, Command, Stdio};
@@ -9,19 +9,19 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::runtime::ability_dispatch::{BidiSource, StreamSource};
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::sidecar::bidi::open_bidi_session;
-use crate::runtime::plugin_host::sidecar::command::SidecarCommand;
-use crate::runtime::plugin_host::sidecar::command::SidecarExecutionModel;
-use crate::runtime::plugin_host::sidecar::io::{
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::sidecar::bidi::open_bidi_session;
+use crate::daemon::plugins::sidecar::command::SidecarCommand;
+use crate::daemon::plugins::sidecar::command::SidecarExecutionModel;
+use crate::daemon::plugins::sidecar::io::{
     collect_stderr, duration_millis, join_stdout_frame_reader, spawn_stderr_reader,
     spawn_stdout_frame_reader, wait_child_with_timeout, write_sidecar_frame,
 };
-use crate::runtime::plugin_host::sidecar::stream::{collect_stream_snapshot, open_live_stream};
-use crate::runtime::plugin_host::sidecar::{
+use crate::daemon::plugins::sidecar::stream::{collect_stream_snapshot, open_live_stream};
+use crate::daemon::plugins::sidecar::{
     SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame,
 };
+use crate::runtime::ability_dispatch::{BidiSource, StreamSource};
 
 const DEFAULT_SIDECAR_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SIDECAR_BIDI_EXIT_TIMEOUT: Duration = Duration::from_secs(5);

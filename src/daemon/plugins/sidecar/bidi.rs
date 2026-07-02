@@ -1,7 +1,7 @@
 // EasyNet CLI — sidecar bidi pump
 // ===============================
 //
-// File: src/runtime/plugin_host/sidecar/bidi.rs
+// File: src/daemon/plugins/sidecar/bidi.rs
 // Description: Live bidirectional JSON-frame pump for sidecar processes.
 
 use std::io::{BufRead, BufReader};
@@ -14,15 +14,15 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::{BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND};
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::sidecar::io::{
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::sidecar::io::{
     collect_stderr, duration_millis, spawn_stderr_reader, wait_child_with_timeout,
     write_sidecar_frame,
 };
-use crate::runtime::plugin_host::sidecar::{
+use crate::daemon::plugins::sidecar::{
     SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame,
 };
+use crate::runtime::ability_dispatch::{BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND};
 
 /// Open the daemon-owned bidi channels around one spawned sidecar process.
 ///

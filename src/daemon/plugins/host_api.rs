@@ -1,7 +1,7 @@
 // EasyNet CLI — plugin runtime host API
 // =====================================
 //
-// File: src/runtime/plugin_host/host_api.rs
+// File: src/daemon/plugins/host_api.rs
 // Description: Collect loaded plugin AbilityImpl contributions for daemon binding.
 
 use std::collections::BTreeSet;
@@ -11,23 +11,23 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::core::ability_spec::{EalExec, McpExec};
+use crate::daemon::plugins::contribution::{
+    PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
+};
+use crate::daemon::plugins::errors::{PluginHostError, Result};
+use crate::daemon::plugins::load_plan::PluginLoadPlan;
+use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::realtime::PluginRealtimeActivationPlan;
+use crate::daemon::plugins::sidecar::{
+    sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
+};
+use crate::daemon::plugins::PluginRealtimeCapability;
 use crate::runtime::ability::{AbilityImplSource, RuntimeEnv};
 use crate::runtime::ability_dispatch::{
     EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
     LocalStreamHandlerWithEnvelope,
 };
 use crate::runtime::context::ParentInvocationContext;
-use crate::runtime::plugin_host::contribution::{
-    PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
-};
-use crate::runtime::plugin_host::errors::{PluginHostError, Result};
-use crate::runtime::plugin_host::load_plan::PluginLoadPlan;
-use crate::runtime::plugin_host::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
-use crate::runtime::plugin_host::realtime::PluginRealtimeActivationPlan;
-use crate::runtime::plugin_host::sidecar::{
-    sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
-};
-use crate::runtime::plugin_host::PluginRealtimeCapability;
 
 /// Runtime host for daemon plugin packages.
 ///
@@ -178,8 +178,8 @@ fn collect_plugin_contributions(
 }
 
 fn collect_package_contribution(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
-) -> Result<crate::runtime::plugin_host::contribution::PluginPackageContribution> {
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
+) -> Result<crate::daemon::plugins::contribution::PluginPackageContribution> {
     let manifest = package.manifest();
     let mut builder = PluginContributionBuilder::new(
         package.id().as_str().to_string(),
@@ -279,7 +279,7 @@ impl<'a> ContributionRegistrationSink<'a> {
 }
 
 fn contribute_declarative_package(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     sink: &mut ContributionRegistrationSink<'_>,
 ) -> Result<()> {
     match package.manifest().declarative_binding() {
@@ -299,7 +299,7 @@ fn contribute_declarative_package(
 }
 
 fn exec_declarative_command(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     argv: &[String],
 ) -> Result<SidecarCommand> {
     let Some(program) = argv.first() else {
@@ -318,7 +318,7 @@ fn exec_declarative_command(
 }
 
 fn contribute_eal_declarative_package(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     sink: &mut ContributionRegistrationSink<'_>,
     program: &str,
     result_binding: Option<String>,
@@ -340,7 +340,7 @@ fn contribute_eal_declarative_package(
 }
 
 fn contribute_mcp_declarative_package(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     sink: &mut ContributionRegistrationSink<'_>,
     server: &str,
     tool: &str,
@@ -362,7 +362,7 @@ fn contribute_mcp_declarative_package(
 }
 
 fn ensure_declarative_rpc_only(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     label: &'static str,
 ) -> Result<()> {
     for ability in package.manifest().abilities() {
@@ -382,7 +382,7 @@ fn ensure_declarative_rpc_only(
 }
 
 fn contribute_json_frame_process_package(
-    package: &crate::runtime::plugin_host::package::SharedPluginPackage,
+    package: &crate::daemon::plugins::package::SharedPluginPackage,
     sink: &mut ContributionRegistrationSink<'_>,
     command: SidecarCommand,
 ) -> Result<()> {
@@ -492,13 +492,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::daemon::plugins::package::PluginPackage;
+    use crate::daemon::plugins::{
+        PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
+    };
     use crate::runtime::ability::CallMode as DescriptorCallMode;
     use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-    use crate::runtime::plugin_host::package::PluginPackage;
-    use crate::runtime::plugin_host::{
-        PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
-    };
 
     #[test]
     fn plugin_runtime_host_registers_exec_declarative_rpc() {
@@ -761,7 +761,7 @@ mod tests {
         assert_eq!(hint.activation_plans.len(), 1);
         assert_eq!(
             hint.activation_plans[0].status,
-            crate::runtime::plugin_host::PluginRealtimeActivationStatus::Ready
+            crate::daemon::plugins::PluginRealtimeActivationStatus::Ready
         );
         assert_eq!(
             hint.activation_plans[0].available_abilities,
