@@ -34,7 +34,7 @@ pub const ABILITY_LIST: &str = crate::daemon::ability::names::agents::CHAT_HISTO
 pub const ABILITY_GET: &str = crate::daemon::ability::names::agents::CHAT_HISTORY_GET;
 
 /// Register the two chat-history read abilities. Called from
-/// `runtime::system_ability_catalog::build_registry`.
+/// `daemon::ability::catalog::build_registry`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         ABILITY_LIST,

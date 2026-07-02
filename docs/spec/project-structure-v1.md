@@ -85,11 +85,10 @@ current code already has `runtime/ability/registry.rs` for control-plane
 registration. Reusing the word `registry` for both would make call sites harder
 to audit.
 
-Fix: descriptor/table generation and system ability catalog assembly move to
-`runtime/system_ability_catalog/` during migration and to
-`src/daemon/ability/catalog/` in Clean Final. The word `registry` remains
-reserved for control-plane registries unless a module is explicitly named as a
-compatibility adapter.
+Fix: descriptor/table generation and system ability catalog assembly now live
+under `src/daemon/ability/catalog/`, matching the Clean Final daemon ability
+layout. The word `registry` remains reserved for control-plane registries
+unless a module is explicitly named as a compatibility adapter.
 
 ### 4. Stable Names Were Not Separated From Private Constants
 
@@ -200,7 +199,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | `runtime/ability/` | AbilityDescriptor, AuthorityBinding, AbilityImpl, control-plane registration | product handler bodies, plugin process management |
 | `runtime/ability_dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
 | `runtime/ability_wire.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
-| `runtime/system_ability_catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
+| `daemon/ability/catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
 | `runtime/system_abilities/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
 | `runtime/executors/` | reusable execution engines used by handlers or manifest-bound abilities | public ability registration |
 | `runtime/execution/` | stateful runtime services such as PTY, schedule, loop, permission, session, MCP execution state | descriptor identity, facade rendering |
@@ -459,7 +458,7 @@ Root compatibility entries:
 - `abilities/system/` is retired after the descriptor-root abstraction lands.
   The current governed descriptor contract root is `ability-descriptors/system/`.
 
-## Migration-Compatible Runtime Layout
+## Migration-Compatible Runtime And Daemon Layout
 
 This is the single-package staging shape for the current checkout. It is not
 the clean final daemon source layout.
@@ -477,13 +476,6 @@ src/runtime/
 ├─ ability_descriptor.rs
 ├─ ability_wire.rs
 ├─ axon_bridge/
-├─ system_ability_catalog/
-│  ├─ mod.rs
-│  ├─ build.rs
-│  ├─ catalog_metadata.rs
-│  ├─ profiles/
-│  ├─ ability_toml.rs
-│  └─ system_manifest.rs
 ├─ system_abilities/
 │  ├─ mod.rs
 │  ├─ agents/
@@ -501,6 +493,20 @@ src/runtime/
 ├─ plugin_host/
 ├─ hub/
 └─ resolver/
+```
+
+```text
+src/daemon/
+└─ ability/
+   ├─ catalog/
+   │  ├─ mod.rs
+   │  ├─ build.rs
+   │  ├─ catalog_metadata.rs
+   │  ├─ profiles/
+   │  ├─ ability_toml.rs
+   │  └─ system_manifest.rs
+   ├─ health.rs
+   └─ names/
 ```
 
 Notes:
@@ -532,7 +538,7 @@ Rules:
 2. New production imports must use `crate::cli` or `easynet_cli::cli`.
 3. MCP CLI edges live under `src/cli/`; MCP descriptor/tool projection and
    dispatch into daemon Invocation live under
-   `runtime::system_ability_catalog::profiles::mcp`.
+   `daemon::ability::catalog::profiles::mcp`.
 4. No file may be added under `src/facade/`.
 5. Current scripts and boundary guards must refer to `src/cli/...` paths.
 
@@ -694,7 +700,7 @@ OOP/encapsulation rules:
 
 ## System Ability Catalog
 
-`runtime/system_ability_catalog/` owns the built-in catalog projection.
+`daemon/ability/catalog/` owns the built-in catalog projection.
 
 Allowed content:
 
@@ -713,7 +719,7 @@ Disallowed content:
 - plugin sidecar process ownership.
 
 The catalog may depend on `runtime/system_abilities/*` registration functions.
-Handlers may not depend back on `system_ability_catalog/` except through narrow
+Handlers may not depend back on `daemon/ability/catalog/` except through narrow
 types needed for registration.
 
 ## Executors And Stateful Execution
@@ -1022,10 +1028,10 @@ Catalog-only moves:
 
 ```text
 src/runtime/agents/ability_toml.rs
-  -> src/runtime/system_ability_catalog/ability_toml.rs
+  -> src/daemon/ability/catalog/ability_toml.rs
 
 src/runtime/agents/system_ability_manifest.rs
-  -> src/runtime/system_ability_catalog/system_manifest.rs
+  -> src/daemon/ability/catalog/system_manifest.rs
 ```
 
 Low-risk repository moves:
@@ -1243,7 +1249,7 @@ Do not move descriptor contract files while code still hard-codes
    `daemon::ability::names`.
 5. Rename `runtime/abilities.rs` to `runtime/agent_ability_specs.rs`, then
    retire the `runtime::abilities` compatibility re-export after callers move.
-6. Add `runtime/system_abilities/` and `runtime/system_ability_catalog/`
+6. Add `runtime/system_abilities/` and `daemon/ability/catalog/`
    skeletons.
 7. Freeze `runtime/agents/` as compatibility facade, move callers, then retire
    the compatibility module once production imports stop using it.
@@ -1253,8 +1259,8 @@ Do not move descriptor contract files while code still hard-codes
 11. Move resources/skills/pages/context/media/voice after hub/plugin/test
     imports use stable paths.
 12. Move automation, integrations, and governance handlers.
-13. Move `system_ability_catalog/` center files after descriptor/catalog
-    baselines are pinned.
+13. Move catalog center files into `daemon/ability/catalog/` after
+    descriptor/catalog baselines are pinned.
 14. Add descriptor-root and descriptor-path abstractions.
 15. Move descriptor contract files.
 16. Move command-line facade source from `src/facade/cli/` to `src/cli/`, then

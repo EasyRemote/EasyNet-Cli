@@ -12,10 +12,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/cli" "$sandbox/src/runtime/system_ability_catalog" "$sandbox/src/runtime/system_abilities/integrations" "$sandbox/docs" "$sandbox/ability-descriptors/system"
+    mkdir -p "$sandbox/src/cli" "$sandbox/src/daemon/ability/catalog" "$sandbox/src/runtime/system_abilities/integrations" "$sandbox/docs" "$sandbox/ability-descriptors/system"
     cp "$REPO_ROOT/src/cli/llm_api.rs" "$sandbox/src/cli/llm_api.rs"
     cp "$REPO_ROOT/src/runtime/system_abilities/integrations/openai_compat.rs" "$sandbox/src/runtime/system_abilities/integrations/openai_compat.rs"
-    cp "$REPO_ROOT/src/runtime/system_ability_catalog/catalog_metadata.rs" "$sandbox/src/runtime/system_ability_catalog/catalog_metadata.rs"
+    cp "$REPO_ROOT/src/daemon/ability/catalog/catalog_metadata.rs" "$sandbox/src/daemon/ability/catalog/catalog_metadata.rs"
     cp "$REPO_ROOT/docs/PAGES_AND_LLM_API.md" "$sandbox/docs/PAGES_AND_LLM_API.md"
     cp "$REPO_ROOT/ability-descriptors/system/openai.chat_completions.ability.toml" "$sandbox/ability-descriptors/system/openai.chat_completions.ability.toml"
     cp "$REPO_ROOT/ability-descriptors/system/openai.list_models.ability.toml" "$sandbox/ability-descriptors/system/openai.list_models.ability.toml"

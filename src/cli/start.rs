@@ -420,13 +420,12 @@ fn with_bridge_lib_env(cfg: crate::daemon::DaemonStartConfig) -> crate::daemon::
 }
 
 fn start_stdio_mcp_server(creds: &config::Credentials) {
-    let config = crate::runtime::system_ability_catalog::profiles::mcp::StdioServerConfig {
+    let config = crate::daemon::ability::catalog::profiles::mcp::StdioServerConfig {
         server_name: "easynet-device".into(),
         tenant_id: creds.realm.clone(),
         agent_name: None,
     };
-    let configured =
-        crate::runtime::system_ability_catalog::profiles::mcp::build_stdio_server(&config);
+    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config);
     let descriptor_count = configured.descriptor_count();
     std::thread::spawn(move || {
         let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
@@ -586,7 +585,7 @@ pub(crate) fn republish_via_federation_best_effort(
 /// without a real bridge.
 fn build_bootstrap_plan(
     creds: &config::Credentials,
-) -> anyhow::Result<crate::runtime::system_ability_catalog::profiles::bootstrap::BootstrapPlan> {
+) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     let user_id = creds.user_id()?;
     let username = creds.username_slug()?;
     build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id, username)
@@ -603,25 +602,22 @@ pub(crate) fn build_bootstrap_plan_from(
     node_id: &str,
     user_id: &str,
     username: &str,
-) -> anyhow::Result<crate::runtime::system_ability_catalog::profiles::bootstrap::BootstrapPlan> {
-    crate::runtime::system_ability_catalog::profiles::bootstrap::build_plan_from_registry(
+) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
+    crate::daemon::ability::catalog::profiles::bootstrap::build_plan_from_registry(
         realm, node_id, user_id, username,
     )
 }
 
 fn bootstrap_local_agent_projection(
     creds: &config::Credentials,
-) -> anyhow::Result<
-    Vec<crate::runtime::system_ability_catalog::profiles::bootstrap::BootstrapOutcome>,
-> {
+) -> anyhow::Result<Vec<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapOutcome>> {
     let plan = build_bootstrap_plan(creds)?;
     let mut file = crate::persistence::local_agents::load()?;
-    let outcomes =
-        crate::runtime::system_ability_catalog::profiles::bootstrap::bootstrap_local_agents(
-            &plan,
-            &mut file,
-            &crate::runtime::system_ability_catalog::profiles::bootstrap::UuidMinter,
-        );
+    let outcomes = crate::daemon::ability::catalog::profiles::bootstrap::bootstrap_local_agents(
+        &plan,
+        &mut file,
+        &crate::daemon::ability::catalog::profiles::bootstrap::UuidMinter,
+    );
     crate::persistence::local_agents::save(&file)?;
     Ok(outcomes)
 }

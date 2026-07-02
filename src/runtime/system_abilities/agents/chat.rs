@@ -158,7 +158,7 @@ pub fn register(
     }
     // The owner-namespaced `<agent>.discover` and `<agent>.invoke`
     // self-bundle abilities live in their own modules — see
-    // `runtime::system_ability_catalog::build_registry_with_services` (called after
+    // `daemon::ability::catalog::build_registry_with_services` (called after
     // the dispatch handle is in scope, since `<agent>.invoke` needs
     // to resolve through the live registry).
     //

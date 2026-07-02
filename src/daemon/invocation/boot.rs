@@ -1056,7 +1056,7 @@ fn device_owner_session_descriptors(
     use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 
     let mut descriptors =
-        crate::runtime::system_ability_catalog::profiles::device::descriptors_for(owner_ura);
+        crate::daemon::ability::catalog::profiles::device::descriptors_for(owner_ura);
     let Some(manager) = plugin_runtime_manager else {
         return descriptors;
     };

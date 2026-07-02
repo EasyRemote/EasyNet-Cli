@@ -26,11 +26,9 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+use easynet_cli::daemon::ability::catalog::profiles::bootstrap::{BootstrapPlan, LlmSubAgent};
 use easynet_cli::runtime::advertise::AbilityInvoker;
 use easynet_cli::runtime::publish::republish_abilities_via_advertise;
-use easynet_cli::runtime::system_ability_catalog::profiles::bootstrap::{
-    BootstrapPlan, LlmSubAgent,
-};
 
 struct RecordingInvoker {
     calls: RefCell<Vec<(String, Value)>>,

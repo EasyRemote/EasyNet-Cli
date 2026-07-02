@@ -46,7 +46,7 @@ fn system_descriptors_for_owner(
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
     use crate::runtime::ability_descriptor::AbilityDescriptor;
 
-    crate::runtime::system_ability_catalog::published_system_abilities_for_owner(owner)
+    crate::daemon::ability::catalog::published_system_abilities_for_owner(owner)
         .into_iter()
         .map(|m| {
             AbilityDescriptor::new(m.name.clone(), owner_ura, visibility_for(&m.name))

@@ -16,7 +16,7 @@
 //! Currently wired in system_abilities/agents/chat.rs. The chat handler
 //! is the conversation.send implementation.
 
-use crate::runtime::system_ability_catalog::SystemAbilityMetadata;
+use crate::daemon::ability::catalog::SystemAbilityMetadata;
 
 const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // RFC-005 owner-local catalogue names: `meta.*` and the built-in
@@ -113,7 +113,7 @@ pub struct LlmProfileAbilityCatalog {
 impl LlmProfileAbilityCatalog {
     #[must_use]
     pub fn load() -> Self {
-        Self::from_system_abilities(crate::runtime::system_ability_catalog::published_abilities())
+        Self::from_system_abilities(crate::daemon::ability::catalog::published_abilities())
     }
 
     #[must_use]

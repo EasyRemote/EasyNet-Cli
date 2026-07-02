@@ -56,6 +56,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+use crate::daemon::ability::catalog::profiles::bootstrap::{
+    self, BootstrapPlan, LlmSubAgent, UuidMinter,
+};
 use crate::persistence::{config, local_agents};
 use crate::registry::agents::{
     self, AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
@@ -65,9 +68,6 @@ use crate::runtime::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentAdvertiseRequest,
 };
 use crate::runtime::directory::{AgentDirectory, Location};
-use crate::runtime::system_ability_catalog::profiles::bootstrap::{
-    self, BootstrapPlan, LlmSubAgent, UuidMinter,
-};
 
 use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_START_AGENT: &str = crate::daemon::ability::names::agents::AGENT_START;
@@ -531,9 +531,9 @@ fn build_hot_agent_descriptors(
     entry: &AgentEntry,
     agent_ura: &str,
 ) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    let live_registry = crate::runtime::system_ability_catalog::build_registry();
+    let live_registry = crate::daemon::ability::catalog::build_registry();
     let hint_snapshot =
-        crate::runtime::system_ability_catalog::AbilityDiscoveryHintSnapshot::from_registry(
+        crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(
             &live_registry,
         );
     let mut descriptors = Vec::new();

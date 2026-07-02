@@ -660,7 +660,7 @@ impl ConfiguredStdioServer {
 /// — they differ only in argument parsing and how they launch the
 /// stdio server (foreground vs. spawned thread).
 pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
-    let mut descriptors = crate::runtime::system_ability_catalog::profiles::load_host_descriptors();
+    let mut descriptors = crate::daemon::ability::catalog::profiles::load_host_descriptors();
 
     // Workspace MCP: when --agent <name> is set, append that
     // agent's per-workspace ability descriptors. Read straight

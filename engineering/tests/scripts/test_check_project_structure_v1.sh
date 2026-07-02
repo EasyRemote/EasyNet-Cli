@@ -14,7 +14,7 @@ make_sandbox() {
     sandbox="$(mktemp -d)"
     mkdir -p \
         "$sandbox/src/runtime/system_abilities" \
-        "$sandbox/src/runtime/system_ability_catalog" \
+        "$sandbox/src/daemon/ability/catalog" \
         "$sandbox/src/runtime/executors" \
         "$sandbox/src/cli" \
         "$sandbox/src/daemon/ability" \
@@ -43,6 +43,7 @@ make_sandbox() {
     printf '%s\n' '// cli root' > "$sandbox/src/cli/mod.rs"
     printf '%s\n' '// daemon root' > "$sandbox/src/daemon/mod.rs"
     printf '%s\n' '// daemon ability root' > "$sandbox/src/daemon/ability/mod.rs"
+    printf '%s\n' '// daemon ability catalog root' > "$sandbox/src/daemon/ability/catalog/mod.rs"
     printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
     printf '%s\n' '// daemon ability names root' > "$sandbox/src/daemon/ability/names/mod.rs"
     printf '%s\n' '// daemon context root' > "$sandbox/src/daemon/context/mod.rs"
@@ -122,6 +123,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/ability_names directory should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+mkdir -p "$SB/src/runtime/system_ability_catalog"
+printf '%s\n' '// retired system ability catalog root' > "$SB/src/runtime/system_ability_catalog/mod.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/system_ability_catalog directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 mkdir -p "$SB/abilities/system"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
@@ -148,6 +157,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::ability_names import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::system_ability_catalog::build_registry; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::system_ability_catalog import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::facade::cli::run; }' > "$SB/src/lib.rs"

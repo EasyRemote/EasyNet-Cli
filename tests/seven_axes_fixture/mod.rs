@@ -32,6 +32,9 @@ use base64::Engine as _;
 use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use easynet_cli::daemon::ability::catalog::{
+    build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
+};
 use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
 use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
@@ -45,9 +48,6 @@ use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
 use easynet_cli::persistence::config::{self, RuntimeKind, RuntimeState};
-use easynet_cli::runtime::system_ability_catalog::{
-    build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
-};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};

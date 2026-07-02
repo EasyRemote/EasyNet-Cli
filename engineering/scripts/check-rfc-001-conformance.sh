@@ -126,7 +126,7 @@ count_pattern "agent.kind / agent.role branches" \
 # no `kind` field (Rule 2 above enforces that). The display string
 # is surfaced through AbilityDescriptor.metadata["agent_type"] when
 # the LLM-profile descriptor builder has it; see
-# runtime/system_ability_catalog/profiles/llm.rs::descriptors_for_with_metadata.
+# daemon/ability/catalog/profiles/llm.rs::descriptors_for_with_metadata.
 # Counted (not [info]) so a future drop-the-internal-enum cleanup
 # can use the count as its progress signal.
 count_pattern "AgentType internal enum (kept by P4.4 decision; no wire impact)" \
@@ -143,7 +143,7 @@ echo
 echo "Rule 3 — MCP only inside profile projection, integration modules, and CLI edges"
 
 # MCP keyword scan. Allowed locations:
-#   * runtime/system_ability_catalog/profiles/mcp.rs
+#   * daemon/ability/catalog/profiles/mcp.rs
 #                                               — owns InvokeMcpProvider
 #                                                 + tool spec projection.
 #   * runtime/system_abilities/integrations/mcp/**
@@ -157,7 +157,7 @@ echo "Rule 3 — MCP only inside profile projection, integration modules, and CL
 count_pattern "MCP keyword in CLI src (case-insensitive)" \
   '(?i)\bmcp\b' \
   "$SRC" \
-  "**/runtime/system_ability_catalog/profiles/mcp.rs" \
+  "**/daemon/ability/catalog/profiles/mcp.rs" \
   "**/runtime/system_abilities/integrations/mcp/**" \
   "**/cli/mcp_server.rs" \
   "**/cli/start.rs"

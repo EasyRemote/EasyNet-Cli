@@ -1,13 +1,13 @@
 //! Assembly-level tests for the system ability registry + catalogue surface.
 
 use super::*;
-use crate::registry::agents::AgentRegistry;
-use crate::runtime::system_ability_catalog::{
+use crate::daemon::ability::catalog::{
     build_registry, build_registry_with_services, build_system_registry, published_abilities,
     published_ability_names, published_system_abilities,
     recover_descriptor_import_transactions_before_daemon_registry_boot, RegistryBuildConfig,
     RegistryBuildServices,
 };
+use crate::registry::agents::AgentRegistry;
 use std::sync::Arc;
 
 fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_> {
@@ -198,7 +198,7 @@ fn ability_layer_classification_is_complete() {
     assert!(
         unclassified.is_empty(),
         "abilities missing a layer classification: {unclassified:?}\n\
-             Add an arm to classify_ability() in src/runtime/system_ability_catalog/assembly_tests.rs \
+             Add an arm to classify_ability() in src/daemon/ability/catalog/assembly_tests.rs \
              and update docs/rfc/AXON-RFC-001-ability-layers.md."
     );
 }

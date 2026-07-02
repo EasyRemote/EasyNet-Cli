@@ -52,13 +52,13 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::catalog::profiles::mcp::{
+    canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
+};
+use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::runtime::ability_descriptor::AbilityDescriptor;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::system_ability_catalog::profiles::mcp::{
-    canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
-};
-use crate::runtime::system_ability_catalog::profiles::DEFAULT_MCP_AGENT_ID;
 
 pub const ABILITY_LIST_TOOLS: &str =
     crate::daemon::ability::names::integrations::MCP_BRIDGE_LIST_TOOLS;

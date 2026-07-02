@@ -79,8 +79,8 @@ impl RuntimeDispatchAdapter {
     pub fn new_for_test() -> Self {
         let agents = crate::registry::agents::AgentRegistry::default();
         let local_runtime = LocalRuntime::new();
-        let mut config = crate::runtime::system_ability_catalog::RegistryBuildConfig::new(
-            crate::runtime::system_ability_catalog::RegistryBuildServices::fresh(),
+        let mut config = crate::daemon::ability::catalog::RegistryBuildConfig::new(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
             &agents,
         );
         config.local_runtime = Some(Arc::clone(&local_runtime));
@@ -90,8 +90,7 @@ impl RuntimeDispatchAdapter {
             )
             .expect("local device URA is a valid device authority root"),
         );
-        let _registry =
-            crate::runtime::system_ability_catalog::build_registry_with_services(config);
+        let _registry = crate::daemon::ability::catalog::build_registry_with_services(config);
         let resolver: Arc<dyn TargetResolver> =
             Arc::new(LocalNodeResolver::new(node_id_from_env_or_default()));
         Self::new_with_runtime(local_runtime, resolver)

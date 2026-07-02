@@ -1,7 +1,7 @@
 // EasyNet CLI — single source of truth for ability TOML descriptors
 // =================================================================
 //
-// File: src/runtime/system_ability_catalog/ability_toml.rs
+// File: src/daemon/ability/catalog/ability_toml.rs
 // Description: Renders an ability's `(name, description,
 //              input_schema)` triple to the on-disk TOML form
 //              resolved by `system_ability_descriptor_path`. Every ability
@@ -25,7 +25,7 @@
 // Why a function and not build.rs
 // -------------------------------
 // build.rs runs *before* the crate compiles, so it cannot call
-// `runtime::system_ability_catalog::published_abilities()`. The generator
+// `daemon::ability::catalog::published_abilities()`. The generator
 // therefore lives in the crate proper, and a tiny `bin/` driver
 // invokes it from a `cargo run --bin gen-ability-tomls` after
 // any change to ability metadata. The drift test in mod.rs

@@ -82,12 +82,12 @@ impl DeviceOpsClock for SystemDeviceOpsClock {
 }
 
 /// Register every device operation handler on `reg`. Called once
-/// at daemon boot from `runtime::system_ability_catalog::build_registry_with_services`.
+/// at daemon boot from `daemon::ability::catalog::build_registry_with_services`.
 pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDeviceRegistrarCell>) {
     reg.register_rpc_with_spec(
         ABILITY_LIST_NODES,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_LIST_NODES,
             list_nodes_description(),
             list_nodes_input_schema(),
@@ -97,7 +97,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDevice
     reg.register_rpc_with_spec(
         ABILITY_DESCRIBE_NODE,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_DESCRIBE_NODE,
             describe_node_description(),
             describe_node_input_schema(),
@@ -107,7 +107,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDevice
     reg.register_rpc_with_spec(
         ABILITY_REMOVE_NODE,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_REMOVE_NODE,
             remove_node_description(),
             remove_node_input_schema(),
@@ -117,7 +117,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDevice
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_DEPLOY_ABILITY,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_DEPLOY_ABILITY,
             deploy_ability_description(),
             deploy_ability_input_schema(),
@@ -132,7 +132,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDevice
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_UNINSTALL_ABILITY,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_UNINSTALL_ABILITY,
             uninstall_ability_description(),
             uninstall_ability_input_schema(),

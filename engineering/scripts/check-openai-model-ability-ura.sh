@@ -14,7 +14,7 @@ fail() {
 
 LLM_RS="src/cli/llm_api.rs"
 OPENAI_RS="src/runtime/system_abilities/integrations/openai_compat.rs"
-RUNTIME_CATALOG_RS="src/runtime/system_ability_catalog/catalog_metadata.rs"
+RUNTIME_CATALOG_RS="src/daemon/ability/catalog/catalog_metadata.rs"
 DOC_MD="docs/PAGES_AND_LLM_API.md"
 CHAT_TOML="ability-descriptors/system/openai.chat_completions.ability.toml"
 MODELS_TOML="ability-descriptors/system/openai.list_models.ability.toml"

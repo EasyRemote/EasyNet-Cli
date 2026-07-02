@@ -1,7 +1,7 @@
 // EasyNet CLI — Hosted Agent bootstrap (RFC-001 §1.4 / §A13)
 // =============================================================
 //
-// File: src/runtime/system_ability_catalog/profiles/bootstrap.rs
+// File: src/daemon/ability/catalog/profiles/bootstrap.rs
 //
 // Mints + persists canonical URAs for every Agent this daemon
 // hosts. Per RFC §1.4 [P2] every hosted Agent URA MUST be:
@@ -28,7 +28,7 @@
 //   advertise.rs module's job, called by the daemon-boot wiring
 //   that consumes this module's output.
 // - Does not register handlers in AxonAbilityCatalog. That's
-//   already wired in `runtime::system_ability_catalog::build_registry_for_daemon`.
+//   already wired in `daemon::ability::catalog::build_registry_for_daemon`.
 // - Does not assume credentials.json exists. Before join, there is
 //   no canonical realm/user identity, so hosted-agent minting is
 //   skipped rather than writing placeholder URAs.
@@ -152,7 +152,7 @@ pub trait UraMinter {
 ///     (`probe-agent`, `codex`, `web-builder`, …). The minted
 ///     agent-id is the raw `name` — no `llm-` prefix. This keeps
 ///     the dispatch registry's `<agent>.chat` entries (registered
-///     by `runtime::system_ability_catalog::build_registry_with_services`
+///     by `daemon::ability::catalog::build_registry_with_services`
 ///     under `agents.json::keys`, i.e. the raw name) aligned with
 ///     what `local-agents.json` advertises to the hub. Without
 ///     this alignment, `/v1/chat/completions` resolves

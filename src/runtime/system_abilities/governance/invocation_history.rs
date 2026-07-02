@@ -84,7 +84,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     reg.register_rpc_with_spec(
         ABILITY_HISTORY_LIST,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_HISTORY_LIST,
             list_history_description(),
             list_history_input_schema(),
@@ -95,7 +95,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     reg.register_rpc_with_spec(
         ABILITY_HISTORY_GET,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_HISTORY_GET,
             get_history_description(),
             get_history_input_schema(),
@@ -106,7 +106,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     reg.register_rpc_with_spec(
         ABILITY_TRACE_GET,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_TRACE_GET,
             get_trace_description(),
             get_trace_input_schema(),
@@ -117,7 +117,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     reg.register_rpc_with_spec(
         ABILITY_HISTORY_PATH,
         OwnerKind::Device,
-        crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_HISTORY_PATH,
             get_path_description(),
             get_path_input_schema(),

@@ -145,7 +145,7 @@ const DEFAULT_LIST_MAX_ENTRIES: usize = 4096;
 // ── Registration ───────────────────────────────────────────────────
 
 /// Wire all three filesystem abilities into the registry. Called
-/// from `runtime::system_ability_catalog::build_registry_with_services` once at
+/// from `daemon::ability::catalog::build_registry_with_services` once at
 /// daemon startup. The abilities are stateless so registration is
 /// just three handler closures with no per-call setup.
 pub fn register(reg: &mut AxonAbilityCatalog) {

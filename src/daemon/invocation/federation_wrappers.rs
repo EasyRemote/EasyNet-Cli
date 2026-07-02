@@ -719,7 +719,7 @@ fn device_owner_projection_values(owner_ura: &str) -> Vec<serde_json::Value> {
     {
         return Vec::new();
     }
-    crate::runtime::system_ability_catalog::profiles::device::descriptors_for(owner_ura)
+    crate::daemon::ability::catalog::profiles::device::descriptors_for(owner_ura)
         .iter()
         .filter_map(|descriptor| {
             crate::runtime::owner_projection::summary_from_descriptor(descriptor).ok()

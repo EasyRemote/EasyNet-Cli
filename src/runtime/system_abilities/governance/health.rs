@@ -38,7 +38,7 @@ use crate::runtime::ability_dispatch::OwnerKind;
 pub const ABILITY_NAME: &str = crate::daemon::ability::names::governance::OBSERVE_HEALTH;
 
 /// Register the `observe.health` handler on the supplied registry.
-/// Called from `runtime::system_ability_catalog::build_registry`.
+/// Called from `daemon::ability::catalog::build_registry`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(ABILITY_NAME, OwnerKind::Device, Arc::new(handler));
 }

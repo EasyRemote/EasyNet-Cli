@@ -162,7 +162,7 @@ fn dispatch_local_device_ability(
 }
 
 fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
-    crate::runtime::system_ability_catalog::published_abilities()
+    crate::daemon::ability::catalog::published_abilities()
         .into_iter()
         .find(|meta| meta.name == ability_name)
         .map(|meta| dispatch_mode_from_hints(&meta.hints))

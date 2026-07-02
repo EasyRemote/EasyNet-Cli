@@ -9,7 +9,7 @@
 //
 //   * `runtime::agent_ability_specs::AgentAbilitySpec` — per-agent on-disk
 //     manifest shape, used for chat / skill manifests.
-//   * `runtime::system_ability_catalog::SystemAbilityMetadata` — in-memory shape
+//   * `daemon::ability::catalog::SystemAbilityMetadata` — in-memory shape
 //     for built-in abilities (observe.*, agent.*, …).
 //
 // Both pre-date RFC-001 and lack visibility/scope. AbilityDescriptor

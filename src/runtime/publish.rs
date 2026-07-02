@@ -35,12 +35,12 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::persistence::local_agents::{self, LocalAgentsFile};
-use crate::runtime::advertise::{self, AbilityInvoker, AdvertiseOutcome};
-use crate::runtime::system_ability_catalog::profiles::{
+use crate::daemon::ability::catalog::profiles::{
     self as profiles_mod,
     bootstrap::{self, BootstrapOutcome, BootstrapPlan, UraMinter, UuidMinter},
 };
+use crate::persistence::local_agents::{self, LocalAgentsFile};
+use crate::runtime::advertise::{self, AbilityInvoker, AdvertiseOutcome};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
@@ -231,9 +231,9 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // A registry-load failure degrades to "no per-agent advertise
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
-    let live_registry = crate::runtime::system_ability_catalog::build_registry();
+    let live_registry = crate::daemon::ability::catalog::build_registry();
     let hint_snapshot =
-        crate::runtime::system_ability_catalog::AbilityDiscoveryHintSnapshot::from_registry(
+        crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(
             &live_registry,
         );
     match crate::registry::agents::load_agents() {
@@ -613,7 +613,7 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     // names — these are the names `meta.list_abilities` would
     // surface to a remote caller. Driven by the same source the
     // runtime-local registry surfaces via list_tools.
-    names.extend(crate::runtime::system_ability_catalog::published_ability_names());
+    names.extend(crate::daemon::ability::catalog::published_ability_names());
 
     // Per-user-agent abilities — `<agent>.chat` and any
     // `<agent>.<verb>` declared in the agent's
@@ -720,7 +720,7 @@ fn runtime_admin_resource_ura(realm: &str, tenant_id: &str, ability_name: &str) 
 mod tests {
     use super::*;
     use crate::cli::test_support::HomeGuard;
-    use crate::runtime::system_ability_catalog::profiles::bootstrap::LlmSubAgent;
+    use crate::daemon::ability::catalog::profiles::bootstrap::LlmSubAgent;
     use std::cell::RefCell;
 
     /// Recording fake invoker; mirrors the one in advertise.rs but

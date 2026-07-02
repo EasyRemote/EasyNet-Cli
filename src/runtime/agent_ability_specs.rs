@@ -44,7 +44,7 @@
 // (`~/.easynet/agents.json`, which records what the operator has
 // installed locally), discovery labels, publication prelude code,
 // and the MCP profile projection
-// (`runtime::system_ability_catalog::profiles::mcp`). It answers
+// (`daemon::ability::catalog::profiles::mcp`). It answers
 // exactly one question — "for agent X of type Y, what abilities does
 // it offer as network-visible tools, and what is the JSON schema of
 // each ability's arguments" — and answers it the same way from all
@@ -53,7 +53,7 @@
 //   1. `registry::a2a_labels::build` — to include in `a2a.agents_json[*].skills`
 //      so federated peers *discover* the abilities without calling
 //      anything.
-//   2. `runtime::system_ability_catalog::profiles::mcp` — to project
+//   2. `daemon::ability::catalog::profiles::mcp` — to project
 //      those same abilities into MCP tool descriptors and route each
 //      tool call back into daemon Invocation.
 //   3. daemon publication/invocation paths — to advertise and invoke

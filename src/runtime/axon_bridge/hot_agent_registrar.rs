@@ -25,7 +25,7 @@
 //!
 //! The `AxonAbilityCatalog` is constructed *before* the Axon
 //! `LocalRuntime` (registry comes from
-//! `runtime::system_ability_catalog::build_registry_with_services` in the daemon's
+//! `daemon::ability::catalog::build_registry_with_services` in the daemon's
 //! Stage 2; runtime comes later in
 //! `invocation_transport::start_daemon_invocation_transport`).
 //! But `agent.start`'s handler closure has to be installed at

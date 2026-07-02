@@ -8,6 +8,7 @@
 use super::{build_registry, build_system_registry};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::daemon::ability::catalog::{ability_toml, system_ability_descriptor_path};
 use crate::daemon::ability::names::{
     agents as agent_names, automation as automation_names, device_control as device_names,
     federation as federation_names, governance as governance_names,
@@ -52,7 +53,6 @@ use crate::runtime::system_abilities::{
         voice as voice_call_ability,
     },
 };
-use crate::runtime::system_ability_catalog::{ability_toml, system_ability_descriptor_path};
 
 /// Public list of every v1 system-ability *name*. Used by
 /// `registry::a2a_labels` to populate the top-level

@@ -45,10 +45,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::daemon::ability::catalog::{self as ability_catalog, AbilityDiscoveryHintSnapshot};
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::runtime::system_ability_catalog::{self, AbilityDiscoveryHintSnapshot};
 use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = crate::daemon::ability::names::governance::META_DESCRIBE;
@@ -60,7 +60,7 @@ pub const ABILITY_LIST_ABILITIES: &str =
 /// `descriptors_provider` runs at handler-call time so future
 /// hot-reload of the descriptor catalog is reflected without
 /// re-registration. Same closure type as `mcp::bridge::register`
-/// so the daemon wires both off `system_ability_catalog::profiles`.
+/// so the daemon wires both off `daemon::ability::catalog::profiles`.
 ///
 /// `registry_handle` is a `OnceLock` populated by the build site
 /// AFTER `Arc::new(reg)`. The list_abilities handler reads through
@@ -203,7 +203,7 @@ fn list_abilities_handler(
     let mut catalog: std::collections::BTreeMap<AbilityIdentity, AbilityDescriptor> =
         std::collections::BTreeMap::new();
     for d in static_descriptors {
-        if !system_ability_catalog::is_publishable_catalog_name(&d.name) {
+        if !ability_catalog::is_publishable_catalog_name(&d.name) {
             continue;
         }
         if !scope.matches_descriptor(&d) {
@@ -291,7 +291,7 @@ fn list_abilities_handler(
             let name = row.name;
             // Keep the live registry on the same public-catalogue surface as
             // `published_abilities`, `easynet ability list`, and advertise.
-            if !system_ability_catalog::is_publishable_catalog_name(&name) {
+            if !ability_catalog::is_publishable_catalog_name(&name) {
                 continue;
             }
             // M0 commit 2: read the owner kind from the registry,
@@ -667,9 +667,7 @@ fn static_descriptors_for_owner(
     context: &AbilityCatalogBuildContext,
 ) -> Option<Vec<AbilityDescriptor>> {
     if context.local.host_device_agent_ura == owner_ura {
-        return Some(
-            crate::runtime::system_ability_catalog::profiles::device::descriptors_for(owner_ura),
-        );
+        return Some(crate::daemon::ability::catalog::profiles::device::descriptors_for(owner_ura));
     }
 
     if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "consent", "default")
@@ -677,7 +675,7 @@ fn static_descriptors_for_owner(
         == Some(owner_ura)
     {
         return Some(
-            crate::runtime::system_ability_catalog::profiles::consent::descriptors_for(owner_ura),
+            crate::daemon::ability::catalog::profiles::consent::descriptors_for(owner_ura),
         );
     }
 
@@ -685,9 +683,7 @@ fn static_descriptors_for_owner(
         .as_deref()
         == Some(owner_ura)
     {
-        return Some(
-            crate::runtime::system_ability_catalog::profiles::mcp::descriptors_for(owner_ura),
-        );
+        return Some(crate::daemon::ability::catalog::profiles::mcp::descriptors_for(owner_ura));
     }
 
     let llm_owner = context
@@ -697,9 +693,9 @@ fn static_descriptors_for_owner(
         .any(|entry| entry.profile == "llm" && entry.agent_ura == owner_ura);
     if llm_owner {
         let catalog =
-            crate::runtime::system_ability_catalog::profiles::llm::LlmProfileAbilityCatalog::load();
+            crate::daemon::ability::catalog::profiles::llm::LlmProfileAbilityCatalog::load();
         return Some(
-            crate::runtime::system_ability_catalog::profiles::llm::descriptors_for_with_catalog(
+            crate::daemon::ability::catalog::profiles::llm::descriptors_for_with_catalog(
                 owner_ura, None, &catalog,
             ),
         );

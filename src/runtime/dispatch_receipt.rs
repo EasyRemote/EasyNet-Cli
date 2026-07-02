@@ -46,11 +46,9 @@
 
 use easynet_axon::invocation::audit::HostedAgentReceiptHeader;
 
+use crate::daemon::ability::catalog::profiles::{DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID};
 use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::system_ability_catalog::profiles::{
-    DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID,
-};
 
 pub trait HostAttestationProvider {
     fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;
@@ -108,7 +106,7 @@ pub fn header_for_ability_with_attestation(
     }
 
     let (profile_key, name) =
-        match crate::runtime::system_ability_catalog::system_ability_owner(ability_name) {
+        match crate::daemon::ability::catalog::system_ability_owner(ability_name) {
             Some(OwnerKind::Device) => {
                 // Self-signed: device authority projected through the host profile.
                 return HostedAgentReceiptHeader::new_selfsigned(host_ura).ok();

@@ -44,9 +44,9 @@ pub fn descriptors_for(
     use crate::runtime::ability_dispatch::OwnerKind;
 
     let mut out = Vec::new();
-    for meta in crate::runtime::system_ability_catalog::published_system_abilities_for_owner(
-        OwnerKind::Device,
-    ) {
+    for meta in
+        crate::daemon::ability::catalog::published_system_abilities_for_owner(OwnerKind::Device)
+    {
         let visibility = if meta.name.starts_with("observe.") {
             Visibility::Public
         } else {

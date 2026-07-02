@@ -3409,7 +3409,7 @@ mod tests {
     //
     // The hub-pushed Dispatch frame's ability name is resolved
     // against the same Axon `LocalRuntime` the daemon binary wires via
-    // `system_ability_catalog::build_registry_for_daemon` → `build_registry_with_services`.
+    // `daemon::ability::catalog::build_registry_for_daemon` → `build_registry_with_services`.
     // That path registers the
     // AXIOM Tier 2.5 Baseline Locomotion Profile (fs.read /
     // fs.write / fs.list / fs.edit / process.exec / shell.run /
@@ -3436,8 +3436,8 @@ mod tests {
         use crate::runtime::execution::schedule::ScheduleService;
         use crate::runtime::execution::session::SessionService;
         let agents = Default::default();
-        let mut config = crate::runtime::system_ability_catalog::RegistryBuildConfig::new(
-            crate::runtime::system_ability_catalog::RegistryBuildServices::new(
+        let mut config = crate::daemon::ability::catalog::RegistryBuildConfig::new(
+            crate::daemon::ability::catalog::RegistryBuildServices::new(
                 Arc::new(SessionService::new()),
                 Arc::new(PermissionService::new()),
                 Arc::new(DiscussService::new()),
@@ -3453,7 +3453,7 @@ mod tests {
             )
             .expect("test device URA is a valid device authority root"),
         );
-        crate::runtime::system_ability_catalog::build_registry_with_services(config)
+        crate::daemon::ability::catalog::build_registry_with_services(config)
     }
 
     #[tokio::test]

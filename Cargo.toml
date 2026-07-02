@@ -103,7 +103,7 @@ path = "src/bin/easynet-keyring.rs"
 # descriptor from the live `published_abilities()` metadata. Run after
 # any change to a `description_*` / `input_schema_*` function; the
 # `every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer`
-# test in src/runtime/system_ability_catalog/assembly_tests.rs fails CI if the on-disk TOML
+# test in src/daemon/ability/catalog/assembly_tests.rs fails CI if the on-disk TOML
 # drifts from what this binary would emit.
 #
 #   cargo run --bin gen-ability-tomls

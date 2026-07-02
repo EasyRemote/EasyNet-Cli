@@ -128,7 +128,7 @@ impl OrchestrationService {
 }
 
 /// Register `mission.discuss_round`. Called once at daemon boot
-/// from `runtime::system_ability_catalog::build_registry_with_services`. The
+/// from `daemon::ability::catalog::build_registry_with_services`. The
 /// `dispatch_registry_handle` is populated AFTER `Arc::new(reg)`
 /// so the handler can dispatch into peer abilities in-process —
 /// going back through the IPC client would deadlock the

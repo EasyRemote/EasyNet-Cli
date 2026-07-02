@@ -403,7 +403,7 @@ impl McpReflectionSupervisor {
 /// function rather than a method on [`McpReflectionSupervisor`]; the
 /// supervisor only ever sees the post-Arc shape. Sync bridge to the
 /// async `reflect_all` lives here so boot code in
-/// `runtime::system_ability_catalog::build_registry_with_services` never has to do
+/// `daemon::ability::catalog::build_registry_with_services` never has to do
 /// its own `Handle::try_current` dance.
 ///
 /// On success, returns the `(per_server_index, ReflectResult)` pair
@@ -449,7 +449,7 @@ pub fn run_eager_blocking(
 /// after wrapping the registry in `Arc`. One variant per terminal
 /// outcome of [`McpReflectionMode`] resolution, plus the unpaired-
 /// daemon arm — so the call site in
-/// `runtime::system_ability_catalog::build_registry_with_services` is exactly one
+/// `daemon::ability::catalog::build_registry_with_services` is exactly one
 /// `plan().apply()` pair rather than two mutually-exclusive
 /// `Option`s threaded across the `Arc::new(reg)` boundary.
 ///

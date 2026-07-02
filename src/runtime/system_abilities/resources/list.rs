@@ -44,11 +44,11 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::catalog::ability_toml::Rfc006Metadata;
 use crate::persistence::resources::{self, filter_by_kinds, ResourceEntry, ResourceType};
 use crate::runtime::ability_descriptor::AbilityClass;
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::system_ability_catalog::ability_toml::Rfc006Metadata;
 
 pub const ABILITY_META_LIST_RESOURCES: &str =
     crate::daemon::ability::names::resources::META_LIST_RESOURCES;

@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
+use easynet_cli::daemon::ability::catalog as ability_catalog;
 use easynet_cli::daemon::ability::health as ability_health;
 use easynet_cli::daemon::context::clipboard_tracker;
 use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
@@ -59,7 +60,6 @@ use easynet_cli::runtime::kernel_api::KernelApi;
 use easynet_cli::runtime::system_abilities::agents::{
     discover as discover_ability, lifecycle as agent_lifecycle_ability,
 };
-use easynet_cli::runtime::system_ability_catalog;
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
@@ -308,9 +308,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(discover_ability::DeferredDiscoverFederationResolver::new());
     let discover_federation_resolver: discover_ability::SharedDiscoverFederationResolver =
         discover_federation_resolver_cell.clone();
-    let built_registry = system_ability_catalog::build_registry_for_daemon_result(
-        system_ability_catalog::RegistryDaemonBuildConfig {
-            services: system_ability_catalog::RegistryBuildServices::new(
+    let built_registry = ability_catalog::build_registry_for_daemon_result(
+        ability_catalog::RegistryDaemonBuildConfig {
+            services: ability_catalog::RegistryBuildServices::new(
                 kernel.session_service(),
                 kernel.permission_service(),
                 kernel.discuss_service(),
@@ -324,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
             local_runtime: Some(Arc::clone(&local_runtime)),
             authority_context: None,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
-            shared_stores: system_ability_catalog::RegistrySharedStores::new(Arc::clone(
+            shared_stores: ability_catalog::RegistrySharedStores::new(Arc::clone(
                 &hub_published_abilities,
             )),
         },

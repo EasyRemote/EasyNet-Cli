@@ -74,10 +74,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::catalog::ability_toml::Rfc006Metadata;
 use crate::runtime::ability_descriptor::AbilityClass;
 use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource, StreamSource};
-use crate::runtime::system_ability_catalog::ability_toml::Rfc006Metadata;
 
 // ── Ability names (exported so registration + descriptor sites
 //    pull from one place) ──────────────────────────────────────
@@ -285,7 +285,7 @@ pub fn input_schema(name: &str) -> Option<Value> {
 /// a schema-less descriptor.
 pub(crate) fn registry_manifest(name: &'static str) -> crate::core::ability_spec::AbilityManifest {
     let row = row(name).unwrap_or_else(|| panic!("{name} must be a registered media ability"));
-    crate::runtime::system_ability_catalog::system_manifest::registry_manifest(
+    crate::daemon::ability::catalog::system_manifest::registry_manifest(
         row.name,
         row.description,
         (row.input_schema)(),

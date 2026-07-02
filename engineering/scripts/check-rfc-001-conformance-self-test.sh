@@ -138,18 +138,18 @@ assertions_run=$((assertions_run + 1))
 # Case 5: MCP inside mcp-profile module — ALLOWED (excluded).
 # ──────────────────────────────────────────────────────────
 echo
-echo "Case 5: MCP inside src/runtime/system_ability_catalog/profiles/mcp.rs is allowed"
-mkdir -p "$FIXTURE_ROOT/src/runtime/system_ability_catalog/profiles"
+echo "Case 5: MCP inside src/daemon/ability/catalog/profiles/mcp.rs is allowed"
+mkdir -p "$FIXTURE_ROOT/src/daemon/ability/catalog/profiles"
 # Remove the violating file from Case 4 first.
 rm "$FIXTURE_ROOT/src/runtime/mcp_in_kernel.rs"
 # Add a file under the allowed path.
-cat > "$FIXTURE_ROOT/src/runtime/system_ability_catalog/profiles/mcp.rs" << 'EOF'
+cat > "$FIXTURE_ROOT/src/daemon/ability/catalog/profiles/mcp.rs" << 'EOF'
 // mcp-profile Agent implementation — MCP keyword expected here.
 fn handle_mcp_request() {}
 EOF
 
 output="$(run_conformance baseline)"
-# The rule "MCP keyword in CLI src" excludes system_ability_catalog/profiles/mcp.rs.
+# The rule "MCP keyword in CLI src" excludes daemon/ability/catalog/profiles/mcp.rs.
 # But we still have system.skill.list from Case 3 + register_* from Case 2.
 # Verify the MCP rule itself reports 0.
 mcp_line="$(echo "$output" | grep "MCP keyword in CLI src" || true)"

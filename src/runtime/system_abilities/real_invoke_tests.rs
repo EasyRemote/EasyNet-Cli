@@ -73,6 +73,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
 use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::runtime::system_abilities::{
@@ -85,7 +86,6 @@ use crate::runtime::system_abilities::{
     },
     governance::consent as permission_ability,
 };
-use crate::runtime::system_ability_catalog::{build_registry, is_publishable_catalog_name};
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -104,11 +104,11 @@ fn registry_with_temp_home() -> (Arc<AxonAbilityCatalog>, crate::cli::test_suppo
     let guard = crate::cli::test_support::HomeGuard::new();
     // build_registry_for_daemon does the agent-registry load that
     // some abilities need (agent.list, chat-per-agent etc).
-    let mut config = crate::runtime::system_ability_catalog::RegistryDaemonBuildConfig::new(
-        crate::runtime::system_ability_catalog::RegistryBuildServices::fresh(),
+    let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
+        crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
     );
     config.loaders = Some(Arc::new(Vec::new()));
-    let reg = crate::runtime::system_ability_catalog::build_registry_for_daemon(config);
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon(config);
     (reg, guard)
 }
 

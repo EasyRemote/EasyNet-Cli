@@ -60,7 +60,7 @@ pub const ABILITY_TRACK: &str = crate::daemon::ability::names::automation::MISSI
 pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::MISSION_CANCEL;
 
 /// Register every mission ability on the registry. Called once at
-/// boot from `runtime::system_ability_catalog::build_registry_with_services`.
+/// boot from `daemon::ability::catalog::build_registry_with_services`.
 ///
 /// The earlier RFC-001 v4.1.6 cut also kept a `device.easynet.*`
 /// alias for `run`/`track`/`cancel` ("user-facing alias"). The

@@ -128,20 +128,15 @@ fi
 # Allowlist:
 #   * The full control set (rule 1) — every syscall type is also
 #     legitimately used here.
-#   * ability, ability_descriptor, ability_names
+#   * ability, ability_descriptor
 #                         — descriptor versions, metadata keys,
-#                           stable public ability names, canonical
-#                           JSON bytes, and conformance metadata
-#                           used to validate and project daemon
-#                           Invocation requests.
+#                           canonical JSON bytes, and conformance
+#                           metadata used to validate and project
+#                           daemon Invocation requests.
 #   * system_abilities    — terminal/file-transfer and governance
 #                           handlers reached by the daemon
 #                           Invocation server as in-process ability
 #                           implementations.
-#   * system_ability_catalog
-#                         — descriptor/catalog snapshots used for
-#                           session prelude advertisement and MCP
-#                           profile projection.
 #   * agent_ability_specs — hosted-agent ability specs advertised in
 #                           prelude/publication flows.
 #   * keyring             — sign/verify for cross-realm receipts
@@ -202,7 +197,7 @@ fi
 # Forbidden by default: anything not on this list. Add with
 # rationale here AND in docs/design/daemon-layers-v1.md.
 if [ -d "src/daemon/invocation" ]; then
-    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|ability_names|system_abilities|system_ability_catalog|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|ability_wire|plugin_host'
+    serve_allowed='kernel_api|invocation|invocation_target|domain|ability_dispatch|gateway_api|gateway|system|local_runtime_invoker|hosted_receipt|ability|ability_descriptor|system_abilities|agent_ability_specs|keyring|publish|local_invocation_identity|failure_codes|owner_projection|resources|join_connection_state|provisional_ura|federation_init|execution|advertise|federation_client|axon_bridge|ability_wire|plugin_host'
     serve_files=$(find src/daemon/invocation -name '*.rs' | sort)
     for f in $serve_files; do
         awk '
@@ -240,11 +235,11 @@ fi
 # ── Rule 4 ────────────────────────────────────────────────────────
 # runtime/agents/ was the old daemon-owned ability handler grouping.
 # Handler implementations now live in `runtime/system_abilities`,
-# descriptor/catalog projection lives in `runtime/system_ability_catalog`,
+# descriptor/catalog projection lives in `daemon/ability/catalog`,
 # and reusable execution engines live in `runtime/executors`.
 if [ -d "src/runtime/agents" ]; then
     echo "ERROR: retired runtime agents directory exists."
-    echo "  Use runtime/system_abilities, runtime/system_ability_catalog, or runtime/executors."
+    echo "  Use runtime/system_abilities, daemon/ability/catalog, or runtime/executors."
     violations=$((violations + 1))
 fi
 

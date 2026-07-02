@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn local_registry_satisfies_device_baseline() {
         let _home = crate::cli::test_support::HomeGuard::new();
-        let registry = crate::runtime::system_ability_catalog::build_registry();
+        let registry = crate::daemon::ability::catalog::build_registry();
         let device = DeviceBaseline::required_abilities();
         let report = RegistryConformance::new(&registry).check("device", &device);
         assert!(report.is_conformant(), "{}", report.panic_message());
@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn local_registry_satisfies_hub_introspection_slice() {
         let _home = crate::cli::test_support::HomeGuard::new();
-        let registry = crate::runtime::system_ability_catalog::build_registry();
+        let registry = crate::daemon::ability::catalog::build_registry();
         let report =
             RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
         assert!(report.is_conformant(), "{}", report.panic_message());

@@ -1,7 +1,7 @@
 // EasyNet CLI — system ability manifest projection
 // =================================================
 //
-// File: src/runtime/system_ability_catalog/system_manifest.rs
+// File: src/daemon/ability/catalog/system_manifest.rs
 // Description: Converts daemon-owned ability registry keys into
 //              `AbilityManifest` metadata used by the control plane.
 

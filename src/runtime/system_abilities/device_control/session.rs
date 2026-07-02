@@ -46,7 +46,7 @@ pub const ABILITY_LIST: &str = crate::daemon::ability::names::device_control::SE
 pub const ABILITY_ATTACH: &str = crate::daemon::ability::names::device_control::SESSION_ATTACH;
 
 /// Register the two session abilities on the registry. Called from
-/// `runtime::system_ability_catalog::build_registry`.
+/// `daemon::ability::catalog::build_registry`.
 ///
 /// `attach` is a Stream-mode ability — its handler is a stream
 /// producer rather than a single response. v1 ships the RPC handler

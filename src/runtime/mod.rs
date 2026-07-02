@@ -124,7 +124,7 @@ pub mod executors;
 // `ability_dispatch` consumes `InvocationTarget` (from
 // stage-1 resolver in `invocation_target.rs`) and routes either to
 // the in-process `AxonAbilityCatalog` or via `GatewayApi`.
-// `system_ability_catalog::build_registry` populates the registry with every
+// `daemon::ability::catalog::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
 pub mod ability;
@@ -152,7 +152,6 @@ pub mod plugin_host;
 pub mod provisional_ura;
 pub mod publish;
 pub mod system_abilities;
-pub mod system_ability_catalog;
 // RFC-002 keyring + KeyResolver. Local-first, zero axon dependency.
 pub mod keyring;
 // RFC-002 tenant suffix resolver: maps tenant_id to admission mode +

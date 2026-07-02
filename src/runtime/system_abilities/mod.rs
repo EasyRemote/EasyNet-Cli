@@ -2,7 +2,7 @@
 //!
 //! Product grouping here is source organization only. The control-plane model
 //! remains in `runtime::ability`, descriptor/catalog projection remains in
-//! `runtime::system_ability_catalog`, and Axon glue remains in
+//! `daemon::ability::catalog`, and Axon glue remains in
 //! `runtime::axon_bridge`.
 
 pub mod agents;

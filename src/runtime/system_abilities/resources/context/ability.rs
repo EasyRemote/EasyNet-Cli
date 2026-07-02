@@ -60,7 +60,7 @@ pub const ABILITY_CAPTURES_GET: &str =
     crate::daemon::ability::names::resources::CONTEXT_CAPTURES_GET;
 
 /// Register every context ability. Called from
-/// `runtime::system_ability_catalog::build_registry`.
+/// `daemon::ability::catalog::build_registry`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         ABILITY_CLIPBOARD_LIST,
