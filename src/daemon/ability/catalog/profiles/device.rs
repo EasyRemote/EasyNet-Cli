@@ -39,9 +39,9 @@
 /// pure (no daemon-state coupling).
 pub fn descriptors_for(
     owner_ura: &str,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-    use crate::runtime::ability_dispatch::OwnerKind;
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::dispatch::OwnerKind;
 
     let mut out = Vec::new();
     for meta in
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn descriptors_for_marks_observe_as_public_and_others_scoped() {
-        use crate::runtime::ability_descriptor::Visibility;
+        use crate::daemon::ability::descriptors::Visibility;
         let descriptors = descriptors_for("easynet:///r/acme/device/01DEV");
         for d in descriptors {
             if d.name.starts_with("observe.") {

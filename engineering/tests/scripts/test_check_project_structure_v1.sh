@@ -58,6 +58,8 @@ make_sandbox() {
     printf '%s\n' '// daemon ability control plane' > "$sandbox/src/daemon/ability/control_plane.rs"
     printf '%s\n' '// daemon ability control plane error' > "$sandbox/src/daemon/ability/control_plane_error.rs"
     printf '%s\n' '// daemon ability descriptors root' > "$sandbox/src/daemon/ability/descriptors/mod.rs"
+    printf '%s\n' '// daemon ability descriptor surface' > "$sandbox/src/daemon/ability/descriptors/surface.rs"
+    printf '%s\n' '// daemon ability dispatch' > "$sandbox/src/daemon/ability/dispatch.rs"
     printf '%s\n' '// daemon ability health' > "$sandbox/src/daemon/ability/health.rs"
     printf '%s\n' '// daemon ability impl bindings root' > "$sandbox/src/daemon/ability/impl_bindings/mod.rs"
     printf '%s\n' '// daemon ability names root' > "$sandbox/src/daemon/ability/names/mod.rs"
@@ -141,6 +143,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired runtime/ability directory should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired ability descriptor facade' > "$SB/src/runtime/ability_descriptor.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/ability_descriptor.rs should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' '// retired ability dispatch facade' > "$SB/src/runtime/ability_dispatch.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired runtime/ability_dispatch.rs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/src/runtime/ability_names"
@@ -232,6 +248,20 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "runtime::ability import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::ability_descriptor::AbilityDescriptor::new; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::ability_descriptor import should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+printf '%s\n' 'fn f() { let _ = crate::runtime::ability_dispatch::AxonAbilityCatalog::new; }' > "$SB/src/lib.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime::ability_dispatch import should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 printf '%s\n' 'fn f() { let _ = crate::runtime::ability_names::agents::CHAT; }' > "$SB/src/lib.rs"

@@ -9,10 +9,10 @@ use serde_json::Value;
 use crate::daemon::ability::builtins::resources::media::resource_subject::{
     reject_subject_in_args, require_resource_ura_subject,
 };
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::errors::{RemoteDesktopError, RemoteDesktopResult};
 use crate::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::plugins::remote_desktop::session_consent::causal_context_contains_receipt;
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 /// Verify that a remote desktop session control-plane ability targets exactly
 /// one session and carries the session bearer token.

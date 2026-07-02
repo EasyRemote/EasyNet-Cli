@@ -100,10 +100,10 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::resources::filesystem::{self, FilesystemResourceCapability};
-use crate::runtime::ability_dispatch::OwnerKind;
 /// Wire name. Pinned by the Tier 2.5 surface; rename = protocol break.
 pub const ABILITY_NAME: &str = crate::daemon::ability::names::device_control::FS_EDIT;
 

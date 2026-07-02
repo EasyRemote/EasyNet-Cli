@@ -38,9 +38,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::domain::SessionId;
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::daemon::execution::session::SessionService;
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 
 pub const ABILITY_LIST: &str = crate::daemon::ability::names::device_control::SESSION_LIST;
 pub const ABILITY_ATTACH: &str = crate::daemon::ability::names::device_control::SESSION_ATTACH;
@@ -60,7 +60,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
         Arc::new(move |args: Value| list_handler(&s_for_list, args)),
     );
     // attach is registered as a stream handler — see
-    // runtime::ability_dispatch for the LocalStreamRegistry surface.
+    // daemon::ability::dispatch for the LocalStreamRegistry surface.
     reg.register_stream_with_owner(
         "session.attach",
         OwnerKind::Device,
@@ -222,7 +222,7 @@ mod tests {
 
         let stream = attach_handler(&svc, json!({"session_id": "live-1"})).unwrap();
         let (snap, mut rx) = match stream {
-            crate::runtime::ability_dispatch::StreamSource::SnapshotThenLive(s, r) => (s, r),
+            crate::daemon::ability::dispatch::StreamSource::SnapshotThenLive(s, r) => (s, r),
             other => panic!("expected SnapshotThenLive, got {other:?}"),
         };
         assert_eq!(snap.len(), 2); // admitted + first progress

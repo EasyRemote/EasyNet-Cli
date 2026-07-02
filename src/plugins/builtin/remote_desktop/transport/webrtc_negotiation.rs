@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::constants::{
     ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX, REASON_SESSION_NOT_FOUND,
 };
@@ -27,7 +28,6 @@ use crate::plugins::remote_desktop::session_lifecycle::{
 use crate::plugins::remote_desktop::transport::{
     start_direct_webrtc_endpoint, StartDirectWebRtcEndpointRequest,
 };
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 /// Parsed remote-offer negotiation request.
 ///

@@ -25,9 +25,9 @@
 /// P4.7 narrows scope_subjects/scope_agents.
 pub fn descriptors_for(
     owner_ura: &str,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::Visibility;
-    use crate::runtime::ability_dispatch::OwnerKind;
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::Visibility;
+    use crate::daemon::ability::dispatch::OwnerKind;
 
     super::system_descriptors_for_owner(
         owner_ura,

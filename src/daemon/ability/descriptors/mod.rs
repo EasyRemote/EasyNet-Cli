@@ -14,6 +14,13 @@ use sha2::{Digest, Sha256};
 
 use super::AbilityControlPlaneError;
 
+mod surface;
+
+pub use surface::{
+    AbilityClass, AbilityDescriptor, AbilityHints, AbilityIdentity, AbilitySchemaSummary,
+    DescriptorError, ScopeRule, Visibility,
+};
+
 pub const DEFAULT_ABILITY_DESCRIPTOR_VERSION: &str =
     crate::core::ability_spec::DEFAULT_DESCRIPTOR_VERSION;
 
@@ -601,7 +608,7 @@ fn governed_schema_summary_for_manifest(
                 manifest.input_schema(),
                 manifest.output_schema().unwrap_or(&empty),
                 access_policy,
-                serde_json::to_value(crate::runtime::ability_descriptor::AbilityHints::default())
+                serde_json::to_value(crate::daemon::ability::descriptors::AbilityHints::default())
                     .expect("ability hints serialize"),
             )
         }
@@ -612,7 +619,7 @@ fn governed_schema_summary_for_manifest(
                 &empty,
                 &empty,
                 access_policy,
-                serde_json::to_value(crate::runtime::ability_descriptor::AbilityHints::default())
+                serde_json::to_value(crate::daemon::ability::descriptors::AbilityHints::default())
                     .expect("ability hints serialize"),
             )
         }
@@ -623,7 +630,7 @@ fn manifest_access_policy_projection(access: &crate::core::ability_spec::AccessP
     governed_access_policy_summary(
         serde_json::to_value(manifest_visibility_projection(access.visibility))
             .expect("manifest visibility projection serializes"),
-        serde_json::to_value(crate::runtime::ability_descriptor::ScopeRule::Any)
+        serde_json::to_value(crate::daemon::ability::descriptors::ScopeRule::Any)
             .expect("scope rule serializes"),
         serde_json::to_value(manifest_scope_agents_projection(access))
             .expect("scope rule serializes"),
@@ -634,30 +641,30 @@ fn manifest_access_policy_projection(access: &crate::core::ability_spec::AccessP
 
 fn manifest_visibility_projection(
     visibility: crate::core::ability_spec::Visibility,
-) -> crate::runtime::ability_descriptor::Visibility {
+) -> crate::daemon::ability::descriptors::Visibility {
     match visibility {
         crate::core::ability_spec::Visibility::Selfish => {
-            crate::runtime::ability_descriptor::Visibility::Private
+            crate::daemon::ability::descriptors::Visibility::Private
         }
         crate::core::ability_spec::Visibility::Device => {
-            crate::runtime::ability_descriptor::Visibility::Scoped
+            crate::daemon::ability::descriptors::Visibility::Scoped
         }
         crate::core::ability_spec::Visibility::Public => {
-            crate::runtime::ability_descriptor::Visibility::Public
+            crate::daemon::ability::descriptors::Visibility::Public
         }
     }
 }
 
 fn manifest_scope_agents_projection(
     access: &crate::core::ability_spec::AccessPolicy,
-) -> crate::runtime::ability_descriptor::ScopeRule {
+) -> crate::daemon::ability::descriptors::ScopeRule {
     match access.allow_callers.as_ref() {
         Some(allow) if !allow.is_empty() => {
-            crate::runtime::ability_descriptor::ScopeRule::OnlyMatching(sorted_policy_list(Some(
+            crate::daemon::ability::descriptors::ScopeRule::OnlyMatching(sorted_policy_list(Some(
                 allow.as_slice(),
             )))
         }
-        _ => crate::runtime::ability_descriptor::ScopeRule::Any,
+        _ => crate::daemon::ability::descriptors::ScopeRule::Any,
     }
 }
 
@@ -865,17 +872,20 @@ mod tests {
         let control_plane_record =
             AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&manifest))
                 .unwrap();
-        let runtime_descriptor = crate::runtime::ability_descriptor::AbilityDescriptor::new(
+        let runtime_descriptor = crate::daemon::ability::descriptors::AbilityDescriptor::new(
             "mentor.quote",
             LOCAL_DEVICE_URA,
-            crate::runtime::ability_descriptor::Visibility::Scoped,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
         )
         .unwrap()
         .with_input_schema(input)
         .with_output_schema(output)
-        .with_scope_agents(crate::runtime::ability_descriptor::ScopeRule::OnlyMatching(
-            vec!["alice".to_string(), "bob".to_string()],
-        ));
+        .with_scope_agents(
+            crate::daemon::ability::descriptors::ScopeRule::OnlyMatching(vec![
+                "alice".to_string(),
+                "bob".to_string(),
+            ]),
+        );
 
         assert_eq!(
             control_plane_record.schema_hash().0,

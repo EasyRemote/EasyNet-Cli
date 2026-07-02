@@ -48,8 +48,8 @@ use crate::daemon::ability::builtins::agents::chat::{
     build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
     build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
 };
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::registry::agents::AgentEntry;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 pub(crate) fn block_on_hot_registrar<F, T>(future: F) -> Option<T>
 where
@@ -643,7 +643,7 @@ impl HotAgentRegistrar {
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
-        handler: crate::runtime::ability_dispatch::LocalRpcHandler,
+        handler: crate::daemon::ability::dispatch::LocalRpcHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
             Some(runtime_key) => {
@@ -683,7 +683,7 @@ impl HotAgentRegistrar {
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
-        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+        handler: crate::daemon::ability::dispatch::LocalStreamHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
             Some(runtime_key) => {
@@ -723,7 +723,7 @@ impl HotAgentRegistrar {
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::core::ability_spec::AbilityManifest,
-        handler: crate::runtime::ability_dispatch::LocalStreamHandlerWithEnvelope,
+        handler: crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
             Some(runtime_key) => {

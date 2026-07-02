@@ -120,8 +120,6 @@ pub mod executors;
 // `daemon::ability::catalog::build_registry` populates the registry with every
 // device-level ability the daemon publishes (today: `observe.health`;
 // PR-ATTACH onwards extends this).
-pub mod ability_descriptor;
-pub mod ability_dispatch;
 pub mod advertise;
 pub mod dispatch_receipt;
 pub mod federation_client;

@@ -11,6 +11,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::core::ability_spec::{EalExec, McpExec};
+use crate::daemon::ability::dispatch::{
+    EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
+    LocalStreamHandlerWithEnvelope,
+};
 use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
 use crate::daemon::plugins::contribution::{
     PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
@@ -23,10 +27,6 @@ use crate::daemon::plugins::sidecar::{
     sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
 };
 use crate::daemon::plugins::PluginRealtimeCapability;
-use crate::runtime::ability_dispatch::{
-    EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
-    LocalStreamHandlerWithEnvelope,
-};
 use crate::runtime::context::ParentInvocationContext;
 
 /// Runtime host for daemon plugin packages.
@@ -492,12 +492,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
     };
-    use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     #[test]

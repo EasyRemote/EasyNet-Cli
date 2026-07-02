@@ -247,7 +247,7 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
     use serde_json::json;
 
     fn clear_registry_for_user(user: &str) {

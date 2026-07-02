@@ -34,7 +34,7 @@ use super::user_binding_chain::{
     verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::ura::{parse_ura, URAKind};
 
 fn b64_encode(bytes: &[u8]) -> String {

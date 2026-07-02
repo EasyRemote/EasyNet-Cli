@@ -44,10 +44,10 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
+use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 use crate::daemon::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::daemon::execution::mcp_client::McpClientService;
-use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
 /// reflectively-registered upstream MCP tool, before the
@@ -1079,7 +1079,7 @@ trait RegistryWriter {
         owner: OwnerKind,
         authority_scope: AuthorityScope,
         manifest: AbilityManifest,
-        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+        handler: crate::daemon::ability::dispatch::LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()>;
 
@@ -1128,7 +1128,7 @@ impl RegistryWriter for StaticWriter<'_> {
         owner: OwnerKind,
         authority_scope: AuthorityScope,
         manifest: AbilityManifest,
-        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+        handler: crate::daemon::ability::dispatch::LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
         self.reg.register_stream_with_spec_impl_and_authority_scope(
@@ -1174,7 +1174,7 @@ impl RegistryWriter for DynamicWriter<'_> {
         owner: OwnerKind,
         authority_scope: AuthorityScope,
         manifest: AbilityManifest,
-        handler: crate::runtime::ability_dispatch::LocalStreamHandler,
+        handler: crate::daemon::ability::dispatch::LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
         self.reg
@@ -1274,8 +1274,8 @@ fn register_one_tool<W: RegistryWriter>(
     let server_for_handler = server_name.to_string();
     let upstream_for_handler = upstream_tool.clone();
     let local_name_for_handler = local_name.clone();
-    let handler: crate::runtime::ability_dispatch::LocalStreamHandler = Arc::new(
-        move |args: Value| -> anyhow::Result<crate::runtime::ability_dispatch::StreamSource> {
+    let handler: crate::daemon::ability::dispatch::LocalStreamHandler = Arc::new(
+        move |args: Value| -> anyhow::Result<crate::daemon::ability::dispatch::StreamSource> {
             // Allocate the broadcast channel BEFORE spawning so the
             // receiver is in hand the moment we return — caller's
             // first `recv()` cannot race the producer.
@@ -1325,7 +1325,7 @@ fn register_one_tool<W: RegistryWriter>(
                 tx,
             ));
 
-            Ok(crate::runtime::ability_dispatch::StreamSource::Live(rx))
+            Ok(crate::daemon::ability::dispatch::StreamSource::Live(rx))
         },
     );
 
@@ -2321,7 +2321,7 @@ while True:
         let handler = reg.get_stream("slow_op").expect("stream handler present");
         let source = handler(serde_json::json!({"input": "go"})).expect("handler ok");
         let mut rx = match source {
-            crate::runtime::ability_dispatch::StreamSource::Live(rx) => rx,
+            crate::daemon::ability::dispatch::StreamSource::Live(rx) => rx,
             other => panic!("expected Live, got {other:?}"),
         };
 

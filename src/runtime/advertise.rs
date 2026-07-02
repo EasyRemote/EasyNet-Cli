@@ -36,7 +36,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::runtime::ability_descriptor::AbilityDescriptor;
+use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::runtime::federation_client::{
     args_to_bytes, parse_receipt_value, AdvertiseAgentArgs, AdvertiseAgentReceipt,
     AdvertisedSigningAuthority, ResolveArgs, ResolveFilter, ResolveReceipt, ResolvedAgent,
@@ -649,7 +649,7 @@ pub fn advertise_hosted_agent_with_host_node<I: AbilityInvoker>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
     use std::cell::RefCell;
 
     /// In-memory fake invoker that records every call and returns a

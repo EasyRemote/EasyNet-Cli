@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use crate::daemon::ability::dispatch::{BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::sidecar::io::{
     collect_stderr, duration_millis, spawn_stderr_reader, wait_child_with_timeout,
@@ -22,7 +23,6 @@ use crate::daemon::plugins::sidecar::io::{
 use crate::daemon::plugins::sidecar::{
     SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame,
 };
-use crate::runtime::ability_dispatch::{BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND};
 
 /// Open the daemon-owned bidi channels around one spawned sidecar process.
 ///

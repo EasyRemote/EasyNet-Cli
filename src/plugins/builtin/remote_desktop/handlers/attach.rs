@@ -6,6 +6,9 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
+use crate::daemon::ability::dispatch::{
+    BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
+};
 use crate::plugins::remote_desktop::constants::{ABILITY_ATTACH_SESSION, REASON_SESSION_NOT_FOUND};
 use crate::plugins::remote_desktop::invoke_bidi::{
     spawn_bidi_capture_worker, BidiCaptureWorkerConfig,
@@ -17,9 +20,6 @@ use crate::plugins::remote_desktop::request::{
 use crate::plugins::remote_desktop::resource::resolve_screen_resource;
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::session_lifecycle::ensure_session_access;
-use crate::runtime::ability_dispatch::{
-    BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
-};
 
 /// Handle `remote_desktop.attach`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(
@@ -84,6 +84,7 @@ mod tests {
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
         EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend, SyntheticScreenBackend,
     };
+    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
         PluginRequirementSet,
@@ -98,7 +99,6 @@ mod tests {
     use crate::plugins::remote_desktop::test_support::{
         env_for, seed_display, test_consent_causal_context, test_lock, test_runtime_limits,
     };
-    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
     use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
     #[derive(Debug)]

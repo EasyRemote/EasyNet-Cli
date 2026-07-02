@@ -47,8 +47,8 @@
 use easynet_axon::invocation::audit::HostedAgentReceiptHeader;
 
 use crate::daemon::ability::catalog::profiles::{DEFAULT_CONSENT_AGENT_ID, DEFAULT_MCP_AGENT_ID};
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::persistence::local_agents::{lookup_hosted_ura, LocalAgentsFile};
-use crate::runtime::ability_dispatch::OwnerKind;
 
 pub trait HostAttestationProvider {
     fn host_attestation(&self, callee_ura: &str, host_ura: &str) -> Option<Vec<u8>>;

@@ -73,8 +73,8 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::support::shellguard::ast::{parse_for_security, ParseForSecurityResult, SimpleCommand};
 use crate::support::shellguard::destructive;
 use crate::support::shellguard::pathconstraints::{self, Constraints, PathVerdict};

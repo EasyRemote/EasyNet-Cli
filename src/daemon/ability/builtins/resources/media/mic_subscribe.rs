@@ -50,9 +50,9 @@ use crate::daemon::ability::builtins::resources::media::resource_subject::{
     self, resolve_required_resource_subject, ResourceSubjectSpec,
 };
 use crate::daemon::ability::builtins::resources::media::{self, ABILITY_MIC_SUBSCRIBE};
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::persistence::resources::{ResourceEntry, ResourceType};
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 
 pub const REASON_SUBJECT_REQUIRED: &str = resource_subject::REASON_SUBJECT_REQUIRED;
 pub const REASON_SUBJECT_IN_ARGS: &str = resource_subject::REASON_SUBJECT_IN_ARGS;

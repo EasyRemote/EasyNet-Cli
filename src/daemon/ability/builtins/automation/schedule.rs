@@ -24,9 +24,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::schedule::ScheduleService;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
 
 pub const ABILITY_ADD: &str = crate::daemon::ability::names::automation::SCHEDULE_ADD;
 pub const ABILITY_LIST: &str = crate::daemon::ability::names::automation::SCHEDULE_LIST;

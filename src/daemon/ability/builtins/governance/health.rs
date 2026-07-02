@@ -30,9 +30,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::OwnerKind;
 /// Wire name of the ability. Pinned so a future rename trips a
 /// fixture-byte-stability test in `registry::a2a_labels`.
 pub const ABILITY_NAME: &str = crate::daemon::ability::names::governance::OBSERVE_HEALTH;

@@ -80,11 +80,11 @@ use std::sync::Arc;
 use base64::Engine;
 use serde_json::{json, Value};
 
-use crate::daemon::execution::pty::{PtyService, PtySessionId};
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, BidiOutputFrame, BidiSource, BIDI_CHANNEL_BOUND,
 };
+use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
 pub const ABILITY_PTY_SESSION_ATTACH: &str =
     crate::daemon::ability::names::device_control::TERMINAL_ATTACH;
@@ -132,7 +132,7 @@ const READ_CHUNK_SIZE: usize = 4096;
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
-    use crate::runtime::ability_dispatch::LocalBidiHandler;
+    use crate::daemon::ability::dispatch::LocalBidiHandler;
     let pty_for_attach = Arc::clone(&pty);
     let handler: LocalBidiHandler =
         Arc::new(move |args: Value| attach_handler(&pty_for_attach, args));

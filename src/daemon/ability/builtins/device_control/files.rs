@@ -68,11 +68,11 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 pub use crate::daemon::resources::filesystem::{
     resource_ref_for_local_path, FilesystemResourceCapability, ResolvedFilesystemPath,
 };
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
 
 use crate::daemon::resources::filesystem;
 // ── Wire-name constants (cross-language pins) ─────────────────────

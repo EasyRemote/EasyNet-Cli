@@ -69,8 +69,8 @@ use std::sync::{Arc, OnceLock};
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::{AbilityManifest, Visibility};
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
 /// Verb portion of the per-agent discover ability. Combined with the
@@ -332,7 +332,7 @@ pub fn register_for_agent_with_resolver<F>(
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let agent = agent_name.clone();
@@ -367,7 +367,7 @@ pub fn register_device_aggregate_with_resolver<F>(
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     reg.register_rpc_with_spec(
         DEVICE_DISCOVER_ABILITY,
@@ -1908,7 +1908,7 @@ mod tests {
         use std::sync::Mutex;
         let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
         let captured_for_provider = Arc::clone(&captured);
-        let provider_handler: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let provider_handler: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(move |args: Value| {
                 *captured_for_provider.lock().unwrap() = Some(args);
                 Ok(json!({

@@ -34,8 +34,8 @@
 use base64::Engine as _;
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::persistence::context_store;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 pub const ABILITY_CLIPBOARD_LIST: &str =
     crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_LIST;

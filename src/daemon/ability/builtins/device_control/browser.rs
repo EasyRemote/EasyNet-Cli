@@ -38,7 +38,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{
+use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, BidiOutputFrame, BidiSource, StreamSource, BIDI_CHANNEL_BOUND,
 };
 
@@ -272,7 +272,7 @@ pub fn attach_session_input_schema() -> Value {
 /// a per-agent surface once wry is integrated, but for v0 the WebView
 /// lives in the daemon process and Device is honest.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let service = Arc::new(BrowserSessionService::default());
 
     let open_service = Arc::clone(&service);
@@ -620,7 +620,7 @@ impl BrowserSessionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
     use std::sync::Arc;
 
     fn open_url(service: &BrowserSessionService, url: &str) -> Value {

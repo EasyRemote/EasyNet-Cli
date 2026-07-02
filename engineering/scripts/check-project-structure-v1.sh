@@ -99,6 +99,8 @@ require_path "src/daemon/ability/conformance.rs"
 require_path "src/daemon/ability/control_plane.rs"
 require_path "src/daemon/ability/control_plane_error.rs"
 require_path "src/daemon/ability/descriptors/mod.rs"
+require_path "src/daemon/ability/descriptors/surface.rs"
+require_path "src/daemon/ability/dispatch.rs"
 require_path "src/daemon/ability/health.rs"
 require_path "src/daemon/ability/impl_bindings/mod.rs"
 require_path "src/daemon/ability/names"
@@ -139,6 +141,8 @@ require_path "scripts"
 require_path "tests/scripts"
 
 reject_path "src/runtime/ability"
+reject_path "src/runtime/ability_descriptor.rs"
+reject_path "src/runtime/ability_dispatch.rs"
 reject_path "src/runtime/ability_runtime"
 reject_path "src/runtime/agents"
 reject_path "src/runtime/ability_names"
@@ -207,6 +211,16 @@ scan_must_be_empty \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \
+    "active code must not import through retired runtime::ability_descriptor paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::ability_descriptor::|easynet_cli::runtime::ability_descriptor::|runtime::ability_descriptor::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not import through retired runtime::ability_dispatch paths" \
+    '(^|[^[:alnum:]_])(crate::runtime::ability_dispatch::|easynet_cli::runtime::ability_dispatch::|runtime::ability_dispatch::)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
     "active code must not import through retired runtime::ability_names paths" \
     '(^|[^[:alnum:]_])(crate::runtime::ability_names::|easynet_cli::runtime::ability_names::|runtime::ability_names::)' \
     "${SCAN_ROOTS[@]}"
@@ -259,6 +273,16 @@ scan_must_be_empty \
 scan_must_be_empty \
     "active code must not reference retired src/runtime/ability physical path" \
     'src/runtime/ability(/|$)' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/ability_descriptor.rs physical path" \
+    'src/runtime/ability_descriptor\.rs|runtime/ability_descriptor\.rs' \
+    "${SCAN_ROOTS[@]}"
+
+scan_must_be_empty \
+    "active code must not reference retired src/runtime/ability_dispatch.rs physical path" \
+    'src/runtime/ability_dispatch\.rs|runtime/ability_dispatch\.rs' \
     "${SCAN_ROOTS[@]}"
 
 scan_must_be_empty \

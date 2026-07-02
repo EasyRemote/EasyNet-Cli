@@ -54,9 +54,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_SEND_TASK: &str =
     crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
 
@@ -74,7 +74,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         ABILITY_SEND_TASK,
         OwnerKind::Device,
         Arc::new(
-            move |env: crate::runtime::ability_dispatch::EnvelopeContext, args: Value| {
+            move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
                 send_task_handler(args, &env)
             },
         ),
@@ -87,7 +87,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// `{"kind":"list","receipts":[..]}` (see `ability_dispatch::causal_context_to_json`).
 /// Returns the parent list to chain onto the forward hop; empty for a root
 /// invocation.
-fn causal_parents_from_env(env: &crate::runtime::ability_dispatch::EnvelopeContext) -> Vec<Value> {
+fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeContext) -> Vec<Value> {
     let cc = env.causal_context();
     match cc.get("kind").and_then(Value::as_str) {
         Some("scalar") => vec![json!({
@@ -123,7 +123,7 @@ fn causal_parents_from_env(env: &crate::runtime::ability_dispatch::EnvelopeConte
 /// that handles the inbound shape handles the outbound shape too.
 fn send_task_handler(
     args: Value,
-    env: &crate::runtime::ability_dispatch::EnvelopeContext,
+    env: &crate::daemon::ability::dispatch::EnvelopeContext,
 ) -> anyhow::Result<Value> {
     let target_node = match target_node_field(&args) {
         Ok(s) => s,
@@ -266,8 +266,8 @@ mod tests {
 
     /// A root (parent-less) inbound envelope. `send_task_handler` reads the
     /// causal context off this to chain it onto the forward hop.
-    fn root_env() -> crate::runtime::ability_dispatch::EnvelopeContext {
-        crate::runtime::ability_dispatch::EnvelopeContext::for_test_ability(
+    fn root_env() -> crate::daemon::ability::dispatch::EnvelopeContext {
+        crate::daemon::ability::dispatch::EnvelopeContext::for_test_ability(
             "easynet:///r/acme/device/local",
             ABILITY_SEND_TASK,
             "easynet:///r/acme/device/local",
@@ -288,7 +288,7 @@ mod tests {
     /// preserves the receipt DAG instead of re-rooting it.
     #[test]
     fn causal_parents_extracted_from_each_causal_context_shape() {
-        use crate::runtime::ability_dispatch::EnvelopeContext;
+        use crate::daemon::ability::dispatch::EnvelopeContext;
 
         // Root: {"kind":"none"} -> no parents.
         let none_env = EnvelopeContext::for_test_ability(

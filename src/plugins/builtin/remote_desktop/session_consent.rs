@@ -6,8 +6,8 @@
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::errors::{RemoteDesktopError, RemoteDesktopResult};
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 const POLICY_LOCAL_USER_CONSENT: &str = "local_user_consent";
 const POLICY_OWNER_SELF_CONSENT: &str = "owner_self_consent";

@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::persistence::daemon_config::{default_config_path, default_ledger_dir, DaemonConfig};
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
 pub const ABILITY_HISTORY_LIST: &str =

@@ -10,8 +10,8 @@ use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
 use super::SessionError;
+use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use crate::runtime::ability_descriptor::AbilityDescriptor;
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],
@@ -371,7 +371,7 @@ async fn advertise_hosted_agent_entry(
     caller_ura: &str,
     caller_node_id: &Option<String>,
     agent_registry: &crate::registry::agents::AgentRegistry,
-    live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
     entry: &AdvertiseEntry,
     signing_seed: Option<SessionSigningSeed>,
 ) {
@@ -429,7 +429,7 @@ struct HostedAgentAbilityAdvertiseContext<'a> {
     caller_ura: &'a str,
     caller_node_id: Option<&'a str>,
     agent_registry: &'a crate::registry::agents::AgentRegistry,
-    live_registry: &'a crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    live_registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog,
     signing_seed: Option<SessionSigningSeed>,
 }
 
@@ -1022,7 +1022,7 @@ fn build_hosted_agent_ability_descriptors(
     agent_name: &str,
     entry: &crate::registry::agents::AgentEntry,
     host_node_id: Option<&str>,
-    live_registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
 ) -> Vec<AbilityDescriptor> {
     let mut descriptors = Vec::new();
     let hint_snapshot =
@@ -1037,7 +1037,7 @@ fn build_hosted_agent_ability_descriptors(
         let Ok(mut descriptor) = AbilityDescriptor::new(
             owner_local_name,
             owner_ura,
-            crate::runtime::ability_descriptor::Visibility::Scoped,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
         ) else {
             continue;
         };
@@ -1070,7 +1070,7 @@ pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<
             AbilityDescriptor::new(
                 descriptor_name,
                 owner_ura,
-                crate::runtime::ability_descriptor::Visibility::Scoped,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
             )
             .ok()
             .map(|descriptor| {

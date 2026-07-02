@@ -9,10 +9,10 @@ use std::sync::{Arc, OnceLock};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::plugins::{
     PluginActivationBroker, PluginRealtimeActivationReport, PluginRuntimeManager,
 };
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 
 /// Daemon-local ability used by `easynet plugin install/update/remove` after
 /// the filesystem transaction commits.

@@ -28,7 +28,7 @@
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 
 pub const ABILITY_LIST: &str = crate::daemon::ability::names::agents::CHAT_HISTORY_LIST;
 pub const ABILITY_GET: &str = crate::daemon::ability::names::agents::CHAT_HISTORY_GET;

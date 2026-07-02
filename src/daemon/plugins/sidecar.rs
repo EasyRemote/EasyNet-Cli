@@ -15,8 +15,8 @@ mod tests;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::errors::Result;
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 pub use command::{SidecarCommand, SidecarExecutionModel};
 pub use frame::{SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame};

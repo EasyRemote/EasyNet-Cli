@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 use anyhow::Context;
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
 

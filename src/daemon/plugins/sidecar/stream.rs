@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+use crate::daemon::ability::dispatch::{StreamSource, BIDI_CHANNEL_BOUND};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::sidecar::io::{
     collect_stderr, duration_millis, spawn_stderr_reader, wait_child_with_timeout,
@@ -22,7 +23,6 @@ use crate::daemon::plugins::sidecar::io::{
 use crate::daemon::plugins::sidecar::{
     SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame,
 };
-use crate::runtime::ability_dispatch::{StreamSource, BIDI_CHANNEL_BOUND};
 
 /// Open a live sidecar stream and return immediately with a daemon-owned
 /// broadcast receiver.

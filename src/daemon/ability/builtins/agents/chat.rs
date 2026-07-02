@@ -87,8 +87,8 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::runtime::dispatch::{AgentResponse, DriverOverrides, ToolCall};
 
 /// The wire-level *verb* portion of every chat ability name. The
@@ -186,7 +186,7 @@ pub fn register_for_agent(
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
 ) {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let ability = format!("{agent_name}.{ABILITY_VERB}");
     let owner = OwnerKind::Agent(agent_name.clone());
 
@@ -278,9 +278,9 @@ pub fn register_for_agent(
 /// failed open never produces a half-live session.
 pub(crate) fn build_host_stream_handler(
     spec: crate::core::ability_spec::HostStreamExec,
-) -> crate::runtime::ability_dispatch::LocalStreamHandlerWithEnvelope {
+) -> crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope {
     Arc::new(
-        move |env: crate::runtime::ability_dispatch::EnvelopeContext, args: Value| {
+        move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
             let call_id = env.invocation_id().to_string();
             let caller = env.caller().to_string();
             crate::runtime::executors::host_stream::run_host_stream(&spec, &args, &call_id, &caller)
@@ -298,7 +298,7 @@ pub(crate) fn build_chat_stream_handler_for(
     agent_name: String,
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-) -> crate::runtime::ability_dispatch::LocalStreamHandler {
+) -> crate::daemon::ability::dispatch::LocalStreamHandler {
     Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args))
 }
 
@@ -312,7 +312,7 @@ pub(crate) fn build_agent_ability_handler(
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
     bare_ability: String,
-) -> crate::runtime::ability_dispatch::LocalRpcHandler {
+) -> crate::daemon::ability::dispatch::LocalRpcHandler {
     Arc::new(move |args: Value| {
         // Re-read this agent's manifests at invoke time so edits made
         // post-boot change the executor binding without a daemon restart.
@@ -373,7 +373,7 @@ pub(crate) fn build_chat_handler_for(
     agent_name: String,
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
-) -> crate::runtime::ability_dispatch::LocalRpcHandler {
+) -> crate::daemon::ability::dispatch::LocalRpcHandler {
     Arc::new(move |args: Value| handler(&agent_name, &entry, &loaders, args))
 }
 
@@ -453,7 +453,7 @@ pub(crate) fn build_discover_handler_for(
     agent_name: String,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: crate::daemon::ability::builtins::agents::discover::SharedDiscoverFederationResolver,
-) -> crate::runtime::ability_dispatch::LocalRpcHandler {
+) -> crate::daemon::ability::dispatch::LocalRpcHandler {
     // Replicate the surface of `discover_ability::register_for_agent`
     // without going through that function (it expects a `&mut
     // AxonAbilityCatalog`, which we don't have here). The handler
@@ -480,7 +480,7 @@ pub(crate) fn build_discover_handler_for(
 pub(crate) fn build_invoke_handler_for(
     agent_name: String,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) -> crate::runtime::ability_dispatch::LocalRpcHandler {
+) -> crate::daemon::ability::dispatch::LocalRpcHandler {
     let provider: Arc<dyn Fn() -> crate::registry::agents::AgentRegistry + Send + Sync> =
         Arc::new(|| crate::registry::agents::load_agents().unwrap_or_default());
     Arc::new(move |args: Value| {

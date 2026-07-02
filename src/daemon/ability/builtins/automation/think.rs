@@ -80,7 +80,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 /// Wire name. Pinned because the CLI (`easynet mission think`) and
 /// any future EAL caller bind to it by string.
@@ -108,7 +108,7 @@ pub fn register(
     reg: &mut AxonAbilityCatalog,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let handle = Arc::clone(&dispatch_registry_handle);
     reg.register_rpc_with_owner(
         "mission.think",

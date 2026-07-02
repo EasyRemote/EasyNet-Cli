@@ -30,7 +30,7 @@ pub mod state;
 use std::sync::Arc;
 
 use crate::daemon::ability::authority::AuthorityScope;
-use crate::runtime::ability_dispatch::{
+use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
 };
 

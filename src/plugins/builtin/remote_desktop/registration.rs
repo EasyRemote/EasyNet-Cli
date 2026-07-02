@@ -27,6 +27,7 @@ use serde_json::Value;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     ScreenSnapshotBackend, XcapBackend,
 };
+use crate::daemon::ability::dispatch::{BidiSource, EnvelopeContext, StreamSource};
 use crate::daemon::ability::AbilityImplSource;
 use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
 use crate::daemon::plugins::{
@@ -41,7 +42,6 @@ use crate::plugins::remote_desktop::constants::{
 use crate::plugins::remote_desktop::handlers;
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::schema;
-use crate::runtime::ability_dispatch::{BidiSource, EnvelopeContext, StreamSource};
 
 type PluginRpcHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<Value>;
@@ -295,11 +295,11 @@ pub(in crate::plugins::builtin::remote_desktop) fn contribute_with_screen_backen
 mod tests {
     use super::*;
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
     use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
-    use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
     #[test]
     fn every_remote_desktop_spec_is_projected_from_binding_table() {

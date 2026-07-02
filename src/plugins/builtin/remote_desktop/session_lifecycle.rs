@@ -10,13 +10,13 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::constants::{REASON_SESSION_EXPIRED, REASON_SESSION_TERMINAL};
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::plugins::remote_desktop::session_access::{
     ensure_session_control_identity, ensure_session_resource_identity,
 };
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 pub(in crate::plugins::builtin::remote_desktop) fn ensure_session_access(
     plugin: &RemoteDesktopPlugin,

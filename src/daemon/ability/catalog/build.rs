@@ -47,6 +47,7 @@ use crate::daemon::ability::builtins::{
         voice as voice_call_ability,
     },
 };
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::execution::discuss::DiscussService;
 use crate::daemon::execution::loop_instance::LoopService;
 use crate::daemon::execution::permission::PermissionService;
@@ -54,7 +55,6 @@ use crate::daemon::execution::pty::PtyService;
 use crate::daemon::execution::schedule::ScheduleService;
 use crate::daemon::execution::session::SessionService;
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use std::sync::Arc;
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
@@ -248,7 +248,7 @@ pub struct RegistryBuildConfig<'a> {
     pub loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
     pub pages_identity: PagesIdentity,
     pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    pub authority_context: Option<crate::runtime::ability_dispatch::AbilityAuthorityContext>,
+    pub authority_context: Option<crate::daemon::ability::dispatch::AbilityAuthorityContext>,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
 }
@@ -278,7 +278,7 @@ pub struct RegistryDaemonBuildConfig {
     pub loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
     pub pages_identity: PagesIdentity,
     pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    pub authority_context: Option<crate::runtime::ability_dispatch::AbilityAuthorityContext>,
+    pub authority_context: Option<crate::daemon::ability::dispatch::AbilityAuthorityContext>,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
 }

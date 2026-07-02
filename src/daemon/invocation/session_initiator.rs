@@ -91,8 +91,8 @@ use futures::Stream;
 use tokio::sync::mpsc;
 use tonic::Status;
 
+use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use crate::runtime::ability_descriptor::AbilityDescriptor;
 
 mod envelope;
 mod frame_loop;
@@ -1600,10 +1600,10 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
         let owner = "easynet:///r/realm/device/n1";
-        let descriptors = vec![crate::runtime::ability_descriptor::AbilityDescriptor::new(
+        let descriptors = vec![crate::daemon::ability::descriptors::AbilityDescriptor::new(
             "agent.start",
             owner,
-            crate::runtime::ability_descriptor::Visibility::Scoped,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
         )
         .expect("test descriptor")];
 
@@ -1680,7 +1680,7 @@ mod tests {
         let descriptors = vec![AbilityDescriptor::new(
             "agent.start",
             device_ura,
-            crate::runtime::ability_descriptor::Visibility::Scoped,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
         )
         .expect("test descriptor")];
         let result = dial_and_run_session_with_idle_timeout(

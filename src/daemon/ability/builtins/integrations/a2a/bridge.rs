@@ -52,10 +52,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_LIST_SKILLS: &str =
     crate::daemon::ability::names::integrations::A2A_BRIDGE_LIST_SKILLS;
 pub const ABILITY_SEND_TASK: &str =

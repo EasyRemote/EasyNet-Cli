@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, watch};
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend,
 };
+use crate::daemon::ability::dispatch::BidiOutputFrame;
 use crate::persistence::resources::ResourceEntry;
 use crate::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED,
@@ -27,7 +28,6 @@ use crate::plugins::remote_desktop::media::encode::{
 use crate::plugins::remote_desktop::request::AttachEncoding;
 use crate::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::plugins::remote_desktop::transport::BidiTerminalGuard;
-use crate::runtime::ability_dispatch::BidiOutputFrame;
 
 pub(in crate::plugins::builtin::remote_desktop) struct BidiCaptureWorkerConfig {
     pub(in crate::plugins::builtin::remote_desktop) session_store: Arc<RemoteDesktopSessionStore>,
@@ -333,7 +333,7 @@ fn install_h264_preview_session_for_test(
                 session_token: "token".to_string(),
                 creator_caller_ura: Some("easynet:///r/acme/user/test-caller".to_string()),
                 consent: crate::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant::from_envelope_for_test(
-                    &crate::runtime::ability_dispatch::EnvelopeContext::for_test(
+                    &crate::daemon::ability::dispatch::EnvelopeContext::for_test(
                         "easynet:///r/acme/user/test-caller",
                         "easynet:///r/acme/resource/display.01",
                     ),

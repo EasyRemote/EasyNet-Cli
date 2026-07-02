@@ -257,10 +257,10 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                             name,
                             registry_name,
                         );
-                    let desc = crate::runtime::ability_descriptor::AbilityDescriptor::new(
+                    let desc = crate::daemon::ability::descriptors::AbilityDescriptor::new(
                         owner_local_name,
                         &owner_ura,
-                        crate::runtime::ability_descriptor::Visibility::Scoped,
+                        crate::daemon::ability::descriptors::Visibility::Scoped,
                     );
                     match desc {
                         Ok(d) => {
@@ -683,7 +683,7 @@ fn first_ura(outcomes: &[BootstrapOutcome], profile: &str, name: &str) -> Option
 }
 
 fn stamp_llm_agent_metadata(
-    descriptors: &mut [crate::runtime::ability_descriptor::AbilityDescriptor],
+    descriptors: &mut [crate::daemon::ability::descriptors::AbilityDescriptor],
     plan: &BootstrapPlan,
     llm_uras: &[(String, String)],
 ) {

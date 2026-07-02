@@ -23,9 +23,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::domain::{AgentId, LoopId};
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::daemon::execution::loop_instance::LoopService;
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, StreamSource};
 
 pub const ABILITY_CREATE: &str = crate::daemon::ability::names::automation::LOOP_CREATE;
 pub const ABILITY_STATUS: &str = crate::daemon::ability::names::automation::LOOP_STATUS;

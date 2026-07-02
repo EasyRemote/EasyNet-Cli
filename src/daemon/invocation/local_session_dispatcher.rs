@@ -3229,7 +3229,7 @@ mod tests {
         register_test_rpc(
             &rt,
             "test.echo",
-            crate::runtime::ability_dispatch::rpc_handler_to_ability_fn(Arc::new(Ok)),
+            crate::daemon::ability::dispatch::rpc_handler_to_ability_fn(Arc::new(Ok)),
         )
         .await;
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
@@ -3428,7 +3428,7 @@ mod tests {
 
     fn build_real_daemon_registry_with_runtime(
         local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
-    ) -> Arc<crate::runtime::ability_dispatch::AxonAbilityCatalog> {
+    ) -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
         use crate::daemon::execution::discuss::DiscussService;
         use crate::daemon::execution::loop_instance::LoopService;
         use crate::daemon::execution::permission::PermissionService;
@@ -3447,7 +3447,7 @@ mod tests {
         );
         config.local_runtime = local_runtime;
         config.authority_context = Some(
-            crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DEVICE_URA,
             )
             .expect("test device URA is a valid device authority root"),

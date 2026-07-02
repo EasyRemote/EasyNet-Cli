@@ -37,7 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use easynet_axon::{VoiceCallState, VoiceEndReason, VoiceEventType, VoiceNetworkMetrics};
 
 pub const ABILITY_CREATE_CALL: &str = crate::daemon::ability::names::resources::VOICE_CREATE_CALL;
@@ -101,7 +101,7 @@ fn now_ms() -> u64 {
 /// hosts the dispatch surface and `OwnerKind::Device` is the
 /// honest classification of where the handler runs today.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let service = Arc::new(VoiceCallService::default());
 
     let create = Arc::clone(&service);

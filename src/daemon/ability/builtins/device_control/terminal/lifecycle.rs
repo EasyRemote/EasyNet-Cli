@@ -37,9 +37,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
 
 pub const ABILITY_PTY_SESSION_CREATE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_CREATE;
@@ -131,7 +131,7 @@ pub fn register(
     pty: Arc<PtyService>,
     io: Option<crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
 ) {
-    use crate::runtime::ability_dispatch::LocalRpcHandler;
+    use crate::daemon::ability::dispatch::LocalRpcHandler;
     let svc_for_create = Arc::clone(&pty);
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));

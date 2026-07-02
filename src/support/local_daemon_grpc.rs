@@ -555,7 +555,7 @@ fn invoke_agent_management_in_process(
     function_name: &str,
     payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    let mut catalog = crate::runtime::ability_dispatch::AxonAbilityCatalog::new();
+    let mut catalog = crate::daemon::ability::dispatch::AxonAbilityCatalog::new();
     crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
         crate::registry::agents::load_agents().unwrap_or_default()
     });

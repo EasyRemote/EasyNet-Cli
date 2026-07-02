@@ -40,7 +40,7 @@ use easynet_cli::daemon::ability::builtins::resources::pages::list_get_unpublish
 use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_publish;
 use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
 use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
-use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
 use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use easynet_cli::ura;
 use std::sync::Arc;

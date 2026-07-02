@@ -433,12 +433,12 @@ impl BaselineConformanceReport {
 }
 
 pub struct RegistryConformance<'a> {
-    registry: &'a crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog,
 }
 
 impl<'a> RegistryConformance<'a> {
     #[must_use]
-    pub fn new(registry: &'a crate::runtime::ability_dispatch::AxonAbilityCatalog) -> Self {
+    pub fn new(registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
         Self { registry }
     }
 
@@ -585,7 +585,7 @@ pub fn baseline_names(abilities: &[BaselineAbility]) -> BTreeSet<&'static str> {
 }
 
 fn registry_supports(
-    registry: &crate::runtime::ability_dispatch::AxonAbilityCatalog,
+    registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
     ability: BaselineAbility,
 ) -> bool {
     match ability.call_mode {

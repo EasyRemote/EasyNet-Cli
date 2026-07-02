@@ -23,7 +23,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 
 use super::mime::mime_from_path;
 use super::sandbox::{open_beneath, validate_regular};

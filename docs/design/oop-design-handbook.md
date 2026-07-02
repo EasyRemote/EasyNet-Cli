@@ -304,7 +304,7 @@ CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三�
 | `CallMode` | enum：Rpc / Stream / Bidi；`.axon_call_mode()` 投影到 Axon `AbilityCallMode` | `descriptor.rs:226-250` |
 | `RuntimeEnv` | struct：执行环境不透明标签（如 `easynet-cli/0.23.1;rust-native`），绑入 impl_hash | `impl_binding.rs:19-68` |
 | `AbilityImplSource` | enum：NativeDaemon / BuiltinPlugin / SidecarPlugin / DeclarativePlugin / DeviceDeploy / Eal / Mcp / Test | `impl_binding.rs:70-96` |
-| `OwnerKind` | enum：Device / Hub / Agent(id) / User(id)；**RFC-001 结构性根治**（M0 前 owner 从名字前缀推断，M0 起注册时声明） | `src/runtime/ability_dispatch.rs:974`（已验证磁盘） |
+| `OwnerKind` | enum：Device / Hub / Agent(id) / User(id)；**RFC-001 结构性根治**（M0 前 owner 从名字前缀推断，M0 起注册时声明） | `src/daemon/ability/dispatch.rs:974`（已验证磁盘） |
 | `AbilityControlPlaneError` | enum（45+ 变体），所有公共构造器无 panic，边界一律返回 Result | `src/daemon/ability/error.rs:8-100` |
 
 #### 3.2.3 三阶段提交 typestate（已验证磁盘 `registry.rs:138`）
@@ -321,13 +321,13 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 ## 4. 能力层
 
-本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。当前实现落在 `src/daemon/ability/builtins/`、`src/daemon/ability/catalog/`、`src/runtime/executors/` 与 `src/runtime/ability_dispatch.rs`；旧 `runtime::agents` 兼容 facade 已退休。
+本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。当前实现落在 `src/daemon/ability/builtins/`、`src/daemon/ability/catalog/`、`src/runtime/executors/` 与 `src/daemon/ability/dispatch.rs`；旧 `runtime::agents` 兼容 facade 已退休。
 
 ### 4.1 中央派发枢纽
 
 | 类型 | 种类 | 角色 | 文件:行 |
 |---|---|---|---|
-| `AxonAbilityCatalog` | struct | 所有已注册能力的中央注册表 & 派发枢纽；桥接 CLI daemon 与 Axon `LocalRuntime`；六张同构 handler map（RPC/Stream/Bidi × with/without envelope） | `src/runtime/ability_dispatch.rs:1247` |
+| `AxonAbilityCatalog` | struct | 所有已注册能力的中央注册表 & 派发枢纽；桥接 CLI daemon 与 Axon `LocalRuntime`；六张同构 handler map（RPC/Stream/Bidi × with/without envelope） | `src/daemon/ability/dispatch.rs:1247` |
 | `DynamicCatalogue` | struct | post-boot 热重载侧表，与静态 map 分离；`RwLock` 守护；查询先静态后动态 | `ability_dispatch.rs:1337` |
 | `EnvelopeContext` | struct | AXIOM 7 元组到产品 handler 的投影；构造时校验所有字段，**无半初始化态** | `ability_dispatch.rs:91`（亦见 `90-277`） |
 | `AbilityAuthorityContext` | struct | 进程本地权威根：device / hub authority_root + source | `ability_dispatch.rs:1035` |

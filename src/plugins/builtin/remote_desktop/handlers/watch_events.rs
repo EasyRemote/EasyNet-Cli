@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::{EnvelopeContext, StreamSource};
 use crate::plugins::remote_desktop::constants::{ABILITY_WATCH_EVENTS, REASON_SESSION_NOT_FOUND};
 use crate::plugins::remote_desktop::request::require_str;
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
-use crate::runtime::ability_dispatch::{EnvelopeContext, StreamSource};
 
 /// Handle `remote_desktop.watch_events`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(

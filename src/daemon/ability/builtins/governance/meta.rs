@@ -46,9 +46,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::daemon::ability::catalog::{self as ability_catalog, AbilityDiscoveryHintSnapshot};
+use crate::daemon::ability::descriptors::{AbilityDescriptor, AbilityIdentity};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use crate::runtime::ability_descriptor::{AbilityDescriptor, AbilityIdentity};
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
 use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = crate::daemon::ability::names::governance::META_DESCRIBE;
@@ -101,7 +101,7 @@ pub fn register<F>(
     // tests pass `None` for unpaired-daemon shape or an explicit
     // string for paired-daemon shape, deterministic either way.
     let pages_user_for_list = pages_user.clone();
-    let list_handler: crate::runtime::ability_dispatch::LocalRpcHandler =
+    let list_handler: crate::daemon::ability::dispatch::LocalRpcHandler =
         Arc::new(move |args: Value| {
             list_abilities_handler(
                 &p_for_list,
@@ -180,7 +180,7 @@ fn list_abilities_handler(
     pages_user: Option<&str>,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> anyhow::Result<Value> {
-    use crate::runtime::ability_descriptor::Visibility;
+    use crate::daemon::ability::descriptors::Visibility;
     let scope = AbilityListScope::from_args(&args)?;
     let build_context = AbilityCatalogBuildContext::load(pages_user);
 
@@ -305,17 +305,17 @@ fn list_abilities_handler(
             // `owner` side table — proven equivalent for every owner kind by
             // `control_plane_owner_matches_legacy_lookup_for_static_ability`.
             let owner_string = match row.owner {
-                Some(crate::runtime::ability_dispatch::OwnerKind::Hub) => hub_owner_ura.clone(),
-                Some(crate::runtime::ability_dispatch::OwnerKind::Device) => {
+                Some(crate::daemon::ability::dispatch::OwnerKind::Hub) => hub_owner_ura.clone(),
+                Some(crate::daemon::ability::dispatch::OwnerKind::Device) => {
                     device_owner_ura.clone()
                 }
-                Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) => {
+                Some(crate::daemon::ability::dispatch::OwnerKind::Agent(agent_id)) => {
                     match (realm.as_deref(), user_segment.as_deref()) {
                         (Some(r), Some(u)) => Some(crate::ura::agent_ura(r, u, &agent_id)),
                         _ => None,
                     }
                 }
-                Some(crate::runtime::ability_dispatch::OwnerKind::User(user_id)) => {
+                Some(crate::daemon::ability::dispatch::OwnerKind::User(user_id)) => {
                     realm.as_deref().map(|r| crate::ura::user_ura(r, &user_id))
                 }
                 None => None,
@@ -710,7 +710,7 @@ fn synthesize_hot_hosted_agent_descriptors(
     hint_snapshot: &AbilityDiscoveryHintSnapshot,
     scope: &AbilityListScope,
 ) {
-    use crate::runtime::ability_descriptor::Visibility;
+    use crate::daemon::ability::descriptors::Visibility;
 
     let Some(agents) = context.agents.as_ref() else {
         return;
@@ -860,7 +860,7 @@ pub fn list_abilities_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(name, "easynet:///r/test/device/01DEV", Visibility::Public)
@@ -1188,7 +1188,7 @@ mod tests {
         // developer's real $HOME credentials.json) and fails when
         // run with siblings that HomeGuard a clean dir — which is
         // the race we're closing.
-        use crate::runtime::ability_dispatch::OwnerKind;
+        use crate::daemon::ability::dispatch::OwnerKind;
         use std::sync::OnceLock;
 
         let _home = crate::cli::test_support::HomeGuard::new();
@@ -1207,7 +1207,7 @@ mod tests {
             OwnerKind::Agent("alice".to_string()),
             crate::core::ability_spec::default_chat_manifest(),
             Arc::new(|_args| {
-                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
                 ))
             }),
@@ -1217,7 +1217,7 @@ mod tests {
             OwnerKind::Agent("bob".to_string()),
             crate::core::ability_spec::default_chat_manifest(),
             Arc::new(|_args| {
-                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
                 ))
             }),
@@ -1226,7 +1226,7 @@ mod tests {
             "alice.subscribe",
             OwnerKind::Agent("alice".to_string()),
             Arc::new(|_args| {
-                Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
                 ))
             }),
@@ -1256,7 +1256,7 @@ mod tests {
                 )
                 .expect("valid MCP manifest"),
                 Arc::new(|_args| {
-                    Ok(crate::runtime::ability_dispatch::StreamSource::Snapshot(
+                    Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                         Vec::new(),
                     ))
                 }),
@@ -1352,7 +1352,7 @@ mod tests {
 
     #[test]
     fn live_registry_synth_drops_entries_without_owner_metadata() {
-        use crate::runtime::ability_dispatch::OwnerKind;
+        use crate::daemon::ability::dispatch::OwnerKind;
         use std::sync::OnceLock;
 
         let mut live_reg = AxonAbilityCatalog::new();
@@ -1389,8 +1389,8 @@ mod tests {
         // dynamic side table. `meta.list_abilities` is the user-facing
         // catalogue backing SchemaForm, so it must read static OR
         // dynamic manifests rather than the static-only map.
+        use crate::daemon::ability::dispatch::OwnerKind;
         use crate::persistence::local_agents::{save, LocalAgentsFile};
-        use crate::runtime::ability_dispatch::OwnerKind;
         use std::sync::OnceLock;
 
         let _home = crate::cli::test_support::HomeGuard::new();

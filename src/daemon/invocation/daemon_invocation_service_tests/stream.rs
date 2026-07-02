@@ -409,7 +409,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
 
 #[tokio::test]
 async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapshot() {
-    use crate::runtime::ability_dispatch::{
+    use crate::daemon::ability::dispatch::{
         AbilityAuthorityContext, AxonAbilityCatalog, LocalStreamHandler, OwnerKind, StreamSource,
     };
     use easynet_axon::invocation::LocalRuntime;
@@ -687,9 +687,9 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
 
     let rt = LocalRuntime::new();
     let mut catalog =
-        crate::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&rt),
-            crate::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DAEMON_URI,
             )
             .expect("test daemon URI is a valid device authority root"),

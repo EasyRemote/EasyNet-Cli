@@ -75,9 +75,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::catalog::ability_toml::Rfc006Metadata;
-use crate::runtime::ability_descriptor::AbilityClass;
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, BidiSource, StreamSource};
+use crate::daemon::ability::descriptors::AbilityClass;
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, BidiSource, StreamSource};
 
 // ── Ability names (exported so registration + descriptor sites
 //    pull from one place) ──────────────────────────────────────

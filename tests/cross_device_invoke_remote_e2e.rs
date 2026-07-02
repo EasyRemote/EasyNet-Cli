@@ -359,11 +359,11 @@ added_at_unix_ms = 0
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URI.to_string()));
     let runtime = LocalRuntime::new();
     let authority_context =
-        easynet_cli::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+        easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
             DEVICE_A_URI,
         )
         .expect("test device URI is a valid device authority root");
-    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+    let mut catalog = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
         authority_context,
     );

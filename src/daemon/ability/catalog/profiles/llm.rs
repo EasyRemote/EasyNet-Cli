@@ -70,7 +70,7 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
 /// P4.7 narrows the SCOPED axes.
 pub fn descriptors_for(
     owner_ura: &str,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let catalog = LlmProfileAbilityCatalog::load();
     descriptors_for_with_catalog(owner_ura, None, &catalog)
 }
@@ -93,7 +93,7 @@ pub fn descriptors_for(
 pub fn descriptors_for_with_metadata(
     owner_ura: &str,
     agent_type_display: Option<&str>,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let catalog = LlmProfileAbilityCatalog::load();
     descriptors_for_with_catalog(owner_ura, agent_type_display, &catalog)
 }
@@ -135,8 +135,8 @@ pub fn descriptors_for_with_catalog(
     owner_ura: &str,
     agent_type_display: Option<&str>,
     catalog: &LlmProfileAbilityCatalog,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
     catalog
         .iter()
         .map(|m| {
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn descriptors_for_marks_skill_namespace_as_private() {
-        use crate::runtime::ability_descriptor::Visibility;
+        use crate::daemon::ability::descriptors::Visibility;
         let descriptors = descriptors_for("easynet:///r/acme/agent/u1.01LLM");
         for d in descriptors {
             if d.name.starts_with("skill.") {
@@ -286,7 +286,7 @@ mod tests {
                 .find(|descriptor| descriptor.name == "skill.design")
                 .expect("skill descriptor")
                 .visibility,
-            crate::runtime::ability_descriptor::Visibility::Private
+            crate::daemon::ability::descriptors::Visibility::Private
         );
     }
 }

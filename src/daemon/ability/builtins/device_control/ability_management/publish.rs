@@ -81,9 +81,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::AbilityManifest;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::registry::agents;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
 use crate::runtime::directory::ABILITY_MANIFEST_SUFFIX;
 
 /// Wire name of the publish meta-ability. Pinned because the

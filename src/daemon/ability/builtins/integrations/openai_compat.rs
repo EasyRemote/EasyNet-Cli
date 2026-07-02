@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::daemon::ability::builtins::resources::pages::PagesIdentity;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::support::process_singleton::ProcessSingleton;
 
@@ -559,7 +559,7 @@ fn registry_from_handle(
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     // RFC-006-C v0.1 — DEVICE-local OpenAI protocol shim. The
     // device daemon serves OpenAI's `/v1/chat/completions` and
     // `/v1/models` HTTP surface against locally-hosted chat-base
@@ -592,7 +592,7 @@ fn project_model_id_with_identity(
     let identity = identity?;
     // SPEC §9.1.A Step 5: agent ownership comes from the control-plane
     // record, not the legacy `owner` side table.
-    let Some(crate::runtime::ability_dispatch::OwnerKind::Agent(agent_id)) =
+    let Some(crate::daemon::ability::dispatch::OwnerKind::Agent(agent_id)) =
         registry.control_plane_owner(ability_name)
     else {
         return None;
@@ -737,7 +737,7 @@ fn deref_to_data_url(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
 
     fn ok_handler() -> LocalRpcHandler {
         Arc::new(|_| Ok(json!({"reply":"ok"})))

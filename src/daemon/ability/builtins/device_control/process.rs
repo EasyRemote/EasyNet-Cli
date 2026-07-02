@@ -58,8 +58,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::support::shellguard::destructive;
 use crate::support::shellguard::runner::{
     self, RunError, RunRequest, Sandbox, OUTPUT_DEFAULT_CAP, OUTPUT_HARD_CAP, TIMEOUT_DEFAULT_MS,

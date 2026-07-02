@@ -170,7 +170,7 @@ fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
 }
 
 fn dispatch_mode_from_hints(
-    hints: &crate::runtime::ability_descriptor::AbilityHints,
+    hints: &crate::daemon::ability::descriptors::AbilityHints,
 ) -> LocalDeviceDispatchMode {
     if hints.bidi_only {
         LocalDeviceDispatchMode::BidiUnsupported
@@ -533,7 +533,7 @@ fn try_dispatch_via_daemon(
 #[cfg(test)]
 mod tests {
     use super::{dispatch_mode_from_hints, LocalDeviceDispatchMode};
-    use crate::runtime::ability_descriptor::AbilityHints;
+    use crate::daemon::ability::descriptors::AbilityHints;
 
     #[test]
     fn local_device_dispatch_mode_is_derived_from_descriptor_hints() {

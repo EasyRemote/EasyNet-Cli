@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::{BidiSource, StreamSource};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::sidecar::bidi::open_bidi_session;
 use crate::daemon::plugins::sidecar::command::SidecarCommand;
@@ -21,7 +22,6 @@ use crate::daemon::plugins::sidecar::stream::{collect_stream_snapshot, open_live
 use crate::daemon::plugins::sidecar::{
     SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame,
 };
-use crate::runtime::ability_dispatch::{BidiSource, StreamSource};
 
 const DEFAULT_SIDECAR_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SIDECAR_BIDI_EXIT_TIMEOUT: Duration = Duration::from_secs(5);

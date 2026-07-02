@@ -71,9 +71,9 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
 
 pub const ABILITY_PTY_SESSION_INPUT: &str =
     crate::daemon::ability::names::device_control::TERMINAL_INPUT;
@@ -335,7 +335,7 @@ impl PtyIoService {
 /// every handler observes the same session and state tables.
 ///
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoService) {
-    use crate::runtime::ability_dispatch::LocalRpcHandler;
+    use crate::daemon::ability::dispatch::LocalRpcHandler;
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();

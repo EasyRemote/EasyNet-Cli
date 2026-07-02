@@ -45,9 +45,9 @@
 /// itself + selected internal callers for client.*. P4.7 narrows.
 pub fn descriptors_for(
     owner_ura: &str,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::Visibility;
-    use crate::runtime::ability_dispatch::OwnerKind;
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::Visibility;
+    use crate::daemon::ability::dispatch::OwnerKind;
 
     super::system_descriptors_for_owner(
         owner_ura,
@@ -73,13 +73,13 @@ pub fn descriptors_for(
 ///                  `"fs.read (source: kernel:built-in)"`.
 ///   inputSchema  ← descriptor.schema_summary.input (JSON Schema)
 pub fn tool_spec_from_descriptor(
-    descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
 ) -> serde_json::Value {
     tool_spec_from_descriptor_with_name(descriptor, &mcp_tool_name_for_ability(&descriptor.name))
 }
 
 fn tool_spec_from_descriptor_with_name(
-    descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
     tool_name: &str,
 ) -> serde_json::Value {
     let base_description = if !descriptor.description.is_empty() {
@@ -113,7 +113,7 @@ fn tool_spec_from_descriptor_with_name(
 }
 
 fn annotated_mcp_description(
-    descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
     base_description: &str,
 ) -> String {
     let owner = owner_label_for_descriptor(descriptor);
@@ -134,7 +134,7 @@ fn annotated_mcp_description(
 }
 
 fn owner_label_for_descriptor(
-    descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
 ) -> String {
     let user = descriptor.metadata.get("owner_user").map(String::as_str);
     let agent = descriptor.metadata.get("owner_agent").map(String::as_str);
@@ -185,7 +185,7 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
 /// `exec_kind` AND `source = "agent:…"`) because that path is always
 /// an LLM dispatch by construction.
 fn inferred_cost_kind(
-    descriptor: &crate::runtime::ability_descriptor::AbilityDescriptor,
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
 ) -> &'static str {
     if descriptor.source.starts_with("agent:") && !descriptor.metadata.contains_key("exec_kind") {
         return "llm_metered";
@@ -204,7 +204,7 @@ fn inferred_cost_label(cost_kind: &str) -> &'static str {
 }
 
 pub fn tool_specs_from_descriptors(
-    descriptors: &[crate::runtime::ability_descriptor::AbilityDescriptor],
+    descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
 ) -> Vec<serde_json::Value> {
     let table = McpToolRouteTable::from_descriptors(descriptors);
     table
@@ -296,7 +296,7 @@ impl McpToolRouteTable {
     /// canonical names project to the same MCP tool name; that
     /// ordering matches the pre-refactor behaviour.
     pub fn from_descriptors(
-        descriptors: &[crate::runtime::ability_descriptor::AbilityDescriptor],
+        descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
     ) -> Self {
         let mut routes = Vec::with_capacity(descriptors.len());
         let mut used: std::collections::BTreeMap<String, String> =
@@ -358,7 +358,7 @@ impl McpToolRouteTable {
 /// can keep their shape; longer-lived call sites should hold an
 /// `McpToolRouteTable` instead.
 pub fn canonical_ability_name_for_mcp_tool<'a>(
-    descriptors: &'a [crate::runtime::ability_descriptor::AbilityDescriptor],
+    descriptors: &'a [crate::daemon::ability::descriptors::AbilityDescriptor],
     tool_name: &str,
 ) -> Option<&'a str> {
     let table = McpToolRouteTable::from_descriptors(descriptors);
@@ -577,7 +577,7 @@ pub struct InvokeMcpProvider<I: LocalInvoker> {
     /// Snapshot of the host's ability descriptors at construction.
     /// Refreshed on daemon restart; for now we keep a static list
     /// because the registry doesn't change at runtime.
-    descriptors: Vec<crate::runtime::ability_descriptor::AbilityDescriptor>,
+    descriptors: Vec<crate::daemon::ability::descriptors::AbilityDescriptor>,
     /// Tool-name routing built from `descriptors` at construction.
     /// Kept paired with `descriptors` via the constructor — this is
     /// the only place that builds the table for the provider, so
@@ -588,7 +588,7 @@ pub struct InvokeMcpProvider<I: LocalInvoker> {
 impl<I: LocalInvoker> InvokeMcpProvider<I> {
     pub fn new(
         invoker: I,
-        descriptors: Vec<crate::runtime::ability_descriptor::AbilityDescriptor>,
+        descriptors: Vec<crate::daemon::ability::descriptors::AbilityDescriptor>,
     ) -> Self {
         let routes = McpToolRouteTable::from_descriptors(&descriptors);
         Self {
@@ -693,8 +693,8 @@ pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
 /// host-wide catalog only.
 fn per_agent_workspace_descriptors(
     agent_name: &str,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 
     // Resolve the agent entry. If unregistered, no per-agent
     // catalog to add — the workspace MCP server is still useful
@@ -950,7 +950,7 @@ impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
     use easynet_axon::mcp::McpToolProvider;
     use std::cell::RefCell;
 
@@ -1575,7 +1575,7 @@ mod tests {
 
     #[test]
     fn invoke_provider_routes_observe_health_through_local_invoker() {
-        use crate::runtime::ability_descriptor::Visibility;
+        use crate::daemon::ability::descriptors::Visibility;
         use easynet_axon::mcp::McpToolProvider;
         let invoker = FakeInvoker {
             value: serde_json::json!({"echo": {}}),

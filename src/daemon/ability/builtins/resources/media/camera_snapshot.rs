@@ -68,10 +68,10 @@ use crate::daemon::ability::builtins::resources::media::{
     self, ABILITY_CAMERA_RECORD_START, ABILITY_CAMERA_RECORD_STOP, ABILITY_CAMERA_SNAPSHOT,
     ABILITY_CAMERA_SUBSCRIBE,
 };
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 use crate::persistence::resources::{ResourceEntry, ResourceType};
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 
 /// Maximum inline image size, in encoded JPEG bytes (NOT the base64
 /// expansion). Above this the handler refuses with an explicit

@@ -40,7 +40,7 @@ use tokio::sync::broadcast;
 
 use crate::core::ability_spec::HostStreamExec;
 use crate::daemon::ability::canonical_json_bytes;
-use crate::runtime::ability_dispatch::StreamSource;
+use crate::daemon::ability::dispatch::StreamSource;
 
 /// Broadcast depth. Frames are small JSON values; a generous buffer
 /// absorbs a slow consumer without forcing the reader task to block on

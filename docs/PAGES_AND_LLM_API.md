@@ -303,7 +303,7 @@ The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat
   - `src/daemon/ability/builtins/governance/api_key.rs` — `<user>.api_key.{create,list,revoke}` capability mint/revoke.
   - `src/daemon/ability/builtins/integrations/openai_compat.rs` — `01HUB.openai.{chat_completions,list_models}` adapters.
   - `src/runtime/hub/{pages_listener.rs, pages_serve_ability.rs}` — HTTP boundary on axum, routes `/v1/*` and `*.*.pages.<realm>/*`.
-  - `src/runtime/ability_dispatch.rs` — `chain_rpc_fallback` (resolver chaining), `list_rpc_names` (used by `list_models`), `resolve_rpc` (used by adapter).
+  - `src/daemon/ability/dispatch.rs` — `chain_rpc_fallback` (resolver chaining), `list_rpc_names` (used by `list_models`), `resolve_rpc` (used by adapter).
   - `src/runtime/workspace.rs` — `write_pages_author_seed` + `write_ability_author_seed` (skill seeding into every agent workspace).
   - `src/runtime/drivers/claude_code.rs` — `--allowedTools` allowlist extension for `Bash(easynet:*)` + `Bash(curl:*)`.
 

@@ -84,7 +84,7 @@ use crate::daemon::ability::builtins::{
     governance::consent as permission_ability,
 };
 use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 
 // ── Helpers ──────────────────────────────────────────────────────

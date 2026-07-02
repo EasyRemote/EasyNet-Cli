@@ -103,7 +103,7 @@ fn collect_baseline_failure(failures: &mut Vec<String>, report: BaselineConforma
 
 fn assert_daemon_baseline_conformance(
     mode: DaemonMode,
-    registry: &easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog,
+    registry: &easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog,
 ) -> Result<(), String> {
     let registry_conformance = RegistryConformance::new(registry);
     let mut failures = Vec::new();

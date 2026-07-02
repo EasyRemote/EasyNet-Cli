@@ -59,6 +59,7 @@ use crate::core::agent_spec::{AgentSpec, RuntimeKind};
 use crate::daemon::ability::catalog::profiles::bootstrap::{
     self, BootstrapPlan, LlmSubAgent, UuidMinter,
 };
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentAdvertiseRequest,
 };
@@ -66,10 +67,9 @@ use crate::persistence::{config, local_agents};
 use crate::registry::agents::{
     self, AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
 };
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::directory::{AgentDirectory, Location};
 
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_START_AGENT: &str = crate::daemon::ability::names::agents::AGENT_START;
 pub const ABILITY_STOP_AGENT: &str = crate::daemon::ability::names::agents::AGENT_STOP;
 pub const ABILITY_REFRESH_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_REFRESH;
@@ -530,7 +530,7 @@ fn build_hot_agent_descriptors(
     name: &str,
     entry: &AgentEntry,
     agent_ura: &str,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let live_registry = crate::daemon::ability::catalog::build_registry();
     let hint_snapshot =
         crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(
@@ -544,10 +544,10 @@ fn build_hot_agent_descriptors(
             name,
             registry_name,
         );
-        match crate::runtime::ability_descriptor::AbilityDescriptor::new(
+        match crate::daemon::ability::descriptors::AbilityDescriptor::new(
             owner_local_name,
             agent_ura,
-            crate::runtime::ability_descriptor::Visibility::Scoped,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
         ) {
             Ok(desc) => {
                 let mut desc = desc

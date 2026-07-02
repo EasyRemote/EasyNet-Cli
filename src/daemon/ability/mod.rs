@@ -21,6 +21,7 @@ pub mod conformance;
 mod control_plane;
 mod control_plane_error;
 pub mod descriptors;
+pub mod dispatch;
 pub mod health;
 pub mod impl_bindings;
 pub mod names;

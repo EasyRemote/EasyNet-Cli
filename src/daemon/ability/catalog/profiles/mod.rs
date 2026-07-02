@@ -41,10 +41,10 @@ pub const DEFAULT_MCP_AGENT_ID: &str = "mcp-default";
 
 fn system_descriptors_for_owner(
     owner_ura: &str,
-    owner: crate::runtime::ability_dispatch::OwnerKind,
-    visibility_for: impl Fn(&str) -> crate::runtime::ability_descriptor::Visibility,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::AbilityDescriptor;
+    owner: crate::daemon::ability::dispatch::OwnerKind,
+    visibility_for: impl Fn(&str) -> crate::daemon::ability::descriptors::Visibility,
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::AbilityDescriptor;
 
     crate::daemon::ability::catalog::published_system_abilities_for_owner(owner)
         .into_iter()
@@ -73,7 +73,7 @@ fn system_descriptors_for_owner(
 /// `mcp.bridge.list_tools` ability handler — keeping them on one
 /// helper is what guarantees external and internal MCP callers see
 /// the same catalog.
-pub fn load_host_descriptors() -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let local = crate::persistence::local_agents::load().unwrap_or_default();
     let host_ura = if local.host_device_agent_ura.is_empty() {
         "self".to_string()
@@ -109,7 +109,7 @@ pub fn all_descriptors_for_host(
     consent_ura: Option<&str>,
     mcp_uri: Option<&str>,
     llm_uras: &[(String, String)], // (sub_agent_name, ura)
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let llm_catalog = if llm_uras.is_empty() {
         None
     } else {

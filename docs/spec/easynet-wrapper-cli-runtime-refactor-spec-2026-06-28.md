@@ -151,7 +151,7 @@ args
 9. 所有 stream/bidi 路径必须有明确终止状态与错误映射。
 10. 所有 baseline 能力必须有 typed conformance model，不能只存在于注释、Markdown 列表、测试里的散字符串。
 11. 所有路由/dispatch fallback 必须能证明不会隐藏 missing handler、wrong call mode、wrong owner、wrong surface。不能用 fallback 让测试“看起来通过”。
-12. Ability registry 只能有一个权威存储。`src/runtime/ability_dispatch.rs::AxonAbilityCatalog` 当前同时持有九张以 ability name 为键的 legacy `BTreeMap`(`rpc`/`stream`/`bidi` × args-only/`_with_env`，加 `owner`/`authority_scope`/`manifests`，并在 `DynamicCatalogue` 重复一份)，又另持 `control_plane: RwLock<AbilityControlPlaneRegistry>`；其自身注释承认 `owner`/`manifests` 是 "compatibility side tables"。这是三套并行真相，是本项目最大的非收敛债，必须在本次重构中收口为单一存储，详见第 9.1.A 节。新增 ability 不允许再写第二张并行表。
+12. Ability registry 只能有一个权威存储。`src/daemon/ability/dispatch.rs::AxonAbilityCatalog` 当前同时持有九张以 ability name 为键的 legacy `BTreeMap`(`rpc`/`stream`/`bidi` × args-only/`_with_env`，加 `owner`/`authority_scope`/`manifests`，并在 `DynamicCatalogue` 重复一份)，又另持 `control_plane: RwLock<AbilityControlPlaneRegistry>`；其自身注释承认 `owner`/`manifests` 是 "compatibility side tables"。这是三套并行真相，是本项目最大的非收敛债，必须在本次重构中收口为单一存储，详见第 9.1.A 节。新增 ability 不允许再写第二张并行表。
 13. Invocation locality 解析只能有一个 owner。当前具体 owner 是 `src/services/invocation_transport/route_resolver.rs::DaemonRouteResolver`，输出 `SelectedInvokeRoute` / `DelegatedInvokeRoute` typed selection；如果未来抽成 `src/runtime/resolver` 或 closed enum wrapper，必须原子迁移，不能保留两套 resolver。所有 unary/stream/bidi dispatch path 必须消费同一 selected route，新增第 6 种 locality 只能扩展 typed selection model，不能在 dispatcher 里另开 ad hoc 分支。详见第 4.2 与第 7.4 节。
 14. Runtime terminal-state 只能有一个 canonical 词汇表。Axon SDK 的 `InvocationState`(含 `is_terminal()`)是 source of truth；CLI 侧的 `TerminalState`(Succeeded/Failed/Cancelled)必须是它的显式投影，不允许两套终态词汇各自独立演化。详见第 7.4 节。
 15. Runtime trust 是一个聚合，不是三条互不协调的写。`identity.register_pubkey` / `identity.list_user_pubkeys` / `identity.revoke_user_pubkey` 必须是同一 `RuntimeTrust` 聚合的唯一 mutators；revoke 必须使 presence 失效并驱动 `JoinConnectionState::DisconnectedRemoved`。详见第 6.1 与第 7.4 节。
@@ -654,7 +654,7 @@ Daemon 负责:
 
 #### 9.1.A Ability registry 收敛规则
 
-当前代码事实: `src/runtime/ability_dispatch.rs::AxonAbilityCatalog` 同时维护 static handler maps、`owner` / `authority_scope` / `manifests` compatibility side tables、`control_plane: RwLock<AbilityControlPlaneRegistry>`，并在 `DynamicCatalogue` 再镜像一套 dynamic maps。这个形态不能继续靠补丁叠加；必须收敛成一个领域对象与一个事务边界。
+当前代码事实: `src/daemon/ability/dispatch.rs::AxonAbilityCatalog` 同时维护 static handler maps、`owner` / `authority_scope` / `manifests` compatibility side tables、`control_plane: RwLock<AbilityControlPlaneRegistry>`，并在 `DynamicCatalogue` 再镜像一套 dynamic maps。这个形态不能继续靠补丁叠加；必须收敛成一个领域对象与一个事务边界。
 
 目标模型:
 

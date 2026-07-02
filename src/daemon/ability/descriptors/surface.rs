@@ -1,7 +1,7 @@
 // EasyNet CLI — AbilityDescriptor (RFC-001 §1.6 / §A15)
 // =======================================================
 //
-// File: src/runtime/ability_descriptor.rs
+// File: src/daemon/ability/descriptors/surface.rs
 //
 // Per AXON-RFC-001 plan v4.1.2 §1.6, every advertised Ability is
 // described by an AbilityDescriptor. This is the Rust home for

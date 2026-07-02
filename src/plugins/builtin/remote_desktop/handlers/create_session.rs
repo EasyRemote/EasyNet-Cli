@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::constants::{
     ABILITY_CREATE_SESSION, REASON_INVALID_ARGUMENT, REASON_SESSION_STORE_FULL,
 };
@@ -22,7 +23,6 @@ use crate::plugins::remote_desktop::session_lifecycle::{
     prune_inactive_sessions, spawn_session_lease_watchdog,
 };
 use crate::plugins::remote_desktop::view::serialize_session_with_token;
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 /// Handle `remote_desktop.create_session`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(

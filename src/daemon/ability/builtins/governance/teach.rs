@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 
 use crate::core::ability_spec::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentRuntimeSyncOutcome,
@@ -41,7 +42,6 @@ use crate::persistence::teach_grants::{
     TeachGrantAdmissionSnapshotDraft, TeachGrantAuthoritySnapshot, TeachGrantDraft,
     TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::support::errors::append_cleanup_error;
 use crate::ura::AbilitySelector;
 

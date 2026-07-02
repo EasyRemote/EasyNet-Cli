@@ -46,7 +46,7 @@ pub mod state;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 
 /// Installation parameters for the Files reference system. Mirror
 /// of `PagesConfig`; the daemon's user identity is the only field

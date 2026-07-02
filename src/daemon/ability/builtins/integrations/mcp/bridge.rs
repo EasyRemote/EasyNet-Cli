@@ -56,9 +56,9 @@ use crate::daemon::ability::catalog::profiles::mcp::{
     canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
 };
 use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
-use crate::runtime::ability_descriptor::AbilityDescriptor;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::descriptors::AbilityDescriptor;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 
 pub const ABILITY_LIST_TOOLS: &str =
     crate::daemon::ability::names::integrations::MCP_BRIDGE_LIST_TOOLS;
@@ -267,7 +267,7 @@ pub fn call_tool_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
     use std::sync::OnceLock;
 
     fn d(name: &str) -> AbilityDescriptor {

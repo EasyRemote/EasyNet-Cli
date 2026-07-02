@@ -142,7 +142,7 @@ fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
 #[test]
 fn terminal_list_is_owner_kind_device() {
     let _home = crate::cli::test_support::HomeGuard::new();
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     assert_eq!(
         system_ability_owner("terminal.list"),
         Some(OwnerKind::Device)

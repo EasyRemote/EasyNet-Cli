@@ -1052,8 +1052,8 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
 fn device_owner_session_descriptors(
     owner_ura: &str,
     plugin_runtime_manager: Option<&crate::daemon::plugins::PluginRuntimeManager>,
-) -> Vec<crate::runtime::ability_descriptor::AbilityDescriptor> {
-    use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 
     let mut descriptors =
         crate::daemon::ability::catalog::profiles::device::descriptors_for(owner_ura);

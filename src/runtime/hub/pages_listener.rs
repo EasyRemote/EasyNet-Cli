@@ -600,7 +600,7 @@ mod tests {
     use crate::daemon::ability::builtins::resources::pages::state::{
         ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
     };
-    use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+    use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 
     #[test]
     fn parses_localhost() {

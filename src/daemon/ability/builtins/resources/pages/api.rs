@@ -51,7 +51,7 @@ use serde_json::{json, Value};
 
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::ura::AbilitySelector;
 
@@ -364,7 +364,7 @@ mod tests {
     use crate::daemon::ability::builtins::resources::pages::state::{
         ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
     };
-    use crate::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
+    use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use serde_json::json;
     use std::sync::{Arc, OnceLock};
     use std::time::SystemTime;

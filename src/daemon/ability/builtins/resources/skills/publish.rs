@@ -58,10 +58,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::registry::agents;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
 pub const ABILITY_PUBLISH: &str = crate::daemon::ability::names::resources::SKILL_PUBLISH;
 /// Wire name: `skill.unpublish`. Curator + operator both call it.

@@ -208,7 +208,7 @@ fn escape_toml_basic(s: &str) -> String {
 pub struct Rfc006Metadata {
     /// Execution shape (Query / Stream / Transition). See
     /// `AbilityClass` for the contract on each.
-    pub class: Option<crate::runtime::ability_descriptor::AbilityClass>,
+    pub class: Option<crate::daemon::ability::descriptors::AbilityClass>,
     /// Reserved for RFC-006 v2 transition receipts. `None` today;
     /// the carrier is `TransitionMetadata` so v2 producers can
     /// land a real shape without breaking the consumer match

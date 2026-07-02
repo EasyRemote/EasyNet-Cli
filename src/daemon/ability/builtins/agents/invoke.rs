@@ -59,8 +59,8 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::core::ability_spec::{AbilityManifest, Visibility};
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::registry::agents::AgentRegistry;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 use crate::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
 use crate::runtime::local_runtime_invoker::is_not_found_error;
 
@@ -88,7 +88,7 @@ pub fn register_for_agent<F>(
 ) where
     F: Fn() -> AgentRegistry + Send + Sync + 'static,
 {
-    use crate::runtime::ability_dispatch::OwnerKind;
+    use crate::daemon::ability::dispatch::OwnerKind;
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let caller = agent_name.clone();
@@ -672,7 +672,7 @@ mod tests {
     /// handlers. The returned closure dispatches `claude.invoke({...})`
     /// for you so each test stays focused on the assertion.
     fn fixture(
-        target_handlers: &[(&str, crate::runtime::ability_dispatch::LocalRpcHandler)],
+        target_handlers: &[(&str, crate::daemon::ability::dispatch::LocalRpcHandler)],
         agents: AgentRegistry,
     ) -> impl Fn(Value) -> anyhow::Result<Value> {
         let mut reg = AxonAbilityCatalog::new();
@@ -895,7 +895,7 @@ mod tests {
     #[test]
     fn invoke_self_ability_dispatches_through_registry() {
         // Ability URA owner is claude; local registry dispatch uses claude.weather.
-        let weather: crate::runtime::ability_dispatch::LocalRpcHandler = Arc::new(|args: Value| {
+        let weather: crate::daemon::ability::dispatch::LocalRpcHandler = Arc::new(|args: Value| {
             let loc = args.get("location").and_then(Value::as_str).unwrap_or("");
             Ok(json!({"summary": format!("{loc}: clear 18C")}))
         });
@@ -914,7 +914,7 @@ mod tests {
 
     #[test]
     fn invoke_agent_ability_ura_dispatches_through_local_registry() {
-        let weather: crate::runtime::ability_dispatch::LocalRpcHandler = Arc::new(|args: Value| {
+        let weather: crate::daemon::ability::dispatch::LocalRpcHandler = Arc::new(|args: Value| {
             let loc = args.get("location").and_then(Value::as_str).unwrap_or("");
             Ok(json!({"summary": format!("{loc}: clear 18C")}))
         });
@@ -970,7 +970,7 @@ mod tests {
         // The handler is registered (the dispatch layer would reach
         // it) — the access check has to be the gate, not the
         // registry miss.
-        let h: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let h: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!("should not run")));
         let dispatch = fixture(&[("codex.internal", h)], agents);
         let err = dispatch(json!({
@@ -993,7 +993,7 @@ mod tests {
         let mut agents = AgentRegistry::default();
         agents.agents.insert("codex".into(), codex_entry);
 
-        let h: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let h: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!({"summary": "Beijing: 18C"})));
         let dispatch = fixture(&[("codex.weather", h)], agents);
         let ability_ura = "easynet:///r/acme/ability/user-1.codex.weather";
@@ -1022,7 +1022,7 @@ mod tests {
         let mut agents = AgentRegistry::default();
         agents.agents.insert("codex".into(), codex_entry);
 
-        let h: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let h: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!("should not run")));
         let dispatch = fixture(&[("codex.weather", h)], agents);
         let err = dispatch(json!({
@@ -1048,7 +1048,7 @@ mod tests {
         let mut agents = AgentRegistry::default();
         agents.agents.insert("codex".into(), codex_entry);
 
-        let h: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let h: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!("should not run")));
         let dispatch = fixture(&[("codex.weather", h)], agents);
         let err = dispatch(json!({
@@ -1075,7 +1075,7 @@ mod tests {
         let mut agents = AgentRegistry::default();
         agents.agents.insert("codex".into(), codex_entry);
 
-        let h: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let h: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!({"summary": "Beijing"})));
         let dispatch = fixture(&[("codex.weather", h)], agents);
         let ability_ura = "easynet:///r/acme/ability/user-1.codex.weather";
@@ -1092,7 +1092,7 @@ mod tests {
         // manifest in this fixture. The invoke handler must NOT
         // reject the call just because lookup_access_policy returns
         // None — that path covers all builtin self-bundle abilities.
-        let chat: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let chat: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| Ok(json!({"reply": "hi"})));
         let dispatch = fixture(&[("claude.chat", chat)], AgentRegistry::default());
         let resp = dispatch(json!({
@@ -1104,7 +1104,7 @@ mod tests {
 
     #[test]
     fn invoke_propagates_handler_error() {
-        let failing: crate::runtime::ability_dispatch::LocalRpcHandler =
+        let failing: crate::daemon::ability::dispatch::LocalRpcHandler =
             Arc::new(|_| anyhow::bail!("upstream_failed: wttr.in returned 503"));
         let dispatch = fixture(&[("claude.weather", failing)], AgentRegistry::default());
         let err = dispatch(json!({

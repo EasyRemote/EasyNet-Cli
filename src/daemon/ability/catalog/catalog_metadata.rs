@@ -45,14 +45,14 @@ use crate::daemon::ability::builtins::{
     },
 };
 use crate::daemon::ability::catalog::{ability_toml, system_ability_descriptor_path};
+use crate::daemon::ability::descriptors::AbilityHints;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::names::{
     agents as agent_names, automation as automation_names, device_control as device_names,
     federation as federation_names, governance as governance_names,
     integrations as integration_names, resources as resource_names,
 };
 use crate::daemon::ability::CallMode as DescriptorCallMode;
-use crate::runtime::ability_descriptor::AbilityHints;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Public list of every v1 system-ability *name*. Used by
 /// `registry::a2a_labels` to populate the top-level
@@ -104,7 +104,7 @@ pub struct SystemAbilityMetadata {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
-    pub hints: crate::runtime::ability_descriptor::AbilityHints,
+    pub hints: crate::daemon::ability::descriptors::AbilityHints,
 }
 
 /// Every published system ability's metadata, in the deterministic
@@ -144,7 +144,7 @@ pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
 /// `device.*` from accidentally stealing abilities advertised by the
 /// device-profile Agent or any hosted sub-profile Agent.
 pub fn published_system_abilities_for_owner(
-    owner: crate::runtime::ability_dispatch::OwnerKind,
+    owner: crate::daemon::ability::dispatch::OwnerKind,
 ) -> Vec<SystemAbilityMetadata> {
     let registry = build_system_registry();
     published_abilities_from_registry_for_owner(&registry, Some(&owner))
@@ -158,7 +158,7 @@ pub fn published_system_abilities_for_owner(
 /// registry object or fall back to profile prefix matching.
 pub fn system_ability_owner(
     ability_name: &str,
-) -> Option<crate::runtime::ability_dispatch::OwnerKind> {
+) -> Option<crate::daemon::ability::dispatch::OwnerKind> {
     let registry = build_system_registry();
     // SPEC §9.1.A Step 5: ownership truth comes from the control-plane
     // record, not the legacy `owner` side table (equivalence pinned by
@@ -172,7 +172,7 @@ fn published_abilities_from_registry(registry: &AxonAbilityCatalog) -> Vec<Syste
 
 fn published_abilities_from_registry_for_owner(
     registry: &AxonAbilityCatalog,
-    owner: Option<&crate::runtime::ability_dispatch::OwnerKind>,
+    owner: Option<&crate::daemon::ability::dispatch::OwnerKind>,
 ) -> Vec<SystemAbilityMetadata> {
     let hint_snapshot = AbilityDiscoveryHintSnapshot::from_registry(registry);
     let catalog_snapshot = registry.ability_catalog_snapshot();
@@ -264,7 +264,7 @@ fn discovery_hints_from_modes(
         // app shells that still call Invoke for the first frame.
         // Discovery must continue to advertise the canonical stream
         // shape so correct clients choose Subscribe/InvokeStream.
-        return crate::runtime::ability_descriptor::AbilityHints {
+        return crate::daemon::ability::descriptors::AbilityHints {
             streaming_only: true,
             ..Default::default()
         };

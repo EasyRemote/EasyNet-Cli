@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::constants::{ABILITY_END_SESSION, REASON_SESSION_NOT_FOUND};
 use crate::plugins::remote_desktop::request::require_str;
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::plugins::remote_desktop::session_access::ensure_session_control_identity;
 use crate::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::plugins::remote_desktop::view::serialize_session;
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 /// Handle `remote_desktop.end_session`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(

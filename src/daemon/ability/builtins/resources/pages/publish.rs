@@ -25,7 +25,7 @@ use std::time::SystemTime;
 use anyhow::Context;
 use serde_json::{json, Value};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use super::sandbox::open_directory;
 use super::state::{

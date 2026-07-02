@@ -66,9 +66,9 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
-use crate::runtime::ability_dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::OwnerKind;
 /// Wire name. Pinned by AXIOM Tier 2.5.
 pub const ABILITY_NAME: &str = crate::daemon::ability::names::device_control::HTTP_REQUEST;
 

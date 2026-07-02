@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::plugins::remote_desktop::constants::{ABILITY_REFRESH_LEASE, REASON_SESSION_NOT_FOUND};
 use crate::plugins::remote_desktop::request::{parse_lease_ttl_ms, require_str};
 use crate::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
@@ -13,7 +14,6 @@ use crate::plugins::remote_desktop::session_lifecycle::{
     ensure_session_control_access, spawn_session_lease_watchdog,
 };
 use crate::plugins::remote_desktop::view::serialize_session;
-use crate::runtime::ability_dispatch::EnvelopeContext;
 
 /// Handle `remote_desktop.refresh_lease`.
 pub(in crate::plugins::builtin::remote_desktop) fn handle(

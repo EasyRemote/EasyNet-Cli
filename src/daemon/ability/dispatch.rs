@@ -1,7 +1,7 @@
 // EasyNet CLI — Axon ability catalogue
 // ====================================
 //
-// File: src/runtime/ability_dispatch.rs
+// File: src/daemon/ability/dispatch.rs
 // Description: Registration and metadata surface for daemon-hosted
 //              Axon abilities. `AxonAbilityCatalog` preserves the
 //              existing module-level `register(&mut catalog)` API,

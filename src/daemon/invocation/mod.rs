@@ -23,7 +23,7 @@
 // - Transport policy gate semantics — this module owns daemon/product
 //   routing checks, while descriptor-bound Axon runtime admission
 //   remains inside `easynet-axon::invocation::LocalRuntime`
-// - Ability dispatch — `runtime::ability_dispatch` continues to own
+// - Ability dispatch — `daemon::ability::dispatch` continues to own
 //   the AxonAbilityCatalog and the registered handler set; this
 //   module routes inbound RPC calls into that runtime surface
 // - Federation `session.open` / `runtime.invoke_remote` reverse-

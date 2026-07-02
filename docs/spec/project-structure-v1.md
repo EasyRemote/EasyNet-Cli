@@ -23,7 +23,7 @@ runtime semantics, these sources are higher priority:
 2. `docs/spec/daemon-sdk-requirements-v1.md` for daemon SDK object model,
    directory/listing complexity, facade rules, and aggregate fan-out state
    machines.
-3. `src/daemon/ability/mod.rs`, `src/runtime/ability_dispatch.rs`,
+3. `src/daemon/ability/mod.rs`, `src/daemon/ability/dispatch.rs`,
    `src/daemon/ability/wire/mod.rs`, and `src/daemon/axon_bridge/` for the current
    daemon-side split among AbilityDescriptor, AuthorityBinding, AbilityImpl,
    dispatch compatibility, wire-profile lookup, and Axon glue.
@@ -51,7 +51,7 @@ owners already exist:
 
 - `daemon/ability/` owns the daemon-local control-plane model:
   AbilityDescriptor, AuthorityBinding, AbilityImpl, and their registries.
-- `runtime/ability_dispatch.rs` is a compatibility facade over the catalog and
+- `daemon/ability/dispatch.rs` is a compatibility facade over the catalog and
   handler registration path, not a new protocol layer.
 - `daemon/ability/wire/mod.rs` owns daemon wire-profile lookup for bidi/session
   bridges.
@@ -126,8 +126,9 @@ they do not loop over targets and invoke governed abilities directly.
 ### 7. Migration Was Not Grounded In The Current Checkout
 
 The old draft listed moves from `runtime/agents/`, but did not acknowledge the
-current adjacent modules such as `daemon/ability/`, `ability_dispatch.rs`,
-`ability_wire.rs`, `runtime/agent_ability_specs.rs`, daemon semantic
+current adjacent modules such as `daemon/ability/`,
+`daemon/ability/dispatch.rs`, `daemon/ability/wire/mod.rs`,
+`runtime/agent_ability_specs.rs`, daemon semantic
 directories, and plugin packages.
 
 Fix: every migration phase now has a caller-inventory gate before code moves,
@@ -197,7 +198,7 @@ names. Clean Final ownership is defined later under `src/daemon/`,
 | --- | --- | --- |
 | `core/` | zero-dependency domain/value types | filesystem walking, daemon policy, transport |
 | `daemon/ability/{descriptors,authority,impl_bindings,control_plane}` | AbilityDescriptor, AuthorityBinding, AbilityImpl, control-plane registration | product handler bodies, plugin process management |
-| `runtime/ability_dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
+| `daemon/ability/dispatch.rs` | compatibility catalog facade and handler registration bridge | new protocol semantics, product policy branching |
 | `daemon/ability/wire/mod.rs` | local ability-to-wire-profile projection | plugin package loading, transport sessions |
 | `daemon/ability/catalog/` | built-in catalog assembly, catalog metadata, profile descriptors, descriptor TOML rendering | handler implementation bodies |
 | `daemon/ability/builtins/` | daemon-owned/system ability handlers grouped by product module | transport admission, receipt canonicalization, persistent service state |
@@ -465,23 +466,15 @@ the clean final daemon source layout.
 
 ```text
 src/runtime/
-├─ ability/
-│  ├─ authority.rs
-│  ├─ conformance.rs
-│  ├─ descriptor.rs
-│  ├─ error.rs
-│  ├─ impl_binding.rs
-│  └─ registry.rs
-├─ ability_dispatch.rs
-├─ ability_descriptor.rs
-├─ ability_wire.rs
 ├─ agent_ability_specs.rs
 ├─ executors/
-├─ execution/
-├─ resources/
 ├─ keyring/
-├─ plugin_host/
 ├─ hub/
+├─ kernel.rs
+├─ kernel_api.rs
+├─ gateway.rs
+├─ gateway_api.rs
+├─ publish.rs
 └─ resolver/
 ```
 
@@ -490,6 +483,9 @@ src/daemon/
 ├─ ability/
 │  ├─ authority/
 │  ├─ descriptors/
+│  │  ├─ mod.rs
+│  │  └─ surface.rs
+│  ├─ dispatch.rs
 │  ├─ impl_bindings/
 │  ├─ control_plane.rs
 │  ├─ control_plane_error.rs
@@ -518,8 +514,8 @@ src/daemon/
 Notes:
 
 - `runtime/ability_runtime/` must not be introduced. It duplicates the existing
-  `daemon/ability/`, `ability_dispatch.rs`, `ability_wire.rs`, and
-  `daemon/axon_bridge/` ownership split.
+  `daemon/ability/`, `daemon/ability/dispatch.rs`,
+  `daemon/ability/wire/mod.rs`, and `daemon/axon_bridge/` ownership split.
 - `daemon/ability/builtins/` is used instead of `runtime/abilities/` to avoid
   reintroducing the retired agent-ability-specs module name and to state that
   these are daemon-owned/system handlers.

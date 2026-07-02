@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::wire::AbilityWireRegistry;
 use crate::daemon::plugins::contribution::DaemonPluginBinder;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
@@ -17,7 +18,6 @@ use crate::daemon::plugins::index::{PluginPackageIndex, PluginPackageIndexError}
 use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadPlanner};
 use crate::daemon::plugins::realtime::activation_plans_for_manifest;
 use crate::daemon::plugins::surface::{PluginSurfaceProjector, PluginSurfaceReport};
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
 
 /// Snapshot of package index and load-plan state for one daemon profile.
 ///

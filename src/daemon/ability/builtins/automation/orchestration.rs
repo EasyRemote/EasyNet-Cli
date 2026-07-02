@@ -67,9 +67,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::discuss::DiscussService;
-use crate::runtime::ability_dispatch::AxonAbilityCatalog;
-use crate::runtime::ability_dispatch::OwnerKind;
 
 pub const ABILITY_DISCUSS_ROUND: &str =
     crate::daemon::ability::names::automation::MISSION_DISCUSS_ROUND;

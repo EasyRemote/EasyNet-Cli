@@ -41,9 +41,9 @@ use crate::daemon::ability::builtins::resources::media::resource_subject::{
 use crate::daemon::ability::builtins::resources::media::{
     self, ABILITY_SCREEN_SNAPSHOT, ABILITY_SCREEN_SUBSCRIBE,
 };
+use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::persistence::resources::{ResourceEntry, ResourceType};
-use crate::runtime::ability_dispatch::OwnerKind;
-use crate::runtime::ability_dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 
 /// 2 MiB inline cap — same shape as camera.snapshot. This keeps
 /// base64-expanded receipts below Axon's 4 MiB IPC frame limit while

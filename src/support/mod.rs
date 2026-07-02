@@ -104,7 +104,7 @@
 /// recipe for driving a future to completion from sync code,
 /// with explicit fallback policy. Replaces three near-identical
 /// `block_on_*` helpers that used to live in
-/// `runtime/ability_dispatch.rs`,
+/// `daemon/ability/dispatch.rs`,
 /// the agent lifecycle system ability, and
 /// `runtime/local_runtime_invoker.rs`.
 pub mod async_bridge;

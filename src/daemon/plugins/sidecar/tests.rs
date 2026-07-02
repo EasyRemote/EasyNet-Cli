@@ -14,8 +14,8 @@ use super::{
     SidecarCommand, SidecarExecutionModel, SidecarInvocationEnvelope, SidecarRequestFrame,
     SidecarRuntimeHost, SidecarRuntimeLimits,
 };
+use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::plugins::errors::PluginHostError;
-use crate::runtime::ability_dispatch::StreamSource;
 
 #[test]
 fn sidecar_open_frame_carries_daemon_invocation_envelope() {

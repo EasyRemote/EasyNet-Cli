@@ -40,13 +40,13 @@ use crate::daemon::ability::builtins::agents::chat::build_host_stream_handler;
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
 };
+use crate::daemon::ability::dispatch::{
+    stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityModeTxn,
+    ControlPlaneAuthorityRebind, ControlPlaneImplementation,
+};
 use crate::daemon::ability::{
     AbilityControlPlaneRecord, AbilityDescriptorKey, AbilityImplSource, AuthorityScope,
     CallMode as DescriptorCallMode, RuntimeEnv,
-};
-use crate::runtime::ability_dispatch::{
-    stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityModeTxn,
-    ControlPlaneAuthorityRebind, ControlPlaneImplementation,
 };
 use crate::support::errors::append_cleanup_error;
 
@@ -1326,7 +1326,7 @@ fn assert_runtime_options_are_proof_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_dispatch::rpc_handler_to_ability_fn;
+    use crate::daemon::ability::dispatch::rpc_handler_to_ability_fn;
 
     #[test]
     fn install_state_wire_strings() {

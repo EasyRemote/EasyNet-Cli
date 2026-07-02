@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use crate::runtime::ability_dispatch::BidiOutputFrame;
+use crate::daemon::ability::dispatch::BidiOutputFrame;
 
 /// Single-terminal guard for one remote desktop Bidi invocation.
 ///

@@ -12,10 +12,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 use crate::persistence::owner_projections::{
     self, OwnerProjectionCursor, OwnerProjectionCursorFile,
 };
-use crate::runtime::ability_descriptor::{AbilityDescriptor, Visibility};
 
 pub(crate) const OWNER_PROJECTION_HEARTBEAT_REFRESH_LIMIT: usize = 64;
 #[cfg(feature = "axon-pb")]
@@ -640,7 +640,7 @@ fn serialize_value(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::ability_descriptor::AbilityDescriptor;
+    use crate::daemon::ability::descriptors::AbilityDescriptor;
 
     #[test]
     fn skill_resource_ura_dual_shape() {

@@ -253,7 +253,7 @@ Reject these designs:
 The current implementation is still converging on this model. Review these
 areas when changing the ability control plane:
 
-- `src/runtime/ability_dispatch.rs`
+- `src/daemon/ability/dispatch.rs`
 - `src/daemon/ability/catalog/profiles/device.rs`
 - `src/daemon/ability/builtins/`
 - `src/runtime/plugin_host/host_api.rs`
