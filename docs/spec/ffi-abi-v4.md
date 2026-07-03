@@ -7,7 +7,8 @@ consume this surface.
 ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
-Draft -> Prepared -> Signed -> Submitted invocation state-machine handles.
+Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
+typed error JSON projection for language bindings.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -20,6 +21,8 @@ stay aligned.
 uint32_t easynet_abi_version(void);
 int32_t  easynet_feature_discovery(char** out_features_json);
 const char* easynet_last_error(void);
+int32_t  easynet_last_error_json(char** out_error_json);
+int32_t  easynet_error_json(int32_t code, const char* message, char** out_error_json);
 void easynet_string_free(char* s);
 ```
 
@@ -28,6 +31,13 @@ reject incompatible libraries before opening daemon traffic.
 
 `easynet_feature_discovery` returns caller-owned JSON. The returned `char*` MUST
 be released with `easynet_string_free`.
+
+`easynet_last_error` remains the legacy borrowed, thread-local human message.
+`easynet_last_error_json` returns caller-owned schema-backed `DaemonError` JSON
+for the current thread's last recorded error, or JSON `null` when no error is
+recorded. `easynet_error_json` projects an explicit ABI return code and optional
+message into the same DTO so bindings can branch on typed fields without parsing
+human strings. Returned JSON strings MUST be released with `easynet_string_free`.
 
 ## 2. Function Families
 

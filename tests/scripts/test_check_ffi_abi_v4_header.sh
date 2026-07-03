@@ -84,6 +84,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "renamed invocation handle await symbol should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/int32_t easynet_last_error_json/int32_t easynet_last_error_payload_missing/' \
+    "$SB/include/easynet_cli.h"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "renamed typed last-error symbol should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's/int32_t easynet_invocation_bidi_close_send/int32_t easynet_invocation_bidi_half_close_missing/' \
     "$SB/include/easynet_cli.h"
 rc=0

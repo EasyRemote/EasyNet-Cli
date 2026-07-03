@@ -76,6 +76,8 @@ expected_symbols=(
     easynet_abi_version
     easynet_feature_discovery
     easynet_last_error
+    easynet_last_error_json
+    easynet_error_json
     easynet_string_free
     easynet_init
     easynet_shutdown
@@ -281,6 +283,8 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
     require_literal "$SPEC" "ERR_INVALID_ARG"
     require_literal "$SPEC" "easynet_feature_discovery"
+    require_literal "$SPEC" "easynet_last_error_json"
+    require_literal "$SPEC" "easynet_error_json"
     require_literal "$SPEC" "easynet_invocation_builder_new"
     require_literal "$SPEC" "easynet_invocation_builder_prepare"
     require_literal "$SPEC" "easynet_invocation_handle_await"

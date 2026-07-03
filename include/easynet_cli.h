@@ -80,6 +80,12 @@ typedef void (*EasynetInvocationBidiCallback)(
 uint32_t easynet_abi_version(void);
 int32_t easynet_feature_discovery(char **out_features_json);
 const char *easynet_last_error(void);
+int32_t easynet_last_error_json(char **out_error_json);
+int32_t easynet_error_json(
+    int32_t code,
+    const char *message,
+    char **out_error_json
+);
 void easynet_string_free(char *s);
 
 int32_t easynet_init(

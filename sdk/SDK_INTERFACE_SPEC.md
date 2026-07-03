@@ -118,6 +118,10 @@ All languages must branch on typed errors, not human strings:
 - `Generic`
 
 The C ABI integer codes are the current cross-language compatibility floor.
+Bindings that cross the C ABI should use `easynet_error_json` or
+`easynet_last_error_json` to project those return codes into the shared
+`sdk/schemas/error.schema.json` DTO instead of parsing `easynet_last_error()`
+message text.
 
 ## Stability Gates
 

@@ -78,6 +78,7 @@ swift test --package-path sdk/swift
 - invocation builder handle state transitions
 - invocation handle terminal monotonicity
 - canonical material delegated to Axon
+- typed error JSON projection
 - prepared-not-submittable
 - pre-signed submit
 - local daemon signing boundary

@@ -22,6 +22,7 @@ method spelling.
 | ABI/version discovery | partial | partial | gap | gap | gap | gap | gap |
 | daemon start/attach/discover/stop/detach | partial | partial | gap | gap | gap | gap | gap |
 | runtime health | partial | partial | gap | gap | gap | gap | gap |
+| typed errors | partial | typed JSON partial | gap | gap | gap | gap | gap |
 | complete invocation draft | partial | builder handles partial | gap | gap | gap | gap | gap |
 | prepare/sign/submit | partial | handle observation partial | gap | gap | gap | gap | gap |
 | unary invoke | partial | partial | gap | gap | gap | gap | gap |
@@ -43,6 +44,8 @@ method spelling.
 - C ABI now exposes invocation builder handles and submitted InvocationHandle
   await/cancel/events/free handles for unary submit; live event streaming and
   receipt fetch/verify remain incomplete.
+- C ABI now exposes schema-shaped typed error JSON for ABI return codes; broad
+  language facade error classes and per-profile source refs remain incomplete.
 - Directory, identity, receipt fetch/verify, publication, host binding,
   mission, admin/gateway, events, surface, compatibility, and convenience
   wrappers are schema/conformance scaffolds only.
