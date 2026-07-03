@@ -77,8 +77,8 @@ use tokio::sync::mpsc;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, BidiOutputFrame, BidiSource};
-use crate::daemon::resources::filesystem::{
-    self, FilesystemResourceCapability, ResolvedFilesystemPath,
+use crate::daemon::resources::files::{
+    self as filesystem, FilesystemResourceCapability, ResolvedFilesystemPath,
 };
 pub const ABILITY_FILE_TRANSFER: &str = crate::daemon::ability::names::device_control::FS_TRANSFER;
 
@@ -563,7 +563,7 @@ pub fn input_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "mode": {"type": "string", "enum": ["upload", "download"]},
-            "resource_ref": crate::daemon::resources::filesystem::resource_ref_schema(),
+            "resource_ref": crate::daemon::resources::files::resource_ref_schema(),
         },
     })
 }
@@ -652,7 +652,7 @@ mod tests {
     }
 
     fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        crate::daemon::resources::filesystem::resource_ref_for_local_path(path, capability)
+        crate::daemon::resources::files::resource_ref_for_local_path(path, capability)
             .expect("local transfer ResourceRef")
     }
 

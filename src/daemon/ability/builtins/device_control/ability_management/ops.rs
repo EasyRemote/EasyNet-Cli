@@ -48,7 +48,7 @@ use crate::daemon::ability::builtins::device_control::ability_management::store:
 use crate::daemon::ability::builtins::integrations::federation_probe;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
-use crate::daemon::resources::filesystem::{self, FilesystemResourceCapability};
+use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
 use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 /// Shared, late-wired cell holding the device-ability registrar.
@@ -361,7 +361,7 @@ struct AbilityBundle {
     /// (`category`, `command`, `tool_name`, …); `AbilityManifest` has no
     /// `deny_unknown_fields`, so they are ignored, and the canonical
     /// `name` / `input_schema` / `exec` come through typed.
-    manifest: crate::core::ability_spec::AbilityManifest,
+    manifest: crate::core::ability::spec::AbilityManifest,
     /// Verb-only local name (`generate`); namespace is separate.
     public_name: String,
     /// Namespace segment (`er`) when the manifest declares one.
@@ -386,10 +386,10 @@ impl AbilityBundle {
         }
 
         let manifest_bytes = std::fs::read(&manifest_file)?;
-        let manifest = crate::core::ability_spec::AbilityManifest::from_json_slice(&manifest_bytes)
-            .map_err(|e| {
-                anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
-            })?;
+        let manifest = crate::core::ability::spec::AbilityManifest::from_json_slice(
+            &manifest_bytes,
+        )
+        .map_err(|e| anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}"))?;
 
         // EasyRemote may carry the namespace separately; the manifest
         // `name` is the verb only (AbilityManifest.name forbids dots).
@@ -442,7 +442,7 @@ fn deploy_ability_handler_with_clock(
         .unwrap_or("local")
         .trim();
     let (local_id, tenant, _hub, _paired) = local_identity();
-    let owner_ura = crate::ura::device_ura(&tenant, &local_id);
+    let owner_ura = crate::core::ura::device_ura(&tenant, &local_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.deploy")?;
     if !is_local_target(node_id, &local_id) {
         return Err(federation_not_wired(&format!(
@@ -453,7 +453,7 @@ fn deploy_ability_handler_with_clock(
     // ── manifest materialization ────────────────────────────────────
     let bundle = AbilityBundle::from_resource_ref(&args)?;
     let key = bundle.wire_key();
-    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, &key)
+    let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, &key)
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: cannot derive ability_ura"))?;
     let install_id = DeviceAbilityRecord::derive_install_id(
         &ability_ura,
@@ -535,7 +535,7 @@ fn uninstall_ability_handler(
         .unwrap_or("local")
         .trim();
     let (local_id, tenant, _hub, _paired) = local_identity();
-    let owner_ura = crate::ura::device_ura(&tenant, &local_id);
+    let owner_ura = crate::core::ura::device_ura(&tenant, &local_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.uninstall")?;
     if !is_local_target(node_id, &local_id) {
         return Err(federation_not_wired(&format!(
@@ -595,12 +595,12 @@ where
 }
 
 fn ability_public_name(ability_ura: &str) -> anyhow::Result<String> {
-    let parsed = crate::ura::parse_ura(ability_ura)
+    let parsed = crate::core::ura::parse_ura(ability_ura)
         .map_err(|e| anyhow::anyhow!("ability.uninstall: invalid `ability_ura`: {e}"))?;
-    if parsed.kind != crate::ura::URAKind::Ability {
+    if parsed.kind != crate::core::ura::URAKind::Ability {
         anyhow::bail!("ability.uninstall: `ability_ura` must be an Ability URA");
     }
-    crate::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
+    crate::core::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
         anyhow::anyhow!("ability.uninstall: ability_ura `{ability_ura}` has no public ability name")
     })
 }
@@ -734,7 +734,7 @@ mod tests {
         // unpaired-fallback arm (collect_device_view's self node).
         // The paired arm goes through federation_probe::resolve_device_record
         // which dials the local runtime bridge — absent in unit tests.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let resp = describe_node_handler(json!({"node_id": "local"})).unwrap();
         assert_eq!(resp.get("is_self"), Some(&json!(true)));
     }
@@ -743,7 +743,7 @@ mod tests {
     fn describe_node_with_remote_returns_not_found() {
         // Same HomeGuard isolation: unpaired fallback bails
         // "node X not found" without reaching the runtime bridge.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let err = describe_node_handler(json!({"node_id": "some-remote"})).unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }

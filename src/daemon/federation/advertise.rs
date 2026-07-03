@@ -64,7 +64,7 @@ const FED_RESOLVE_KEY_ABILITY_NAME: &str = "federation.resolve_key";
 const FED_FORWARD_INVOKE_ABILITY_NAME: &str = "federation.forward_invoke";
 
 fn hub_ability_resource_ura(realm: &str, ability_name: &str) -> String {
-    crate::ura::hub_ability_ura(realm, ability_name)
+    crate::core::ura::hub_ability_ura(realm, ability_name)
 }
 
 /// Build the canonical hub-owned ability URA for
@@ -271,12 +271,14 @@ impl<'a> AbilityInvoker for BridgeAbilityInvoker<'a> {
 /// pure (no I/O, no state) so a test that pins each shape is
 /// sufficient.
 pub(crate) fn subject_id_from_resource_ura(resource_ura: &str) -> Option<String> {
-    if let Ok(parsed) = crate::ura::parse_ura(resource_ura) {
+    if let Ok(parsed) = crate::core::ura::parse_ura(resource_ura) {
         match parsed.kind {
-            crate::ura::URAKind::Hub => return Some(format!("easynet:prv:hub:{}", parsed.realm)),
-            crate::ura::URAKind::Ability
+            crate::core::ura::URAKind::Hub => {
+                return Some(format!("easynet:prv:hub:{}", parsed.realm))
+            }
+            crate::core::ura::URAKind::Ability
                 if parsed.ability().is_some_and(|ability| {
-                    matches!(ability.owner, crate::ura::AbilityOwner::Hub)
+                    matches!(ability.owner, crate::core::ura::AbilityOwner::Hub)
                 }) =>
             {
                 return Some(format!("easynet:prv:hub:{}", parsed.realm));
@@ -563,8 +565,8 @@ pub fn forward_invoke<I: AbilityInvoker>(
     let arguments_bytes =
         serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
     let arguments_b64 = STANDARD.encode(&arguments_bytes);
-    let public_ability = crate::ura::owner_local_ability_name(target_ura, ability_name);
-    let ability_ura = crate::ura::owner_ability_ura(target_ura, &public_ability)
+    let public_ability = crate::core::ura::owner_local_ability_name(target_ura, ability_name);
+    let ability_ura = crate::core::ura::owner_ability_ura(target_ura, &public_ability)
         .ok_or_else(|| format!("derive forward ability URA for {target_ura} {public_ability}"))?;
     let payload = serde_json::json!({
         "target_ura": target_ura,
@@ -812,7 +814,7 @@ mod tests {
 
     #[test]
     fn advertise_abilities_serializes_owner_projection_without_raw_descriptors() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let descriptors = vec![
             AbilityDescriptor::new(
@@ -867,7 +869,7 @@ mod tests {
 
     #[test]
     fn advertise_abilities_targets_correct_resource_ura() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         // Fake invokers observe the canonical business-layer URA.
         let invoker = RecordingInvoker::new(serde_json::json!({"ack": true}));
         let _ = advertise_abilities(
@@ -887,8 +889,9 @@ mod tests {
 
     #[test]
     fn heartbeat_includes_owner_projection_refresh_batch() {
-        let _home = crate::cli::test_support::HomeGuard::new();
-        let mut file = crate::persistence::owner_projections::OwnerProjectionCursorFile::default();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file =
+            crate::daemon::persistence::owner_projections::OwnerProjectionCursorFile::default();
         file.upsert(owner_projection_cursor(
             "easynet:///r/acme/agent/u1.01AGENT",
             "easynet:///r/acme/device/01DEV",
@@ -897,7 +900,7 @@ mod tests {
             "easynet:///r/acme/device/01DEV",
             "easynet:///r/acme/device/01DEV",
         ));
-        crate::persistence::owner_projections::save(&file).expect("save projection cursor");
+        crate::daemon::persistence::owner_projections::save(&file).expect("save projection cursor");
 
         let invoker = RecordingInvoker::new(serde_json::json!({
             "membership_status": "active",
@@ -924,8 +927,8 @@ mod tests {
     fn owner_projection_cursor(
         owner_ura: &str,
         host_device_ura: &str,
-    ) -> crate::persistence::owner_projections::OwnerProjectionCursor {
-        crate::persistence::owner_projections::OwnerProjectionCursor {
+    ) -> crate::daemon::persistence::owner_projections::OwnerProjectionCursor {
+        crate::daemon::persistence::owner_projections::OwnerProjectionCursor {
             owner_ura: owner_ura.into(),
             host_device_ura: host_device_ura.into(),
             projection_revision: 1,

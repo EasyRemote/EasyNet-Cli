@@ -43,7 +43,7 @@ use easynet_cli::daemon::keyring::{
     MasterKeySource, Vault, DEFAULT_VAULT_REL,
 };
 #[cfg(windows)]
-use easynet_cli::support::named_pipe::PipeListener;
+use easynet_cli::support::platform::named_pipe::PipeListener;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::UnixListener;

@@ -1,7 +1,7 @@
 // EasyNet CLI — Context loaders for the chat ability
 // ====================================================
 //
-// File: src/runtime/system/context_loaders/mod.rs
+// File: src/daemon/ability/builtins/resources/context/loaders/mod.rs
 // Description: Concrete implementations of `chat_ability::ContextLoader`
 //              that the daemon registers at boot. The trait seam
 //              lives in `chat_ability`; the loaders that contribute

@@ -59,7 +59,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::registry::agents;
+use crate::daemon::persistence::agent_registry as agents;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
@@ -148,7 +148,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let skill_md_path = skill_dir.join("SKILL.md");
     let hash = content_hash(&body);
     let size_bytes = body.len() as u64;
-    crate::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
+    crate::daemon::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
 
     // Provenance: source.kind = "curator", identifier carries the
@@ -158,7 +158,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let identifier = run_id
         .clone()
         .unwrap_or_else(|| "mission.think".to_string());
-    let source = crate::runtime::skill_store::SkillSource {
+    let source = crate::daemon::resources::skills::store::SkillSource {
         kind: "curator".to_string(),
         identifier: identifier.clone(),
         ref_: None,
@@ -169,9 +169,11 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     // The wire envelope below keeps the prefix because callers
     // benefit from algorithm tagging.
     let bare_hash = hash.strip_prefix("sha256:").unwrap_or(&hash).to_string();
-    let record = crate::runtime::skill_store::InstallRecord {
+    let record = crate::daemon::resources::skills::store::InstallRecord {
         name: skill_name.clone(),
-        description: crate::runtime::skill_store::skill_description_from_dir(&skill_dir),
+        description: crate::daemon::resources::skills::store::skill_description_from_dir(
+            &skill_dir,
+        ),
         agent_id: owner_id.clone(),
         source,
         skill_tree_hash: bare_hash,
@@ -191,7 +193,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let install_path = meta_dir.join("install.json");
     let install_json = serde_json::to_string_pretty(&record)
         .map_err(|e| anyhow::anyhow!("skill.publish: failed to serialise install.json: {e}"))?;
-    crate::persistence::config::atomic_write(&install_path, install_json.as_bytes())
+    crate::daemon::persistence::config::atomic_write(&install_path, install_json.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", install_path.display()))?;
 
     let dir_display = format!("{}", skill_dir.display());
@@ -246,7 +248,9 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     let install_path = skill_dir.join(".easynet").join("install.json");
     let logged_hash = std::fs::read_to_string(&install_path)
         .ok()
-        .and_then(|t| serde_json::from_str::<crate::runtime::skill_store::InstallRecord>(&t).ok())
+        .and_then(|t| {
+            serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&t).ok()
+        })
         .map(|r| {
             if r.skill_tree_hash.starts_with("sha256:") {
                 r.skill_tree_hash
@@ -402,7 +406,7 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
             anyhow::anyhow!("skill.write_file: create parent {}: {e}", parent.display())
         })?;
     }
-    crate::persistence::config::atomic_write(&full, content.as_bytes())
+    crate::daemon::persistence::config::atomic_write(&full, content.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.write_file: write {}: {e}", full.display()))?;
     let hash = refresh_install_record_hash(&skill_dir)?;
     let rel_wire = rel.to_string_lossy().to_string();
@@ -471,9 +475,9 @@ fn package_resource_ura_from_args(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("{verb}: missing/empty `resource_ura`"))?;
 
-    let parsed = crate::ura::parse_ura(ura)
+    let parsed = crate::core::ura::parse_ura(ura)
         .map_err(|e| anyhow::anyhow!("{verb}: invalid resource_ura {ura:?}: {e}"))?;
-    if parsed.kind != crate::ura::URAKind::Resource {
+    if parsed.kind != crate::core::ura::URAKind::Resource {
         anyhow::bail!(
             "{verb}: resource_ura must be a resource URA, got {}",
             parsed.kind
@@ -502,10 +506,10 @@ fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {
     if clean.is_empty() {
         return base.to_string();
     }
-    let Ok(parsed) = crate::ura::parse_ura(base) else {
+    let Ok(parsed) = crate::core::ura::parse_ura(base) else {
         return base.to_string();
     };
-    if parsed.kind != crate::ura::URAKind::Resource {
+    if parsed.kind != crate::core::ura::URAKind::Resource {
         return base.to_string();
     }
     let resource_path = parsed.resource_path().unwrap_or_default();
@@ -517,7 +521,7 @@ fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {
     let Some(owner_id) = parsed.resource_owner_id() else {
         return base.to_string();
     };
-    crate::ura::resource_dot_ura(&parsed.realm, owner_id, &child_path)
+    crate::core::ura::resource_dot_ura(&parsed.realm, owner_id, &child_path)
 }
 
 fn annotate_skill_file_resource_uras(package_ura: &str, entries: &mut [Value]) {
@@ -620,7 +624,7 @@ fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agent
     let root = entry
         .root_path
         .clone()
-        .unwrap_or_else(|| crate::persistence::config::agents_root().join(owner_id));
+        .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(owner_id));
     if !root.is_dir() {
         anyhow::bail!(
             "owner agent {owner_id:?} has no on-disk workspace at {}",
@@ -678,7 +682,7 @@ fn skill_dir_candidates_for(
         }
     };
     if let Some(global_dir) =
-        crate::runtime::skill_store::global_skill_dir_for(agent_type, skill_name)
+        crate::daemon::resources::skills::store::global_skill_dir_for(agent_type, skill_name)
     {
         if !candidates.iter().any(|candidate| candidate == &global_dir) {
             candidates.push(global_dir);
@@ -706,7 +710,7 @@ fn resolve_readable_skill_dir(
     verb: &str,
 ) -> anyhow::Result<PathBuf> {
     if let Some(global_pool) =
-        crate::runtime::skill_store::GlobalSkillPoolRef::parse_owner_id(owner_id, verb)?
+        crate::daemon::resources::skills::store::GlobalSkillPoolRef::parse_owner_id(owner_id, verb)?
     {
         if let Some(path) = global_pool.skill_dir(skill_name) {
             return Ok(path);
@@ -860,14 +864,15 @@ fn refresh_install_record_hash(skill_dir: &Path) -> anyhow::Result<String> {
     let hash = hash_skill_tree(skill_dir)?;
     let record_path = skill_dir.join(".easynet").join("install.json");
     if record_path.exists() {
-        let mut record = crate::runtime::skill_store::read_install_record(&record_path)?;
+        let mut record =
+            crate::daemon::resources::skills::store::read_install_record(&record_path)?;
         record.skill_tree_hash = hash.clone();
         record.size_bytes = skill_tree_size_bytes(skill_dir)?;
         let body = serde_json::to_string_pretty(&record)
             .map_err(|e| anyhow::anyhow!("skill.write_file: serialise install.json: {e}"))?;
-        crate::persistence::config::atomic_write(&record_path, body.as_bytes()).map_err(|e| {
-            anyhow::anyhow!("skill.write_file: write {}: {e}", record_path.display())
-        })?;
+        crate::daemon::persistence::config::atomic_write(&record_path, body.as_bytes()).map_err(
+            |e| anyhow::anyhow!("skill.write_file: write {}: {e}", record_path.display()),
+        )?;
     }
     Ok(hash)
 }
@@ -1076,10 +1081,10 @@ pub fn write_file_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::test_support::HomeGuard;
-    use crate::core::agent_spec::{AgentSpec, RuntimeKind};
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
-    use crate::runtime::directory::{AgentDirectory, Location};
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::core::agent::spec::{AgentSpec, RuntimeKind};
+    use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 
     fn materialise_agent(tag: &str, _guard: &HomeGuard) -> String {
         let pid = std::process::id();
@@ -1088,7 +1093,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let name = format!("test-agent-{tag}-{pid}-{nanos}");
-        let agent_root = crate::persistence::config::agents_root().join(&name);
+        let agent_root = crate::daemon::persistence::config::agents_root().join(&name);
         let spec = AgentSpec::new(&name, RuntimeKind::ClaudeCode);
         let _ = AgentDirectory::create(
             &Location::Local {
@@ -1106,12 +1111,15 @@ mod tests {
     }
 
     fn persist_hosted_agent_ura(name: &str) -> String {
-        let agent_ura = crate::ura::agent_ura("localhost", "dev", name);
-        let mut local = crate::persistence::local_agents::load()
-            .unwrap_or_else(|_| crate::persistence::local_agents::LocalAgentsFile::default());
+        let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
+        let mut local = crate::daemon::persistence::local_agents::load().unwrap_or_else(|_| {
+            crate::daemon::persistence::local_agents::LocalAgentsFile::default()
+        });
         local.host_device_agent_ura = "easynet:///r/localhost/device/dev-1".to_string();
-        crate::persistence::local_agents::upsert_hosted_agent(&mut local, "llm", name, &agent_ura);
-        crate::persistence::local_agents::save(&local).unwrap();
+        crate::daemon::persistence::local_agents::upsert_hosted_agent(
+            &mut local, "llm", name, &agent_ura,
+        );
+        crate::daemon::persistence::local_agents::save(&local).unwrap();
         agent_ura
     }
 
@@ -1258,14 +1266,14 @@ mod tests {
         assert_eq!(items[0]["name"], "first-skill");
         assert_eq!(
             items[0]["resource_ura"],
-            crate::ura::resource_dot_ura(
+            crate::core::ura::resource_dot_ura(
                 "localhost",
                 &format!("agent.dev.{first}"),
                 "skill/first-skill"
             )
         );
 
-        let skill_subject = crate::ura::resource_dot_ura(
+        let skill_subject = crate::core::ura::resource_dot_ura(
             "localhost",
             &format!("agent.dev.{first}"),
             "skill/first-skill",
@@ -1282,7 +1290,7 @@ mod tests {
 
         let err = list_handler(json!({
             "agent_ura": second_ura,
-            "subject_ura": crate::ura::resource_dot_ura(
+            "subject_ura": crate::core::ura::resource_dot_ura(
                 "localhost",
                 &format!("agent.dev.{first}"),
                 "skill/first-skill",
@@ -1317,7 +1325,8 @@ mod tests {
         let dir = PathBuf::from(published["skill_dir"].as_str().unwrap());
         let notes_dir = dir.join("notes");
         std::fs::create_dir_all(&notes_dir).unwrap();
-        crate::persistence::config::atomic_write(&notes_dir.join("guide.md"), b"guide").unwrap();
+        crate::daemon::persistence::config::atomic_write(&notes_dir.join("guide.md"), b"guide")
+            .unwrap();
 
         let tree = tree_handler(json!({
             "owner_agent_id": name,
@@ -1348,18 +1357,21 @@ mod tests {
     fn tree_and_read_file_resolve_global_pool_skill_returned_by_list() {
         let g = HomeGuard::new();
         let name = materialise_agent("global-tree-read", &g);
-        let skill_dir = crate::persistence::config::home_dir()
+        let skill_dir = crate::daemon::persistence::config::home_dir()
             .join(".claude")
             .join("skills")
             .join("alive-video");
         std::fs::create_dir_all(&skill_dir).unwrap();
-        crate::persistence::config::atomic_write(
+        crate::daemon::persistence::config::atomic_write(
             &skill_dir.join("SKILL.md"),
             b"---\nname: alive-video\ndescription: Alive Video\n---\n# Alive Video\n",
         )
         .unwrap();
-        crate::persistence::config::atomic_write(&skill_dir.join("guide.md"), b"global guide")
-            .unwrap();
+        crate::daemon::persistence::config::atomic_write(
+            &skill_dir.join("guide.md"),
+            b"global guide",
+        )
+        .unwrap();
 
         let listed = list_handler(json!({"owner_agent_id": name})).expect("list ok");
         assert!(
@@ -1404,18 +1416,21 @@ mod tests {
     #[test]
     fn tree_and_read_file_accept_unscoped_global_pool_owner() {
         let _g = HomeGuard::new();
-        let skill_dir = crate::persistence::config::home_dir()
+        let skill_dir = crate::daemon::persistence::config::home_dir()
             .join(".claude")
             .join("skills")
             .join("global-inspectable");
         std::fs::create_dir_all(&skill_dir).unwrap();
-        crate::persistence::config::atomic_write(
+        crate::daemon::persistence::config::atomic_write(
             &skill_dir.join("SKILL.md"),
             b"---\nname: global-inspectable\ndescription: Global Inspectable\n---\n",
         )
         .unwrap();
-        crate::persistence::config::atomic_write(&skill_dir.join("guide.md"), b"global guide")
-            .unwrap();
+        crate::daemon::persistence::config::atomic_write(
+            &skill_dir.join("guide.md"),
+            b"global guide",
+        )
+        .unwrap();
 
         let tree = tree_handler(json!({
             "owner_agent_id": "global:claude-global",
@@ -1495,7 +1510,7 @@ mod tests {
     }
 
     fn test_skill_resource_ura(owner: &str, skill: &str) -> String {
-        crate::ura::resource_dot_ura(
+        crate::core::ura::resource_dot_ura(
             "localhost",
             &format!("agent.dev.{owner}"),
             &format!("skill/{skill}"),

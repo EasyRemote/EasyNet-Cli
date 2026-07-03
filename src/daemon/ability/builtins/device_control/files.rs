@@ -70,11 +70,11 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-pub use crate::daemon::resources::filesystem::{
+pub use crate::daemon::resources::files::{
     resource_ref_for_local_path, FilesystemResourceCapability, ResolvedFilesystemPath,
 };
 
-use crate::daemon::resources::filesystem;
+use crate::daemon::resources::files as filesystem;
 // ── Wire-name constants (cross-language pins) ─────────────────────
 
 pub const ABILITY_FS_READ: &str = crate::daemon::ability::names::device_control::FS_READ;

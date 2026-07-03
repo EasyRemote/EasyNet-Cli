@@ -45,9 +45,9 @@ use easynet_cli::daemon::federation::client::{FederationClient, FederationClient
 use easynet_cli::daemon::federation::directory::{
     poll_once, DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
 };
-use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
-use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::daemon::invocation::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 
 /// In-process forwarder that delivers `forward_invoke` calls
@@ -93,7 +93,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     // polling some other peer hub). Daemon B then polls A's
     // `federation.discover`, gets that entry, and stamps A's
     // realm onto it via the §2.4 chokepoint.
-    let daemon_a_loopback = easynet_cli::ura::hub_ura("realm-a");
+    let daemon_a_loopback = easynet_cli::core::ura::hub_ura("realm-a");
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(daemon_a_loopback.clone()),
@@ -122,7 +122,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     );
 
     // ── Daemon B: realm-b, empty directory + the forwarder ──
-    let daemon_b_loopback = easynet_cli::ura::hub_ura("realm-b");
+    let daemon_b_loopback = easynet_cli::core::ura::hub_ura("realm-b");
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
         peer_loopback_uri: daemon_a_loopback.clone(),
@@ -179,7 +179,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
     // End-to-end happy path: daemon B polls daemon A, populates
     // its directory, then a CLI call to B's federation.discover
     // surfaces the entries.
-    let daemon_a_loopback = easynet_cli::ura::hub_ura("realm-a");
+    let daemon_a_loopback = easynet_cli::core::ura::hub_ura("realm-a");
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(daemon_a_loopback.clone()),
@@ -205,7 +205,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
             .with_federated_directory_cell(daemon_a_directory),
     );
 
-    let daemon_b_loopback = easynet_cli::ura::hub_ura("realm-b");
+    let daemon_b_loopback = easynet_cli::core::ura::hub_ura("realm-b");
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
         peer_loopback_uri: daemon_a_loopback.clone(),
@@ -252,7 +252,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
         }))
         .await
         .expect("federation.discover ok");
-    let body: easynet_cli::daemon::invocation::federation_wrappers::DiscoverResponse =
+    let body: easynet_cli::daemon::invocation::dispatch::federation_wrappers::DiscoverResponse =
         serde_json::from_slice(&resp.into_inner().result).expect("DiscoverResponse");
 
     // The CLI should see at least one entry — device-Y from

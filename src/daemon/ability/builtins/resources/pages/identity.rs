@@ -21,7 +21,7 @@ pub struct PagesIdentity {
     /// `self.api_key.*` placeholder leak).
     pub user: Option<String>,
     /// Realm the user-rooted handlers stamp into URAs. Defaults
-    /// to `crate::ura::REALM_EASYNET`.
+    /// to `crate::core::ura::REALM_EASYNET`.
     pub realm: Option<String>,
     /// HTTP listener port for the pages server. `None` falls back
     /// to the historical 8787.
@@ -39,7 +39,7 @@ impl PagesIdentity {
             .ok()
             .filter(|v| !v.is_empty())
             .or_else(|| {
-                crate::persistence::config::load_credentials()
+                crate::daemon::persistence::config::load_credentials()
                     .ok()
                     .and_then(|c| c.username)
                     .filter(|v| !v.is_empty())
@@ -56,7 +56,7 @@ impl PagesIdentity {
                 .ok()
                 .filter(|v| !v.is_empty())
                 .or_else(|| {
-                    crate::persistence::config::load_credentials()
+                    crate::daemon::persistence::config::load_credentials()
                         .ok()
                         .map(|c| c.realm)
                         .filter(|v| !v.is_empty())

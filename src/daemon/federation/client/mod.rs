@@ -14,7 +14,7 @@
 // What lives here
 // ---------------
 // - `FederationClient` trait — the abstract surface
-//   `daemon::invocation::federation_wrappers::handle_forward_invoke` consumes.
+//   `daemon::invocation::dispatch::federation_wrappers::handle_forward_invoke` consumes.
 //   Sync trait method shape mirrors
 //   `daemon_grpc::Client::Invoke` so the federation client can be
 //   swapped for tests + future protocol versions without touching

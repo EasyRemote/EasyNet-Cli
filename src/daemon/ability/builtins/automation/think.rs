@@ -440,7 +440,7 @@ struct CuratorTurnRequest<'a> {
 /// returns an empty list, and validation downstream emits a clear
 /// "no catalog available" rather than refusing to publish.
 pub(crate) fn collect_owner_catalog(owner: &str) -> Vec<CatalogEntry> {
-    let registry = match crate::registry::agents::load_agents() {
+    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -448,7 +448,8 @@ pub(crate) fn collect_owner_catalog(owner: &str) -> Vec<CatalogEntry> {
         Some(e) => e.clone(),
         None => return Vec::new(),
     };
-    let manifests = crate::runtime::agent_ability_specs::manifests_for(owner, &entry);
+    let manifests =
+        crate::daemon::execution::mission::agent_ability_specs::manifests_for(owner, &entry);
     manifests
         .into_iter()
         .map(|m| CatalogEntry {
@@ -491,7 +492,7 @@ pub(crate) fn validate_authored_ability(
     body: &str,
     catalog: &[CatalogEntry],
 ) -> Result<(), String> {
-    use crate::core::ability_spec::{AbilityExec, AbilityManifest};
+    use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 
     let manifest =
         AbilityManifest::from_toml_str(body).map_err(|e| format!("manifest parse failed: {e}"))?;
@@ -521,8 +522,8 @@ pub(crate) fn validate_authored_ability(
 /// (`<agent>.<verb>`). We walk the parsed AST rather than regex
 /// over the source so a string literal that happens to contain a
 /// `.` does not produce a false positive.
-fn collect_member_call_targets(program: &crate::eal::ast::EalProgram) -> Vec<String> {
-    use crate::eal::ast::{CallExpr, FieldValue, Statement, TargetKind};
+fn collect_member_call_targets(program: &crate::eal::parser::ast::EalProgram) -> Vec<String> {
+    use crate::eal::parser::ast::{CallExpr, FieldValue, Statement, TargetKind};
     let mut out: Vec<String> = Vec::new();
     fn visit_call(c: &CallExpr, out: &mut Vec<String>) {
         if c.target_kind == TargetKind::Agent {

@@ -43,11 +43,11 @@ use easynet_cli::daemon::ability::catalog::{
     RegistryDaemonBuildConfig,
 };
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
-use easynet_cli::daemon::invocation::local_runtime_invoker::{
+use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::{
     invoke_local_rpc_sync, open_local_stream,
 };
-use easynet_cli::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::daemon::resources::filesystem::{
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::daemon::resources::files::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
@@ -368,7 +368,7 @@ fn main() -> anyhow::Result<()> {
         let chat_mission_dir = mission_dir.clone();
         let result = rt.block_on(async move {
             tokio::task::spawn_blocking(move || {
-                let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                let _mission_ctx = easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(
                     chat_mission_id,
                     chat_mission_dir,
                 );
@@ -425,7 +425,7 @@ fn main() -> anyhow::Result<()> {
         let ctx_mission_dir = mission_dir.clone();
         let ctx_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                let _mission_ctx = easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(
                     ctx_mission_id,
                     ctx_mission_dir,
                 );
@@ -543,10 +543,11 @@ fn main() -> anyhow::Result<()> {
             causal_context: None,
         };
         {
-            let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
-                mission_id.clone(),
-                mission_dir.clone(),
-            );
+            let _mission_ctx =
+                easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(
+                    mission_id.clone(),
+                    mission_dir.clone(),
+                );
             let stream = dispatcher_for_stream
                 .execute_stream(stream_target)
                 .expect("execute_stream");

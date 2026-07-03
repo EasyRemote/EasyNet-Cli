@@ -36,7 +36,7 @@
 // -----------------------
 // - The admission gate itself — that lives in `easynet-axon`'s
 //   `invocation::admission` module and is consulted from
-//   `daemon::invocation::daemon_invocation_service` (commit 7b/9)
+//   `daemon::invocation::dispatch::daemon_invocation_service` (commit 7b/9)
 // - The `realm-trust.toml` *writer* — pairing flow lives in PR-7
 // - SIGHUP reload — PR-7 wires the reload signal handler; PR-1
 //   reads once at boot
@@ -309,17 +309,18 @@ fn canonical_ura_for_role(
     agent_ura: &str,
     role: TrustedAgentRole,
 ) -> Result<String, RealmTrustError> {
-    let parsed =
-        crate::ura::parse_ura(agent_ura).map_err(|err| RealmTrustError::InvalidUraForRole {
+    let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|err| {
+        RealmTrustError::InvalidUraForRole {
             agent_ura: agent_ura.to_string(),
             role: role_label(role).to_string(),
             detail: format!("{}; parse failed: {err}", canonical_ura_expectation(role)),
-        })?;
+        }
+    })?;
 
     match (role, parsed.kind) {
-        (TrustedAgentRole::Device, crate::ura::URAKind::Device)
-        | (TrustedAgentRole::Backend | TrustedAgentRole::Hub, crate::ura::URAKind::Hub)
-        | (TrustedAgentRole::User, crate::ura::URAKind::User) => Ok(agent_ura.to_string()),
+        (TrustedAgentRole::Device, crate::core::ura::URAKind::Device)
+        | (TrustedAgentRole::Backend | TrustedAgentRole::Hub, crate::core::ura::URAKind::Hub)
+        | (TrustedAgentRole::User, crate::core::ura::URAKind::User) => Ok(agent_ura.to_string()),
         (_, kind) => Err(RealmTrustError::InvalidUraForRole {
             agent_ura: agent_ura.to_string(),
             role: role_label(role).to_string(),

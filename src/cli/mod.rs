@@ -93,69 +93,18 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub(crate) mod abilities;
-pub(crate) mod ability_bidi;
-pub(crate) mod ability_catalog_row;
-pub(crate) mod ability_record;
-pub(crate) mod ability_scaffold;
-pub(crate) mod ability_stream;
-pub(crate) mod agent;
-pub(crate) mod agent_new_ability;
-pub(crate) mod agent_sessions;
-pub(crate) mod auth;
-pub(crate) mod bridge_lib;
-pub(crate) mod completion;
-pub(crate) mod config_cmd;
-pub(crate) mod connect;
-pub(crate) mod daemon_agent_view;
-pub(crate) mod deploy;
-pub(crate) mod devices;
-pub mod discover;
-pub(crate) mod discuss;
-pub(crate) mod docker;
-pub(crate) mod doctor;
-pub(crate) mod exec;
-#[cfg(feature = "axon-pb")]
-pub(crate) mod federation_discover;
-pub(crate) mod federation_gen_cert;
-pub(crate) mod federation_peers;
-pub(crate) mod federation_wire;
-pub(crate) mod groups;
+pub mod commands;
+pub(crate) mod daemon_client;
+pub(crate) mod mcp;
 pub mod presentation;
-
-/// RFC-006-C v0.1 — `easynet api-key` for OpenAI-compat bearer
-/// tokens, and `easynet llm-api` for chat-completion calls.
-pub(crate) mod api_key_cli;
-/// RFC-006-B v0.6 — `easynet pages` ergonomic wrapper around
-/// `<user>.pages.{publish,unpublish,list,get}` and the
-/// `<user>.<project_id>.page.fetch` family.
-pub(crate) mod context;
-pub mod invocation_watch;
-pub(crate) mod invoke;
-pub(crate) mod join;
-pub(crate) mod llm_api;
-pub(crate) mod mcp_install;
-pub(crate) mod mcp_server;
-pub mod mission_runs;
-pub(crate) mod pages;
-/// #185 — `easynet quota` owner verb to inspect/edit the per-consumer
-/// invocation quota policy (`[daemon.quota]`).
-pub(crate) mod quota_cmd;
-pub mod receipt_verification;
-pub(crate) mod reset;
-pub(crate) mod skill;
-pub(crate) mod skill_install;
-pub(crate) mod start;
-pub(crate) mod start_boot_watcher;
-pub(crate) mod status;
-pub(crate) mod stop;
-pub mod teach;
-#[cfg(test)]
-pub(crate) mod test_support;
-pub(crate) mod think;
+pub use commands::{discover, invocation_watch, mission_runs, receipt_verification, teach};
 
 use clap::builder::styling::{AnsiColor, Effects, Style, Styles};
 use clap::{Parser, Subcommand};
+use commands::{
+    api_key_cli, completion, context, docker, doctor, groups, join, llm_api, pages, quota_cmd,
+    skill, start, stop,
+};
 
 // ── Help styling ─────────────────────────────────────────────────────
 //

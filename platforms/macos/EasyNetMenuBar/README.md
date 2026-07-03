@@ -10,14 +10,14 @@ macOS accessory app for local EasyNet operator affordances:
 Build and run locally:
 
 ```sh
-scripts/build-macos-menubar.sh
+tools/scripts/build-macos-menubar.sh
 open target/macos/EasyNetMenuBar.app
 ```
 
 Install as a login LaunchAgent:
 
 ```sh
-scripts/install-macos-menubar.sh
+tools/scripts/install-macos-menubar.sh
 ```
 
 The installed app lives at `~/.easynet/apps/EasyNetMenuBar.app`. The LaunchAgent lives at `~/Library/LaunchAgents/tech.silan.easynet.menubar.plist`.

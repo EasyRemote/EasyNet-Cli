@@ -478,11 +478,11 @@ impl DaemonInvocationSurface {
     #[cfg(feature = "axon-pb")]
     pub fn from_daemon_surface() -> Self {
         Self::new(
-            crate::daemon::invocation::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
+            crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
                 .iter()
                 .map(|route| (route.name(), route.call_mode()))
                 .chain(
-                    crate::daemon::invocation::daemon_invocation_service::DAEMON_INVOCATION_STREAM_ROUTES
+                    crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_STREAM_ROUTES
                         .iter()
                         .map(|route| (route.name(), route.call_mode())),
                 ),
@@ -544,7 +544,7 @@ impl RuntimeAdminConformance {
     #[cfg(feature = "axon-pb")]
     pub fn from_daemon_surface() -> Self {
         Self::new(
-            crate::daemon::invocation::bidi_dispatcher::RUNTIME_ADMIN_BIDI_ROUTES
+            crate::daemon::invocation::bidi::bidi_dispatcher::RUNTIME_ADMIN_BIDI_ROUTES
                 .iter()
                 .copied()
                 .chain(std::iter::once(ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY)),
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn local_registry_satisfies_device_baseline() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let registry = crate::daemon::ability::catalog::build_registry();
         let device = DeviceBaseline::required_abilities();
         let report = RegistryConformance::new(&registry).check("device", &device);
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn local_registry_satisfies_hub_introspection_slice() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let registry = crate::daemon::ability::catalog::build_registry();
         let report =
             RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
@@ -662,12 +662,12 @@ mod tests {
     #[test]
     fn daemon_invocation_surface_detects_missing_route() {
         let installed_without_identity_register =
-            crate::daemon::invocation::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
+            crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
                 .iter()
                 .filter(|route| route.name() != ABILITY_IDENTITY_REGISTER_PUBKEY)
                 .map(|route| (route.name(), route.call_mode()))
                 .chain(
-                    crate::daemon::invocation::daemon_invocation_service::DAEMON_INVOCATION_STREAM_ROUTES
+                    crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_STREAM_ROUTES
                         .iter()
                         .map(|route| (route.name(), route.call_mode())),
                 );
@@ -687,19 +687,19 @@ mod tests {
     #[test]
     fn daemon_invocation_route_tables_are_classified_by_dispatchers() {
         for route in
-            crate::daemon::invocation::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
+            crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_UNARY_ROUTES
         {
             assert_eq!(
-                crate::daemon::invocation::daemon_invocation_service::DaemonUnaryRoute::from_function(route.name()),
+                crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute::from_function(route.name()),
                 Some(*route)
             );
         }
 
         for route in
-            crate::daemon::invocation::daemon_invocation_service::DAEMON_INVOCATION_STREAM_ROUTES
+            crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_STREAM_ROUTES
         {
             assert_eq!(
-                crate::daemon::invocation::daemon_invocation_service::DaemonStreamRoute::from_function(route.name()),
+                crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonStreamRoute::from_function(route.name()),
                 Some(*route)
             );
         }

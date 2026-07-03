@@ -74,15 +74,16 @@ fn system_descriptors_for_owner(
 /// helper is what guarantees external and internal MCP callers see
 /// the same catalog.
 pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    let local = crate::persistence::local_agents::load().unwrap_or_default();
+    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
     let host_ura = if local.host_device_agent_ura.is_empty() {
         "self".to_string()
     } else {
         local.host_device_agent_ura.clone()
     };
     let consent_ura =
-        crate::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
-    let mcp_uri = crate::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default");
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
+    let mcp_uri =
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default");
     let llm_uras: Vec<(String, String)> = local
         .hosted_agents
         .iter()
@@ -140,7 +141,7 @@ mod tests {
     fn aggregator_with_only_device_returns_device_descriptors_only() {
         // URA v4.1.5 §A.URA-1: device URAs use the `device` role
         // (not the legacy v1 `agent/01DEV` placeholder). Production
-        // mints this via `crate::ura::device_ura` (start.rs:623).
+        // mints this via `crate::core::ura::device_ura` (start.rs:623).
         let device_ura = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
         let all = all_descriptors_for_host(device_ura, None, None, &[]);
         assert!(!all.is_empty());

@@ -197,7 +197,7 @@ pub fn resolve(realm: &str, cfg: &ResolverConfig) -> RealmResolution {
 /// federation layer's hub-discovery decision but does NOT appear in
 /// any URI.
 pub fn canonical_device_ura(node_id: &str, resolution: &RealmResolution) -> String {
-    crate::ura::device_ura(&resolution.realm, node_id)
+    crate::core::ura::device_ura(&resolution.realm, node_id)
 }
 
 #[cfg(test)]

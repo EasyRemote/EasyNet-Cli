@@ -88,8 +88,8 @@ use std::time::Instant;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::registry::agents::{AgentEntry, AgentRegistry};
-use crate::runtime::dispatch::{AgentResponse, DriverOverrides, ToolCall};
+use crate::daemon::execution::mission::dispatch::{AgentResponse, DriverOverrides, ToolCall};
+use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
@@ -203,7 +203,7 @@ pub fn register_for_agent(
     reg.register_rpc_with_spec(
         &ability,
         owner.clone(),
-        crate::core::ability_spec::default_chat_manifest(),
+        crate::core::ability::spec::default_chat_manifest(),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -217,8 +217,10 @@ pub fn register_for_agent(
     // invoke them: the dispatcher returns NOT_FOUND for every
     // <agent>.<ability> name that isn't `<agent>.chat`.
     //
-    let other_abilities = crate::runtime::agent_ability_specs::abilities_for(&agent_name, &entry);
-    let manifests = crate::runtime::agent_ability_specs::manifests_for(&agent_name, &entry);
+    let other_abilities =
+        crate::daemon::execution::mission::agent_ability_specs::abilities_for(&agent_name, &entry);
+    let manifests =
+        crate::daemon::execution::mission::agent_ability_specs::manifests_for(&agent_name, &entry);
     let chat_name = ability.clone();
     for spec in other_abilities {
         if spec.name() == chat_name {
@@ -237,7 +239,7 @@ pub fn register_for_agent(
             continue;
         };
         match exec {
-            crate::core::ability_spec::AbilityExec::HostStream(stream_spec) => {
+            crate::core::ability::spec::AbilityExec::HostStream(stream_spec) => {
                 let h = build_host_stream_handler(stream_spec.clone());
                 reg.register_stream_with_envelope_and_owner(&ability_name, owner.clone(), h);
             }
@@ -261,7 +263,7 @@ pub fn register_for_agent(
     reg.register_stream_with_spec(
         &ability,
         owner,
-        crate::core::ability_spec::default_chat_manifest(),
+        crate::core::ability::spec::default_chat_manifest(),
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }
@@ -277,13 +279,15 @@ pub fn register_for_agent(
 /// immediately; anything that can fail the open surfaces as `Err` so a
 /// failed open never produces a half-live session.
 pub(crate) fn build_host_stream_handler(
-    spec: crate::core::ability_spec::HostStreamExec,
+    spec: crate::core::ability::spec::HostStreamExec,
 ) -> crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope {
     Arc::new(
         move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
             let call_id = env.invocation_id().to_string();
             let caller = env.caller().to_string();
-            crate::runtime::executors::host_stream::run_host_stream(&spec, &args, &call_id, &caller)
+            crate::daemon::execution::mission::executors::host_stream::run_host_stream(
+                &spec, &args, &call_id, &caller,
+            )
         },
     )
 }
@@ -317,9 +321,12 @@ pub(crate) fn build_agent_ability_handler(
         // Re-read this agent's manifests at invoke time so edits made
         // post-boot change the executor binding without a daemon restart.
         let matching_manifest =
-            crate::runtime::agent_ability_specs::manifests_for(&agent_name, &entry)
-                .into_iter()
-                .find(|m| m.name() == bare_ability);
+            crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+                &agent_name,
+                &entry,
+            )
+            .into_iter()
+            .find(|m| m.name() == bare_ability);
 
         if let Some(manifest) = matching_manifest.as_ref() {
             if let Some(exec) = manifest.exec() {
@@ -327,22 +334,28 @@ pub(crate) fn build_agent_ability_handler(
                     .timeout_seconds()
                     .map(std::time::Duration::from_secs);
                 return match exec {
-                    crate::core::ability_spec::AbilityExec::Shell(spec) => {
-                        crate::runtime::executors::shell::run_shell_exec(spec, &args, timeout)
+                    crate::core::ability::spec::AbilityExec::Shell(spec) => {
+                        crate::daemon::execution::mission::executors::shell::run_shell_exec(
+                            spec, &args, timeout,
+                        )
                     }
-                    crate::core::ability_spec::AbilityExec::Http(spec) => {
-                        crate::runtime::executors::http::run_http_exec(spec, &args, timeout)
+                    crate::core::ability::spec::AbilityExec::Http(spec) => {
+                        crate::daemon::execution::mission::executors::http::run_http_exec(
+                            spec, &args, timeout,
+                        )
                     }
-                    crate::core::ability_spec::AbilityExec::Eal(spec) => {
-                        crate::runtime::executors::eal::run_eal_exec(spec, &args, timeout)
+                    crate::core::ability::spec::AbilityExec::Eal(spec) => {
+                        crate::daemon::execution::mission::executors::eal::run_eal_exec(
+                            spec, &args, timeout,
+                        )
                     }
-                    crate::core::ability_spec::AbilityExec::Mcp(spec) => {
+                    crate::core::ability::spec::AbilityExec::Mcp(spec) => {
                         let _ = timeout;
                         crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
                             spec, &args,
                         )
                     }
-                    crate::core::ability_spec::AbilityExec::HostStream(_) => {
+                    crate::core::ability::spec::AbilityExec::HostStream(_) => {
                         // host_stream registers as a stream-mode ability
                         // (see register_for_agent): it is dispatched
                         // through the stream handler, never this unary RPC
@@ -459,8 +472,9 @@ pub(crate) fn build_discover_handler_for(
     // AxonAbilityCatalog`, which we don't have here). The handler
     // re-loads agents on every call so a brand-new peer is visible
     // immediately — same hot-add story as the chat handler.
-    let provider: Arc<dyn Fn() -> crate::registry::agents::AgentRegistry + Send + Sync> =
-        Arc::new(|| crate::registry::agents::load_agents().unwrap_or_default());
+    let provider: Arc<
+        dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
+    > = Arc::new(|| crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default());
     Arc::new(move |args: Value| {
         // Defer to the discover module's per-call entry. Public
         // entry exposed for this purpose (and test cases).
@@ -481,8 +495,9 @@ pub(crate) fn build_invoke_handler_for(
     agent_name: String,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    let provider: Arc<dyn Fn() -> crate::registry::agents::AgentRegistry + Send + Sync> =
-        Arc::new(|| crate::registry::agents::load_agents().unwrap_or_default());
+    let provider: Arc<
+        dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
+    > = Arc::new(|| crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default());
     Arc::new(move |args: Value| {
         crate::daemon::ability::builtins::agents::invoke::dispatch(
             &agent_name,
@@ -547,7 +562,7 @@ pub(crate) fn invoke_direct_with_progress(
     // with is bound as the pointer after the transcript write).
     let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
     if lifelong_requested {
-        parsed.session_id = crate::persistence::chat_sessions::lifelong_session(agent_name);
+        parsed.session_id = crate::daemon::persistence::chat_sessions::lifelong_session(agent_name);
     }
 
     // Session id resolution. When the caller supplies one we echo
@@ -691,7 +706,7 @@ pub(crate) fn invoke_direct_with_progress(
     let driver_overrides = Some(&driver_with_resume);
     let dispatch_call = || {
         if let Some(progress_tx) = progress_tx.clone() {
-            crate::runtime::dispatch::send_external_with_overrides_and_progress(
+            crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
                 agent_name,
                 entry,
                 &parsed.prompt,
@@ -700,7 +715,7 @@ pub(crate) fn invoke_direct_with_progress(
                 Some(progress_tx),
             )
         } else {
-            crate::runtime::dispatch::send_external_with_overrides(
+            crate::daemon::execution::mission::dispatch::send_external_with_overrides(
                 agent_name,
                 entry,
                 &parsed.prompt,
@@ -751,7 +766,7 @@ pub(crate) fn invoke_direct_with_progress(
     // Frontend Group page) leaves no trace for `chat.history.{list,
     // get}` to read. Best-effort: a disk failure must not break the
     // in-flight reply.
-    crate::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
+    crate::daemon::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
         agent_name,
         &session_id,
         &parsed.prompt,
@@ -763,7 +778,7 @@ pub(crate) fn invoke_direct_with_progress(
     // Bind (or re-affirm) the lifelong pointer after the turn is on
     // disk, so the next sentinel turn resumes this same thread.
     if lifelong_requested {
-        crate::persistence::chat_sessions::set_lifelong_session_best_effort(
+        crate::daemon::persistence::chat_sessions::set_lifelong_session_best_effort(
             agent_name,
             &session_id,
         );
@@ -851,7 +866,7 @@ fn stream_handler(
     // see the comment there and on LIFELONG_SESSION_ID.
     let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
     if lifelong_requested {
-        parsed.session_id = crate::persistence::chat_sessions::lifelong_session(agent_name);
+        parsed.session_id = crate::daemon::persistence::chat_sessions::lifelong_session(agent_name);
     }
     let session_id = parsed
         .session_id
@@ -992,7 +1007,7 @@ fn stream_handler(
     std::thread::Builder::new()
         .name(format!("chat-stream-{agent_name}"))
         .spawn(move || {
-            let result = crate::runtime::dispatch::send_external_with_overrides_and_progress(
+            let result = crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
                 &agent_name_owned,
                 &entry_owned,
                 &prompt_owned,
@@ -1020,7 +1035,7 @@ fn stream_handler(
                     };
                     // Persist the streamed turn too — same transcript
                     // contract as the RPC path (invoke_direct_with_progress).
-                    crate::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
+                    crate::daemon::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
                         &agent_name_owned,
                         &resolved_session_id,
                         &prompt_owned,
@@ -1030,7 +1045,7 @@ fn stream_handler(
                         elapsed_ms,
                     );
                     if lifelong_requested {
-                        crate::persistence::chat_sessions::set_lifelong_session_best_effort(
+                        crate::daemon::persistence::chat_sessions::set_lifelong_session_best_effort(
                             &agent_name_owned,
                             &resolved_session_id,
                         );
@@ -1090,12 +1105,12 @@ fn enumerate_skill_specs(
     agent_name: &str,
     entry: &AgentEntry,
     selection: &Selection,
-) -> Vec<crate::runtime::agent_ability_specs::AgentAbilitySpec> {
+) -> Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec> {
     if matches!(selection.mode, SelectionMode::None) {
         return Vec::new();
     }
     let self_chat = format!("{agent_name}.{ABILITY_VERB}");
-    crate::runtime::agent_ability_specs::abilities_for(agent_name, entry)
+    crate::daemon::execution::mission::agent_ability_specs::abilities_for(agent_name, entry)
         .into_iter()
         .filter(|s| s.name() != self_chat)
         .filter(|s| selection.is_selected(s.name()))
@@ -1123,8 +1138,8 @@ fn enumerate_skill_specs(
 ///     which is what the per-ability route exists to avoid.
 fn enumerate_other_agent_specs(
     self_agent_name: &str,
-) -> Vec<crate::runtime::agent_ability_specs::AgentAbilitySpec> {
-    let registry = match crate::registry::agents::load_agents() {
+) -> Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec> {
+    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -1134,7 +1149,10 @@ fn enumerate_other_agent_specs(
             continue;
         }
         let other_chat = format!("{other_name}.{ABILITY_VERB}");
-        for spec in crate::runtime::agent_ability_specs::abilities_for(other_name, other_entry) {
+        for spec in crate::daemon::execution::mission::agent_ability_specs::abilities_for(
+            other_name,
+            other_entry,
+        ) {
             if spec.name() == other_chat {
                 continue;
             }
@@ -1409,7 +1427,7 @@ fn base64_encode(input: &[u8]) -> String {
 }
 
 fn format_skills_hint(
-    skills: &[crate::runtime::agent_ability_specs::AgentAbilitySpec],
+    skills: &[crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec],
 ) -> Option<String> {
     if skills.is_empty() {
         return None;
@@ -1440,7 +1458,7 @@ fn format_skills_hint(
 /// installs see exactly the same prompt they did before this hint
 /// was added; no spurious empty section).
 fn format_cross_agent_hint(
-    others: &[crate::runtime::agent_ability_specs::AgentAbilitySpec],
+    others: &[crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec],
 ) -> Option<String> {
     if others.is_empty() {
         return None;
@@ -1843,7 +1861,7 @@ mod tests {
     //! agent directories and would otherwise spawn subprocesses.
 
     use super::*;
-    use crate::registry::agents::{AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};
 
     fn entry() -> AgentEntry {
         AgentEntry::new(AgentType::ClaudeCode, None)
@@ -1853,7 +1871,7 @@ mod tests {
     fn register_mounts_one_handler_per_agent() {
         // Hold the env lock: register() consults HOME-rooted registry
         // state, so a concurrent HOME-mutating test must not race it.
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry());
@@ -1880,8 +1898,8 @@ mod tests {
 
     #[test]
     fn register_does_not_mount_unbound_manifest_as_chat_fallback() {
-        let _g = crate::cli::test_support::HomeGuard::new();
-        let root = crate::persistence::config::agents_root().join("alice");
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let root = crate::daemon::persistence::config::agents_root().join("alice");
         let abilities_dir = root.join("abilities");
         std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
         std::fs::write(
@@ -1889,7 +1907,7 @@ mod tests {
             "name = \"alice\"\nruntime = \"claude-code\"\n",
         )
         .expect("agent.toml");
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "echo",
             "Unbound manifest.",
             json!({"type": "object"}),
@@ -1959,9 +1977,10 @@ mod tests {
         // With a lifelong pointer bound, a sentinel turn must surface
         // the bound concrete id in the leading `session` frame — the
         // literal "lifelong" never appears on the wire as a session id.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let bound = "38e5640c-6843-4f15-8f3a-2c8de75d0209";
-        crate::persistence::chat_sessions::set_lifelong_session("alice", bound).expect("bind");
+        crate::daemon::persistence::chat_sessions::set_lifelong_session("alice", bound)
+            .expect("bind");
         let entry = entry();
         let source = stream_handler(
             "alice",
@@ -1986,7 +2005,7 @@ mod tests {
         // No pointer bound: the sentinel falls through to the
         // fresh-turn path, so the session frame carries a minted id,
         // not the sentinel literal.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = entry();
         let source = stream_handler(
             "alice",
@@ -2025,7 +2044,7 @@ mod tests {
         // snapshot length to 2. Scoping HOME to a private tmpdir
         // makes this test see the empty fallback every time, which
         // is what the assertion expects.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = entry();
         let source = stream_handler("alice", &entry, &[], json!({"prompt": "hi"})).unwrap();
         match source {
@@ -2372,10 +2391,12 @@ mod tests {
 
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
+        use crate::daemon::boot::kernel::api::KernelApi;
+        use crate::daemon::boot::kernel::Kernel;
         use crate::daemon::federation::gateway::NoopGateway;
-        use crate::daemon::invocation::runtime_record::{RuntimeCausalContext, RuntimeInvocation};
-        use crate::daemon::kernel::api::KernelApi;
-        use crate::daemon::kernel::Kernel;
+        use crate::daemon::invocation::receipts::runtime_record::{
+            RuntimeCausalContext, RuntimeInvocation,
+        };
         use easynet_axon::invocation::{
             make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes, AxonError,
             KeyResolver, LocalRuntime,
@@ -2383,7 +2404,7 @@ mod tests {
         use ed25519_dalek::VerifyingKey;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
 
         struct FixedKey(VerifyingKey);
         impl KeyResolver for FixedKey {
@@ -2407,9 +2428,11 @@ mod tests {
         // Register under the canonical owner ability URA the kernel
         // resolves (`device.a.alice.chat`), not the bare handler name — a
         // raw LocalRuntime has no catalog to mirror the bare key.
-        let chat_runtime_ability =
-            crate::ura::owner_ability_ura(&crate::ura::device_ura("localhost", "a"), "alice.chat")
-                .expect("derive alice.chat runtime URA");
+        let chat_runtime_ability = crate::core::ura::owner_ability_ura(
+            &crate::core::ura::device_ura("localhost", "a"),
+            "alice.chat",
+        )
+        .expect("derive alice.chat runtime URA");
         crate::support::async_bridge::run_blocking(
             rt.register_ability_with_options(
                 chat_runtime_ability,
@@ -2435,7 +2458,7 @@ mod tests {
         let kernel = Kernel::new(Arc::new(NoopGateway));
         kernel.set_local_runtime(Arc::clone(&rt));
 
-        let device_ura = crate::ura::device_ura("localhost", "a");
+        let device_ura = crate::core::ura::device_ura("localhost", "a");
         let mut inv = RuntimeInvocation {
             caller: device_ura.clone(),
             callee: device_ura.clone(),
@@ -2456,7 +2479,7 @@ mod tests {
         let receipt = kernel.invoke(inv).expect("invoke ok");
         assert!(matches!(
             receipt.terminal,
-            crate::daemon::invocation::runtime_record::TerminalState::Succeeded
+            crate::daemon::invocation::receipts::runtime_record::TerminalState::Succeeded
         ));
         assert_eq!(
             counter.load(Ordering::SeqCst),
@@ -2473,13 +2496,13 @@ mod tests {
     #[test]
     fn format_skills_hint_lists_each_skill_with_one_line_description() {
         let skills = vec![
-            crate::runtime::agent_ability_specs::AgentAbilitySpec::new(
+            crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec::new(
                 "alice.voice",
                 "Speak text via the local TTS engine.\nMore detail.",
                 json!({"type": "object"}),
             )
             .unwrap(),
-            crate::runtime::agent_ability_specs::AgentAbilitySpec::new(
+            crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec::new(
                 "alice.fs.read",
                 "Read a file from disk.",
                 json!({"type": "object"}),
@@ -2876,17 +2899,17 @@ mod tests {
     /// any latency probe got a chance to run.
     #[test]
     fn build_agent_ability_handler_routes_shell_exec_manifest_through_shell_executor() {
-        use crate::core::ability_spec::{AbilityExec, AbilityManifest, ShellExec};
-        use crate::registry::agents::AgentEntry;
+        use crate::core::ability::spec::{AbilityExec, AbilityManifest, ShellExec};
+        use crate::daemon::persistence::agent_registry::AgentEntry;
 
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
 
         // Materialise an agent root with a single ability manifest
         // that pins a shell executor. We use `printf` (POSIX,
         // deterministic, available on the macOS dev box and any
         // Linux CI runner) so the test is hermetic — no network,
         // no LLM, no system PATH guesses beyond a coreutils.
-        let ws_root = crate::persistence::config::agents_root().join("alice");
+        let ws_root = crate::daemon::persistence::config::agents_root().join("alice");
         let abilities_dir = ws_root.join("abilities");
         std::fs::create_dir_all(&abilities_dir)
             .expect("HomeGuard provides a fresh tmp HOME, mkdir must succeed");
@@ -2937,7 +2960,10 @@ model = "sonnet"
         // Build the handler the same way the registration paths do:
         // boot-time pre-registration and HotAgentRegistrar both call
         // build_agent_ability_handler.
-        let mut entry = AgentEntry::new(crate::registry::agents::AgentType::ClaudeCode, None);
+        let mut entry = AgentEntry::new(
+            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+            None,
+        );
         // `root_path` is the field that `manifests_for` (and
         // `abilities_for`) read to find the on-disk abilities/
         // directory. Without it the helpers fall back to the

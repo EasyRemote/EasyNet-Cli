@@ -40,7 +40,7 @@ use crate::daemon::ability::catalog::profiles::{
     bootstrap::{self, BootstrapOutcome, BootstrapPlan, UraMinter, UuidMinter},
 };
 use crate::daemon::federation::advertise::{self, AbilityInvoker, AdvertiseOutcome};
-use crate::persistence::local_agents::{self, LocalAgentsFile};
+use crate::daemon::persistence::local_agents::{self, LocalAgentsFile};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
@@ -236,7 +236,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
         crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(
             &live_registry,
         );
-    match crate::registry::agents::load_agents() {
+    match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
                 let owner_ura = match llm_uras
@@ -248,11 +248,11 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                     None => continue, // bootstrap didn't mint a URA for this agent
                 };
                 let specs =
-                    crate::runtime::agent_ability_specs::abilities_for_publication(name, entry);
+                    crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(name, entry);
                 for spec in specs {
                     let registry_name = spec.name();
                     let owner_local_name =
-                        crate::runtime::agent_ability_specs::public_agent_ability_name(
+                        crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
                             &owner_ura,
                             name,
                             registry_name,
@@ -553,8 +553,8 @@ fn host_node_id_from_ura(ura: &str) -> Option<String> {
     // Legacy `reg/{device,agent}.<id>?tenant_id=<t>` shapes are rejected
     // per memory `feedback_no_legacy_ura.md` (strict v4.1.5 only;
     // route every URA parse through `parse_ura`).
-    let parsed = crate::ura::parse_ura(ura).ok()?;
-    if parsed.kind == crate::ura::URAKind::Device {
+    let parsed = crate::core::ura::parse_ura(ura).ok()?;
+    if parsed.kind == crate::core::ura::URAKind::Device {
         return parsed.device_id().map(str::to_string);
     }
     None
@@ -621,10 +621,12 @@ fn collect_daemon_owned_ability_names() -> Vec<String> {
     // in `published_ability_names` (that table is device-level)
     // so we walk the agent registry the same way
     // `republish_with_minter` does at advertise time.
-    if let Ok(reg) = crate::registry::agents::load_agents() {
+    if let Ok(reg) = crate::daemon::persistence::agent_registry::load_agents() {
         for (agent_name, entry) in &reg.agents {
             for spec in
-                crate::runtime::agent_ability_specs::abilities_for_publication(agent_name, entry)
+                crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
+                    agent_name, entry,
+                )
             {
                 names.push(spec.name().to_string());
             }
@@ -713,13 +715,13 @@ fn stamp_llm_agent_metadata(
 
 fn runtime_admin_resource_ura(realm: &str, tenant_id: &str, ability_name: &str) -> String {
     let _ = tenant_id;
-    crate::ura::hub_ability_ura(realm, ability_name)
+    crate::core::ura::hub_ability_ura(realm, ability_name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::test_support::HomeGuard;
+    use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::ability::catalog::profiles::bootstrap::LlmSubAgent;
     use std::cell::RefCell;
 
@@ -813,17 +815,17 @@ mod tests {
 
     #[test]
     fn owner_local_ability_name_projects_agent_registry_key() {
-        let owner_ura = crate::ura::agent_ura("acme", "u1", "alice");
+        let owner_ura = crate::core::ura::agent_ura("acme", "u1", "alice");
         assert_eq!(
-            crate::ura::owner_local_ability_name(&owner_ura, "alice.chat"),
+            crate::core::ura::owner_local_ability_name(&owner_ura, "alice.chat"),
             "chat"
         );
         assert_eq!(
-            crate::ura::owner_local_ability_name(&owner_ura, "alice.files.read"),
+            crate::core::ura::owner_local_ability_name(&owner_ura, "alice.files.read"),
             "files.read"
         );
         assert_eq!(
-            crate::ura::owner_local_ability_name(&owner_ura, "chat"),
+            crate::core::ura::owner_local_ability_name(&owner_ura, "chat"),
             "chat"
         );
     }
@@ -894,7 +896,10 @@ mod tests {
             host_node_id_from_ura("easynet:///r/acme/resource/01HZ8/fs/etc/hosts"),
             None
         );
-        assert_eq!(host_node_id_from_ura(&crate::ura::hub_ura("acme")), None);
+        assert_eq!(
+            host_node_id_from_ura(&crate::core::ura::hub_ura("acme")),
+            None
+        );
         assert_eq!(host_node_id_from_ura("easynet:///r/acme/user/alice"), None);
 
         // Malformed inputs — strict parser returns Err, we map to None.
@@ -982,15 +987,16 @@ mod tests {
 
         // Persist an `alice` AgentEntry into the registry so that
         // `load_agents()` inside republish_with_minter sees it.
-        let mut reg = crate::registry::agents::AgentRegistry::default();
+        let mut reg = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         reg.agents.insert(
             "alice".to_string(),
-            crate::registry::agents::AgentEntry::new(
-                crate::registry::agents::AgentType::ClaudeCode,
+            crate::daemon::persistence::agent_registry::AgentEntry::new(
+                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
                 Some("sonnet".into()),
             ),
         );
-        crate::registry::agents::save_agents(&reg).expect("save alice into registry");
+        crate::daemon::persistence::agent_registry::save_agents(&reg)
+            .expect("save alice into registry");
 
         // Plan: realm joined, alice listed as an LLM sub-agent so
         // bootstrap mints a URA for her.
@@ -1058,7 +1064,7 @@ mod tests {
                 .iter()
                 .find(|a| ability_summary_public_name(a).as_deref() == Some(ability_name))
                 .unwrap_or_else(|| panic!("{ability_name} summary must be advertised"));
-            let expected_ura = crate::ura::owner_ability_ura(alice_ura, ability_name)
+            let expected_ura = crate::core::ura::owner_ability_ura(alice_ura, ability_name)
                 .expect("alice chat ability URA");
             assert_eq!(
                 summary["ability_ura"].as_str(),
@@ -1097,15 +1103,15 @@ mod tests {
         // descriptors Vec, the device-profile abilities (fs.read,
         // shell.run, …) would silently drop off the wire.
         let _h = HomeGuard::new();
-        let mut reg = crate::registry::agents::AgentRegistry::default();
+        let mut reg = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         reg.agents.insert(
             "alice".into(),
-            crate::registry::agents::AgentEntry::new(
-                crate::registry::agents::AgentType::ClaudeCode,
+            crate::daemon::persistence::agent_registry::AgentEntry::new(
+                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
                 Some("sonnet".into()),
             ),
         );
-        crate::registry::agents::save_agents(&reg).unwrap();
+        crate::daemon::persistence::agent_registry::save_agents(&reg).unwrap();
         let plan = BootstrapPlan {
             realm: "acme".into(),
             user_id: "alice".into(),

@@ -132,13 +132,13 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
         .map(str::to_string)
         .unwrap_or_else(|| "mission.run".to_string());
 
-    let opts = crate::cli::mission_runs::MissionRunOpts {
+    let opts = crate::cli::commands::mission_runs::MissionRunOpts {
         source_label: Some(label),
         trace_path: None,
         invocation_context: None,
     };
 
-    let result = crate::cli::mission_runs::run_mission_inproc(&source, opts)?;
+    let result = crate::cli::commands::mission_runs::run_mission_inproc(&source, opts)?;
     let outputs_json: serde_json::Map<String, Value> = result.bound_vars.into_iter().collect();
     let meta_json = serde_json::to_value(&result.meta).unwrap_or(Value::Null);
     Ok(json!({
@@ -177,7 +177,7 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
     if run_id.trim().is_empty() {
         anyhow::bail!("easynet.track: `run_id` must be a non-empty string");
     }
-    let summary = crate::cli::mission_runs::find_run(&run_id)?;
+    let summary = crate::cli::commands::mission_runs::find_run(&run_id)?;
     let meta_json = serde_json::to_value(&summary.meta).unwrap_or(Value::Null);
     Ok(json!({
         "run_id":  summary.id,
@@ -213,10 +213,10 @@ fn cancel_handler(args: Value) -> anyhow::Result<Value> {
     if run_id.trim().is_empty() {
         anyhow::bail!("easynet.cancel: `run_id` must be a non-empty string");
     }
-    let outcome = crate::cli::mission_runs::cancel_run(&run_id)?;
+    let outcome = crate::cli::commands::mission_runs::cancel_run(&run_id)?;
     let (cancelled, summary) = match outcome {
-        crate::cli::mission_runs::CancelOutcome::Cancelled(s) => (true, s),
-        crate::cli::mission_runs::CancelOutcome::AlreadyTerminal(s) => (false, s),
+        crate::cli::commands::mission_runs::CancelOutcome::Cancelled(s) => (true, s),
+        crate::cli::commands::mission_runs::CancelOutcome::AlreadyTerminal(s) => (false, s),
     };
     let meta_json = serde_json::to_value(&summary.meta).unwrap_or(Value::Null);
     Ok(json!({

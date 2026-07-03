@@ -13,7 +13,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::RngCore as _;
 use std::sync::{Arc, OnceLock};
 
-pub(crate) use crate::ura::LOCAL_SYSTEM_AGENT_URA;
+pub(crate) use crate::core::ura::LOCAL_SYSTEM_AGENT_URA;
 
 pub(crate) const UNPAIRED_LOCAL_REALM: &str = "default";
 pub(crate) const UNPAIRED_LOCAL_DEVICE_ID: &str = "local";
@@ -75,20 +75,22 @@ pub(crate) fn local_device_ura() -> String {
     if let Some(ura) = persisted_local_device_ura() {
         return ura;
     }
-    crate::persistence::config::load_credentials()
+    crate::daemon::persistence::config::load_credentials()
         .ok()
-        .map(|creds| crate::ura::device_ura(&creds.realm, &creds.node_id))
-        .unwrap_or_else(|| crate::ura::device_ura(UNPAIRED_LOCAL_REALM, UNPAIRED_LOCAL_DEVICE_ID))
+        .map(|creds| crate::core::ura::device_ura(&creds.realm, &creds.node_id))
+        .unwrap_or_else(|| {
+            crate::core::ura::device_ura(UNPAIRED_LOCAL_REALM, UNPAIRED_LOCAL_DEVICE_ID)
+        })
 }
 
 fn persisted_local_device_ura() -> Option<String> {
-    let local = crate::persistence::local_agents::load().ok()?;
+    let local = crate::daemon::persistence::local_agents::load().ok()?;
     let ura = local.host_device_agent_ura.trim();
     if ura.is_empty() {
         return None;
     }
-    let parsed = crate::ura::parse_ura(ura).ok()?;
-    if parsed.kind == crate::ura::URAKind::Device {
+    let parsed = crate::core::ura::parse_ura(ura).ok()?;
+    if parsed.kind == crate::core::ura::URAKind::Device {
         Some(ura.to_string())
     } else {
         None

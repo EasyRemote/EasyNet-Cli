@@ -39,12 +39,12 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use easynet_cli::runtime::keyring::abilities::{
+use easynet_cli::daemon::keyring::abilities::{
     handle_consume_federate_user_token, handle_create, handle_federate_user_identity_token,
 };
-use easynet_cli::runtime::keyring::federated_bindings::FederatedBindingsStore;
-use easynet_cli::runtime::keyring::handle::KeyringHandle;
-use easynet_cli::runtime::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
+use easynet_cli::daemon::keyring::federated_bindings::FederatedBindingsStore;
+use easynet_cli::daemon::keyring::handle::KeyringHandle;
+use easynet_cli::daemon::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
 
 /// Stand up realm A's daemon: keyring + agent_signing entry +
 /// bound device subject. Returns the handle plus the user URI

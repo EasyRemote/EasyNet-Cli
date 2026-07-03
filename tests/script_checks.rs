@@ -5,7 +5,7 @@
 //
 // The individual cases live in shell so they can be invoked directly by
 // contributors: `bash tests/scripts/test_trace_parity.sh`. The shell
-// bodies live under `engineering/tests/scripts/`; `tests/scripts/`
+// bodies live under `tests/scripts/`; `tests/scripts/`
 // remains the Cargo-friendly wrapper entrypoint. This Rust shim is the
 // automation seam.
 //
@@ -65,8 +65,8 @@ fn check_upstream_names_script_contract_holds() {
 
 #[test]
 fn no_raw_ura_construction_script_contract_holds() {
-    // Pins the URA builder/parser boundary: only src/ura.rs may hand
-    // construct or scheme-prefix parse easynet URAs.
+    // Pins the URA builder/parser boundary: only src/core/ura/mod.rs may
+    // hand construct or scheme-prefix parse easynet URAs.
     run_bash_script("tests/scripts/test_no_raw_ura_construction.sh");
 }
 

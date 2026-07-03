@@ -339,11 +339,11 @@ impl BrowserSessionService {
         // the daemon's self-identity. The id segment reuses the existing
         // process-wide ULID minter (`runtime::keyring::store::ulid_like`)
         // so we don't fork a second generator with weaker uniqueness.
-        // The URA literal is built through `crate::ura::resource_dot_ura`
+        // The URA literal is built through `crate::core::ura::resource_dot_ura`
         // so the centralised URA construction lint
         // (`tests/scripts/test_no_raw_ura_construction.sh`) keeps passing.
-        let id = crate::runtime::keyring::store::ulid_like();
-        let session_ura = crate::ura::resource_dot_ura("local", "daemon.browser", &id);
+        let id = crate::daemon::keyring::store::ulid_like();
+        let session_ura = crate::core::ura::resource_dot_ura("local", "daemon.browser", &id);
         let created_at_ms = now_ms();
 
         let state = SessionState {
@@ -659,11 +659,11 @@ mod tests {
         // scheme-prefix `starts_with` so the canonical-construction
         // lint (`tests/scripts/test_no_raw_ura_construction.sh`)
         // does not have to special-case this test.
-        let parsed = crate::ura::parse_ura(&ura)
+        let parsed = crate::core::ura::parse_ura(&ura)
             .unwrap_or_else(|e| panic!("session_ura {ura:?} must parse: {e}"));
         assert_eq!(
             parsed.kind,
-            crate::ura::URAKind::Resource,
+            crate::core::ura::URAKind::Resource,
             "session_ura must resolve to a Resource URA, got kind={:?}",
             parsed.kind
         );

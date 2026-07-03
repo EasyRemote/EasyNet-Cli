@@ -149,23 +149,27 @@ fn owner_label_for_descriptor(
 }
 
 fn parsed_owner_label(owner_ura: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(owner_ura).ok()?;
+    let parsed = crate::core::ura::parse_ura(owner_ura).ok()?;
     match parsed.kind {
-        crate::ura::URAKind::Agent => parsed
+        crate::core::ura::URAKind::Agent => parsed
             .agent_ids()
             .map(|(user_id, agent_id)| format!("user/{user_id} agent/{agent_id}")),
-        crate::ura::URAKind::Ability => match parsed.ability()?.owner {
-            crate::ura::AbilityOwner::Agent { user_id, agent_id } => {
+        crate::core::ura::URAKind::Ability => match parsed.ability()?.owner {
+            crate::core::ura::AbilityOwner::Agent { user_id, agent_id } => {
                 Some(format!("user/{user_id} agent/{agent_id}"))
             }
-            crate::ura::AbilityOwner::Device { device_id } => Some(format!("device/{device_id}")),
-            crate::ura::AbilityOwner::Hub => Some("hub".to_string()),
+            crate::core::ura::AbilityOwner::Device { device_id } => {
+                Some(format!("device/{device_id}"))
+            }
+            crate::core::ura::AbilityOwner::Hub => Some("hub".to_string()),
         },
-        crate::ura::URAKind::User => parsed.user_id().map(|user_id| format!("user/{user_id}")),
-        crate::ura::URAKind::Device => parsed
+        crate::core::ura::URAKind::User => {
+            parsed.user_id().map(|user_id| format!("user/{user_id}"))
+        }
+        crate::core::ura::URAKind::Device => parsed
             .device_id()
             .map(|device_id| format!("device/{device_id}")),
-        crate::ura::URAKind::Hub => Some("hub".to_string()),
+        crate::core::ura::URAKind::Hub => Some("hub".to_string()),
         _ => None,
     }
 }
@@ -389,7 +393,7 @@ fn short_ability_hash(ability_name: &str) -> String {
 
 fn metadata_for_agent_ability(
     agent_name: &str,
-    manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+    manifest: Option<&crate::core::ability::spec::AbilityManifest>,
 ) -> Vec<(&'static str, String)> {
     let mut metadata = vec![
         ("owner_agent", agent_name.to_string()),
@@ -405,25 +409,25 @@ fn metadata_for_agent_ability(
     // local (the honesty rule that replaced the older "free for
     // everything we don't recognise" lie).
     let (heur_kind, heur_label): (&str, &str) = match manifest.and_then(|m| m.exec()) {
-        Some(crate::core::ability_spec::AbilityExec::Mcp(exec)) => {
+        Some(crate::core::ability::spec::AbilityExec::Mcp(exec)) => {
             metadata.push(("exec_kind", "mcp".to_string()));
             metadata.push(("mcp_server", exec.server.clone()));
             metadata.push(("mcp_tool", exec.tool.clone()));
             ("unknown", "upstream cost declared by operator")
         }
-        Some(crate::core::ability_spec::AbilityExec::Http(_)) => {
+        Some(crate::core::ability::spec::AbilityExec::Http(_)) => {
             metadata.push(("exec_kind", "http".to_string()));
             ("external_metered", "HTTP/API billing may apply")
         }
-        Some(crate::core::ability_spec::AbilityExec::Shell(_)) => {
+        Some(crate::core::ability::spec::AbilityExec::Shell(_)) => {
             metadata.push(("exec_kind", "shell".to_string()));
             ("free", "free/local")
         }
-        Some(crate::core::ability_spec::AbilityExec::Eal(_)) => {
+        Some(crate::core::ability::spec::AbilityExec::Eal(_)) => {
             metadata.push(("exec_kind", "eal".to_string()));
             ("unknown", "composed ability cost depends on steps")
         }
-        Some(crate::core::ability_spec::AbilityExec::HostStream(_)) => {
+        Some(crate::core::ability::spec::AbilityExec::HostStream(_)) => {
             metadata.push(("exec_kind", "host_stream".to_string()));
             ("free", "free/local")
         }
@@ -539,7 +543,7 @@ impl LocalInvoker for DaemonLocalInvoker {
         ability: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        crate::support::local_invoke::invoke_local_ability(ability, args)
+        crate::support::platform::local_invoke::invoke_local_ability(ability, args)
             .map_err(|err| err.to_string())
     }
 
@@ -550,7 +554,7 @@ impl LocalInvoker for DaemonLocalInvoker {
         args: serde_json::Value,
     ) -> Result<(serde_json::Value, Option<InvocationToolTrace>), String> {
         let (value, meta) =
-            crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
+            crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
                 ability,
                 args,
                 None,
@@ -699,7 +703,7 @@ fn per_agent_workspace_descriptors(
     // Resolve the agent entry. If unregistered, no per-agent
     // catalog to add — the workspace MCP server is still useful
     // for the host catalog alone.
-    let registry = match crate::registry::agents::load_agents() {
+    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -710,28 +714,29 @@ fn per_agent_workspace_descriptors(
 
     let mut out: Vec<AbilityDescriptor> = Vec::new();
 
-    let to_descriptor = |s: crate::runtime::agent_ability_specs::AgentAbilitySpec,
-                         owner_ura: &str,
-                         source: String,
-                         metadata: Vec<(&'static str, String)>|
-     -> Option<AbilityDescriptor> {
-        AbilityDescriptor::new(s.name().to_string(), owner_ura, Visibility::Scoped)
-            .ok()
-            .map(|mut d| {
-                // AgentAbilitySpec calls its JSON-Schema field
-                // `parameters()` (carrying the input schema in
-                // the chat-style "parameters" shape) — that
-                // IS the input schema for the descriptor.
-                d = d
-                    .with_input_schema(s.parameters().clone())
-                    .with_source(source)
-                    .with_description(s.description());
-                for (key, value) in metadata {
-                    d = d.with_metadata_entry(key, value);
-                }
-                d
-            })
-    };
+    let to_descriptor =
+        |s: crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec,
+         owner_ura: &str,
+         source: String,
+         metadata: Vec<(&'static str, String)>|
+         -> Option<AbilityDescriptor> {
+            AbilityDescriptor::new(s.name().to_string(), owner_ura, Visibility::Scoped)
+                .ok()
+                .map(|mut d| {
+                    // AgentAbilitySpec calls its JSON-Schema field
+                    // `parameters()` (carrying the input schema in
+                    // the chat-style "parameters" shape) — that
+                    // IS the input schema for the descriptor.
+                    d = d
+                        .with_input_schema(s.parameters().clone())
+                        .with_source(source)
+                        .with_description(s.description());
+                    for (key, value) in metadata {
+                        d = d.with_metadata_entry(key, value);
+                    }
+                    d
+                })
+        };
 
     // Phase 1: this agent's own abilities. Owner URA uses the
     // agent's own name. The agent's `<agent_name>.chat` ability is
@@ -740,12 +745,13 @@ fn per_agent_workspace_descriptors(
     // invite infinite recursion).
     let own_manifests: std::collections::BTreeMap<
         String,
-        crate::core::ability_spec::AbilityManifest,
-    > = crate::runtime::agent_ability_specs::manifests_for(agent_name, entry)
+        crate::core::ability::spec::AbilityManifest,
+    > = crate::daemon::execution::mission::agent_ability_specs::manifests_for(agent_name, entry)
         .into_iter()
         .map(|manifest| (manifest.qualified_name(agent_name), manifest))
         .collect();
-    let own_specs = crate::runtime::agent_ability_specs::abilities_for(agent_name, entry);
+    let own_specs =
+        crate::daemon::execution::mission::agent_ability_specs::abilities_for(agent_name, entry);
     let own_owner_ura = format!("agent://{agent_name}");
     let self_chat = format!("{agent_name}.chat");
     for s in own_specs.into_iter().filter(|s| s.name() != self_chat) {
@@ -830,14 +836,20 @@ fn per_agent_workspace_descriptors(
         let other_owner = format!("agent://{other_name}");
         let other_manifests: std::collections::BTreeMap<
             String,
-            crate::core::ability_spec::AbilityManifest,
-        > = crate::runtime::agent_ability_specs::manifests_for(other_name, other_entry)
-            .into_iter()
-            .map(|manifest| (manifest.qualified_name(other_name), manifest))
-            .collect();
-        for s in crate::runtime::agent_ability_specs::abilities_for(other_name, other_entry)
-            .into_iter()
-            .filter(|s| s.name() != other_chat)
+            crate::core::ability::spec::AbilityManifest,
+        > = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+            other_name,
+            other_entry,
+        )
+        .into_iter()
+        .map(|manifest| (manifest.qualified_name(other_name), manifest))
+        .collect();
+        for s in crate::daemon::execution::mission::agent_ability_specs::abilities_for(
+            other_name,
+            other_entry,
+        )
+        .into_iter()
+        .filter(|s| s.name() != other_chat)
         {
             let metadata = metadata_for_agent_ability(other_name, other_manifests.get(s.name()));
             if let Some(d) = to_descriptor(s, &other_owner, format!("agent:{other_name}"), metadata)
@@ -980,12 +992,15 @@ mod tests {
 
     fn create_manifest_backed_agent_entry(
         agent: &str,
-    ) -> (std::path::PathBuf, crate::registry::agents::AgentEntry) {
-        use crate::core::agent_spec::{AgentSpec, RuntimeKind};
-        use crate::registry::agents::{AgentEntry, AgentType};
-        use crate::runtime::directory::{AgentDirectory, Location};
+    ) -> (
+        std::path::PathBuf,
+        crate::daemon::persistence::agent_registry::AgentEntry,
+    ) {
+        use crate::core::agent::spec::{AgentSpec, RuntimeKind};
+        use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+        use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
 
-        let workspace_root = crate::persistence::config::agents_root().join(agent);
+        let workspace_root = crate::daemon::persistence::config::agents_root().join(agent);
         let _ = std::fs::remove_dir_all(&workspace_root);
         AgentDirectory::create(
             &Location::Local {
@@ -1286,7 +1301,7 @@ mod tests {
 
     #[test]
     fn daemon_local_invoker_surfaces_daemon_not_running() {
-        let _h = crate::cli::test_support::HomeGuard::new();
+        let _h = crate::cli::commands::test_support::HomeGuard::new();
         let err = DaemonLocalInvoker
             .invoke_sync("observe.health", serde_json::json!({}))
             .expect_err("daemon-backed invoker must fail when no daemon is running");
@@ -1303,7 +1318,7 @@ mod tests {
         // The result MUST advertise every device-profile ability the
         // live registry registers, anchored on whatever local-agents.json
         // says (or the literal "self" pre-join).
-        let _h = crate::cli::test_support::HomeGuard::new();
+        let _h = crate::cli::commands::test_support::HomeGuard::new();
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
             tenant_id: "test-tenant".into(),
@@ -1332,14 +1347,14 @@ mod tests {
 
     #[test]
     fn build_stdio_server_anchors_descriptors_on_persisted_host_ura_when_present() {
-        let _h = crate::cli::test_support::HomeGuard::new();
+        let _h = crate::cli::commands::test_support::HomeGuard::new();
         // Pre-populate local-agents.json with a host URA; build_stdio_server
         // must pick it up.
-        let file = crate::persistence::local_agents::LocalAgentsFile {
+        let file = crate::daemon::persistence::local_agents::LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
-            ..crate::persistence::local_agents::LocalAgentsFile::default()
+            ..crate::daemon::persistence::local_agents::LocalAgentsFile::default()
         };
-        crate::persistence::local_agents::save(&file).unwrap();
+        crate::daemon::persistence::local_agents::save(&file).unwrap();
 
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
@@ -1374,7 +1389,7 @@ mod tests {
         // the EasyNet ontology's "agent exposes abilities"
         // promise: agents could declare abilities but the LLM
         // they wrap couldn't call them.
-        use crate::cli::test_support::HomeGuard;
+        use crate::cli::commands::test_support::HomeGuard;
 
         let _g = HomeGuard::new();
 
@@ -1386,10 +1401,10 @@ mod tests {
         // generic names like "alice" or "bob".
         let agent = "g1-test-agent";
 
-        let mut registry = crate::registry::agents::AgentRegistry::default();
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
         registry.agents.insert(agent.into(), entry);
-        crate::registry::agents::save_agents(&registry).unwrap();
+        crate::daemon::persistence::agent_registry::save_agents(&registry).unwrap();
 
         std::fs::write(
             workspace_root.join("abilities/code-review.ability.toml"),
@@ -1501,15 +1516,15 @@ mod tests {
         // way to say "this MCP-backed tool actually hits a billed
         // upstream" without the system burying that under the
         // fallback `cost: unknown`.
-        use crate::cli::test_support::HomeGuard;
+        use crate::cli::commands::test_support::HomeGuard;
 
         let _g = HomeGuard::new();
         let agent = "day1-cost-test-agent";
 
-        let mut registry = crate::registry::agents::AgentRegistry::default();
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
         registry.agents.insert(agent.into(), entry);
-        crate::registry::agents::save_agents(&registry).unwrap();
+        crate::daemon::persistence::agent_registry::save_agents(&registry).unwrap();
 
         // MCP-backed ability whose [exec] kind = "mcp" would normally
         // resolve to `cost_kind = unknown` via the heuristic. The

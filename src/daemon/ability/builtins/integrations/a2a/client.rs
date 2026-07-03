@@ -143,8 +143,10 @@ fn send_task_handler(
 
     #[cfg(feature = "axon-pb")]
     {
-        let target_ura = if crate::ura::parse_ura(target_node.trim()).is_ok() {
-            match crate::daemon::invocation::federation_invoke::parse_node_ura(&target_node) {
+        let target_ura = if crate::core::ura::parse_ura(target_node.trim()).is_ok() {
+            match crate::daemon::invocation::routing::federation_invoke::parse_node_ura(
+                &target_node,
+            ) {
                 Ok(ura) => ura,
                 Err(e) => return Ok(error_response(&format!("parse target_node_ura: {e}"))),
             }
@@ -152,9 +154,9 @@ fn send_task_handler(
             // Bare uuid path: wrap in the local daemon's realm.
             // Without credentials we cannot do this safely — surface
             // a structured error so the caller knows to pass a URA.
-            match crate::persistence::config::load_credentials() {
+            match crate::daemon::persistence::config::load_credentials() {
                 Ok(c) if !c.realm.trim().is_empty() => {
-                    crate::ura::device_ura(&c.realm, target_node.trim())
+                    crate::core::ura::device_ura(&c.realm, target_node.trim())
                 }
                 _ => {
                     return Ok(error_response(
@@ -166,12 +168,12 @@ fn send_task_handler(
             }
         };
 
-        let caller_ura = crate::persistence::config::load_credentials()
+        let caller_ura = crate::daemon::persistence::config::load_credentials()
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
+            .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
         let target_call =
-            match crate::daemon::invocation::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+            match crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                 &target_ura,
                 &ability,
             ) {
@@ -182,7 +184,7 @@ fn send_task_handler(
         // hop so an A2A relay preserves the receipt DAG instead of re-rooting
         // it (SPEC §15.1-1, bug-1 Slice B). Root invocations yield no parents.
         let causal_parents = causal_parents_from_env(env);
-        match crate::daemon::invocation::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+        match crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
             &target_call,
             task_args,
             caller_ura.as_deref(),
@@ -391,7 +393,7 @@ mod tests {
         // surfaces a structured `ok: false` envelope (NOT panic)
         // with a message naming the missing daemon transport or
         // the parse arm if the URI shape rejects first.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let resp = send_task_handler(
             json!({
                 "target_node_ura": "easynet:///r/acme/device/N1",
@@ -414,7 +416,7 @@ mod tests {
 
     #[test]
     fn send_task_rejects_retired_target_node_uri_alias() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let resp = send_task_handler(
             json!({
                 "target_node_uri": "easynet:///r/acme/device/N1",

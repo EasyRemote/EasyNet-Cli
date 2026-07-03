@@ -4,7 +4,7 @@
 // File: src/daemon/federation/directory_reader.rs
 // Description: Product-layer read boundary for daemon federation discovery.
 //
-// `daemon::invocation::federation_invoke` is gated behind
+// `daemon::invocation::routing::federation_invoke` is gated behind
 // `axon-pb` because it depends on tonic and SDK-owned protobuf types.
 // Ability discovery is a product read path: it can compile in a
 // minimal local-only build, but federation-specific callers must see
@@ -16,7 +16,9 @@ use serde_json::Value;
 /// `federation.discover` ability.
 #[cfg(feature = "axon-pb")]
 pub fn read_federated_directory(agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::federation_invoke::invoke_federation_discover(agent_ura_filter)
+    crate::daemon::invocation::routing::federation_invoke::invoke_federation_discover(
+        agent_ura_filter,
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -24,7 +26,7 @@ pub fn read_federated_directory_filtered(
     agent_ura_filter: Option<&str>,
     local_user_id_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::federation_invoke::invoke_federation_discover_filtered(
+    crate::daemon::invocation::routing::federation_invoke::invoke_federation_discover_filtered(
         agent_ura_filter,
         local_user_id_filter,
     )

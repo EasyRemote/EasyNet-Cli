@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use crate::core::ability_spec::AbilityManifest;
+use crate::core::ability::spec::AbilityManifest;
 
 /// Build the manifest metadata attached to a daemon-owned ability registration.
 ///

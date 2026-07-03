@@ -1,0 +1,28 @@
+# Verification
+
+## Completed
+
+- `tools/scripts/check-project-structure-v1.sh`: passed.
+- `tests/scripts/test_check_project_structure_v1.sh`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo check --all-targets --features axon-pb`: passed.
+- `cargo fmt --check`: passed.
+- `git diff --check`: passed.
+- `cargo test --test script_checks --features axon-pb`: passed, 28 tests.
+- `cargo test --test mcp_bench_config_translation --features axon-pb`: passed,
+  3 tests.
+- `find . -name .DS_Store -print`: no output after cleanup.
+
+## Final Re-Run
+
+- `tools/scripts/check-project-structure-v1.sh && tests/scripts/test_check_project_structure_v1.sh`: passed.
+- `cargo check --all-targets --features axon-pb`: passed.
+- `cargo test --test script_checks --features axon-pb`: passed, 28 tests.
+- `cargo fmt --check && git diff --check && find . -name .DS_Store -print`:
+  passed with no artifact output.
+
+## Residual Risk
+
+Historical documentation still references retired roots as part of prior
+architecture records. Those references are not runtime ownership roots, but
+future doc cleanup may be useful after this structural implementation lands.

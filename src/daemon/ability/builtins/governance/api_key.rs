@@ -120,7 +120,8 @@ fn now_secs() -> u64 {
 }
 
 fn realm() -> String {
-    std::env::var("EASYNET_PAGES_REALM").unwrap_or_else(|_| crate::ura::REALM_EASYNET.to_string())
+    std::env::var("EASYNET_PAGES_REALM")
+        .unwrap_or_else(|_| crate::core::ura::REALM_EASYNET.to_string())
 }
 
 /// Mint a fresh API key. Returns the bearer token ONCE — the
@@ -139,7 +140,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
     let entry = ApiKeyEntry {
         id_prefix: id[..12].to_string(),
         token_hash: hash_token(&token),
-        user_ura: crate::ura::user_ura(&realm(), user),
+        user_ura: crate::core::ura::user_ura(&realm(), user),
         label: label.clone(),
         created_at: now_secs(),
         revoked_at: None,
@@ -157,7 +158,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
         // operator-visible listing only; the URA must carry the
         // full unguessable id so revocation by URA cannot collide
         // and so the URA itself functions as the capability.
-        crate::ura::resource_dot_ura(&realm(), &format!("api_key.{id}"), "")
+        crate::core::ura::resource_dot_ura(&realm(), &format!("api_key.{id}"), "")
     };
 
     Ok(json!({
@@ -174,7 +175,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
 /// List keys (without exposing tokens).
 pub fn handle_list(user: &str, _args: Value) -> anyhow::Result<Value> {
     let store = load_store();
-    let user_ura = crate::ura::user_ura(&realm(), user);
+    let user_ura = crate::core::ura::user_ura(&realm(), user);
     let mine: Vec<_> = store
         .keys
         .iter()
@@ -199,7 +200,7 @@ pub fn handle_revoke(user: &str, args: Value) -> anyhow::Result<Value> {
         .get("id_prefix")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing id_prefix"))?;
-    let user_ura = crate::ura::user_ura(&realm(), user);
+    let user_ura = crate::core::ura::user_ura(&realm(), user);
 
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut store = load_store();

@@ -55,9 +55,9 @@ fn admission_facade_with_identities(identities: &[(&str, &SigningKey)]) -> Admis
     let mut trust = String::new();
     for (ura, signing_key) in identities {
         let public_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let role = match easynet_cli::ura::parse_ura(ura).map(|parsed| parsed.kind) {
-            Ok(easynet_cli::ura::URAKind::User) => "user",
-            Ok(easynet_cli::ura::URAKind::Device) => "device",
+        let role = match easynet_cli::core::ura::parse_ura(ura).map(|parsed| parsed.kind) {
+            Ok(easynet_cli::core::ura::URAKind::User) => "user",
+            Ok(easynet_cli::core::ura::URAKind::Device) => "device",
             _ => "backend",
         };
         trust.push_str(&format!(
@@ -72,7 +72,10 @@ added_at_unix_ms = 1714492800000
     }
     std::fs::write(&path, trust).expect("write trust anchor");
     let anchor = RealmTrustAnchor::try_load_strict(&path).expect("load trust anchor");
-    AdmissionFacade::new(Arc::new(anchor), Some(easynet_cli::ura::hub_ura("realm")))
+    AdmissionFacade::new(
+        Arc::new(anchor),
+        Some(easynet_cli::core::ura::hub_ura("realm")),
+    )
 }
 
 fn signed_request(
@@ -89,7 +92,8 @@ fn signed_request(
     let subject = SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
     let ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(callee_ura, ability).expect("callee-owned ability URA"),
+        easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
+            .expect("callee-owned ability URA"),
         DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
     let axiom_env = InvocationEnvelope {
@@ -215,7 +219,7 @@ fn delegation_metadata_from_value(signer: &SigningKey, payload: serde_json::Valu
 fn backend_session_subject_accepts_user_signed_delegation_metadata() {
     let backend_key = SigningKey::from_bytes(&[0x31; 32]);
     let user_key = SigningKey::from_bytes(&[0x41; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("delegation-it");
+    let caller_ura = easynet_cli::core::ura::hub_ura("delegation-it");
     let callee_ura = "easynet:///r/realm/device/device-it";
     let user_ura = "easynet:///r/realm/user/alice";
     let subject_ura = "easynet:///r/realm/session/sess-alice-1";
@@ -253,7 +257,7 @@ fn backend_session_subject_accepts_user_signed_delegation_metadata() {
 fn delegation_metadata_verifies_against_canonical_payload_order() {
     let backend_key = SigningKey::from_bytes(&[0x35; 32]);
     let user_key = SigningKey::from_bytes(&[0x45; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("delegation-it-canonical");
+    let caller_ura = easynet_cli::core::ura::hub_ura("delegation-it-canonical");
     let callee_ura = "easynet:///r/realm/device/device-canonical";
     let user_ura = "easynet:///r/realm/user/alice";
     let subject_ura = "easynet:///r/realm/session/sess-canonical-1";
@@ -294,7 +298,7 @@ fn delegation_metadata_verifies_against_canonical_payload_order() {
 #[test]
 fn backend_session_subject_accepts_backend_signed_session_authority() {
     let signing_key = SigningKey::from_bytes(&[0x37; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("session-it");
+    let caller_ura = easynet_cli::core::ura::hub_ura("session-it");
     let callee_ura = "easynet:///r/realm/device/device-it";
     let user_ura = "easynet:///r/realm/user/alice";
     let subject_ura = "easynet:///r/realm/session/sess-alice-1";
@@ -330,7 +334,7 @@ fn backend_session_subject_accepts_backend_signed_session_authority() {
 #[test]
 fn backend_session_subject_without_authority_metadata_is_denied() {
     let signing_key = SigningKey::from_bytes(&[0x32; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("delegation-it-missing");
+    let caller_ura = easynet_cli::core::ura::hub_ura("delegation-it-missing");
     let facade = admission_facade(&caller_ura, &signing_key);
     let request = signed_request(
         &caller_ura,
@@ -352,7 +356,7 @@ fn backend_session_subject_without_authority_metadata_is_denied() {
 #[test]
 fn bootstrap_authority_session_subject_without_delegation_metadata_is_admitted() {
     let signing_key = SigningKey::from_bytes(&[0x34; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("bootstrap-authority");
+    let caller_ura = easynet_cli::core::ura::hub_ura("bootstrap-authority");
     let callee_ura = caller_ura.clone();
     let subject_ura = "easynet:///r/bootstrap-authority/session/bootstrap-alice";
     let facade = admission_facade(&caller_ura, &signing_key);
@@ -386,7 +390,7 @@ fn bootstrap_authority_session_subject_without_delegation_metadata_is_admitted()
 fn bootstrap_authority_still_rejects_bad_caller_signature() {
     let trusted_key = SigningKey::from_bytes(&[0x35; 32]);
     let wrong_key = SigningKey::from_bytes(&[0x36; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("bootstrap-authority-bad-sig");
+    let caller_ura = easynet_cli::core::ura::hub_ura("bootstrap-authority-bad-sig");
     let facade = admission_facade(&caller_ura, &trusted_key);
     let request = signed_request(
         &caller_ura,
@@ -407,7 +411,7 @@ fn bootstrap_authority_still_rejects_bad_caller_signature() {
 #[test]
 fn stream_and_bidi_verify_delegation_metadata() {
     let signing_key = SigningKey::from_bytes(&[0x33; 32]);
-    let caller_ura = easynet_cli::ura::hub_ura("delegation-it-stream");
+    let caller_ura = easynet_cli::core::ura::hub_ura("delegation-it-stream");
     let callee_ura = "easynet:///r/realm/device/device-it-stream";
     let user_ura = "easynet:///r/realm/user/carla";
     let subject_ura = "easynet:///r/realm/session/sess-carla-1";

@@ -38,8 +38,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::persistence::config;
-use crate::registry::agents::AgentRegistry;
+use crate::daemon::persistence::agent_registry::AgentRegistry;
+use crate::daemon::persistence::config;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_LIST_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_LIST;
@@ -64,13 +64,13 @@ fn list_agents_handler(
     registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let registry = registry_provider();
-    let local_agents = crate::persistence::local_agents::load().unwrap_or_default();
+    let local_agents = crate::daemon::persistence::local_agents::load().unwrap_or_default();
     Ok(json!({ "agents": agent_rows(&registry, &local_agents) }))
 }
 
 fn agent_rows(
     registry: &AgentRegistry,
-    local_agents: &crate::persistence::local_agents::LocalAgentsFile,
+    local_agents: &crate::daemon::persistence::local_agents::LocalAgentsFile,
 ) -> Vec<Value> {
     let rows: Vec<Value> = registry
         .agents
@@ -80,8 +80,11 @@ fn agent_rows(
                 .root_path
                 .clone()
                 .unwrap_or_else(|| config::agents_root().join(name));
-            let ura =
-                crate::persistence::local_agents::lookup_hosted_ura(local_agents, "llm", name);
+            let ura = crate::daemon::persistence::local_agents::lookup_hosted_ura(
+                local_agents,
+                "llm",
+                name,
+            );
             json!({
                 "name": name,
                 "ura": ura.map(Value::String).unwrap_or(Value::Null),
@@ -116,7 +119,7 @@ pub fn list_agents_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 
     #[test]
     fn registration_makes_list_agents_dispatchable() {
@@ -162,8 +165,8 @@ mod tests {
             "claude".to_string(),
             AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
         );
-        let mut local_agents = crate::persistence::local_agents::LocalAgentsFile::default();
-        crate::persistence::local_agents::upsert_hosted_agent(
+        let mut local_agents = crate::daemon::persistence::local_agents::LocalAgentsFile::default();
+        crate::daemon::persistence::local_agents::upsert_hosted_agent(
             &mut local_agents,
             "llm",
             "claude",
@@ -205,7 +208,7 @@ mod tests {
 
         let rows = agent_rows(
             &registry,
-            &crate::persistence::local_agents::LocalAgentsFile::default(),
+            &crate::daemon::persistence::local_agents::LocalAgentsFile::default(),
         );
 
         assert!(rows[0].get("entry").is_none());

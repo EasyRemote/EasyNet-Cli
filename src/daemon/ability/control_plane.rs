@@ -95,7 +95,7 @@ pub struct AbilityControlPlaneRegistration<'a> {
     ability: String,
     descriptor_version: String,
     call_mode: CallMode,
-    manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+    manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
     authority_scope: AuthorityScope,
     runtime_env: RuntimeEnv,
     impl_source: AbilityImplSource,
@@ -106,7 +106,7 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
     pub fn new(
         ability: impl Into<String>,
         call_mode: CallMode,
-        manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+        manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
         authority_scope: AuthorityScope,
         runtime_env: RuntimeEnv,
         impl_source: AbilityImplSource,
@@ -177,13 +177,13 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             impl_content_hash,
         } = self.registration;
         let authority_root = authority_scope.authority_root().to_string();
-        let ability_ura =
-            crate::ura::owner_ability_ura(&authority_root, &ability).ok_or_else(|| {
-                AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
+        let ability_ura = crate::core::ura::owner_ability_ura(&authority_root, &ability)
+            .ok_or_else(
+                || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
                     authority_root: authority_root.clone(),
                     ability: ability.clone(),
-                }
-            })?;
+                },
+            )?;
         let descriptor = AbilityDescriptorRecord::for_ability_ura(
             ability_ura,
             &ability,
@@ -243,7 +243,7 @@ impl AbilityControlPlaneRegistry {
         &mut self,
         ability: impl Into<String>,
         call_mode: CallMode,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
         authority_scope: AuthorityScope,
         runtime_env: RuntimeEnv,
         impl_source: AbilityImplSource,
@@ -748,10 +748,10 @@ fn format_control_plane_key(key: &AbilityControlPlaneKey) -> String {
 }
 
 fn manifest_descriptor_version(
-    manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+    manifest: Option<&crate::core::ability::spec::AbilityManifest>,
 ) -> &str {
     manifest
-        .map(crate::core::ability_spec::AbilityManifest::descriptor_version)
+        .map(crate::core::ability::spec::AbilityManifest::descriptor_version)
         .unwrap_or(DEFAULT_ABILITY_DESCRIPTOR_VERSION)
 }
 
@@ -791,7 +791,7 @@ mod tests {
 
     #[test]
     fn register_uses_manifest_descriptor_version_as_control_plane_fact() {
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "search",
             "search local docs",
             json!({"type": "object"}),
@@ -829,7 +829,7 @@ mod tests {
 
     #[test]
     fn register_version_rejects_manifest_descriptor_version_mismatch() {
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "search",
             "search local docs",
             json!({"type": "object"}),
@@ -1162,7 +1162,7 @@ mod tests {
 
     #[test]
     fn authority_mode_lookup_and_remove_are_not_default_version_bound() {
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "search",
             "search local docs",
             json!({"type": "object"}),

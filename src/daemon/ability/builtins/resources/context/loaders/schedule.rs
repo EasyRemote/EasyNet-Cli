@@ -1,7 +1,7 @@
 // EasyNet CLI — ScheduleLoader (chat context)
 // ============================================
 //
-// File: src/runtime/system/context_loaders/schedule.rs
+// File: src/daemon/ability/builtins/resources/context/loaders/schedule.rs
 // Description: A `ContextLoader` that asks the running daemon's
 //              `ScheduleService` for upcoming fires bound to a given
 //              agent and emits them as a markdown block the chat

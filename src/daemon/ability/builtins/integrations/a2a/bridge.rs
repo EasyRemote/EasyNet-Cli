@@ -53,7 +53,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::registry::agents::AgentRegistry;
+use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_LIST_SKILLS: &str =
@@ -105,9 +105,7 @@ fn list_skills_handler(
     registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let registry = registry_provider();
-    Ok(crate::registry::a2a_labels::build_agents_envelope(
-        &registry,
-    ))
+    Ok(crate::daemon::federation::read_model::a2a_labels::build_agents_envelope(&registry))
 }
 
 /// `a2a.bridge.send_task` handler.
@@ -225,7 +223,7 @@ pub fn send_task_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use std::sync::OnceLock;
 
     /// Test fixture: build a registry with both bridge abilities

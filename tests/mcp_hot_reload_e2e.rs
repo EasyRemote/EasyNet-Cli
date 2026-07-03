@@ -21,7 +21,7 @@ use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_regist
     refresh_server_dynamic, RegistryRefreshSink,
 };
 use easynet_cli::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use easynet_cli::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
+use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
 
 /// Build a Python stdio MCP server whose tools/list answer toggles
 /// between two single-tool catalogues and pushes a list_changed

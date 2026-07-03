@@ -41,7 +41,8 @@ use easynet_cli::daemon::ability::conformance::{
 #[cfg(feature = "axon-pb")]
 use easynet_cli::daemon::ability::conformance::{DaemonInvocationSurface, RuntimeAdminConformance};
 use easynet_cli::daemon::ability::health as ability_health;
-use easynet_cli::daemon::context::clipboard_tracker;
+use easynet_cli::daemon::boot::kernel::api::KernelApi;
+use easynet_cli::daemon::boot::kernel::Kernel;
 use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::daemon::control::discovery::DaemonIdentity;
 use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
@@ -50,14 +51,15 @@ use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
 use easynet_cli::daemon::federation::gateway::NoopGateway;
 use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use easynet_cli::daemon::invocation::runtime_record::{RuntimeCausalContext, RuntimeInvocation};
-use easynet_cli::daemon::invocation::target::{LocalNodeResolver, TargetResolver};
-use easynet_cli::daemon::kernel::api::KernelApi;
-use easynet_cli::daemon::kernel::Kernel;
-use easynet_cli::persistence::config;
-use easynet_cli::persistence::daemon_config::{
+use easynet_cli::daemon::invocation::receipts::runtime_record::{
+    RuntimeCausalContext, RuntimeInvocation,
+};
+use easynet_cli::daemon::invocation::routing::target::{LocalNodeResolver, TargetResolver};
+use easynet_cli::daemon::persistence::config;
+use easynet_cli::daemon::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
 };
+use easynet_cli::daemon::resources::context::clipboard_tracker;
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
@@ -215,7 +217,8 @@ async fn main() -> anyhow::Result<()> {
     if media_resource_bootstrap_enabled() {
         match config::load_credentials() {
             Ok(creds) => {
-                let owner_agent = easynet_cli::ura::device_ura(creds.realm_str(), &creds.node_id);
+                let owner_agent =
+                    easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
                 match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
                     creds.realm_str(),
                     &owner_agent,
@@ -481,33 +484,34 @@ async fn main() -> anyhow::Result<()> {
             return Err(err);
         }
     };
-    let pages_port = match easynet_cli::daemon::hub::pages_listener::spawn_first_available(
-        pages_start_port,
-        easynet_cli::daemon::hub::pages_listener::DEFAULT_PORT_PROBE_SPAN,
-    )
-    .await
-    {
-        Ok((port, handle)) => {
-            tokio::spawn(async move {
-                match handle.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => eprintln!("[pages-listener] exited: {e:#}"),
-                    Err(e) => eprintln!("[pages-listener] task failed: {e:#}"),
-                }
-            });
-            boot_bus.emit(BootEvent::PortChosen {
-                service: "pages".into(),
-                port,
-                start: Some(pages_start_port),
-            });
-            boot_bus.emit_ok("pages-listener");
-            port
-        }
-        Err(err) => {
-            boot_bus.emit_failed("pages-listener", err.to_string());
-            return Err(err);
-        }
-    };
+    let pages_port =
+        match easynet_cli::daemon::resources::pages::pages_listener::spawn_first_available(
+            pages_start_port,
+            easynet_cli::daemon::resources::pages::pages_listener::DEFAULT_PORT_PROBE_SPAN,
+        )
+        .await
+        {
+            Ok((port, handle)) => {
+                tokio::spawn(async move {
+                    match handle.await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => eprintln!("[pages-listener] exited: {e:#}"),
+                        Err(e) => eprintln!("[pages-listener] task failed: {e:#}"),
+                    }
+                });
+                boot_bus.emit(BootEvent::PortChosen {
+                    service: "pages".into(),
+                    port,
+                    start: Some(pages_start_port),
+                });
+                boot_bus.emit_ok("pages-listener");
+                port
+            }
+            Err(err) => {
+                boot_bus.emit_failed("pages-listener", err.to_string());
+                return Err(err);
+            }
+        };
     let runtime_discovery = match ready_runtime_discovery() {
         Ok(snapshot) => snapshot,
         Err(err) => {
@@ -715,8 +719,8 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     ),
                 };
                 let local_device_ura =
-                    easynet_cli::ura::device_ura("default", entry.target_node.as_str());
-                let schedule_subject_ura = easynet_cli::ura::resource_dot_ura(
+                    easynet_cli::core::ura::device_ura("default", entry.target_node.as_str());
+                let schedule_subject_ura = easynet_cli::core::ura::resource_dot_ura(
                     "default",
                     &format!("schedule.{}", fire.schedule_id.as_str()),
                     "",

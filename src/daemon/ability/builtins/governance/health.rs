@@ -1,7 +1,7 @@
 // EasyNet CLI — observe.health smoke ability
 // ========================================
 //
-// File: src/runtime/system/ping.rs
+// File: src/daemon/ability/builtins/governance/health.rs
 // Description: Health probe used to confirm the dispatch path is wired
 //              end-to-end. Returns the Axon observe.health contract
 //              fields plus additive smoke-diagnostic fields.
@@ -90,7 +90,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
     #[test]
     fn handler_returns_health_contract_and_stamps_timestamp() {

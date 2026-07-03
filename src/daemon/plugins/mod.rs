@@ -57,10 +57,24 @@ pub use surface::{
 };
 pub use wire::PluginWireRegistry;
 
+use crate::daemon::plugins::package::BuiltinPluginBinding;
+
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
+
+/// Return every builtin plugin binding compiled into this binary.
+///
+/// Runtime loading policy stays in the plugin host. Builtin implementation
+/// packages live under their product resource owner, not under a separate
+/// top-level plugin source root.
+pub fn builtin_bindings() -> Vec<BuiltinPluginBinding> {
+    vec![
+        #[cfg(feature = "remote-desktop")]
+        crate::daemon::resources::remote_desktop::binding(),
+    ]
+}
 
 /// Return true when an ability is exported by a plugin package loaded in this
 /// daemon boot profile.

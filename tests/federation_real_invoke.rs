@@ -49,8 +49,8 @@ use easynet_cli::daemon::federation::init::{
     try_install_federation_routing, FederationInitInputs, FederationInitOutcome, FederationStage,
 };
 use easynet_cli::daemon::federation::resolver as tenant_resolver;
-use easynet_cli::persistence::config::Credentials;
-use easynet_cli::runtime::keyring::KeyringHandle;
+use easynet_cli::daemon::keyring::KeyringHandle;
+use easynet_cli::daemon::persistence::config::Credentials;
 
 // ── Fixtures ───────────────────────────────────────────────────────
 

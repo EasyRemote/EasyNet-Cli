@@ -30,9 +30,9 @@
 
 use std::io::IsTerminal;
 
-use crate::persistence::config;
-use crate::support::net;
-use crate::ura;
+use crate::core::ura;
+use crate::daemon::persistence::config;
+use crate::support::platform::net;
 
 /// Width of the status-block label column ("Daemon:", "Hub:",
 /// "Current device:"). Picked so the longest label fits with one

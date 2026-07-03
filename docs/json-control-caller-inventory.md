@@ -75,7 +75,7 @@ Production JSON-control product callers remaining: **0**.
 | `src/daemon/control/runtime_dispatch.rs` | Runtime-dispatch request parsing, response shape, stream output, and socket handling. |
 | `src/daemon/control/runtime_dispatch_adapter.rs` | Adapter dispatch to live local runtime and node hint parsing. |
 | `src/ffi/client.rs` | Retained boot/status round trip against a real control server. |
-| `engineering/scripts/check-daemon-invocation-migration.sh` | Mechanical guard that rejects restored product control frames, direct `DaemonInvocation` construction outside `src/daemon/invocation/request.rs`, and reintroduced CLI-owned `Invocation`/`canonical_bytes`/`invocation_id_of` semantics. |
+| `tools/scripts/check-daemon-invocation-migration.sh` | Mechanical guard that rejects restored product control frames, direct `DaemonInvocation` construction outside `src/daemon/invocation/request.rs`, and reintroduced CLI-owned `Invocation`/`canonical_bytes`/`invocation_id_of` semantics. |
 
 Legacy product-frame compatibility tests have been removed from active control modules.
 

@@ -33,6 +33,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use easynet_axon::invocation::LocalRuntime;
 use serde_json::{json, Value};
 
+use easynet_cli::core::ura;
 use easynet_cli::daemon::ability::builtins::resources::pages::fetch::handle_fetch;
 use easynet_cli::daemon::ability::builtins::resources::pages::list_get_unpublish::{
     handle_get, handle_list, handle_unpublish, handle_unpublish_with_registry,
@@ -41,8 +42,7 @@ use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_pu
 use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
 use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
-use easynet_cli::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::ura;
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project

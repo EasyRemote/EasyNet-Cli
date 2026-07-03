@@ -75,7 +75,7 @@ v1 is *not*" quickly.
 | P6  | Crash consistent                       | ✅                                                  | `PersistentLog`                                                |
 | D1  | DAG acyclic                            | ✅                                                  | causal_context wall-clock ordering                             |
 | D2  | Single callee signature per receipt    | ⚠️ partial (signature empty in v1)                  | `Kernel` state machine + Receipt field optionality             |
-| U1  | Invocation unity (one exec entry)      | ✅ (after PR-INVOCATION-EXEC-UNITY)                 | `Kernel::invoke` + `engineering/scripts/check-invocation-unity.sh`         |
+| U1  | Invocation unity (one exec entry)      | ✅ (after PR-INVOCATION-EXEC-UNITY)                 | `Kernel::invoke` + `tools/scripts/check-invocation-unity.sh`         |
 
 ### 3.2 Non-repudiation — v2 target
 

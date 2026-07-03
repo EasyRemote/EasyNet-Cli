@@ -10,12 +10,13 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::ability_spec::{EalExec, McpExec};
+use crate::core::ability::spec::{EalExec, McpExec};
 use crate::daemon::ability::dispatch::{
     EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
     LocalStreamHandlerWithEnvelope,
 };
 use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
+use crate::daemon::execution::mission::context::ParentInvocationContext;
 use crate::daemon::plugins::contribution::{
     PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
 };
@@ -27,7 +28,6 @@ use crate::daemon::plugins::sidecar::{
     sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
 };
 use crate::daemon::plugins::PluginRealtimeCapability;
-use crate::runtime::context::ParentInvocationContext;
 
 /// Runtime host for daemon plugin packages.
 ///
@@ -235,7 +235,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_rpc(
         &mut self,
         ability: String,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.rpc(
@@ -250,7 +250,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_stream(
         &mut self,
         ability: String,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.stream(
@@ -265,7 +265,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_bidi(
         &mut self,
         ability: String,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.bidi(
@@ -429,7 +429,7 @@ fn rpc_process_handler(command: SidecarCommand, ability: String) -> LocalRpcHand
 fn eal_rpc_handler(spec: EalExec) -> LocalRpcHandlerWithEnvelope {
     Arc::new(move |env, args: Value| {
         let invocation_context = invocation_context_from_envelope(&env).to_json_value();
-        crate::runtime::executors::eal::run_eal_exec_with_invocation_context(
+        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_invocation_context(
             &spec,
             &args,
             Some(invocation_context),
@@ -494,7 +494,7 @@ mod tests {
     use super::*;
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
-    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,

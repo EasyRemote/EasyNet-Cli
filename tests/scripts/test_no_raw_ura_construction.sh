@@ -1,4 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-exec bash "$ROOT/engineering/tests/scripts/test_no_raw_ura_construction.sh" "$@"
+cd "$ROOT"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+violations="$tmp/violations.txt"
+: >"$violations"
+
+# URA construction and scheme-prefix parsing must stay centralized in
+# src/core/ura/mod.rs. Other modules should call crate::core::ura builders/parsers so
+# ontology changes cannot leave stale hand-built route fragments behind.
+rg -n \
+  'format!\([^"\n]*"easynet:///r|strip_prefix\("easynet:///r/"\)|starts_with\("easynet:///r/' \
+  src \
+  --glob '!src/core/ura/mod.rs' \
+  >"$violations" || true
+
+if [[ -s "$violations" ]]; then
+  echo "raw URA construction/parsing found outside src/core/ura/mod.rs:" >&2
+  cat "$violations" >&2
+  exit 1
+fi

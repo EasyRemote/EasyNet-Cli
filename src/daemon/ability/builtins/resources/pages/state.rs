@@ -127,7 +127,7 @@ fn registry_path_for_user(user: &str) -> PathBuf {
             }
         })
         .collect();
-    crate::persistence::config::state_dir().join(format!("pages-published-{suffix}.json"))
+    crate::daemon::persistence::config::state_dir().join(format!("pages-published-{suffix}.json"))
 }
 
 fn system_time_to_epoch_ms(time: SystemTime) -> u64 {
@@ -175,10 +175,10 @@ pub(crate) fn persist_registry_for_user(user: &str) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    let dir = crate::persistence::config::state_dir();
+    let dir = crate::daemon::persistence::config::state_dir();
     fs::create_dir_all(&dir)?;
     let bytes = serde_json::to_vec_pretty(&snapshot)?;
-    crate::persistence::config::atomic_write(&path, &bytes)?;
+    crate::daemon::persistence::config::atomic_write(&path, &bytes)?;
     Ok(())
 }
 
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn publish_snapshot_restores_project_after_map_clear() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
 
         let user = "pages-restore-alice";
         clear_registry_for_user(user);
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn restore_skips_missing_folder_and_cleans_snapshot() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
 
         let user = "pages-missing-alice";
         clear_registry_for_user(user);

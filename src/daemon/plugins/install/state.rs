@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::persistence::config;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::package::PluginPackage;
-use crate::persistence::config;
 
 const STATE_DIR: &str = "state";
 const PLUGINS_STATE_FILE: &str = "plugins.toml";

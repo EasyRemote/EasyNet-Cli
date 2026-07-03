@@ -77,7 +77,7 @@ Receipt per unit of termination.
 
 ## 5. Bypass detection
 
-`engineering/scripts/check-invocation-unity.sh` grep-enforces:
+`tools/scripts/check-invocation-unity.sh` grep-enforces:
 
 1. KernelApi / GatewayApi trait method signatures cannot take
    `args_json` / raw `Value` fragments — they must take domain
@@ -117,7 +117,7 @@ Receipt per unit of termination.
 - [ ] Does the PR add a new KernelApi method? If yes, the
       signature must name domain objects — not `args_json`.
 - [ ] Does the PR add a new Execution sub-service? If yes, it
-      must be isolated per `engineering/scripts/check-subservice-isolation.sh`.
+      must be isolated per `tools/scripts/check-subservice-isolation.sh`.
 - [ ] Does the PR add a new handler under `runtime/system/`? If
       yes, it must not branch on `self.node_id` /
       `target_node == self`.

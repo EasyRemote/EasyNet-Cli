@@ -6,14 +6,14 @@ use super::retry::{
 };
 use super::trace::{CappedTraceBuffer, CapturedResult, TRACE_CAP_HEAD, TRACE_CAP_TAIL};
 use super::*;
-use crate::eal::ir::IrFailurePolicy;
+use crate::eal::runtime::ir::IrFailurePolicy;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
 mod cases {
     use super::*;
-    use crate::eal::{parser, planner};
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::eal::{parser, runtime::planner};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -59,10 +59,10 @@ mod cases {
     }
 
     fn dummy_agent_entry() -> AgentEntry {
-        use crate::core::agent_spec::{AgentSpec, RuntimeKind};
-        use crate::runtime::directory::{AgentDirectory, Location};
+        use crate::core::agent::spec::{AgentSpec, RuntimeKind};
+        use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
 
-        let root = crate::persistence::config::agents_root().join("alice");
+        let root = crate::daemon::persistence::config::agents_root().join("alice");
         let _ = std::fs::remove_dir_all(&root);
         AgentDirectory::create(
             &Location::Local { root: root.clone() },
@@ -142,8 +142,8 @@ mod cases {
     fn synth_trace(id: &str) -> StepTrace {
         StepTrace {
             step_id: id.to_string(),
-            ability: crate::core::agent_id::AbilityName::parse("t").expect("valid ability name"),
-            target: crate::eal::ir::IrTarget::Device {
+            ability: crate::core::agent::id::AbilityName::parse("t").expect("valid ability name"),
+            target: crate::eal::runtime::ir::IrTarget::Device {
                 node_id: "n".to_string(),
             },
             phase_index: 0,
@@ -339,10 +339,9 @@ mod cases {
                 _timeout_ms: Option<u64>,
                 _causal_parents: &[Value],
             ) -> Result<StepDispatchOutcome, EalError> {
-                self.seen
-                    .lock()
-                    .unwrap()
-                    .push(crate::runtime::context::current().map(|c| c.mission_id));
+                self.seen.lock().unwrap().push(
+                    crate::daemon::execution::mission::context::current().map(|c| c.mission_id),
+                );
                 Ok(StepDispatchOutcome::from(serde_json::json!({})))
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -365,11 +364,12 @@ mod cases {
         let dispatcher = ContextProbe {
             seen: Arc::clone(&seen),
         };
-        let _ctx =
-            crate::runtime::context::enter(crate::runtime::context::DispatchContext::for_mission(
+        let _ctx = crate::daemon::execution::mission::context::enter(
+            crate::daemon::execution::mission::context::DispatchContext::for_mission(
                 "ctx-handoff-run",
                 std::env::temp_dir(),
-            ));
+            ),
+        );
         let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
         assert_eq!(report.steps_completed, 3);
         let seen = seen.lock().unwrap();
@@ -510,13 +510,13 @@ mod cases {
         // that hides the driver's live stderr timeline inside the
         // daemon process. The local path fails here on the bogus
         // binary name, not on missing control.json.
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut registry = AgentRegistry::default();
         registry
             .agents
             .insert("alice".to_string(), dummy_agent_entry());
 
-        let agent_id = crate::core::agent_id::AgentId::parse("alice").expect("valid agent id");
+        let agent_id = crate::core::agent::id::AgentId::parse("alice").expect("valid agent id");
         let ability =
             AbilityName::parse(crate::daemon::ability::builtins::agents::chat::ABILITY_VERB)
                 .expect("valid chat ability");
@@ -1091,7 +1091,7 @@ mod cases {
     /// motivation.
     #[test]
     fn resolve_arguments_fails_loud_on_malformed_upstream_payload() {
-        use crate::core::agent_id::{AbilityName, AgentId};
+        use crate::core::agent::id::{AbilityName, AgentId};
         use std::collections::BTreeMap;
 
         let mut input_refs = BTreeMap::new();
@@ -1157,7 +1157,7 @@ mod cases {
     /// consumer" trace from looking like a cascade of failures.
     #[test]
     fn resolve_arguments_returns_upstream_skipped_for_skipped_binding() {
-        use crate::core::agent_id::{AbilityName, AgentId};
+        use crate::core::agent::id::{AbilityName, AgentId};
         use std::collections::BTreeMap;
 
         let mut input_refs = BTreeMap::new();
@@ -1199,7 +1199,7 @@ mod cases {
     /// caught immediately.
     #[test]
     fn resolve_arguments_threads_well_formed_payload() {
-        use crate::core::agent_id::{AbilityName, AgentId};
+        use crate::core::agent::id::{AbilityName, AgentId};
         use std::collections::BTreeMap;
 
         let mut input_refs = BTreeMap::new();
@@ -1239,7 +1239,7 @@ mod cases {
 
     #[test]
     fn member_call_lowers_to_agent_target() {
-        use crate::core::agent_id::AgentId;
+        use crate::core::agent::id::AgentId;
 
         let src = r#"
             mission "member-call" {
@@ -1281,7 +1281,7 @@ mod cases {
     fn member_call_dispatches_to_agent_via_recorder() {
         // The interpreter dispatch path receives the resolved
         // IrTarget::Agent — no string-based classification along the way.
-        use crate::core::agent_id::AgentId;
+        use crate::core::agent::id::AgentId;
 
         let src = r#"
             mission "member-call" {

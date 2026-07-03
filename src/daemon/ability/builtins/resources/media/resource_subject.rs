@@ -7,9 +7,9 @@
 
 use serde_json::Value;
 
+use crate::core::ura::URAKind;
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
-use crate::ura::URAKind;
+use crate::daemon::persistence::resources::{self, lookup_by_ura, ResourceEntry, ResourceType};
 
 pub const REASON_SUBJECT_REQUIRED: &str = "subject_required";
 pub const REASON_SUBJECT_IN_ARGS: &str = "subject_in_args";
@@ -103,7 +103,7 @@ pub fn require_resource_ura_subject<'a>(
 /// True only for canonical resource URAs. Invalid URAs and non-resource URAs
 /// are both false because neither can identify a media resource.
 pub fn is_resource_ura_subject(subject: &str) -> bool {
-    crate::ura::parse_ura(subject.trim())
+    crate::core::ura::parse_ura(subject.trim())
         .map(|parsed| parsed.kind == URAKind::Resource)
         .unwrap_or(false)
 }
@@ -117,7 +117,7 @@ fn subject_required_error(ability: &str, required_subject: &str) -> anyhow::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::test_support::HomeGuard;
+    use crate::cli::commands::test_support::HomeGuard;
 
     #[test]
     fn corrupt_resources_table_is_not_reported_as_resource_not_found() {

@@ -84,7 +84,8 @@ pub fn handle_get(
         .unwrap_or(0);
     let url_root = super::pages_public_url_root(realm, user, project_id);
     let dev_listener_url_root = super::pages_dev_listener_url_root(user, project_id, listener_port);
-    let project_ura = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
+    let project_ura =
+        crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
 
     Ok(json!({
         "user":                      user,

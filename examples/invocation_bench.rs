@@ -35,19 +35,21 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity, BinaryChunk, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiDown,
     InvokeBidiUp, InvokeRequest, StreamDescriptor,
 };
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::{
     InvokeRemoteDown, InvokeRemoteUp, SessionContentEnvelope, SessionDispatch,
     ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
-use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
-use easynet_cli::services::invocation_transport::session_initiator::{
+use easynet_cli::daemon::invocation::bidi::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
-use easynet_cli::services::pending_dispatch::{PendingDispatchMap, PendingStreamDispatchMap};
-use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
+use easynet_cli::daemon::invocation::bidi::state::pending_dispatch::{
+    PendingDispatchMap, PendingStreamDispatchMap,
+};
+use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::local_session_dispatcher::LocalAxonSessionDispatcher;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use futures::StreamExt;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use serde_json::json;

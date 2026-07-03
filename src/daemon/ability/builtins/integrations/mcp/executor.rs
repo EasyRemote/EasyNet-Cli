@@ -32,7 +32,7 @@
 // Client lifecycle (process-singleton, boot-injected)
 // ---------------------------------------------------
 // A daemon invocation of an `mcp` exec must NOT rebuild
-// `McpClientService` per call — doing so re-reads `mcp_clients.json`
+// `McpClientService` per call — doing so re-reads `mcps.json`
 // from disk and resets every upstream's connection state
 // (`McpServerRow.conn`/`http_conn`), forcing a fresh stdio spawn +
 // `initialize` handshake on every tool call. For an mcp-bench
@@ -40,7 +40,7 @@
 // handshakes.
 //
 // The executor therefore reads the `McpClientService` from a
-// process-wide [`crate::support::process_singleton::ProcessSingleton`]
+// process-wide [`crate::support::platform::process_singleton::ProcessSingleton`]
 // (`Mode::Once` — production write-once) that
 // `build_registry_with_services` populates at boot via
 // `set_process_client(...)`. The same `Arc` instance backs both
@@ -66,9 +66,9 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::McpExec;
-use crate::daemon::execution::mcp_client::McpClientService;
-use crate::support::process_singleton::ProcessSingleton;
+use crate::core::ability::spec::McpExec;
+use crate::daemon::execution::mcp::McpClientService;
+use crate::support::platform::process_singleton::ProcessSingleton;
 
 /// Process-wide `McpClientService` handle. Populated at daemon boot
 /// by `build_registry_with_services` via `set_process_client(...)`
@@ -250,7 +250,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
+    use crate::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
 
     #[test]
     fn rejects_non_object_args_with_typed_messages() {
@@ -332,7 +332,7 @@ mod tests {
     /// than silently re-loading the on-disk config — that older
     /// behaviour created a second `McpClientService` instance and
     /// diverged from the reflective registry's view of
-    /// `mcp_clients.json`. We assert the error mentions the missing
+    /// `mcps.json`. We assert the error mentions the missing
     /// init step so an operator hitting this in dev can grep
     /// straight to the cause.
     #[tokio::test(flavor = "multi_thread")]

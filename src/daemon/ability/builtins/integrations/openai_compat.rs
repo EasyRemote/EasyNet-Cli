@@ -30,8 +30,8 @@ use serde_json::{json, Value};
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::daemon::ability::builtins::resources::pages::PagesIdentity;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
-use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-use crate::support::process_singleton::ProcessSingleton;
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::support::platform::process_singleton::ProcessSingleton;
 
 /// Process-wide handle to the live ability registry. The inner
 /// `Arc<OnceLock<Arc<AxonAbilityCatalog>>>` is the seam
@@ -109,7 +109,7 @@ impl OpenAICompatIdentity {
             user: identity.user,
             realm: identity
                 .realm
-                .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string()),
+                .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string()),
         }
     }
 }
@@ -226,23 +226,23 @@ struct ResolvedOpenAIModelAbility {
 /// Required shape: canonical ability URA
 ///   `easynet:///r/<realm>/ability/<user>.<agent>.chat`
 fn resolve_model_to_ability_and_owner(model: &str) -> anyhow::Result<ResolvedOpenAIModelAbility> {
-    let parsed = crate::ura::parse_ura(model)
+    let parsed = crate::core::ura::parse_ura(model)
         .map_err(|e| anyhow::anyhow!("model must be a valid canonical Ability URA: {e}"))?;
-    if parsed.kind != crate::ura::URAKind::Ability {
+    if parsed.kind != crate::core::ura::URAKind::Ability {
         anyhow::bail!("model must be a canonical Ability URA");
     }
     let Some(ability) = parsed.ability() else {
         anyhow::bail!("model Ability URA has no typed ability owner");
     };
-    let crate::ura::AbilityOwner::Agent { user_id, agent_id } = ability.owner else {
+    let crate::core::ura::AbilityOwner::Agent { user_id, agent_id } = ability.owner else {
         anyhow::bail!("model must point to an agent-owned chat Ability URA");
     };
-    if crate::ura::ability_name_from_parts(&parsed).as_deref() != Some("chat") {
+    if crate::core::ura::ability_name_from_parts(&parsed).as_deref() != Some("chat") {
         anyhow::bail!("model must point to the canonical agent chat Ability URA");
     }
-    let owner_ura = crate::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
+    let owner_ura = crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
     Ok(ResolvedOpenAIModelAbility {
-        local_dispatch_key: crate::ura::local_dispatch_ability_key(&owner_ura, "chat"),
+        local_dispatch_key: crate::core::ura::local_dispatch_ability_key(&owner_ura, "chat"),
         owner_ura,
     })
 }
@@ -598,9 +598,9 @@ fn project_model_id_with_identity(
         return None;
     };
     let user = identity.user.as_deref()?;
-    let owner_ura = crate::ura::agent_ura(&identity.realm, user, &agent_id);
-    let public_name = crate::ura::owner_local_ability_name(&owner_ura, ability_name);
-    crate::ura::owner_ability_ura(&owner_ura, &public_name)
+    let owner_ura = crate::core::ura::agent_ura(&identity.realm, user, &agent_id);
+    let public_name = crate::core::ura::owner_local_ability_name(&owner_ura, ability_name);
+    crate::core::ura::owner_ability_ura(&owner_ura, &public_name)
 }
 
 // ─── EasyNet URA dereference for multimodal message content ──────
@@ -643,7 +643,7 @@ fn deref_easynet_uras_in_messages(
                 if let Some(nested) = block.get_mut(*nested_key) {
                     if let Some(url) = nested.get_mut("url") {
                         if let Some(s) = url.as_str() {
-                            if crate::ura::parse_ura(s).is_ok() {
+                            if crate::core::ura::parse_ura(s).is_ok() {
                                 if let Ok(data_url) = deref_to_data_url(s, dispatch_handle) {
                                     *url = Value::String(data_url);
                                 }
@@ -657,7 +657,7 @@ fn deref_easynet_uras_in_messages(
                 for url_key in &["url", "file_url"] {
                     if let Some(url) = file.get_mut(*url_key) {
                         if let Some(s) = url.as_str() {
-                            if crate::ura::parse_ura(s).is_ok() {
+                            if crate::core::ura::parse_ura(s).is_ok() {
                                 if let Ok(data_url) = deref_to_data_url(s, dispatch_handle) {
                                     *url = Value::String(data_url);
                                 }
@@ -680,9 +680,9 @@ fn deref_to_data_url(
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
-    let parsed =
-        crate::ura::parse_ura(ura).map_err(|e| anyhow::anyhow!("deref `{ura}`: parse: {e}"))?;
-    if !matches!(parsed.kind, crate::ura::URAKind::Resource) {
+    let parsed = crate::core::ura::parse_ura(ura)
+        .map_err(|e| anyhow::anyhow!("deref `{ura}`: parse: {e}"))?;
+    if !matches!(parsed.kind, crate::core::ura::URAKind::Resource) {
         anyhow::bail!("deref `{ura}`: not a resource URA");
     }
     // Owner segment is `<userID>.<owner-tail>` for v4.1.5 dot-id
@@ -799,7 +799,7 @@ mod tests {
         // Hold the env lock: catalog registration consults HOME-rooted
         // authority/runtime state, so a concurrent HOME-mutating test must
         // not race it (passes isolated, flakes only under parallelism).
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         reg.register_rpc_with_owner("codex.chat", OwnerKind::Agent("codex".into()), ok_handler());
         let identity = OpenAICompatIdentity {

@@ -86,7 +86,7 @@ fn descriptor_import_e2e_owner_initiative_and_independent_ownership() {
     let new_descriptor_ura = resp["new_descriptor_ura"]
         .as_str()
         .expect("new_descriptor_ura present");
-    let selector = easynet_cli::ura::AbilitySelector::parse(new_descriptor_ura)
+    let selector = easynet_cli::core::ura::AbilitySelector::parse(new_descriptor_ura)
         .expect("learner's URA round-trips the Axon parser");
     assert_eq!(selector.owner_kind(), "agent");
     assert_eq!(

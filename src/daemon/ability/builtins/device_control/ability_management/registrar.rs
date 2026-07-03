@@ -35,7 +35,7 @@ use easynet_axon::invocation::{
 };
 use serde::Serialize;
 
-use crate::core::ability_spec::{AbilityExec, AbilityManifest};
+use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::builtins::agents::chat::build_host_stream_handler;
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
@@ -48,7 +48,7 @@ use crate::daemon::ability::{
     AbilityControlPlaneRecord, AbilityDescriptorKey, AbilityImplSource, AuthorityScope,
     CallMode as DescriptorCallMode, RuntimeEnv,
 };
-use crate::support::errors::append_cleanup_error;
+use crate::support::platform::errors::append_cleanup_error;
 
 /// Outcome of one install attempt, mapped 1:1 to the deploy handler's
 /// `state` field. `Active` requires route visibility AND the right
@@ -158,7 +158,7 @@ impl DeviceAbilityInstall {
         if &parsed_manifest != manifest {
             anyhow::bail!("ability.deploy: manifest snapshot does not match parsed manifest");
         }
-        let selector = crate::ura::AbilitySelector::parse(ability_ura)?;
+        let selector = crate::core::ura::AbilitySelector::parse(ability_ura)?;
         if selector.owner_kind() != "device" {
             anyhow::bail!(
                 "ability.deploy: device install requires a device-owned Ability URA, got owner kind {:?}",
@@ -301,7 +301,7 @@ impl DeviceAbilityControlPlaneKey {
         expected_public_name: &str,
         call_mode: DescriptorCallMode,
     ) -> anyhow::Result<Self> {
-        let selector = crate::ura::AbilitySelector::parse(ability_ura)?;
+        let selector = crate::core::ura::AbilitySelector::parse(ability_ura)?;
         if selector.owner_kind() != "device" {
             anyhow::bail!(
                 "device ability control-plane key requires device owner, got {:?} in {}",
@@ -1184,7 +1184,7 @@ pub enum ReplayOutcomeStatus {
 /// not" decision — a security-relevant gate — cannot diverge between the two
 /// consumers or grow two different error strings for the same condition.
 enum DeployableExec<'a> {
-    HostStream(&'a crate::core::ability_spec::HostStreamExec),
+    HostStream(&'a crate::core::ability::spec::HostStreamExec),
 }
 
 impl<'a> DeployableExec<'a> {
@@ -1367,7 +1367,7 @@ mod tests {
         );
     }
 
-    use crate::core::ability_spec::{AbilityExec, HostStreamExec, ShellExec};
+    use crate::core::ability::spec::{AbilityExec, HostStreamExec, ShellExec};
 
     fn host_stream_manifest(socket: &str, function: &str) -> AbilityManifest {
         AbilityManifest::new(

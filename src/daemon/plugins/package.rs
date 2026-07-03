@@ -85,14 +85,14 @@ impl BuiltinPluginAbilitySpec {
     /// (`remote_desktop.create_session`), while `AbilityManifest` names are
     /// verb-local. The catalog key remains the full ability name at
     /// registration; only the manifest body stores the local verb.
-    pub fn to_registry_manifest(&self) -> Result<crate::core::ability_spec::AbilityManifest> {
+    pub fn to_registry_manifest(&self) -> Result<crate::core::ability::spec::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
             PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.to_string(),
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        crate::core::ability_spec::AbilityManifest::new(
+        crate::core::ability::spec::AbilityManifest::new(
             verb,
             (self.description)(),
             (self.input_schema)(),
@@ -146,14 +146,14 @@ impl PluginAbilityDescriptor {
     /// names are verb-local, so plugin ability names such as
     /// `plugin.echo` project to `echo` while the catalog key remains the
     /// full ability name.
-    pub fn to_registry_manifest(&self) -> Result<crate::core::ability_spec::AbilityManifest> {
+    pub fn to_registry_manifest(&self) -> Result<crate::core::ability::spec::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
             PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.clone(),
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        let mut manifest = crate::core::ability_spec::AbilityManifest::new(
+        let mut manifest = crate::core::ability::spec::AbilityManifest::new(
             verb,
             self.description.clone(),
             self.input_schema.clone(),
@@ -288,7 +288,7 @@ impl PluginPackage {
     pub fn ability_registry_manifest(
         &self,
         ability: &str,
-    ) -> Result<crate::core::ability_spec::AbilityManifest> {
+    ) -> Result<crate::core::ability::spec::AbilityManifest> {
         let descriptor = self.ability_descriptor(ability).ok_or_else(|| {
             PluginHostError::InvalidAbilityDescriptor {
                 path: self.manifest_path.clone(),

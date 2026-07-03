@@ -12,6 +12,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub(crate) mod a2a_labels;
 #[cfg(feature = "axon-pb")]
 pub mod ability_catalog;
 pub mod advertised_agents;

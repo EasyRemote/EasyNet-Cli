@@ -49,7 +49,7 @@ fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
     let meta = home.invoke_testbot_echo_with_meta("watch me");
     let expected_echo_ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(&home.testbot_ura, "echo")
+        easynet_cli::core::ura::owner_ability_ura(&home.testbot_ura, "echo")
             .expect("mint testbot echo ability URA"),
         TESTBOT_ECHO_DESCRIPTOR_VERSION
     );

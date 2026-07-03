@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::core::domain::LoopId;
 use crate::core::domain::{LoopInstance, TenantId};
-use crate::persistence::tenant_paths::{ensure, TenantKind};
+use crate::daemon::persistence::tenant_paths::{ensure, TenantKind};
 
 const SCHEMA_VERSION: u32 = 1;
 

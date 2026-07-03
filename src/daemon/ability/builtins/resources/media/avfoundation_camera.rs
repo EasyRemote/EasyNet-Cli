@@ -48,7 +48,7 @@ use crate::daemon::ability::builtins::resources::media::camera_snapshot::{
 use crate::daemon::ability::builtins::resources::media::{
     ABILITY_CAMERA_SNAPSHOT, ABILITY_CAMERA_SUBSCRIBE,
 };
-use crate::persistence::resources::ResourceEntry;
+use crate::daemon::persistence::resources::ResourceEntry;
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {}

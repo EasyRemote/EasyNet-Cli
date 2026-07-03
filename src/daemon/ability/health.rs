@@ -51,7 +51,7 @@
 // "healthy" can never be replayed from a previous daemon life.
 //
 // Key discipline: records are keyed by canonical ability URA built
-// with the same `crate::ura::owner_ability_ura` builder the
+// with the same `crate::core::ura::owner_ability_ura` builder the
 // descriptor's `canonical_ability_ura()` uses — never by the bare
 // `<agent>.<verb>` string, which collides across hosted-synth paths
 // and breaks on agent rename.
@@ -65,7 +65,7 @@ use std::process::Stdio;
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::core::ability_spec::{AbilityManifest, BootSpec, CostKind, HealthSpec};
+use crate::core::ability::spec::{AbilityManifest, BootSpec, CostKind, HealthSpec};
 
 /// Scan cadence. The tick only *checks due-ness*; per-record cadence
 /// is owned by `next_probe_unix_ms`, so a shorter tick sharpens
@@ -236,24 +236,27 @@ fn scan() -> ScanPlan {
         unmonitored: Vec::new(),
         live: BTreeSet::new(),
     };
-    let Ok(registry) = crate::registry::agents::load_agents() else {
+    let Ok(registry) = crate::daemon::persistence::agent_registry::load_agents() else {
         return plan;
     };
-    let local = crate::persistence::local_agents::load().unwrap_or_default();
+    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
     for (agent_name, entry) in &registry.agents {
         let Some(owner_ura) =
-            crate::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent_name)
+            crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent_name)
         else {
             continue;
         };
-        for manifest in crate::runtime::agent_ability_specs::manifests_for(agent_name, entry) {
+        for manifest in
+            crate::daemon::execution::mission::agent_ability_specs::manifests_for(agent_name, entry)
+        {
             let class = classify_manifest(&manifest);
             if class == ManifestHealthClass::Unmanaged {
                 continue;
             }
             let qualified = manifest.qualified_name(agent_name);
-            let public_name = crate::ura::owner_local_ability_name(&owner_ura, &qualified);
-            let Some(ability_ura) = crate::ura::owner_ability_ura(&owner_ura, &public_name) else {
+            let public_name = crate::core::ura::owner_local_ability_name(&owner_ura, &qualified);
+            let Some(ability_ura) = crate::core::ura::owner_ability_ura(&owner_ura, &public_name)
+            else {
                 continue;
             };
             plan.live.insert(ability_ura.clone());

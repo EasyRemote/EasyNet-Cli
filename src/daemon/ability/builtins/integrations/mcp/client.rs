@@ -51,7 +51,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::execution::mcp_client::McpClientService;
+use crate::daemon::execution::mcp::McpClientService;
 
 pub const ABILITY_LIST: &str = crate::daemon::ability::names::integrations::MCP_CLIENT_LIST;
 pub const ABILITY_CALL: &str = crate::daemon::ability::names::integrations::MCP_CLIENT_CALL;
@@ -209,7 +209,7 @@ pub fn list_input_schema() -> Value {
 
 pub fn list_description() -> &'static str {
     "Aggregate tools/list across every configured upstream MCP \
-     server (~/.easynet/mcp_clients.json). Returns one server entry \
+     server (~/.easynet/mcps.json). Returns one server entry \
      per configured upstream; an entry with `error` set indicates \
      that specific upstream failed without taking the others down."
 }
@@ -231,7 +231,7 @@ pub fn call_input_schema() -> Value {
 
 pub fn call_description() -> &'static str {
     "Forward a tools/call to a configured upstream MCP server. \
-     `server` is the operator-chosen name from mcp_clients.json; \
+     `server` is the operator-chosen name from mcps.json; \
      `name` is the upstream tool's name (as it appears in that \
      upstream's tools/list). Returns the upstream's tools/call \
      response verbatim (MCP {content, isError} shape)."
@@ -240,7 +240,7 @@ pub fn call_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::execution::mcp_client::{McpClientsFile, McpServerSpec};
+    use crate::daemon::execution::mcp::{McpClientsFile, McpServerSpec};
     use std::path::PathBuf;
 
     fn empty_svc() -> Arc<McpClientService> {
@@ -435,10 +435,9 @@ while True:
         // Pin the on-disk file path the daemon will read so a future
         // refactor that renamed the config file would trip this.
         // We don't assert the exact path string — only the shape.
-        let svc = McpClientService::from_path(&PathBuf::from(
-            "/this/path/should/not/exist/__mcp_clients.json",
-        ))
-        .expect("missing file → empty service, not error");
+        let svc =
+            McpClientService::from_path(&PathBuf::from("/this/path/should/not/exist/__mcps.json"))
+                .expect("missing file → empty service, not error");
         let names = futures::executor::block_on(svc.server_names());
         assert!(names.is_empty());
     }

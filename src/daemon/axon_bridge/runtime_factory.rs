@@ -87,9 +87,9 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
     // the CLI URA boundary object before calling Axon's canonical builder;
     // do not duplicate URI grammar in this adapter.
     let callee_public_name =
-        crate::ura::owner_local_ability_name(&binding.callee.ura, ability_name);
+        crate::core::ura::owner_local_ability_name(&binding.callee.ura, ability_name);
     let caller_public_name =
-        crate::ura::owner_local_ability_name(&binding.caller.ura, ability_name);
+        crate::core::ura::owner_local_ability_name(&binding.caller.ura, ability_name);
 
     easynet_axon::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
         .or_else(|| {
@@ -164,7 +164,7 @@ mod tests {
         let fallback_binding = AxiomBinding {
             caller: fallback_caller.clone(),
             callee: AgentIdentity::new(
-                crate::ura::hub_ura("localhost"),
+                crate::core::ura::hub_ura("localhost"),
                 UraProfile::EasynetStrictV2,
             ),
             subject: SubjectIdentity::new(

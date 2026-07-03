@@ -6,7 +6,7 @@
 //! Unlike `mcp_bench_round1_e2e` — which runs against an
 //! in-process echo upstream and is part of the default test set —
 //! this test depends on:
-//!   * `~/.easynet/mcp_clients.json` existing on the host
+//!   * `~/.easynet/mcps.json` existing on the host
 //!   * each upstream's stdio command actually being installed
 //!   * outbound network for any HTTP-backed upstream
 //!
@@ -35,7 +35,7 @@ use std::path::PathBuf;
 
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all;
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
-use easynet_cli::daemon::execution::mcp_client::McpClientService;
+use easynet_cli::daemon::execution::mcp::McpClientService;
 
 /// Minimum reachable-server count below which the verifier fails.
 /// Pinned to the round-1 baseline so a regression in setup or in
@@ -55,7 +55,7 @@ async fn live_reachability_holds_baseline() {
     std::env::set_var("EASYNET_MCP_TOOLS_LIST_TIMEOUT_SECS", "30");
 
     let home = std::env::var("HOME").expect("HOME");
-    let path = PathBuf::from(home).join(".easynet/mcp_clients.json");
+    let path = PathBuf::from(home).join(".easynet/mcps.json");
     assert!(path.exists(), "{} missing", path.display());
     let svc = McpClientService::from_path(&path).expect("from_path must accept");
     let names = svc.server_names().await;

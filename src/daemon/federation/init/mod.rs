@@ -69,9 +69,9 @@ pub use probe::FederationStatusProbe;
 use std::sync::Arc;
 
 use super::resolver as tenant_resolver;
-use crate::persistence::config::Credentials;
-use crate::runtime::keyring::bridge_forward::BridgeForwardInvoker;
-use crate::runtime::keyring::KeyringHandle;
+use crate::daemon::keyring::bridge_forward::BridgeForwardInvoker;
+use crate::daemon::keyring::KeyringHandle;
+use crate::daemon::persistence::config::Credentials;
 
 /// Environment opt-out. When set to "1" / "true", the daemon
 /// runs without federation wiring even if credentials look
@@ -223,7 +223,7 @@ fn ensure_device_subject(
         None => {
             // Synthesise + bind on first install. Subsequent calls
             // re-use the bound subject so re-installs are idempotent.
-            let synth = crate::ura::device_ura(&creds.realm, &creds.node_id);
+            let synth = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
             keyring
                 .set_device_subject(synth.clone())
                 .map_err(|e| format!("keyring.set_device_subject({synth}): {e}"))?;
@@ -347,7 +347,7 @@ mod tests {
     fn synthesised_device_subject_uses_canonical_device_ura() {
         let c = creds("acme.com", "node-1");
         let k = keyring();
-        let expected = crate::ura::device_ura(&c.realm, &c.node_id);
+        let expected = crate::core::ura::device_ura(&c.realm, &c.node_id);
         let got = ensure_device_subject(&k, &c).expect("subject synthesised");
         assert_eq!(got, expected);
         assert_eq!(k.device_subject().as_deref(), Some(expected.as_str()));

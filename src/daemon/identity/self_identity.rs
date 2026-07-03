@@ -416,8 +416,8 @@ impl SelfIdentity for InMemoryVault {
 pub fn canonical_self_uras(realm: &str, node_id: &str) -> (String, Vec<String>) {
     let realm = realm.trim();
     let node_id = node_id.trim();
-    let primary = crate::ura::device_ura(realm, node_id);
-    let hub_overlay = crate::ura::hub_ura(realm);
+    let primary = crate::core::ura::device_ura(realm, node_id);
+    let hub_overlay = crate::core::ura::hub_ura(realm);
     (primary, vec![hub_overlay])
 }
 
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn in_memory_role_overlay_signs_with_same_keypair() {
         let device = "easynet:///r/r/device/u";
-        let hub = crate::ura::hub_ura("r");
+        let hub = crate::core::ura::hub_ura("r");
         let id = make_in_memory_vault(device, vec![hub.clone()]);
         let pk_a = id.public_key(device).unwrap();
         let pk_b = id.public_key(&hub).unwrap();

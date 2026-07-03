@@ -44,9 +44,9 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(not(windows))]
-use crate::persistence::config::state_dir;
+use crate::daemon::persistence::config::state_dir;
 #[cfg(windows)]
-use crate::support::named_pipe::{scoped_pipe_name, PipeListener};
+use crate::support::platform::named_pipe::{scoped_pipe_name, PipeListener};
 
 /// Filename for the Unix Domain Socket inside the user's
 /// `~/.easynet/` directory. Pinned so the Client FFI library can

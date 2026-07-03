@@ -15,7 +15,7 @@
 //                                  turn record), verbatim.
 //
 // The persistence + readers already exist in
-// `crate::persistence::chat_sessions`; this module only registers
+// `crate::daemon::persistence::chat_sessions`; this module only registers
 // them as invokable abilities so the Hub/backend (and ultimately the
 // Frontend Group page) can read transcripts over the wire instead of
 // only via the local `easynet agent chat-history` CLI command.
@@ -56,12 +56,12 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// by default and badge it in the session list.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let agent = require_agent(&args)?;
-    let sessions = crate::persistence::chat_sessions::list_sessions(&agent);
+    let sessions = crate::daemon::persistence::chat_sessions::list_sessions(&agent);
     let json_sessions: Vec<Value> = sessions
         .iter()
         .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
         .collect();
-    let lifelong = crate::persistence::chat_sessions::lifelong_session(&agent);
+    let lifelong = crate::daemon::persistence::chat_sessions::lifelong_session(&agent);
     Ok(json!({
         "agent": agent,
         "lifelong_session_id": lifelong,
@@ -81,7 +81,7 @@ fn get_handler(args: Value) -> anyhow::Result<Value> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("chat.history.get: `session_id` required"))?
         .to_string();
-    let turns = crate::persistence::chat_sessions::load_session(&agent, &session_id)?;
+    let turns = crate::daemon::persistence::chat_sessions::load_session(&agent, &session_id)?;
     Ok(json!({ "agent": agent, "session_id": session_id, "turns": turns }))
 }
 
@@ -102,8 +102,8 @@ fn require_agent(args: &Value) -> anyhow::Result<String> {
 /// directory name and every UI history read came back empty. Parsing
 /// stays with Axon (`parse_ura`); non-URA strings pass through as-is.
 fn normalize_agent(raw: &str) -> String {
-    if let Ok(parsed) = crate::ura::parse_ura(raw) {
-        if parsed.kind == crate::ura::URAKind::Agent {
+    if let Ok(parsed) = crate::core::ura::parse_ura(raw) {
+        if parsed.kind == crate::core::ura::URAKind::Agent {
             if let Some((_user_id, agent_id)) = parsed.agent_ids() {
                 return agent_id.to_string();
             }
@@ -162,8 +162,8 @@ mod tests {
         // handlers must project URA → local name, or every UI history
         // read silently comes back empty (the regression that hid the
         // lifelong thread after a reload).
-        let _g = crate::cli::test_support::HomeGuard::new();
-        crate::persistence::chat_sessions::write_turn(
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::chat_sessions::write_turn(
             "demot",
             "sess-1",
             "hi",
@@ -172,8 +172,9 @@ mod tests {
             &json!({}),
         )
         .expect("seed turn");
-        crate::persistence::chat_sessions::set_lifelong_session("demot", "sess-1").expect("bind");
-        let ura = crate::ura::agent_ura("localhost", "dev", "demot");
+        crate::daemon::persistence::chat_sessions::set_lifelong_session("demot", "sess-1")
+            .expect("bind");
+        let ura = crate::core::ura::agent_ura("localhost", "dev", "demot");
         let resp = list_handler(json!({"agent": ura.as_str()})).expect("list via URA");
         assert_eq!(resp["agent"], "demot");
         assert_eq!(resp["lifelong_session_id"], "sess-1");
@@ -189,12 +190,13 @@ mod tests {
 
     #[test]
     fn list_surfaces_lifelong_session_id() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         // Unbound: explicit null, not a missing key — the Frontend
         // reads the field unconditionally.
         let resp = list_handler(json!({"agent": "demot"})).expect("list");
         assert!(resp["lifelong_session_id"].is_null());
-        crate::persistence::chat_sessions::set_lifelong_session("demot", "sess-1").expect("bind");
+        crate::daemon::persistence::chat_sessions::set_lifelong_session("demot", "sess-1")
+            .expect("bind");
         let resp = list_handler(json!({"agent": "demot"})).expect("list");
         assert_eq!(resp["lifelong_session_id"], "sess-1");
     }

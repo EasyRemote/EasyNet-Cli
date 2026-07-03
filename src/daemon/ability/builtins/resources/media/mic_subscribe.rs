@@ -52,7 +52,7 @@ use crate::daemon::ability::builtins::resources::media::resource_subject::{
 use crate::daemon::ability::builtins::resources::media::{self, ABILITY_MIC_SUBSCRIBE};
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
-use crate::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
 
 pub const REASON_SUBJECT_REQUIRED: &str = resource_subject::REASON_SUBJECT_REQUIRED;
 pub const REASON_SUBJECT_IN_ARGS: &str = resource_subject::REASON_SUBJECT_IN_ARGS;
@@ -448,8 +448,8 @@ fn finalize_recording(device_ura: &str, pcm: &[u8], sample_rate: u32, channels: 
     let wav = wav_from_s16le(pcm, sample_rate, channels);
     let bytes_per_second = u64::from(sample_rate) * u64::from(channels) * 2;
     let duration_ms = (pcm.len() as u64).saturating_mul(1000) / bytes_per_second.max(1);
-    if let Err(err) = crate::persistence::context_store::record_capture(
-        crate::persistence::context_store::CaptureRecord {
+    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+        crate::daemon::persistence::context_store::CaptureRecord {
             device: device_ura,
             ability: ABILITY_MIC_SUBSCRIBE,
             ext: "wav",
@@ -498,8 +498,8 @@ fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-    use crate::persistence::resources::{
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
 
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn handler_returns_live_stream_with_pcm_frame_when_subject_resolves() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_mic(&mut file, "h-mic-e2e");
         resources::save(&file).unwrap();
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_non_resource_subject() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let backend: Arc<dyn MicBackend> = Arc::new(SyntheticMicBackend);
         let err = handler(
             &backend,
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_camera_subject_with_resource_type_mismatch() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let cam_ura = upsert_resource(
             &mut file,
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_subject_in_args() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn handler_reports_corrupt_resources_table_as_table_unavailable() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let path = resources::path();
         std::fs::create_dir_all(path.parent().expect("resources path has parent"))
             .expect("create state dir");
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn recording_tee_finalizes_when_consumer_drops_without_next_frame() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let (tx, upstream_rx) = broadcast::channel::<Value>(8);
         let seq = AtomicU64::new(0);
         let frame = build_frame(&seq, 48_000, 1, "h-mic-recording", &[0u8; 960]);
@@ -725,8 +725,10 @@ mod tests {
 
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
-            let captures =
-                crate::persistence::context_store::list_captures(Some(ABILITY_MIC_SUBSCRIBE), 10);
+            let captures = crate::daemon::persistence::context_store::list_captures(
+                Some(ABILITY_MIC_SUBSCRIBE),
+                10,
+            );
             if let Some(capture) = captures.first() {
                 assert_eq!(capture.content_type, "audio/wav");
                 assert_eq!(capture.duration_ms, Some(10));

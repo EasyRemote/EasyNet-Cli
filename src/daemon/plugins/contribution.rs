@@ -101,7 +101,7 @@ impl PluginAbilityHandler {
 pub struct PluginAbilityContribution {
     name: String,
     call_mode: PluginCallMode,
-    manifest: crate::core::ability_spec::AbilityManifest,
+    manifest: crate::core::ability::spec::AbilityManifest,
     implementation: PluginImplementationBinding,
 }
 
@@ -109,7 +109,7 @@ impl PluginAbilityContribution {
     pub fn new(
         name: impl Into<String>,
         call_mode: PluginCallMode,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         implementation: PluginImplementationBinding,
     ) -> Result<Self> {
         let name = name.into();
@@ -139,7 +139,7 @@ impl PluginAbilityContribution {
         self.call_mode
     }
 
-    pub fn manifest(&self) -> &crate::core::ability_spec::AbilityManifest {
+    pub fn manifest(&self) -> &crate::core::ability::spec::AbilityManifest {
         &self.manifest
     }
 
@@ -250,7 +250,7 @@ impl PluginContributionBuilder {
     pub fn rpc(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalRpcHandlerWithEnvelope,
@@ -270,7 +270,7 @@ impl PluginContributionBuilder {
     pub fn stream(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalStreamHandlerWithEnvelope,
@@ -290,7 +290,7 @@ impl PluginContributionBuilder {
     pub fn bidi(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalBidiHandlerWithEnvelope,
@@ -311,7 +311,7 @@ impl PluginContributionBuilder {
         &mut self,
         ability: impl Into<String>,
         call_mode: PluginCallMode,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         implementation: PluginImplementationBinding,
     ) -> Result<()> {
         let ability = ability.into();

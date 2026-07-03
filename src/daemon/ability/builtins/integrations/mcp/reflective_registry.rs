@@ -24,7 +24,7 @@
 //
 //   - Does not own the lifecycle of `McpClientService` connections.
 //     The caller passes a service that's already been built from
-//     `mcp_clients.json`; we just call `tools/list` + register.
+//     `mcps.json`; we just call `tools/list` + register.
 //   - Does not yet handle `notifications/tools/list_changed`
 //     (round-2 of the plan).
 //   - Does not yet handle reflective registration over HTTP
@@ -43,11 +43,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::AbilityManifest;
+use crate::core::ability::spec::AbilityManifest;
 use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 use crate::daemon::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
-use crate::daemon::execution::mcp_client::McpClientService;
+use crate::daemon::execution::mcp::McpClientService;
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
 /// reflectively-registered upstream MCP tool, before the
@@ -181,7 +181,7 @@ pub struct ReflectedAbility {
     /// the inbound MCP bridge's projection).
     pub descriptor: AbilityDescriptor,
     /// Upstream server's local name (the operator-chosen short
-    /// identifier from `mcp_clients.json`).
+    /// identifier from `mcps.json`).
     pub server: String,
     /// Upstream tool name as the server reported it. Distinguishing
     /// this from `ability_name` matters when an alias was applied.
@@ -500,7 +500,7 @@ impl PostArcReflection {
     ) -> Self {
         let Some(user) = pages_user else {
             // Unpaired daemons emit a single informational line so
-            // an operator who configured `mcp_clients.json` but
+            // an operator who configured `mcps.json` but
             // forgot to pair a user understands why their MCP tools
             // are not showing up as bare-name abilities. We do NOT
             // consult the service for its server count here — that
@@ -828,7 +828,7 @@ enum CatalogFetch {
 }
 
 struct CatalogFetchOk {
-    spec: crate::daemon::execution::mcp_client::McpServerSpec,
+    spec: crate::daemon::execution::mcp::McpServerSpec,
     tools: Vec<Value>,
 }
 
@@ -1210,7 +1210,7 @@ fn register_one_tool<W: RegistryWriter>(
     client: &McpClientService,
     server_name: &str,
     owner_ura: &str,
-    spec: &crate::daemon::execution::mcp_client::McpServerSpec,
+    spec: &crate::daemon::execution::mcp::McpServerSpec,
     tool: &Value,
 ) -> Result<ReflectedAbility, ReflectFailure> {
     let upstream_tool = tool
@@ -1245,7 +1245,7 @@ fn register_one_tool<W: RegistryWriter>(
             reason: format!(
                 "ability `{local_name}` already registered{kind}; \
                  set `name_prefix` or an entry in `aliases` for \
-                 server `{server_name}` in mcp_clients.json",
+                 server `{server_name}` in mcps.json",
                 kind = format_collision_hint(W::COLLISION_KIND_HINT),
             ),
         });
@@ -1376,10 +1376,10 @@ struct DescriptorOwnerAuthority {
 }
 
 fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthority, String> {
-    let parsed =
-        crate::ura::parse_ura(owner_ura).map_err(|e| format!("owner URA parse failed: {e}"))?;
+    let parsed = crate::core::ura::parse_ura(owner_ura)
+        .map_err(|e| format!("owner URA parse failed: {e}"))?;
     let (owner_kind, owner_projection, authority_root) = match parsed.kind {
-        crate::ura::URAKind::Agent => {
+        crate::core::ura::URAKind::Agent => {
             // DEC-F048: MCP reflective descriptors carry user-configured
             // tooling. A device-sponsored System Agent carries no user
             // identity and MUST NOT own them (RFC-005 §3.1.2) — explicit
@@ -1400,20 +1400,22 @@ fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthorit
                 owner_ura.to_string(),
             )
         }
-        crate::ura::URAKind::Hub => (OwnerKind::Hub, "hub".to_string(), owner_ura.to_string()),
-        crate::ura::URAKind::Device => (
+        crate::core::ura::URAKind::Hub => {
+            (OwnerKind::Hub, "hub".to_string(), owner_ura.to_string())
+        }
+        crate::core::ura::URAKind::Device => (
             OwnerKind::Device,
             "device".to_string(),
             owner_ura.to_string(),
         ),
-        crate::ura::URAKind::User => {
+        crate::core::ura::URAKind::User => {
             let Some(user_id) = parsed.user_id() else {
                 return Err("owner user URA is missing user_id".to_string());
             };
             (
                 OwnerKind::User(user_id.to_string()),
                 format!("user:{user_id}"),
-                crate::ura::agent_ura(&parsed.realm, user_id, "account"),
+                crate::core::ura::agent_ura(&parsed.realm, user_id, "account"),
             )
         }
         other => {
@@ -1446,8 +1448,8 @@ struct StreamForwardingSink {
     sender: tokio::sync::broadcast::Sender<Value>,
 }
 
-impl crate::daemon::execution::mcp_client::NotificationSink for StreamForwardingSink {
-    fn observe(&mut self, n: crate::daemon::execution::mcp_client::ObservedNotification) {
+impl crate::daemon::execution::mcp::NotificationSink for StreamForwardingSink {
+    fn observe(&mut self, n: crate::daemon::execution::mcp::ObservedNotification) {
         if let Some(p) = n.as_progress() {
             let frame = serde_json::json!({
                 "type": "progress",
@@ -1487,7 +1489,7 @@ impl crate::daemon::execution::mcp_client::NotificationSink for StreamForwarding
 /// can retire vanished names without leaving stale entries.
 pub struct RegistryRefreshSink {
     registry: std::sync::Weak<AxonAbilityCatalog>,
-    client: std::sync::Weak<crate::daemon::execution::mcp_client::McpClientService>,
+    client: std::sync::Weak<crate::daemon::execution::mcp::McpClientService>,
     server_name: String,
     owner_ura: String,
     /// Names previously reflected through this sink. Wrapped in Arc
@@ -1501,7 +1503,7 @@ pub struct RegistryRefreshSink {
 impl RegistryRefreshSink {
     pub fn new(
         registry: std::sync::Weak<AxonAbilityCatalog>,
-        client: std::sync::Weak<crate::daemon::execution::mcp_client::McpClientService>,
+        client: std::sync::Weak<crate::daemon::execution::mcp::McpClientService>,
         server_name: String,
         owner_ura: String,
         initially_reflected: Vec<String>,
@@ -1516,8 +1518,8 @@ impl RegistryRefreshSink {
     }
 }
 
-impl crate::daemon::execution::mcp_client::NotificationSink for RegistryRefreshSink {
-    fn observe(&mut self, n: crate::daemon::execution::mcp_client::ObservedNotification) {
+impl crate::daemon::execution::mcp::NotificationSink for RegistryRefreshSink {
+    fn observe(&mut self, n: crate::daemon::execution::mcp::ObservedNotification) {
         if n.method != "notifications/tools/list_changed" {
             return;
         }
@@ -1541,7 +1543,7 @@ impl crate::daemon::execution::mcp_client::NotificationSink for RegistryRefreshS
         let server = self.server_name.clone();
         let owner = self.owner_ura.clone();
         let names = std::sync::Arc::clone(&self.reflected_names);
-        // We're called from the mcp_client listener task, which is a
+        // We're called from the mcp listener task, which is a
         // tokio task — `Handle::current()` is available. observe()
         // must return quickly (the listener is still draining
         // frames), so the network-bound refresh runs detached.
@@ -1568,7 +1570,7 @@ impl crate::daemon::execution::mcp_client::NotificationSink for RegistryRefreshS
 /// The future ends with `tx` dropping, which closes the broadcast
 /// channel and signals end-of-stream to the receiver.
 async fn stream_one_upstream_call(
-    client: crate::daemon::execution::mcp_client::McpClientService,
+    client: crate::daemon::execution::mcp::McpClientService,
     server: String,
     upstream_tool: String,
     args: Value,
@@ -1604,7 +1606,7 @@ async fn stream_one_upstream_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::execution::mcp_client::{McpClientService, McpClientsFile, McpServerSpec};
+    use crate::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
     use std::collections::HashMap;
 
     #[test]
@@ -1926,7 +1928,7 @@ while True:
     /// by `plan(...)` tests that exercise non-Eager arms — those
     /// branches never dial the service, so the empty catalogue is
     /// sufficient and avoids spinning up a stdio child process.
-    fn empty_mcp_client() -> Arc<McpClientService> {
+    fn empty_mcp() -> Arc<McpClientService> {
         Arc::new(McpClientService::from_file(McpClientsFile {
             servers: Vec::new(),
         }))
@@ -1938,7 +1940,7 @@ while True:
         // (no user segment), so reflection MUST short-circuit before
         // any mode-dependent work. This invariant holds across all
         // three modes — `pages_user = None` always wins.
-        let svc = empty_mcp_client();
+        let svc = empty_mcp();
         let mut reg = AxonAbilityCatalog::new();
         for mode in [
             McpReflectionMode::Off,
@@ -1958,7 +1960,7 @@ while True:
     fn plan_off_mode_skips_even_when_paired() {
         // `EASYNET_MCP_REFLECTION=off` is the operator's explicit opt
         // out — pairing state is irrelevant, the plan stays Skip.
-        let svc = empty_mcp_client();
+        let svc = empty_mcp();
         let mut reg = AxonAbilityCatalog::new();
         let plan = PostArcReflection::plan(
             McpReflectionMode::Off,
@@ -1974,10 +1976,10 @@ while True:
     fn plan_lazy_mode_defers_to_supervisor_with_canonical_owner() {
         // Lazy + paired daemon: plan stamps the owner URA and hands
         // off to the supervisor. The service is NOT consulted at
-        // plan-time (no `tools/list` round-trip), so `empty_mcp_client`
+        // plan-time (no `tools/list` round-trip), so `empty_mcp`
         // is sufficient — the actual reflection happens later inside
         // the supervisor's spawned thread.
-        let svc = empty_mcp_client();
+        let svc = empty_mcp();
         let mut reg = AxonAbilityCatalog::new();
         let plan = PostArcReflection::plan(
             McpReflectionMode::Lazy,
@@ -2152,15 +2154,14 @@ while True:
         // The "before" upstream advertises [a, b].
         let script = write_script(dir.path(), &["a", "b"], "before");
 
-        let svc =
-            McpClientService::from_file(crate::daemon::execution::mcp_client::McpClientsFile {
-                servers: vec![McpServerSpec {
-                    name: "echo".into(),
-                    command: script.to_string_lossy().to_string(),
-                    stdio_framing: "content-length".into(),
-                    ..Default::default()
-                }],
-            });
+        let svc = McpClientService::from_file(crate::daemon::execution::mcp::McpClientsFile {
+            servers: vec![McpServerSpec {
+                name: "echo".into(),
+                command: script.to_string_lossy().to_string(),
+                stdio_framing: "content-length".into(),
+                ..Default::default()
+            }],
+        });
         let mut reg = AxonAbilityCatalog::new();
         let initial = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
         assert!(initial.failed.is_empty(), "{:?}", initial.failed);
@@ -2182,15 +2183,14 @@ while True:
         drop(svc);
 
         let script2 = write_script(dir.path(), &["b", "c"], "after");
-        let svc2 =
-            McpClientService::from_file(crate::daemon::execution::mcp_client::McpClientsFile {
-                servers: vec![McpServerSpec {
-                    name: "echo".into(),
-                    command: script2.to_string_lossy().to_string(),
-                    stdio_framing: "content-length".into(),
-                    ..Default::default()
-                }],
-            });
+        let svc2 = McpClientService::from_file(crate::daemon::execution::mcp::McpClientsFile {
+            servers: vec![McpServerSpec {
+                name: "echo".into(),
+                command: script2.to_string_lossy().to_string(),
+                stdio_framing: "content-length".into(),
+                ..Default::default()
+            }],
+        });
         let mut reg2 = AxonAbilityCatalog::new();
         // Pre-seed reg2 with the "before" catalogue + a fake
         // descriptor source — refresh_server should keep `b`,
@@ -2303,9 +2303,9 @@ while True:
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let svc = crate::daemon::execution::mcp_client::McpClientService::from_file(
-            crate::daemon::execution::mcp_client::McpClientsFile {
-                servers: vec![crate::daemon::execution::mcp_client::McpServerSpec {
+        let svc = crate::daemon::execution::mcp::McpClientService::from_file(
+            crate::daemon::execution::mcp::McpClientsFile {
+                servers: vec![crate::daemon::execution::mcp::McpServerSpec {
                     name: "prg".into(),
                     command: script.to_string_lossy().to_string(),
                     stdio_framing: "content-length".into(),

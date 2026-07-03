@@ -4,7 +4,7 @@ A ready-to-publish folder with a **static frontend** and a **real backend**,
 both served by your EasyNet daemon through the Hub. No build step, no nginx,
 no separate API server, no LLM call — just `easynet pages create`.
 
-Unlike `demos/d2-agent-fullstack.sh` (which dispatches an agent to *write* an
+Unlike `examples/public-routes-e2e/d2-agent-fullstack.sh` (which dispatches an agent to *write* an
 app), this folder is checked in and publishable directly.
 
 ## Layout
@@ -83,4 +83,4 @@ ability_ura = "easynet:///r/<realm>/ability/<user>.<project>.api.add_feedback"
 
 The HTTP request body is forwarded verbatim as the ability's args, and the
 ability's result becomes the HTTP response body. See
-`demos/d2-agent-fullstack.sh` for an end-to-end `kind="ability"` example.
+`examples/public-routes-e2e/d2-agent-fullstack.sh` for an end-to-end `kind="ability"` example.

@@ -36,7 +36,7 @@ use crate::daemon::ability::builtins::{
     },
     integrations::{
         a2a::{bridge as a2a_bridge_ability, client as a2a_client_ability},
-        mcp::{bridge as mcp_bridge_ability, client as mcp_client_ability},
+        mcp::{bridge as mcp_bridge_ability, client as mcp_ability},
         openai_compat as openai_compat_ability, plugins as plugin_lifecycle_ability,
     },
     resources::{
@@ -48,13 +48,13 @@ use crate::daemon::ability::builtins::{
     },
 };
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::execution::discuss::DiscussService;
 use crate::daemon::execution::loop_instance::LoopService;
+use crate::daemon::execution::mission::discuss::DiscussService;
 use crate::daemon::execution::permission::PermissionService;
 use crate::daemon::execution::pty::PtyService;
 use crate::daemon::execution::schedule::ScheduleService;
 use crate::daemon::execution::session::SessionService;
-use crate::registry::agents::AgentRegistry;
+use crate::daemon::persistence::agent_registry::AgentRegistry;
 use std::sync::Arc;
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
@@ -631,7 +631,7 @@ fn build_registry_with_services_result_inner(
             let realm = pages_identity
                 .realm
                 .clone()
-                .unwrap_or_else(|| crate::ura::REALM_EASYNET.to_string());
+                .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string());
             let listener_port = pages_identity.listener_port.unwrap_or(8787);
             let pages_realm = realm.clone();
             pages::register(
@@ -723,7 +723,7 @@ fn build_registry_with_services_result_inner(
     // through HotAgentRegistrar after `Arc::new(reg)` below.
     discover_ability::register_device_aggregate_with_resolver(
         &mut reg,
-        || crate::registry::agents::load_agents().unwrap_or_default(),
+        || crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default(),
         Arc::clone(&local_registry_handle),
         Arc::clone(&discover_federation_resolver),
     );
@@ -753,7 +753,7 @@ fn build_registry_with_services_result_inner(
     if std::env::var("EASYNET_KEYRING_DISABLE").is_err() {
         match init_keyring_for_daemon() {
             Ok(handle) => {
-                crate::runtime::keyring::abilities::register_for_owner(&mut reg, "device", handle);
+                crate::daemon::keyring::abilities::register_for_owner(&mut reg, "device", handle);
             }
             Err(e) => {
                 let err_msg = format!("{e}");
@@ -789,7 +789,10 @@ fn build_registry_with_services_result_inner(
     let agents_for_a2a = agents.clone();
     a2a_bridge_ability::register(
         &mut reg,
-        move || crate::registry::agents::load_agents().unwrap_or_else(|_| agents_for_a2a.clone()),
+        move || {
+            crate::daemon::persistence::agent_registry::load_agents()
+                .unwrap_or_else(|_| agents_for_a2a.clone())
+        },
         Arc::clone(&local_registry_handle),
     );
     // a2a.client.send_task — outbound A2A. The handler dials the
@@ -798,33 +801,30 @@ fn build_registry_with_services_result_inner(
     // instead of panicking.
     a2a_client_ability::register(&mut reg);
     // mcp.client.{list,call} — outbound MCP. Boots an
-    // McpClientService from ~/.easynet/mcp_clients.json (missing
+    // McpClientService from ~/.easynet/mcps.json (missing
     // file → empty service, no upstreams). Each upstream MCP
     // server is spawned lazily on first call; subsequent calls
     // reuse the live connection. Parse errors at boot bubble up
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
-    let mcp_clients_path =
-        crate::daemon::execution::mcp_client::McpClientService::default_config_path();
-    let mcp_client_svc = match crate::daemon::execution::mcp_client::McpClientService::from_path(
-        &mcp_clients_path,
-    ) {
+    let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path();
+    let mcp_svc = match crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path) {
         Ok(svc) => Arc::new(svc),
         Err(e) => {
-            let path_display = format!("{}", mcp_clients_path.display());
+            let path_display = format!("{}", mcps_path.display());
             let err_msg = format!("{e}");
             crate::op_event!(
-                component = mcp_client,
+                component = mcp,
                 kind = config_load_failed,
                 level = "warn",
                 path = path_display,
                 error = err_msg,
                 fallback = "empty_service",
             );
-            Arc::new(crate::daemon::execution::mcp_client::McpClientService::new())
+            Arc::new(crate::daemon::execution::mcp::McpClientService::new())
         }
     };
-    mcp_client_ability::register(&mut reg, mcp_client_svc.clone());
+    mcp_ability::register(&mut reg, mcp_svc.clone());
 
     // Install the same `Arc<McpClientService>` as the process-wide
     // handle used by `[exec] kind="mcp"` ability dispatch. Before this
@@ -834,7 +834,7 @@ fn build_registry_with_services_result_inner(
     // shares one connection pool, one config snapshot, one `next_id`
     // sequence per upstream. No silent divergence between surfaces.
     crate::daemon::ability::builtins::integrations::mcp::executor::set_process_client(
-        mcp_client_svc.clone(),
+        mcp_svc.clone(),
     );
 
     // MCP reflection policy. Direct MCP client abilities are already
@@ -874,7 +874,7 @@ fn build_registry_with_services_result_inner(
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
         pages_identity.user.as_deref(),
         &reflection_realm,
-        &mcp_client_svc,
+        &mcp_svc,
         &mut reg,
     );
     // agent.list — operational view of registered LLM
@@ -882,7 +882,8 @@ fn build_registry_with_services_result_inner(
     // for the protocol agent-card view see a2a.bridge.list_skills.
     let agents_for_device_view = agents.clone();
     agent_list_ability::register(&mut reg, move || {
-        crate::registry::agents::load_agents().unwrap_or_else(|_| agents_for_device_view.clone())
+        crate::daemon::persistence::agent_registry::load_agents()
+            .unwrap_or_else(|_| agents_for_device_view.clone())
     });
     // meta.teach / meta.acquire / meta.forget — GET route B
     // (seven-axes T3.3): owner-conferred capability transfer.
@@ -988,7 +989,7 @@ fn build_registry_with_services_result_inner(
     // in exactly one module. Eager hands the supervisor the
     // per-server index it computed at boot; lazy lets the supervisor
     // compute its own once the background reflection pass finishes.
-    reflection_plan.apply(Arc::clone(&mcp_client_svc), Arc::clone(&arc));
+    reflection_plan.apply(Arc::clone(&mcp_svc), Arc::clone(&arc));
 
     BuiltAbilityRegistry {
         catalog: arc,
@@ -1026,10 +1027,10 @@ pub fn build_registry_with_services(config: RegistryBuildConfig<'_>) -> Arc<Axon
 ///
 /// Returns `Err` only on filesystem / decode / KDF errors; absence
 /// of an existing file is the happy path (creates a fresh ring).
-fn init_keyring_for_daemon(
-) -> anyhow::Result<std::sync::Arc<crate::runtime::keyring::KeyringHandle>> {
-    use crate::runtime::keyring::store::default_keyring_path;
-    use crate::runtime::keyring::KeyringHandle;
+fn init_keyring_for_daemon() -> anyhow::Result<std::sync::Arc<crate::daemon::keyring::KeyringHandle>>
+{
+    use crate::daemon::keyring::store::default_keyring_path;
+    use crate::daemon::keyring::KeyringHandle;
     let path = std::env::var("EASYNET_KEYRING_PATH")
         .map(std::path::PathBuf::from)
         .ok()
@@ -1075,7 +1076,7 @@ pub fn build_registry_for_daemon_result(
         shared_stores,
     } = config;
     recover_descriptor_import_transactions_before_daemon_registry_boot()?;
-    let agents = match crate::registry::agents::load_agents() {
+    let agents = match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(r) => r,
         Err(e) => {
             let err_msg = format!("{e}");

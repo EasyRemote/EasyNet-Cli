@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::persistence::config::state_dir;
+use crate::daemon::persistence::config::state_dir;
 
 /// Filename inside `~/.easynet/`.
 pub const CONTROL_JSON_FILENAME: &str = "control.json";

@@ -8,13 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::persistence::resources::ResourcesFile;
 use crate::daemon::plugins::manifest::PluginRealtimeCapability;
 use crate::daemon::plugins::realtime::{
     PluginRealtimeActivationPlan, PluginRealtimeActivationStatus, PluginRealtimeTransportReadiness,
     PluginRealtimeTransportReadinessStatus,
 };
 use crate::daemon::plugins::surface::{PluginPackageSurfaceRecord, PluginSurfaceReport};
-use crate::persistence::resources::ResourcesFile;
 
 /// Package-level activation broker for plugin realtime capabilities.
 ///
@@ -331,13 +331,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::surface::PluginKindView;
     use crate::daemon::plugins::{
         activation_plans_for_manifest, PluginPackageManifest, PluginRealtimePermissionStatus,
         PluginRealtimeTransportReadinessStatus, PluginRealtimeTransportRoleStatus,
         PluginSurfaceReport,
     };
-    use crate::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use std::collections::BTreeSet;
 
     #[test]
@@ -500,8 +500,11 @@ resources = ["display"]
 
     fn resource(kind: ResourceType, hardware_id: &str) -> ResourceEntry {
         ResourceEntry {
-            resource_ura: crate::persistence::resources::build_resource_ura("acme", hardware_id),
-            owner_agent: crate::ura::device_ura("acme", "dev-a"),
+            resource_ura: crate::daemon::persistence::resources::build_resource_ura(
+                "acme",
+                hardware_id,
+            ),
+            owner_agent: crate::core::ura::device_ura("acme", "dev-a"),
             kind,
             binding: ResourceBinding::LocalDevice,
             hardware_id: hardware_id.to_string(),

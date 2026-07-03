@@ -85,23 +85,26 @@ use crate::daemon::ability::builtins::{
 };
 use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
 // ── Helpers ──────────────────────────────────────────────────────
 
 fn fs_ref(
     path: &std::path::Path,
-    capability: crate::daemon::resources::filesystem::FilesystemResourceCapability,
+    capability: crate::daemon::resources::files::FilesystemResourceCapability,
 ) -> Value {
-    crate::daemon::resources::filesystem::resource_ref_for_local_path(path, capability)
+    crate::daemon::resources::files::resource_ref_for_local_path(path, capability)
         .expect("local fs ResourceRef")
 }
 
 /// Build the production registry inside a HomeGuard so any
 /// HOME-touching boot logic (mcp_clients.json discovery,
 /// agents.json load, etc.) lands in a fresh tempdir.
-fn registry_with_temp_home() -> (Arc<AxonAbilityCatalog>, crate::cli::test_support::HomeGuard) {
-    let guard = crate::cli::test_support::HomeGuard::new();
+fn registry_with_temp_home() -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+) {
+    let guard = crate::cli::commands::test_support::HomeGuard::new();
     // build_registry_for_daemon does the agent-registry load that
     // some abilities need (agent.list, chat-per-agent etc).
     let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
@@ -123,18 +126,18 @@ fn materialise_skill_fixture(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let owner = format!("real-skill-{tag}-{pid}-{nanos}");
-    let root = crate::persistence::config::agents_root().join(&owner);
+    let root = crate::daemon::persistence::config::agents_root().join(&owner);
     let skill_dir = root.join("skills").join(skill_name);
     std::fs::create_dir_all(&skill_dir).expect("create skill fixture dir");
-    crate::persistence::config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())
+    crate::daemon::persistence::config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())
         .expect("write skill fixture body");
     let meta_dir = skill_dir.join(".easynet");
     std::fs::create_dir_all(&meta_dir).expect("create skill fixture metadata dir");
-    let install = crate::runtime::skill_store::InstallRecord {
+    let install = crate::daemon::resources::skills::store::InstallRecord {
         name: skill_name.to_string(),
         description: body.to_string(),
         agent_id: owner.clone(),
-        source: crate::runtime::skill_store::SkillSource {
+        source: crate::daemon::resources::skills::store::SkillSource {
             kind: "fixture".to_string(),
             identifier: "real-invoke-tests".to_string(),
             ref_: None,
@@ -147,15 +150,19 @@ fn materialise_skill_fixture(
         upgrade_available: false,
     };
     let install_json = serde_json::to_vec_pretty(&install).expect("serialize install fixture");
-    crate::persistence::config::atomic_write(&meta_dir.join("install.json"), &install_json)
+    crate::daemon::persistence::config::atomic_write(&meta_dir.join("install.json"), &install_json)
         .expect("write install fixture");
 
-    let mut registry = crate::registry::agents::load_agents().unwrap_or_default();
-    let mut entry =
-        crate::registry::agents::AgentEntry::new(crate::registry::agents::AgentType::Codex, None);
+    let mut registry =
+        crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default();
+    let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
+        crate::daemon::persistence::agent_registry::AgentType::Codex,
+        None,
+    );
     entry.root_path = Some(root);
     registry.agents.insert(owner.clone(), entry);
-    crate::registry::agents::save_agents(&registry).expect("save skill fixture agent");
+    crate::daemon::persistence::agent_registry::save_agents(&registry)
+        .expect("save skill fixture agent");
     (owner, skill_dir)
 }
 
@@ -830,7 +837,7 @@ fn real_fs_write_round_trips_through_real_disk() {
     let resp = invoke(
         "fs.write",
         json!({
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
             "content": payload,
             "encoding": "utf8",
         }),
@@ -975,7 +982,7 @@ fn real_fs_read_reads_this_crates_cargo_toml() {
     let resp = invoke(
         "fs.read",
         json!({
-            "resource_ref": fs_ref(&cargo_toml, crate::daemon::resources::filesystem::FilesystemResourceCapability::Read),
+            "resource_ref": fs_ref(&cargo_toml, crate::daemon::resources::files::FilesystemResourceCapability::Read),
             "encoding": "utf8",
         }),
     );
@@ -997,7 +1004,7 @@ fn real_fs_read_reads_this_crates_cargo_toml() {
 
 #[test]
 fn real_fs_read_reads_an_actual_file() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-read-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("hello.txt");
@@ -1006,7 +1013,7 @@ fn real_fs_read_reads_an_actual_file() {
     let resp = invoke(
         "fs.read",
         json!({
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Read),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Read),
             "encoding":"utf8"
         }),
     );
@@ -1019,7 +1026,7 @@ fn real_fs_read_reads_an_actual_file() {
 
 #[test]
 fn real_fs_stat_reports_file_metadata() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-stat-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("metadata.txt");
@@ -1028,7 +1035,7 @@ fn real_fs_stat_reports_file_metadata() {
     let resp = invoke(
         "fs.stat",
         json!({
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Stat),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Stat),
         }),
     );
 
@@ -1057,7 +1064,7 @@ fn real_fs_stat_reports_file_metadata() {
 
 #[test]
 fn real_fs_write_creates_a_file_with_expected_content() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-write-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("out.txt");
@@ -1065,7 +1072,7 @@ fn real_fs_write_creates_a_file_with_expected_content() {
     let resp = invoke(
         "fs.write",
         json!({
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
             "content": "real write",
             "encoding": "utf8",
         }),
@@ -1078,7 +1085,7 @@ fn real_fs_write_creates_a_file_with_expected_content() {
 
 #[test]
 fn real_fs_list_lists_directory_entries() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-list-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     std::fs::write(dir.join("a.txt"), "a").unwrap();
@@ -1087,7 +1094,7 @@ fn real_fs_list_lists_directory_entries() {
     let resp = invoke(
         "fs.list",
         json!({
-            "resource_ref": fs_ref(&dir, crate::daemon::resources::filesystem::FilesystemResourceCapability::List)
+            "resource_ref": fs_ref(&dir, crate::daemon::resources::files::FilesystemResourceCapability::List)
         }),
     );
     let body = resp.as_object().expect("object response");
@@ -1133,7 +1140,7 @@ fn real_fs_list_lists_directory_entries() {
 
 #[test]
 fn real_fs_edit_replaces_a_unique_match() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-edit-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("config.txt");
@@ -1142,7 +1149,7 @@ fn real_fs_edit_replaces_a_unique_match() {
     let resp = invoke(
         "fs.edit",
         json!({
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
             "old_string": "old",
             "new_string": "new",
         }),
@@ -1163,7 +1170,7 @@ fn real_consent_decide_records_a_decision() {
     // Fresh PermissionService → no pending → handler errors
     // gracefully. We assert the structured error mentions the
     // unknown id rather than panicking.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new();
     permission_ability::register(&mut reg, perms);
@@ -1192,7 +1199,7 @@ fn real_consent_decide_records_a_decision() {
 
 #[test]
 fn real_consent_list_pending_returns_empty_on_fresh_service() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new();
     permission_ability::register(&mut reg, perms);
@@ -1213,8 +1220,8 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
 
 #[test]
 fn real_discuss_create_then_post_round_trips_through_the_service() {
-    let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::daemon::execution::discuss::DiscussService::new());
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let svc = Arc::new(crate::daemon::execution::mission::discuss::DiscussService::new());
     let mut reg = AxonAbilityCatalog::new();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -1258,7 +1265,7 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
 
 #[test]
 fn real_schedule_add_then_list_then_remove_round_trip() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
     let mut reg = AxonAbilityCatalog::new();
     schedule_ability::register(&mut reg, svc);
@@ -1296,7 +1303,7 @@ fn real_schedule_add_then_list_then_remove_round_trip() {
 
 #[test]
 fn real_schedule_enable_routes_to_handler() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
     let mut reg = AxonAbilityCatalog::new();
     schedule_ability::register(&mut reg, svc);
@@ -1319,7 +1326,7 @@ fn real_schedule_enable_routes_to_handler() {
 
 #[test]
 fn real_schedule_remove_routes_to_handler() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
     let mut reg = AxonAbilityCatalog::new();
     schedule_ability::register(&mut reg, svc);
@@ -1338,7 +1345,7 @@ fn real_schedule_remove_routes_to_handler() {
 
 #[test]
 fn real_loop_create_then_status_then_cancel() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
@@ -1376,7 +1383,7 @@ fn real_loop_create_then_status_then_cancel() {
 
 #[test]
 fn real_loop_status_routes_for_unknown_id() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
@@ -1392,7 +1399,7 @@ fn real_loop_status_routes_for_unknown_id() {
 
 #[test]
 fn real_loop_cancel_routes_for_unknown_id() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
@@ -1427,15 +1434,17 @@ fn real_device_session_list_returns_empty_under_temp_home() {
 #[test]
 fn real_device_agent_start_then_stop_agent_round_trip() {
     let (reg, _g) = registry_with_temp_home();
-    crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
-        node_id: "dev-1".to_string(),
-        credential_token: "token".to_string(),
-        hub_endpoint: "axon://hub.test:50051".to_string(),
-        realm: "localhost".to_string(),
-        username: Some("dev".to_string()),
-        user_id: Some("user-dev".to_string()),
-        ..Default::default()
-    })
+    crate::daemon::persistence::config::save_credentials(
+        &crate::daemon::persistence::config::Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            realm: "localhost".to_string(),
+            username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
+            ..Default::default()
+        },
+    )
     .expect("seed joined credentials");
     let d = dispatcher_for(reg);
     let start = d
@@ -1468,15 +1477,17 @@ fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
     // returns `ok=true`. A hosted agent with no runtime row to sync simply
     // reports `runtime_registered=0` without failing.
     let (reg, _g) = registry_with_temp_home();
-    crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
-        node_id: "dev-1".to_string(),
-        credential_token: "token".to_string(),
-        hub_endpoint: "axon://hub.test:50051".to_string(),
-        realm: "localhost".to_string(),
-        username: Some("dev".to_string()),
-        user_id: Some("user-dev".to_string()),
-        ..Default::default()
-    })
+    crate::daemon::persistence::config::save_credentials(
+        &crate::daemon::persistence::config::Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            realm: "localhost".to_string(),
+            username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
+            ..Default::default()
+        },
+    )
     .expect("seed joined credentials");
     let d = dispatcher_for(reg);
     d.execute_rpc(target(
@@ -1656,14 +1667,16 @@ fn real_skill_list_returns_items_array_under_temp_home() {
 fn real_skill_list_accepts_agent_and_subject_ura_scope() {
     let (reg, _g) = registry_with_temp_home();
     let (owner, _skill_dir) = materialise_skill_fixture("scope", "scoped-skill", "# Scoped\nBody");
-    let agent_ura = crate::ura::agent_ura("localhost", "dev", &owner);
-    let mut local = crate::persistence::local_agents::LocalAgentsFile {
+    let agent_ura = crate::core::ura::agent_ura("localhost", "dev", &owner);
+    let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
         host_device_agent_ura: "easynet:///r/localhost/device/dev-1".to_string(),
         ..Default::default()
     };
-    crate::persistence::local_agents::upsert_hosted_agent(&mut local, "llm", &owner, &agent_ura);
-    crate::persistence::local_agents::save(&local).expect("save local agents fixture");
-    let subject_ura = crate::ura::resource_dot_ura(
+    crate::daemon::persistence::local_agents::upsert_hosted_agent(
+        &mut local, "llm", &owner, &agent_ura,
+    );
+    crate::daemon::persistence::local_agents::save(&local).expect("save local agents fixture");
+    let subject_ura = crate::core::ura::resource_dot_ura(
         "localhost",
         &format!("agent.dev.{owner}"),
         "skill/scoped-skill",
@@ -1691,7 +1704,7 @@ fn real_skill_tree_lists_files_for_registered_agent_skill() {
         materialise_skill_fixture("tree", "inspectable", "# Inspectable\nBody");
     let notes = skill_dir.join("notes");
     std::fs::create_dir_all(&notes).expect("create notes dir");
-    crate::persistence::config::atomic_write(&notes.join("guide.md"), b"guide")
+    crate::daemon::persistence::config::atomic_write(&notes.join("guide.md"), b"guide")
         .expect("write guide");
 
     let resp = dispatcher_for(reg)
@@ -2115,7 +2128,7 @@ fn every_published_ability_has_a_real_invoke_test() {
 
 #[test]
 fn real_device_plugin_status_reports_runtime_surface() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let status = d
@@ -2130,7 +2143,7 @@ fn real_device_plugin_status_reports_runtime_surface() {
 
 #[test]
 fn real_device_plugin_reload_reports_registration_diff() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let report = d
@@ -2149,7 +2162,7 @@ fn real_device_plugin_reload_reports_registration_diff() {
 
 #[test]
 fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let result = d.execute_rpc(target(
@@ -2173,7 +2186,7 @@ fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
 
 #[test]
 fn real_consent_subscribe_returns_a_stream_source() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new();
     permission_ability::register(&mut reg, perms);
@@ -2187,8 +2200,8 @@ fn real_consent_subscribe_returns_a_stream_source() {
 
 #[test]
 fn real_discuss_subscribe_returns_a_stream_source() {
-    let _g = crate::cli::test_support::HomeGuard::new();
-    let svc = Arc::new(crate::daemon::execution::discuss::DiscussService::new());
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let svc = Arc::new(crate::daemon::execution::mission::discuss::DiscussService::new());
     let mut reg = AxonAbilityCatalog::new();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -2208,7 +2221,7 @@ fn real_discuss_subscribe_returns_a_stream_source() {
 
 #[test]
 fn real_loop_subscribe_returns_a_stream_source() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
     let mut reg = AxonAbilityCatalog::new();
     loop_ability::register(&mut reg, svc);
@@ -2226,7 +2239,7 @@ fn real_loop_subscribe_returns_a_stream_source() {
 
 #[test]
 fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::session::SessionService::new());
     let mut reg = AxonAbilityCatalog::new();
     session_ability::register(&mut reg, svc);
@@ -2244,7 +2257,7 @@ fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
 
 #[test]
 fn real_device_terminal_create_then_close_round_trip() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
@@ -2287,7 +2300,7 @@ fn real_device_terminal_create_then_close_round_trip() {
 // scans this file's tokens picks up every ability name.
 #[test]
 fn real_device_terminal_input_read_resize_round_trip() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let io = pty_io_ability::PtyIoService::new();
     let mut reg = AxonAbilityCatalog::new();
@@ -2358,7 +2371,7 @@ fn real_device_terminal_input_read_resize_round_trip() {
 // live runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_terminal_attach_returns_a_bidi_source() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
@@ -2386,7 +2399,7 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let mut reg = AxonAbilityCatalog::new();
     file_transfer_ability::register(&mut reg);
     let d = dispatcher_for(Arc::new(reg));
@@ -2404,7 +2417,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "upload",
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Write),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
         }),
     );
     t.call_mode = CallMode::Bidi;
@@ -2442,7 +2455,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let mut reg = AxonAbilityCatalog::new();
     file_transfer_ability::register(&mut reg);
     let d = dispatcher_for(Arc::new(reg));
@@ -2462,7 +2475,7 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "download",
-            "resource_ref": fs_ref(&path, crate::daemon::resources::filesystem::FilesystemResourceCapability::Read),
+            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Read),
         }),
     );
     t.call_mode = CallMode::Bidi;
@@ -2542,26 +2555,26 @@ fn assert_routed_to_media_stub(ability: &str, err: &anyhow::Error) {
 }
 
 fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
-    let mut file = crate::persistence::resources::ResourcesFile::default();
-    let ura = crate::persistence::resources::upsert_resource(
+    let mut file = crate::daemon::persistence::resources::ResourcesFile::default();
+    let ura = crate::daemon::persistence::resources::upsert_resource(
         &mut file,
-        crate::persistence::resources::ResourceUpsert {
+        crate::daemon::persistence::resources::ResourceUpsert {
             realm: "acme",
             owner_agent: "easynet:///r/acme/device/real-invoke",
-            kind: crate::persistence::resources::ResourceType::Display,
-            binding: crate::persistence::resources::ResourceBinding::LocalDevice,
+            kind: crate::daemon::persistence::resources::ResourceType::Display,
+            binding: crate::daemon::persistence::resources::ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Real Invoke Display",
             metadata: json!({}),
         },
     );
-    crate::persistence::resources::save(&file).expect("save real-invoke display resource");
+    crate::daemon::persistence::resources::save(&file).expect("save real-invoke display resource");
     ura
 }
 
 #[test]
 fn real_mic_subscribe_routes_to_subject_gate() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("mic.subscribe", json!({}))
@@ -2578,7 +2591,7 @@ fn real_mic_subscribe_routes_to_subject_gate() {
 
 #[test]
 fn real_camera_subscribe_routes_to_media_subject_gate() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("camera.subscribe", json!({}));
@@ -2597,7 +2610,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
     // PR3a real handler: with no envelope subject the handler
     // MUST reject with reason="subject_required". The dedicated
     // suite in `media::camera_snapshot` covers the populated path.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -2611,7 +2624,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
 
 #[test]
 fn real_camera_record_start_with_no_subject_returns_subject_required() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -2625,7 +2638,7 @@ fn real_camera_record_start_with_no_subject_returns_subject_required() {
 
 #[test]
 fn real_camera_record_stop_with_no_subject_returns_subject_required() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -2642,7 +2655,7 @@ fn real_camera_record_stop_with_no_subject_returns_subject_required() {
 
 #[test]
 fn real_screen_subscribe_with_no_subject_returns_subject_required() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("screen.subscribe", json!({}));
@@ -2658,7 +2671,7 @@ fn real_screen_subscribe_with_no_subject_returns_subject_required() {
 
 #[test]
 fn real_screen_snapshot_with_no_subject_returns_subject_required() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -2673,7 +2686,7 @@ fn real_screen_snapshot_with_no_subject_returns_subject_required() {
 #[test]
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_permission_status_reports_contract() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let status = d
@@ -2688,7 +2701,7 @@ fn real_remote_desktop_permission_status_reports_contract() {
 #[test]
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_request_permission_reports_contract() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let status = d
@@ -2703,7 +2716,7 @@ fn real_remote_desktop_request_permission_reports_contract() {
 #[test]
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_create_session_requires_envelope_subject() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -2718,7 +2731,7 @@ fn real_remote_desktop_create_session_requires_envelope_subject() {
 #[test]
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
     let reg = build_registry();
     let d = dispatcher_for(reg);
@@ -2848,7 +2861,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
 #[test]
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut attach = target(
@@ -2867,7 +2880,7 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
 
 #[test]
 fn real_speaker_publish_routes_to_media_stub() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("speaker.publish", json!({}));
@@ -2878,7 +2891,7 @@ fn real_speaker_publish_routes_to_media_stub() {
 
 #[test]
 fn real_voice_subscribe_routes_to_media_stub() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("voice.subscribe", json!({}));
@@ -2889,7 +2902,7 @@ fn real_voice_subscribe_routes_to_media_stub() {
 
 #[test]
 fn real_voice_transcribe_routes_to_media_stub() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let mut t = target("voice.transcribe", json!({}));
@@ -2919,11 +2932,11 @@ fn real_browser_open_session_mints_resource_ura() {
     // Centralised URA parsing satisfies the
     // `tests/scripts/test_no_raw_ura_construction.sh` contract: no
     // module outside `src/ura.rs` should hand-parse the scheme.
-    let parsed = crate::ura::parse_ura(ura)
+    let parsed = crate::core::ura::parse_ura(ura)
         .unwrap_or_else(|e| panic!("session_ura {ura:?} must parse: {e}"));
     assert_eq!(
         parsed.kind,
-        crate::ura::URAKind::Resource,
+        crate::core::ura::URAKind::Resource,
         "session_ura must resolve to a Resource URA, got {parsed:?}"
     );
     assert_eq!(resp["state"], "open");
@@ -2931,7 +2944,7 @@ fn real_browser_open_session_mints_resource_ura() {
 
 #[test]
 fn real_browser_send_input_requires_known_session() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -2950,7 +2963,7 @@ fn real_browser_send_input_requires_known_session() {
 fn real_browser_capture_viewport_emits_one_placeholder_frame() {
     // Open a session inside the same dispatcher so the in-process
     // session store sees the row when capture_viewport runs.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let open = d
@@ -2974,7 +2987,7 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
 
 #[tokio::test]
 async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let open = d
@@ -3028,7 +3041,7 @@ async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
 
 #[test]
 fn real_browser_close_session_is_idempotent() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let open = d
@@ -3056,7 +3069,7 @@ fn real_meta_list_resources_returns_resources_array() {
     // A9 ships fully working in PR2: empty `~/.easynet/` →
     // `{"resources":[]}` (no failure). HomeGuard ensures we read
     // a fresh empty resources.json.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let resp = invoke("meta.list_resources", json!({}));
     assert!(
         resp.get("resources").and_then(Value::as_array).is_some(),
@@ -3072,7 +3085,7 @@ fn real_meta_list_resources_returns_resources_array() {
 
 #[test]
 fn real_device_node_describe_local_returns_self_envelope() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let resp = invoke("node.describe", json!({"node_id": "local"}));
     assert!(
         resp.get("node_id").is_some(),
@@ -3086,7 +3099,7 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     // `terminal.create` / `terminal.close` are the v2
     // canonical names. Coverage walker pins the current public
     // namespace so an accidental reintroduction of old names fails.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
@@ -3112,7 +3125,7 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     // Mirror of `real_device_terminal_input_read_resize_round_trip`
     // exercising the v2 aliases. Same PTY service / IO service
     // wiring; same printf marker pattern.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let io = pty_io_ability::PtyIoService::new();
     let mut reg = AxonAbilityCatalog::new();
@@ -3175,7 +3188,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     // plane uses. We just pin "the registry knows about it under
     // the v2 name" — full bidi round-trip coverage already lives
     // on the legacy alias's test.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
     let mut reg = AxonAbilityCatalog::new();
     pty_attach_ability::register(&mut reg, pty);
@@ -3191,7 +3204,7 @@ fn real_voice_list_calls_returns_items_array() {
     // service as `{items: [...]}`. This integration test pins only
     // the wire contract; behavior-level state semantics live in
     // `voice_call_ability` unit tests.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let resp = invoke("voice.list_calls", json!({}));
     assert!(
         resp.get("items").and_then(Value::as_array).is_some(),
@@ -3215,7 +3228,7 @@ fn real_device_openai_list_models_returns_v1_models_envelope() {
     // No agents installed → empty `data` array but the OpenAI v1
     // /models envelope shape (`{object:"list", data:[...]}`)
     // must be intact.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let resp = invoke("openai.list_models", json!({}));
     assert_eq!(
         resp["object"], "list",
@@ -3232,7 +3245,7 @@ fn real_device_openai_chat_completions_rejects_missing_request_arg() {
     // The handler validates `request` upfront. A request with no
     // body must fail-fast rather than dispatch into the chat-base
     // pipeline with a None.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let d = dispatcher_for(reg);
     let err = d
@@ -3267,7 +3280,7 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     // The handlers themselves are agnostic to how they were
     // wired in — invoking them through a private dispatcher hits
     // the same code paths the production registration would.
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let mut reg = AxonAbilityCatalog::new();
     crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test");
     let d = dispatcher_for(Arc::new(reg));
@@ -3318,7 +3331,7 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
 
 #[test]
 fn real_context_clipboard_and_favorites_round_trip() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
 
     // Tracking toggle: flip on, observe the flag in the list reply.
     let tracked = invoke("context.clipboard.track", json!({"enabled": true}));
@@ -3326,15 +3339,17 @@ fn real_context_clipboard_and_favorites_round_trip() {
 
     // Seed one clip directly through the store (the tracker thread
     // is not running under test), then list + get it back.
-    crate::persistence::context_store::append_clip(&crate::persistence::context_store::ClipEntry {
-        id: "clip-1".into(),
-        timestamp: "2026-06-10T00:00:00Z".into(),
-        device: "easynet:///r/test/device/d1".into(),
-        kind: "text".into(),
-        text: Some("hello clipboard".into()),
-        image_file: None,
-        preview: "hello clipboard".into(),
-    })
+    crate::daemon::persistence::context_store::append_clip(
+        &crate::daemon::persistence::context_store::ClipEntry {
+            id: "clip-1".into(),
+            timestamp: "2026-06-10T00:00:00Z".into(),
+            device: "easynet:///r/test/device/d1".into(),
+            kind: "text".into(),
+            text: Some("hello clipboard".into()),
+            image_file: None,
+            preview: "hello clipboard".into(),
+        },
+    )
     .expect("seed clip");
     let listed = invoke("context.clipboard.list", json!({"limit": 10}));
     assert_eq!(listed["entries"][0]["id"], json!("clip-1"));
@@ -3366,11 +3381,11 @@ fn real_context_clipboard_and_favorites_round_trip() {
 
 #[test]
 fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     let dir = std::env::temp_dir().join(format!("real-invoke-ctx-fs-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("sub")).expect("fixture dir");
     std::fs::write(dir.join("a.txt"), b"x").expect("fixture file");
-    crate::persistence::context_store::add_folder(dir.to_str().unwrap(), Some("proj"))
+    crate::daemon::persistence::context_store::add_folder(dir.to_str().unwrap(), Some("proj"))
         .expect("map folder");
 
     let folders = invoke("context.folders.list", json!({}));
@@ -3393,11 +3408,11 @@ fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
 
 #[test]
 fn real_context_captures_record_list_get() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     // Seed one artifact the way a media handler does, then read it
     // back through both abilities.
-    let entry = crate::persistence::context_store::record_capture(
-        crate::persistence::context_store::CaptureRecord {
+    let entry = crate::daemon::persistence::context_store::record_capture(
+        crate::daemon::persistence::context_store::CaptureRecord {
             device: "easynet:///r/test/device/d1",
             ability: "screen.snapshot",
             ext: "jpg",
@@ -3428,10 +3443,10 @@ fn real_context_captures_record_list_get() {
 
 #[test]
 fn real_chat_history_list_and_get_read_persisted_transcripts() {
-    let _g = crate::cli::test_support::HomeGuard::new();
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
     // Persist one session turn through the store, then read it back
     // through both abilities.
-    crate::persistence::chat_sessions::write_turn_best_effort(
+    crate::daemon::persistence::chat_sessions::write_turn_best_effort(
         "demo",
         "real-session-1",
         "hello there",

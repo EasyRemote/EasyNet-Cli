@@ -34,7 +34,7 @@ use crate::daemon::ability::{
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, RuntimeEnv,
     HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
-use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,
@@ -334,7 +334,7 @@ impl ControlPlaneImplementation {
 struct ControlPlaneRegistrationRequest<'a> {
     ability: &'a str,
     owner: &'a OwnerKind,
-    manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+    manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
     call_mode: DescriptorCallMode,
     implementation: ControlPlaneImplementation,
 }
@@ -342,7 +342,7 @@ struct ControlPlaneRegistrationRequest<'a> {
 struct ResolvedControlPlaneRegistration<'a> {
     ability: &'a str,
     authority_scope: AuthorityScope,
-    manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+    manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
     call_mode: DescriptorCallMode,
     implementation: ControlPlaneImplementation,
     owner_label: String,
@@ -351,7 +351,7 @@ struct ResolvedControlPlaneRegistration<'a> {
 pub struct ControlPlaneAuthorityRebind<'a> {
     pub ability: &'a str,
     pub authority_scope: AuthorityScope,
-    pub manifest: Option<&'a crate::core::ability_spec::AbilityManifest>,
+    pub manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
     pub call_mode: DescriptorCallMode,
     pub implementation: ControlPlaneImplementation,
 }
@@ -1240,13 +1240,13 @@ impl AbilityAuthorityContext {
         device_authority_root: impl Into<String>,
     ) -> Result<Self, AbilityControlPlaneError> {
         let device_authority_root = device_authority_root.into();
-        let parsed = crate::ura::parse_ura(&device_authority_root).map_err(|error| {
+        let parsed = crate::core::ura::parse_ura(&device_authority_root).map_err(|error| {
             AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
                 authority_root: device_authority_root.clone(),
                 reason: error.to_string(),
             }
         })?;
-        if parsed.kind != crate::ura::URAKind::Device {
+        if parsed.kind != crate::core::ura::URAKind::Device {
             return Err(AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
                 authority_root: device_authority_root,
                 reason: format!("expected /device/ URA, got {:?}", parsed.kind),
@@ -1254,7 +1254,7 @@ impl AbilityAuthorityContext {
         }
         Ok(Self {
             device_authority_root,
-            hub_authority_root: crate::ura::hub_ura(&parsed.realm),
+            hub_authority_root: crate::core::ura::hub_ura(&parsed.realm),
             source: AbilityAuthoritySource::FixedDevice,
         })
     }
@@ -1263,18 +1263,22 @@ impl AbilityAuthorityContext {
         if self.source == AbilityAuthoritySource::FixedDevice {
             return self.device_scoped_agent_authority_root(agent_id);
         }
-        if let Ok(local_agents) = crate::persistence::local_agents::load() {
-            if let Ok(Some(entry)) = crate::persistence::local_agents::lookup_hosted_agent_by_name(
-                &local_agents,
-                agent_id,
-            ) {
+        if let Ok(local_agents) = crate::daemon::persistence::local_agents::load() {
+            if let Ok(Some(entry)) =
+                crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
+                    &local_agents,
+                    agent_id,
+                )
+            {
                 return entry.agent_ura.clone();
             }
         }
-        match crate::persistence::config::load_credentials() {
+        match crate::daemon::persistence::config::load_credentials() {
             Ok(creds) => match creds.user_id() {
-                Ok(user_id) => crate::ura::agent_ura(&creds.realm, user_id, agent_id),
-                Err(_) => crate::ura::device_agent_ura(&creds.realm, &creds.node_id, agent_id),
+                Ok(user_id) => crate::core::ura::agent_ura(&creds.realm, user_id, agent_id),
+                Err(_) => {
+                    crate::core::ura::device_agent_ura(&creds.realm, &creds.node_id, agent_id)
+                }
             },
             Err(_) => self.device_scoped_agent_authority_root(agent_id),
         }
@@ -1284,22 +1288,22 @@ impl AbilityAuthorityContext {
         if self.source == AbilityAuthoritySource::FixedDevice {
             return self.device_scoped_user_authority_root(user_id);
         }
-        let realm = crate::persistence::config::load_credentials()
+        let realm = crate::daemon::persistence::config::load_credentials()
             .ok()
             .map(|creds| creds.realm)
             .or_else(|| {
-                crate::ura::parse_ura(&self.device_authority_root)
+                crate::core::ura::parse_ura(&self.device_authority_root)
                     .ok()
                     .map(|ura| ura.realm)
             })
             .unwrap_or_else(|| {
                 crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string()
             });
-        crate::ura::agent_ura(&realm, user_id, "account")
+        crate::core::ura::agent_ura(&realm, user_id, "account")
     }
 
     fn device_scoped_agent_authority_root(&self, agent_id: &str) -> String {
-        let parsed = crate::ura::parse_ura(&self.device_authority_root).ok();
+        let parsed = crate::core::ura::parse_ura(&self.device_authority_root).ok();
         let realm = parsed
             .as_ref()
             .map(|ura| ura.realm.as_str())
@@ -1308,16 +1312,16 @@ impl AbilityAuthorityContext {
             .as_ref()
             .and_then(|ura| ura.device_id())
             .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID);
-        crate::ura::device_agent_ura(realm, device_id, agent_id)
+        crate::core::ura::device_agent_ura(realm, device_id, agent_id)
     }
 
     fn device_scoped_user_authority_root(&self, user_id: &str) -> String {
-        let parsed = crate::ura::parse_ura(&self.device_authority_root).ok();
+        let parsed = crate::core::ura::parse_ura(&self.device_authority_root).ok();
         let realm = parsed
             .as_ref()
             .map(|ura| ura.realm.as_str())
             .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM);
-        crate::ura::agent_ura(realm, user_id, "account")
+        crate::core::ura::agent_ura(realm, user_id, "account")
     }
 }
 
@@ -1326,13 +1330,13 @@ fn local_device_authority_root() -> String {
 }
 
 fn local_hub_authority_root() -> String {
-    let realm = crate::persistence::config::load_credentials()
+    let realm = crate::daemon::persistence::config::load_credentials()
         .ok()
         .map(|creds| creds.realm)
         .unwrap_or_else(|| {
             crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string()
         });
-    crate::ura::hub_ura(&realm)
+    crate::core::ura::hub_ura(&realm)
 }
 
 fn local_runtime_ability_key_for_authority(
@@ -1412,14 +1416,14 @@ impl ControlPlaneModeKey {
 pub struct AbilityCatalogSnapshotRow {
     pub name: String,
     pub owner: Option<OwnerKind>,
-    pub manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    pub manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
 }
 
 #[derive(Debug, Clone)]
 struct AbilityCatalogSnapshotBuilder {
     owner: Option<OwnerKind>,
     ambiguous_owner: bool,
-    manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
     ambiguous_manifest: bool,
 }
 
@@ -1447,7 +1451,7 @@ impl AbilityCatalogSnapshotBuilder {
         }
     }
 
-    fn observe_manifest(&mut self, next: Option<Arc<crate::core::ability_spec::AbilityManifest>>) {
+    fn observe_manifest(&mut self, next: Option<Arc<crate::core::ability::spec::AbilityManifest>>) {
         let Some(next) = next else {
             return;
         };
@@ -1534,7 +1538,7 @@ pub struct AxonAbilityCatalog {
     /// missing record cannot have a manifest fall through (acceptance test
     /// 5). There is no String-keyed manifest fallback.
     control_plane_manifests: std::sync::RwLock<
-        BTreeMap<AbilityControlPlaneKey, Arc<crate::core::ability_spec::AbilityManifest>>,
+        BTreeMap<AbilityControlPlaneKey, Arc<crate::core::ability::spec::AbilityManifest>>,
     >,
     /// Serializes post-boot dynamic catalogue transactions.
     ///
@@ -1975,7 +1979,7 @@ struct StaticRegistration {
     ability: String,
     owner: OwnerKind,
     authority_scope: Option<AuthorityScope>,
-    manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
     implementation: ControlPlaneImplementation,
     handler: StaticRegistrationHandler,
 }
@@ -1996,7 +2000,7 @@ impl StaticRegistration {
         }
     }
 
-    fn with_manifest(mut self, manifest: crate::core::ability_spec::AbilityManifest) -> Self {
+    fn with_manifest(mut self, manifest: crate::core::ability::spec::AbilityManifest) -> Self {
         self.manifest = Some(Arc::new(manifest));
         self
     }
@@ -2049,7 +2053,7 @@ struct DynamicRegistration {
     ability: String,
     owner: OwnerKind,
     authority_scope: Option<AuthorityScope>,
-    manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+    manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
     implementation: ControlPlaneImplementation,
     handler: DynamicRegistrationHandler,
 }
@@ -2058,7 +2062,7 @@ impl DynamicRegistration {
     fn new(
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: Option<Arc<crate::core::ability_spec::AbilityManifest>>,
+        manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
         implementation: ControlPlaneImplementation,
         handler: DynamicRegistrationHandler,
     ) -> Self {
@@ -2085,7 +2089,7 @@ impl DynamicRegistration {
     fn rpc_with_spec(
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandler,
     ) -> Self {
         Self::new(
@@ -2100,7 +2104,7 @@ impl DynamicRegistration {
     fn stream_with_spec_and_impl(
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> Self {
@@ -2130,7 +2134,7 @@ impl DynamicRegistration {
     fn rpc_with_envelope_and_spec_and_impl(
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> Self {
@@ -2160,7 +2164,7 @@ impl DynamicRegistration {
     fn stream_with_envelope_and_spec_and_impl(
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> Self {
@@ -2190,7 +2194,7 @@ impl DynamicRegistration {
     fn bidi_with_envelope_and_spec_and_impl(
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> Self {
@@ -2216,7 +2220,7 @@ impl DynamicRegistration {
         self.handler.call_mode()
     }
 
-    fn manifest_ref(&self) -> Option<&crate::core::ability_spec::AbilityManifest> {
+    fn manifest_ref(&self) -> Option<&crate::core::ability::spec::AbilityManifest> {
         self.manifest.as_ref().map(Arc::as_ref)
     }
 
@@ -2346,7 +2350,7 @@ pub struct ControlPlaneAuthorityModeTxn<'a> {
     prior_manifests: Option<
         Vec<(
             AbilityControlPlaneKey,
-            Arc<crate::core::ability_spec::AbilityManifest>,
+            Arc<crate::core::ability::spec::AbilityManifest>,
         )>,
     >,
     phase: ControlPlaneAuthorityModeTxnPhase,
@@ -2725,7 +2729,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: &str,
         authority_scope: AuthorityScope,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
         implementation: &ControlPlaneImplementation,
     ) -> anyhow::Result<ControlPlaneModeKey> {
@@ -2749,7 +2753,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: &str,
         authority_scope: AuthorityScope,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
         implementation: &ControlPlaneImplementation,
     ) -> anyhow::Result<ControlPlaneModeKey> {
@@ -2865,7 +2869,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: &str,
         owner: &OwnerKind,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
         call_mode: DescriptorCallMode,
         impl_source: AbilityImplSource,
         runtime_env: RuntimeEnv,
@@ -3164,7 +3168,7 @@ impl AxonAbilityCatalog {
         mut target: InvocationTarget,
         call_mode: DescriptorCallMode,
     ) -> anyhow::Result<InvocationTarget> {
-        if crate::ura::AbilitySelector::parse(&target.ability).is_ok() {
+        if crate::core::ura::AbilitySelector::parse(&target.ability).is_ok() {
             return Ok(target);
         }
         let Some(record) = self.control_plane_record_for_mode(&target.ability, call_mode)? else {
@@ -3219,8 +3223,10 @@ impl AxonAbilityCatalog {
         let target = self
             .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
             .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
-        crate::daemon::invocation::local_runtime_invoker::invoke_local_rpc_sync(runtime, target)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+        crate::daemon::invocation::dispatch::local_runtime_invoker::invoke_local_rpc_sync(
+            runtime, target,
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))
     }
 
     fn replace_runtime_ability(
@@ -3498,7 +3504,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandler,
     ) {
         self.register_static_or_panic(
@@ -3512,7 +3518,7 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         authority_scope: AuthorityScope,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -3533,7 +3539,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
     ) {
         self.register_static_or_panic(
@@ -3546,7 +3552,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -3562,7 +3568,7 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         authority_scope: AuthorityScope,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -3586,7 +3592,7 @@ impl AxonAbilityCatalog {
     pub fn control_plane_manifest(
         &self,
         ability: &str,
-    ) -> Option<Arc<crate::core::ability_spec::AbilityManifest>> {
+    ) -> Option<Arc<crate::core::ability::spec::AbilityManifest>> {
         let record = self
             .control_plane
             .read()
@@ -3667,7 +3673,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandler,
     ) {
         self.register_static_or_panic(
@@ -3721,7 +3727,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
     ) {
         self.register_static_or_panic(
@@ -3738,7 +3744,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -3794,7 +3800,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) {
         self.register_static_or_panic(
@@ -3811,7 +3817,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -3857,7 +3863,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) {
         self.register_static_or_panic(
@@ -3874,7 +3880,7 @@ impl AxonAbilityCatalog {
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -4007,7 +4013,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandler,
     ) -> anyhow::Result<()> {
         DynamicRegistration::rpc_with_spec(ability, owner, manifest, handler).commit(self)
@@ -4036,7 +4042,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
     ) -> anyhow::Result<()> {
         self.hot_register_stream_with_spec_and_impl(
@@ -4052,7 +4058,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -4071,7 +4077,7 @@ impl AxonAbilityCatalog {
         ability: impl Into<String>,
         owner: OwnerKind,
         authority_scope: AuthorityScope,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandler,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -4104,7 +4110,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
     ) -> anyhow::Result<()> {
         self.hot_register_rpc_with_envelope_and_spec_and_impl(
@@ -4120,7 +4126,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -4150,7 +4156,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) -> anyhow::Result<()> {
         self.hot_register_stream_with_envelope_and_spec_and_impl(
@@ -4166,7 +4172,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -4196,7 +4202,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) -> anyhow::Result<()> {
         self.hot_register_bidi_with_envelope_and_spec_and_impl(
@@ -4212,7 +4218,7 @@ impl AxonAbilityCatalog {
         &self,
         ability: impl Into<String>,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
@@ -4577,14 +4583,17 @@ impl AxonAbilityCatalog {
         let target = self
             .bind_invocation_target_to_control_plane(target, DescriptorCallMode::Rpc)
             .map_err(|err| anyhow::anyhow!("{err}; local Axon runtime loopback path"))?;
-        crate::daemon::invocation::local_runtime_invoker::invoke_local_rpc_sync(runtime, target)
-            .map_err(|err| {
-                if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&err) {
-                    anyhow::anyhow!("{err}; local Axon runtime loopback path")
-                } else {
-                    anyhow::anyhow!("{err}")
-                }
-            })
+        crate::daemon::invocation::dispatch::local_runtime_invoker::invoke_local_rpc_sync(
+            runtime, target,
+        )
+        .map_err(|err| {
+            if crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error(&err)
+            {
+                anyhow::anyhow!("{err}; local Axon runtime loopback path")
+            } else {
+                anyhow::anyhow!("{err}")
+            }
+        })
     }
 
     /// Test-only convenience wrapper that opens the stream through
@@ -4616,7 +4625,8 @@ impl AxonAbilityCatalog {
             })?;
         runtime_stream_source(runtime, target).map_err(|err| {
             let msg = err.to_string();
-            if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg) {
+            if crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error(&msg)
+            {
                 anyhow::anyhow!(
                     "no local stream handler registered for ability {ability} (local Axon runtime)"
                 )
@@ -4655,7 +4665,8 @@ impl AxonAbilityCatalog {
             })?;
         runtime_bidi_source(runtime, target).map_err(|err| {
             let msg = err.to_string();
-            if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg) {
+            if crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error(&msg)
+            {
                 anyhow::anyhow!(
                     "no local bidi handler registered for ability {ability} (local Axon runtime)"
                 )
@@ -4687,7 +4698,7 @@ fn runtime_stream_source(
             };
             rt.block_on(async move {
                 let mut handle =
-                    match crate::daemon::invocation::local_runtime_invoker::open_local_stream(runtime, target)
+                    match crate::daemon::invocation::dispatch::local_runtime_invoker::open_local_stream(runtime, target)
                         .await
                     {
                         Ok(handle) => handle,
@@ -4708,7 +4719,7 @@ fn runtime_stream_source(
                     {
                         Ok(Some(Ok(frame))) => {
                             if !frame.payload.is_empty() {
-                                match crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(
+                                match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
                                     &frame,
                                 ) {
                                     Ok(value) => snapshot.push(value),
@@ -4751,7 +4762,7 @@ fn runtime_stream_source(
                     };
                     if !frame.payload.is_empty() {
                         if let Ok(value) =
-                            crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(&frame)
+                            crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(&frame)
                         {
                             let _ = tx.send(value);
                         }
@@ -4789,7 +4800,7 @@ fn runtime_bidi_source(
             };
             rt.block_on(async move {
                 let source =
-                    match crate::daemon::invocation::local_runtime_invoker::open_local_bidi(runtime, target)
+                    match crate::daemon::invocation::dispatch::local_runtime_invoker::open_local_bidi(runtime, target)
                         .await
                     {
                         Ok(source) => source,
@@ -4813,7 +4824,7 @@ fn runtime_bidi_source(
                 {
                     Ok(Some(Ok(frame))) => {
                         if !frame.payload.is_empty() {
-                            match crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(
+                            match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
                                 &frame,
                             ) {
                                 Ok(value) => {
@@ -4866,7 +4877,7 @@ fn runtime_bidi_source(
                             let output_frame = if frame.content_type == "application/json"
                                 || frame.content_type.is_empty()
                             {
-                                match crate::daemon::invocation::local_runtime_invoker::ability_frame_to_json(
+                                match crate::daemon::invocation::dispatch::local_runtime_invoker::ability_frame_to_json(
                                     &frame,
                                 ) {
                                     Ok(value) => Ok(BidiOutputFrame::json(value)),
@@ -5101,7 +5112,7 @@ mod tests {
         // routes through GatewayApi (deleted along with
         // NoopGateway's invoke_remote_ability stub). Cross-device
         // dispatch flows through
-        // `daemon::invocation::federation_invoke::invoke_via_federation_forward`
+        // `daemon::invocation::routing::federation_invoke::invoke_via_federation_forward`
         // instead. The dispatcher surfaces a typed error
         // pointing the caller at the new path so a stale Remote
         // construction fails loud instead of silently bouncing
@@ -5235,7 +5246,7 @@ mod tests {
     #[test]
     fn ability_catalog_snapshot_projects_owner_and_manifest_in_one_pass() {
         let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "read",
             "read a local file",
             json!({"type": "object"}),
@@ -5585,7 +5596,7 @@ mod tests {
 
     #[test]
     fn local_runtime_key_strips_agent_owner_prefix() {
-        let pages_agent = crate::ura::agent_ura("localhost", "dev", "pages");
+        let pages_agent = crate::core::ura::agent_ura("localhost", "dev", "pages");
         let runtime_key = local_runtime_ability_key_for_authority(&pages_agent, "pages.list")
             .expect("runtime key");
 
@@ -5594,7 +5605,7 @@ mod tests {
 
     #[test]
     fn local_runtime_key_preserves_device_domain_prefix() {
-        let device = crate::ura::device_ura("localhost", "dev-a");
+        let device = crate::core::ura::device_ura("localhost", "dev-a");
         let runtime_key = local_runtime_ability_key_for_authority(&device, "device.inspect")
             .expect("runtime key");
 
@@ -5607,7 +5618,7 @@ mod tests {
     #[test]
     fn runtime_registration_binds_manifest_descriptor_version() {
         let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "read",
             "read a local file",
             json!({"type": "object"}),
@@ -5648,7 +5659,7 @@ mod tests {
     #[test]
     fn control_plane_manifest_carries_registered_body_and_reports_absence() {
         let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "read",
             "read a local file",
             json!({"type": "object", "properties": {"path": {"type": "string"}}}),
@@ -5680,7 +5691,7 @@ mod tests {
     #[test]
     fn control_plane_rebind_without_manifest_removes_stale_manifest_facet() {
         let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "read",
             "read a local file",
             json!({"type": "object", "properties": {"path": {"type": "string"}}}),
@@ -5712,7 +5723,7 @@ mod tests {
     #[test]
     fn remove_control_plane_record_for_authority_mode_removes_manifest_facet() {
         let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "read",
             "read a local file",
             json!({"type": "object", "properties": {"path": {"type": "string"}}}),
@@ -6271,7 +6282,7 @@ mod tests {
         // reads. A hot-registered manifest must surface there or
         // freshly reflected MCP tools advertise without a schema.
         let reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "search",
             "Search Wikipedia.",
             serde_json::json!({"type": "object"}),
@@ -6299,7 +6310,7 @@ mod tests {
     #[test]
     fn hot_register_stream_with_explicit_impl_writes_control_plane_once() {
         let reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "search",
             "Search Wikipedia.",
             serde_json::json!({"type": "object"}),
@@ -6338,7 +6349,7 @@ mod tests {
         assert!(reg.has_rpc("plugin.mode_shift"));
         assert!(!reg.has_stream("plugin.mode_shift"));
 
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "mode_shift",
             "Mode-shift test ability.",
             serde_json::json!({"type": "object"}),
@@ -6467,7 +6478,7 @@ mod tests {
     #[test]
     fn control_plane_authority_mode_transaction_restores_prior_slice() {
         let catalog = AxonAbilityCatalog::new();
-        let old_manifest = crate::core::ability_spec::AbilityManifest::new(
+        let old_manifest = crate::core::ability::spec::AbilityManifest::new(
             "txn",
             "Old transactional descriptor.",
             serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
@@ -6500,7 +6511,7 @@ mod tests {
             control_plane_key.ability(),
             control_plane_key.call_mode(),
         );
-        let new_manifest = crate::core::ability_spec::AbilityManifest::new(
+        let new_manifest = crate::core::ability::spec::AbilityManifest::new(
             "txn",
             "New transactional descriptor.",
             serde_json::json!({"type": "object", "properties": {"new": {"type": "boolean"}}}),
@@ -6543,7 +6554,7 @@ mod tests {
     #[test]
     fn dynamic_registration_rollback_restores_prior_snapshot() {
         let catalog = AxonAbilityCatalog::new();
-        let old_manifest = crate::core::ability_spec::AbilityManifest::new(
+        let old_manifest = crate::core::ability::spec::AbilityManifest::new(
             "rollback",
             "Old rollback handler.",
             serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
@@ -6580,7 +6591,7 @@ mod tests {
             control_plane_key.call_mode(),
         );
 
-        let new_manifest = crate::core::ability_spec::AbilityManifest::new(
+        let new_manifest = crate::core::ability::spec::AbilityManifest::new(
             "rollback",
             "New rollback handler.",
             serde_json::json!({"type": "object", "properties": {"new": {"type": "boolean"}}}),
@@ -6708,7 +6719,7 @@ mod tests {
     #[test]
     fn hot_unregister_removes_dynamic_control_plane_manifest_facet() {
         let reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "search",
             "Search a hot MCP index.",
             json!({"type": "object", "properties": {"query": {"type": "string"}}}),

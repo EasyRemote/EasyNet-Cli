@@ -257,7 +257,7 @@ impl AbilityIdentity {
             return None;
         }
         if let Some(canonical) = descriptor.canonical_ability_ura() {
-            if crate::ura::parse_ura(&canonical).is_ok() {
+            if crate::core::ura::parse_ura(&canonical).is_ok() {
                 return Some(Self { locator: canonical });
             }
         }
@@ -426,7 +426,7 @@ struct AbilityDescriptorWire {
 impl AbilityDescriptorWire {
     fn from_descriptor(d: &AbilityDescriptor) -> Self {
         let name = d.public_name();
-        let ability_ura = crate::ura::owner_ability_ura(&d.owner_ura, &name)
+        let ability_ura = crate::core::ura::owner_ability_ura(&d.owner_ura, &name)
             .or_else(|| d.canonical_ability_ura())
             .unwrap_or_default();
         // Wire always carries a concrete class. Pinned overrides
@@ -572,8 +572,8 @@ impl AbilityDescriptor {
             return Err(DescriptorError::EmptyOwner);
         }
         if !name.contains('.') {
-            let agent_owned = crate::ura::parse_ura(&owner_ura)
-                .map(|parsed| parsed.kind == crate::ura::URAKind::Agent)
+            let agent_owned = crate::core::ura::parse_ura(&owner_ura)
+                .map(|parsed| parsed.kind == crate::core::ura::URAKind::Agent)
                 .unwrap_or(false);
             if !agent_owned {
                 return Err(DescriptorError::UnnamespacedName);
@@ -673,7 +673,7 @@ impl AbilityDescriptor {
     /// registry entries may arrive as `<agent-id>.<verb>` internally;
     /// this method is the only place that projection is applied.
     pub fn public_name(&self) -> String {
-        crate::ura::owner_local_ability_name(&self.owner_ura, &self.name)
+        crate::core::ura::owner_local_ability_name(&self.owner_ura, &self.name)
     }
 
     /// Canonical ability URA for this descriptor. Always recomputed
@@ -681,7 +681,7 @@ impl AbilityDescriptor {
     /// wire field is a one-way serialize-time projection of this
     /// method, not a separate source of truth.
     pub fn canonical_ability_ura(&self) -> Option<String> {
-        crate::ura::owner_ability_ura(&self.owner_ura, &self.public_name())
+        crate::core::ura::owner_ability_ura(&self.owner_ura, &self.public_name())
     }
 
     pub fn schema_hash_bytes(&self) -> [u8; 32] {
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn scoped_both_axes_filtered_requires_both_matches() {
-        let backend = crate::ura::hub_ura("acme");
+        let backend = crate::core::ura::hub_ura("acme");
         let operator = "easynet:///r/acme/user/alice";
         let d = must(
             "agent.list",
@@ -917,7 +917,7 @@ mod tests {
         // sharing a prefix.
         let d = must(
             "agent.list",
-            &crate::ura::hub_ura("acme"),
+            &crate::core::ura::hub_ura("acme"),
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::OnlyMatching(vec![

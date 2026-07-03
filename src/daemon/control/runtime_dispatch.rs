@@ -81,7 +81,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 #[cfg(windows)]
-use crate::support::named_pipe::{scoped_pipe_name, PipeListener};
+use crate::support::platform::named_pipe::{scoped_pipe_name, PipeListener};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
@@ -164,7 +164,7 @@ pub fn dispatch_socket_path() -> PathBuf {
     {
         return PathBuf::from(scoped_pipe_name("runtime-dispatch"));
     }
-    crate::persistence::config::state_dir().join(DEFAULT_RUNTIME_DISPATCH_SOCK_NAME)
+    crate::daemon::persistence::config::state_dir().join(DEFAULT_RUNTIME_DISPATCH_SOCK_NAME)
 }
 
 /// Build the matching `ipc://...` URA the daemon registers as the
@@ -409,12 +409,14 @@ fn build_response_line(req: &DispatchRequest, adapter: &RuntimeDispatchAdapter) 
             // Translate the canonical "ability not found" reason
             // strings (centralised in `local_runtime_invoker`) into
             // NOT_FOUND; anything else is generic ABILITY_FAILED.
-            let code = if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg)
-            {
-                "NOT_FOUND"
-            } else {
-                "ABILITY_FAILED"
-            };
+            let code =
+                if crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error(
+                    &msg,
+                ) {
+                    "NOT_FOUND"
+                } else {
+                    "ABILITY_FAILED"
+                };
             error_line(code, msg)
         }
     }
@@ -481,12 +483,14 @@ where
         Err(msg) => {
             // Centralised "ability not found" classification — see
             // `local_runtime_invoker::is_not_found_error`.
-            let code = if crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&msg)
-            {
-                "NOT_FOUND"
-            } else {
-                "ABILITY_FAILED"
-            };
+            let code =
+                if crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error(
+                    &msg,
+                ) {
+                    "NOT_FOUND"
+                } else {
+                    "ABILITY_FAILED"
+                };
             let line = stream_error_line(code, msg);
             write_half.write_all(line.as_bytes()).await?;
             write_half.flush().await?;
@@ -630,7 +634,7 @@ mod tests {
     use crate::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 
     struct IsolatedRuntimeDispatchAdapter {
-        _home: crate::cli::test_support::HomeGuard,
+        _home: crate::cli::commands::test_support::HomeGuard,
         adapter: RuntimeDispatchAdapter,
     }
 
@@ -646,7 +650,7 @@ mod tests {
     /// the live system-ability registry — `observe.health` is the
     /// canonical "always-registered, no fixture needed" probe.
     fn fresh_adapter() -> IsolatedRuntimeDispatchAdapter {
-        let home = crate::cli::test_support::HomeGuard::new();
+        let home = crate::cli::commands::test_support::HomeGuard::new();
         let adapter = RuntimeDispatchAdapter::new_for_test();
         IsolatedRuntimeDispatchAdapter {
             _home: home,

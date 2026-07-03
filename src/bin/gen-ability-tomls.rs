@@ -180,6 +180,13 @@ fn delete_stale_descriptors(
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        if path.is_dir() {
+            delete_stale_descriptors(&path, live_names, deleted)?;
+            if std::fs::read_dir(&path)?.next().is_none() {
+                std::fs::remove_dir(&path)?;
+            }
+            continue;
+        }
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n,
             None => continue,

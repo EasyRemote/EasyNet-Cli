@@ -12,7 +12,7 @@
 // `invoke_remote_ability` and `subscribe_remote_ability` came down
 // with the legacy abstraction cull. Cross-device dispatch now flows
 // through the daemon's `federation.forward_invoke` ability — one
-// path, one helper (`daemon::invocation::federation_invoke`). What survives on
+// path, one helper (`daemon::invocation::routing::federation_invoke`). What survives on
 // `GatewayApi` are lifecycle / discovery surfaces unrelated to
 // remote dispatch: `publish_ability`, `list_peers`, `send_heartbeat`.
 //

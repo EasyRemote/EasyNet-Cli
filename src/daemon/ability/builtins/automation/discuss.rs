@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use crate::core::domain::{AgentId, RoomId};
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::daemon::execution::discuss::DiscussService;
+use crate::daemon::execution::mission::discuss::DiscussService;
 
 pub const ABILITY_CREATE: &str = crate::daemon::ability::names::automation::DISCUSS_CREATE;
 pub const ABILITY_POST: &str = crate::daemon::ability::names::automation::DISCUSS_POST;

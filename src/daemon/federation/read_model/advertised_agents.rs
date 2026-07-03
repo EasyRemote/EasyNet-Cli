@@ -80,10 +80,10 @@ impl AdvertisedAgentStore {
     /// `easynet:///r/<realm>/agent/<user>.<agent>`. Device-sponsored agent
     /// URAs intentionally do not match this method.
     pub fn remove_user_owned_agents(&self, user_ura: &str) -> Vec<AdvertisedAgentRecord> {
-        let Ok(user) = crate::ura::parse_ura(user_ura) else {
+        let Ok(user) = crate::core::ura::parse_ura(user_ura) else {
             return Vec::new();
         };
-        if user.kind != crate::ura::URAKind::User {
+        if user.kind != crate::core::ura::URAKind::User {
             return Vec::new();
         }
         let Some(user_id) = user.user_id() else {
@@ -124,10 +124,10 @@ impl AdvertisedAgentStore {
 }
 
 fn record_is_owned_by_user(record: &AdvertisedAgentRecord, realm: &str, user_id: &str) -> bool {
-    let Ok(agent) = crate::ura::parse_ura(&record.agent_ura) else {
+    let Ok(agent) = crate::core::ura::parse_ura(&record.agent_ura) else {
         return false;
     };
-    agent.kind == crate::ura::URAKind::Agent
+    agent.kind == crate::core::ura::URAKind::Agent
         && agent.realm == realm
         && agent.agent_ids().map(|(owner, _)| owner) == Some(user_id)
 }

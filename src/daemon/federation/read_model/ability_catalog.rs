@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(
             store.upsert_projection(OwnerAbilityProjectionRow::new(
                 "ura".to_string(),
-                crate::ura::device_ura("easynet.run", "abc"),
+                crate::core::ura::device_ura("easynet.run", "abc"),
                 1,
                 "sha256:digest".to_string(),
                 1_000,
@@ -466,7 +466,7 @@ mod tests {
     ) -> OwnerAbilityProjectionRow {
         OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
-            crate::ura::device_ura("easynet.run", "abc"),
+            crate::core::ura::device_ura("easynet.run", "abc"),
             revision,
             digest.to_string(),
             lease_expires_unix_ms,
@@ -476,9 +476,9 @@ mod tests {
 
     fn summary(local_name: &str) -> AbilityProjectionSummary {
         let ability_id = format!("fs.{local_name}");
-        let owner_ura = crate::ura::device_ura("easynet.run", "abc");
+        let owner_ura = crate::core::ura::device_ura("easynet.run", "abc");
         AbilityProjectionSummary {
-            ability_ura: crate::ura::device_ability_ura("easynet.run", "abc", &ability_id),
+            ability_ura: crate::core::ura::device_ability_ura("easynet.run", "abc", &ability_id),
             owner_ura,
             namespace: "fs".to_string(),
             local_name: local_name.to_string(),

@@ -35,7 +35,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::persistence::context_store;
+use crate::daemon::persistence::context_store;
 
 pub const ABILITY_CLIPBOARD_LIST: &str =
     crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_LIST;
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn track_toggle_then_list_reflects_state() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         clipboard_track_handler(json!({"enabled": true})).unwrap();
         let out = clipboard_list_handler(json!({})).unwrap();
         assert_eq!(out["tracking"], true);
@@ -405,14 +405,14 @@ mod tests {
 
     #[test]
     fn track_requires_enabled_bool() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         assert!(clipboard_track_handler(json!({})).is_err());
         assert!(clipboard_track_handler(json!({"enabled": "yes"})).is_err());
     }
 
     #[test]
     fn fs_list_requires_folder_and_descriptions_schemas_cover_all() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         assert!(fs_list_handler(json!({})).is_err());
         for name in ALL {
             assert!(description_for(name).is_some(), "{name} description");
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn clipboard_remove_deletes_entry_and_errors_on_unknown_id() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = context_store::ClipEntry {
             id: "clip-1".into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn clipboard_list_collapses_duplicates_and_marks_counts() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         for (id, text) in [
             ("clip-old", "same text"),
             ("clip-other", "other text"),
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn favorites_add_validates_and_round_trips() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         assert!(favorites_add_handler(json!({"kind": "clipboard"})).is_err());
         let fav = favorites_add_handler(
             json!({"kind": "clipboard", "label": "snippet", "reference": "c1"}),

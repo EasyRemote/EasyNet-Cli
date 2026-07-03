@@ -207,7 +207,7 @@ fn register_management_abilities(
 fn pages_management_authority_scope(config: &PagesConfig) -> AuthorityScope {
     AuthorityScope::new(
         "agent:pages",
-        crate::ura::agent_ura(&config.realm, &config.user, "pages"),
+        crate::core::ura::agent_ura(&config.realm, &config.user, "pages"),
     )
     .expect("static pages management authority scope is well-formed")
 }
@@ -217,7 +217,7 @@ fn register_management_rpc(
     ability: &'static str,
     owner: OwnerKind,
     authority_scope: AuthorityScope,
-    manifest: crate::core::ability_spec::AbilityManifest,
+    manifest: crate::core::ability::spec::AbilityManifest,
     handler: LocalRpcHandler,
 ) {
     reg.register_rpc_with_spec_impl_and_authority_scope(
@@ -236,7 +236,7 @@ fn register_management_rpc(
 /// Build the `AbilityManifest` for a `pages.<verb>` from the shared
 /// spec list. The manifest `name` is the bare verb (`get`), since `.`
 /// is the agent/verb separator AbilityManifest rejects.
-fn manifest_for_verb(relative_name: &str) -> crate::core::ability_spec::AbilityManifest {
+fn manifest_for_verb(relative_name: &str) -> crate::core::ability::spec::AbilityManifest {
     let spec = management_ability_specs()
         .into_iter()
         .find(|s| s.relative_name == relative_name)
@@ -255,8 +255,8 @@ fn pages_manifest(
     name: &str,
     description: &str,
     input_schema: serde_json::Value,
-) -> crate::core::ability_spec::AbilityManifest {
-    crate::core::ability_spec::AbilityManifest::new(name, description, input_schema)
+) -> crate::core::ability::spec::AbilityManifest {
+    crate::core::ability::spec::AbilityManifest::new(name, description, input_schema)
         .expect("static pages manifest is well-formed")
 }
 

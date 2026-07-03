@@ -487,7 +487,7 @@ mod tests {
     fn resolved_agents_list_parses_status_strings() {
         let body = json!({
             "agents": [
-                {"ura": crate::ura::hub_ura("acme"), "status": "active"},
+                {"ura": crate::core::ura::hub_ura("acme"), "status": "active"},
                 {"ura": "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8", "status": "revoked"}
             ]
         });

@@ -36,7 +36,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::persistence::local_agents::{upsert_hosted_agent, HostedAgentEntry, LocalAgentsFile};
+use crate::daemon::persistence::local_agents::{
+    upsert_hosted_agent, HostedAgentEntry, LocalAgentsFile,
+};
 
 /// Configuration for one bootstrap pass. The daemon-boot wiring
 /// fills this from `~/.easynet/config.toml` (`[profiles]` section)
@@ -95,7 +97,7 @@ pub fn build_plan_from_registry(
     user_id: &str,
     username: &str,
 ) -> anyhow::Result<BootstrapPlan> {
-    let registry = crate::registry::agents::load_agents()
+    let registry = crate::daemon::persistence::agent_registry::load_agents()
         .map_err(|err| anyhow::anyhow!("load agent registry: {err}"))?;
     let llm_sub_agents: Vec<LlmSubAgent> = registry
         .agents
@@ -111,7 +113,7 @@ pub fn build_plan_from_registry(
         realm: tenant_id.to_string(),
         user_id: user_id.to_string(),
         username: username.to_string(),
-        host_device_ura: crate::ura::device_ura(tenant_id, node_id),
+        host_device_ura: crate::core::ura::device_ura(tenant_id, node_id),
         consent: true,
         mcp: false,
         llm_sub_agents,
@@ -251,7 +253,7 @@ pub fn bootstrap_local_agents<M: UraMinter>(
             Some(ura) => (ura, true),
             None => {
                 let id = minter.mint_id(profile, name);
-                let ura = crate::ura::agent_ura(&plan.realm, &plan.username, &id);
+                let ura = crate::core::ura::agent_ura(&plan.realm, &plan.username, &id);
                 upsert_hosted_agent(file, profile, name, &ura);
                 (ura, false)
             }
@@ -307,10 +309,10 @@ pub fn hosted_uras(file: &LocalAgentsFile) -> Vec<(String, String, String)> {
 /// this predicate; malformed, non-agent, and stale-realm rows are
 /// local projection garbage under the clean RFC-005 identity model.
 fn is_current_agent_ura(ura: &str, realm: &str, username: &str) -> bool {
-    let Ok(parsed) = crate::ura::parse_ura(ura) else {
+    let Ok(parsed) = crate::core::ura::parse_ura(ura) else {
         return false;
     };
-    if parsed.kind != crate::ura::URAKind::Agent {
+    if parsed.kind != crate::core::ura::URAKind::Agent {
         return false;
     }
     // Device-sponsored System Agents (`agent/device.<id>.<agent>`,
@@ -383,7 +385,7 @@ mod tests {
             // v4.1.4: hosted-agent URA is user-anchored
             // (`r/<realm>/agent/<user>.<id>`). plan_with seeds
             // user_id="u1".
-            let expected_prefix = format!("{}u1.", crate::ura::realm_agent_prefix("acme"));
+            let expected_prefix = format!("{}u1.", crate::core::ura::realm_agent_prefix("acme"));
             assert!(o.agent_ura.starts_with(&expected_prefix));
         }
         // The daemon's own self-URA uses the device segment.
@@ -705,8 +707,10 @@ mod tests {
         assert!(!outcomes.is_empty(), "expected hosted agents to be minted");
         for o in &outcomes {
             assert!(
-                o.agent_ura
-                    .starts_with(&format!("{}dev.", crate::ura::realm_agent_prefix("acme"))),
+                o.agent_ura.starts_with(&format!(
+                    "{}dev.",
+                    crate::core::ura::realm_agent_prefix("acme")
+                )),
                 "owner-prefix must be the username slug, got {}",
                 o.agent_ura
             );

@@ -39,8 +39,8 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::persistence::config::sync_directory;
-use crate::persistence::file_lock::{ExclusiveFileLock, SharedFileLock};
+use crate::daemon::persistence::config::sync_directory;
+use crate::daemon::persistence::file_lock::{ExclusiveFileLock, SharedFileLock};
 
 const STORE_SCHEMA_VERSION: &str = "1";
 const STORE_FILE: &str = "device-abilities.json";
@@ -297,7 +297,7 @@ impl DeviceAbilityStore {
     #[must_use]
     pub fn open_default() -> Self {
         Self {
-            path: crate::persistence::config::state_dir().join(STORE_FILE),
+            path: crate::daemon::persistence::config::state_dir().join(STORE_FILE),
         }
     }
 
@@ -635,12 +635,12 @@ mod tests {
         manifest_marker: &str,
         installed_at_unix_ms: u64,
     ) -> DeviceAbilityRecord {
-        let owner_ura = crate::ura::device_ura("localhost", "x");
+        let owner_ura = crate::core::ura::device_ura("localhost", "x");
         let manifest_bytes = format!(r#"{{"name":"{name}","marker":"{manifest_marker}"}}"#);
         DeviceAbilityRecord::new_with_manifest_bytes(
             name.to_string(),
             "er".to_string(),
-            crate::ura::owner_ability_ura(&owner_ura, name).expect("ability ura"),
+            crate::core::ura::owner_ability_ura(&owner_ura, name).expect("ability ura"),
             format!("/bundles/{name}/ability.json"),
             manifest_bytes.as_bytes(),
             installed_at_unix_ms,

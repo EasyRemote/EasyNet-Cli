@@ -691,7 +691,7 @@ pub async fn dispatch_rpc_local_with_subject(
 /// rejection — produces `Some(<diagnostic>)` with the original
 /// `AxonError`'s `Display` rendering. Caller wires this directly
 /// into the in-band terminal frame helper at
-/// `daemon::invocation::daemon_invocation_service::
+/// `daemon::invocation::dispatch::daemon_invocation_service::
 ///  invoke_remote_inband_error_response` (already in place from
 /// the earlier Phase-2 follow-up).
 ///
@@ -840,7 +840,7 @@ mod tests {
     async fn dispatch_rpc_completes_through_axon_runtime_and_persists() {
         let (rt, ledger, sk, _temp) = build_test_runtime();
         let callee_ura = "easynet:///r/t/device/host";
-        let ability_ura = crate::ura::owner_ability_ura(callee_ura, "test.echo").unwrap();
+        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, "test.echo").unwrap();
         rt.register_ability_with_options(
             ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -997,7 +997,7 @@ mod tests {
         let (rt, ledger, _sk, _temp) = build_test_runtime();
         let callee_ura = "easynet:///r/t/device/host";
         let ability_ura =
-            crate::ura::owner_ability_ura(callee_ura, "demo.daemon_internal").unwrap();
+            crate::core::ura::owner_ability_ura(callee_ura, "demo.daemon_internal").unwrap();
         rt.register_ability_with_options(
             ability_ura.clone(),
             make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),

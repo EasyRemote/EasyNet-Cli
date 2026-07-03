@@ -60,11 +60,11 @@ Inside `easynet-daemon`:
 
 The layering is enforced at CI time:
 
-- `engineering/scripts/check-kernel-boundary.sh` — Control layer reaches
+- `tools/scripts/check-kernel-boundary.sh` — Control layer reaches
   daemon execution through `crate::daemon::kernel::api`; any remaining
   `crate::runtime::*` import must be on the narrow allowlist and justified
   as a not-yet-migrated adapter.
-- `engineering/scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
+- `tools/scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
   transport may import the explicitly listed runtime adapters it
   needs to translate Axon `Invocation` frames into daemon-local
   execution. The allowed names are the current semantic owners:
@@ -84,16 +84,16 @@ The layering is enforced at CI time:
   allowed only for the boot-injected `PluginRuntimeManager` handle used to
   execute already-loaded plugin-backed abilities; install/load policy stays in
   `runtime/plugin_host`. See `docs/design/plugin-contribution-boundary.md`.
-- `engineering/scripts/check-kernel-boundary.sh` (rule 3) — Execution may
+- `tools/scripts/check-kernel-boundary.sh` (rule 3) — Execution may
   only touch the network via `crate::daemon::federation::gateway_api`, not
   the concrete `daemon::federation::gateway`.
-- `engineering/scripts/check-subservice-isolation.sh` — Execution
+- `tools/scripts/check-subservice-isolation.sh` — Execution
   sub-services cannot import each other.
-- `engineering/scripts/check-invocation-unity.sh` — IPC/Kernel/Gateway
+- `tools/scripts/check-invocation-unity.sh` — IPC/Kernel/Gateway
   method signatures must not speak `args_json`;
   `Kernel::invoke` cannot be called from inside an Execution
   sub-service.
-- `engineering/scripts/check-dispatch-boundary.sh` — ability handlers under
+- `tools/scripts/check-dispatch-boundary.sh` — ability handlers under
   `runtime/system/` cannot branch on node identity.
 
 ## 3. Scheme X justification — one daemon, not two

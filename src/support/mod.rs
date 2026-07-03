@@ -19,13 +19,13 @@
 //
 // What MOVED OUT
 // --------------
-//   config.rs           → `crate::persistence::config`
-//   agents.rs           → `crate::registry::agents`
-//   agent_id.rs         → `crate::core::agent_id`
-//   a2a_labels.rs       → `crate::registry::a2a_labels`
-//   connect_bridge()    → `crate::persistence::config` (needs RuntimeState)
+//   config.rs           → `crate::daemon::persistence::config`
+//   agents.rs           → `crate::daemon::persistence::agent_registry`
+//   agent_id.rs         → `crate::core::agent::id`
+//   a2a_labels.rs       → `crate::daemon::federation::read_model::a2a_labels`
+//   connect_bridge()    → `crate::daemon::persistence::config` (needs RuntimeState)
 //   BRIDGE_CONNECT_TIMEOUT_MS
-//                       → `crate::support::timeouts` (centralised tower)
+//                       → `crate::support::platform::timeouts` (centralised tower)
 //
 // Dependency direction invariant
 // ------------------------------
@@ -51,9 +51,9 @@
 // module whose name answers "what is this?" from the use site
 // alone:
 //
-//     use crate::persistence::config;          // on-disk state
-//     use crate::registry::agents;             // agent registry
-//     use crate::core::agent_id::NodeId;   // typed identity
+//     use crate::daemon::persistence::config;          // on-disk state
+//     use crate::daemon::persistence::agent_registry as agents;             // agent registry
+//     use crate::core::agent::id::NodeId;   // typed identity
 //
 // Architectural Position
 // ----------------------
@@ -100,96 +100,30 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-/// `run_blocking()` + `try_run_blocking_in_tokio()` — the single
-/// recipe for driving a future to completion from sync code,
-/// with explicit fallback policy. Replaces three near-identical
-/// `block_on_*` helpers that used to live in
-/// `daemon/ability/dispatch.rs`,
-/// the agent lifecycle system ability, and
-/// `daemon/invocation/local_runtime_invoker.rs`.
 pub mod async_bridge;
-
-/// `append_cleanup_error()` — fold a best-effort cleanup outcome into a
-/// primary error so transactional rollback paths report both what failed
-/// and whether compensation completed. Shared by `daemon::ability::builtins`
-/// and `persistence` rollback sites; see `errors.rs` for the rationale.
-pub(crate) mod errors;
-
-// federation_invoke moved under daemon::invocation, and the
-// product read boundary lives in daemon::federation::directory_reader.
-// Keeping both out of support prevents this module from reaching upward into
-// services — the production back-edge this split removed.
-
-/// Transport plumbing for the local daemon's Invocation gRPC
-/// surface — socket resolution, UDS / named-pipe connect, tonic
-/// channel construction, and the `LocalDaemonAbilityClient` value
-/// object that carries a caller-override URA.
-///
-/// **Do not call into this module from CLI surfaces.** Use
-/// [`local_invoke::invoke_local_ability`] (no caller override) or
-/// the `LocalDaemonAbilityClient` constructors. The transport
-/// helpers here are pub(crate) for that one shim; widening their
-/// usage re-spawns the "one CLI subcommand opens its own IPC"
-/// anti-pattern this module file was created to eliminate.
-pub(crate) mod invocation_receipt_projection;
-pub(crate) mod local_daemon_grpc;
-
-/// **Canonical CLI ability-invocation surface.** One helper —
-/// `invoke_local_ability(name, args)` — every CLI subcommand uses
-/// to talk to the local daemon's Axon Invocation gRPC surface. Per
-/// the AXON-RFC-001 ontology, every CLI action collapses to one
-/// ability Invoke; centralising the daemon.sock bridge here keeps
-/// CLI commands out of registry internals and legacy control-plane
-/// dispatch. The day the transport evolves, this is the **one**
-/// module to swap.
-pub(crate) mod local_invoke;
-#[cfg(windows)]
-pub mod named_pipe;
-pub(crate) mod net;
-pub(crate) mod node;
-/// Operator-log macro `op_event!`. See module header for the
-/// convention; see `operator_log.rs` for the implementation
-/// rationale and the migration-to-`tracing` story.
-pub mod operator_log;
-pub(crate) mod output;
-/// `ProcessSingleton<T>` — typed "set at boot, read on the hot path"
-/// handle. Replaces ad-hoc `OnceLock` / `RwLock<Option<_>>` statics
-/// scattered across the agents layer; see `process_singleton.rs` for
-/// the mode-choice rationale.
-pub(crate) mod process_singleton;
-#[cfg(feature = "axon-pb")]
-pub(crate) mod remote_device;
-/// AXIOM Tier 2.5 bash safety subsystem. Self-contained set
-/// of helpers (destructive command list, hardened process
-/// runner, AST + security pipeline added in later slices)
-/// shared between `process.exec`, `shell.run`, and any
-/// future ability that needs the same hardening surface.
-/// See `shellguard/mod.rs` for the design rationale.
+pub mod platform;
 pub(crate) mod shellguard;
-pub(crate) mod shutdown;
-pub(crate) mod sysinfo;
-pub(crate) mod timeouts;
 
 use anyhow::Context;
 
 /// Open a [`DendriteBridge`] to a given endpoint, using the shared
-/// [`crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS`] budget.
+/// [`crate::support::platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS`] budget.
 ///
 /// This is the low-level, state-free entry point. Callers that also
 /// want the runtime's on-disk [`RuntimeState`] (tenant, label, PID)
 /// alongside the bridge should use
-/// [`crate::persistence::config::RuntimeState::connect_bridge`] or
-/// [`crate::persistence::config::load_and_connect`], both of which
-/// wrap this function after a [`crate::persistence::config::load`].
+/// [`crate::daemon::persistence::config::RuntimeState::connect_bridge`] or
+/// [`crate::daemon::persistence::config::load_and_connect`], both of which
+/// wrap this function after a [`crate::daemon::persistence::config::load`].
 ///
-/// [`RuntimeState`]: crate::persistence::config::RuntimeState
+/// [`RuntimeState`]: crate::daemon::persistence::config::RuntimeState
 /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
 pub fn connect_bridge_to(
     endpoint: &str,
 ) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
     easynet_axon::dendrite_bridge::DendriteBridge::connect(
         endpoint,
-        timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
+        platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
     )
     .with_context(|| format!("bridge connect to {endpoint}"))
 }

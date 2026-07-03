@@ -36,18 +36,18 @@ use easynet_cli::daemon::ability::catalog::{
     build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
 };
 use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
-use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
-use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
-use easynet_cli::daemon::invocation::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
 use easynet_cli::daemon::keyring::{
     home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
     Vault, DEFAULT_VAULT_REL,
 };
+use easynet_cli::daemon::persistence::config::{self, RuntimeKind, RuntimeState};
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
-use easynet_cli::persistence::config::{self, RuntimeKind, RuntimeState};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -109,8 +109,8 @@ struct SevenAxesSigner {
 impl SevenAxesSigner {
     fn for_caller(caller_ura: &str) -> Self {
         let mut accepted_uras = vec![caller_ura.to_string()];
-        if let Ok(parsed) = easynet_cli::ura::parse_ura(caller_ura) {
-            accepted_uras.push(easynet_cli::ura::hub_ura(&parsed.realm));
+        if let Ok(parsed) = easynet_cli::core::ura::parse_ura(caller_ura) {
+            accepted_uras.push(easynet_cli::core::ura::hub_ura(&parsed.realm));
         }
         Self {
             signing_key: SigningKey::from_bytes(&test_keyring_seed()),
@@ -186,7 +186,7 @@ fn start_test_keyring(primary_self: String) -> TestKeyring {
     let seed_hex = test_keyring_seed_hex();
     match vault.put(
         &primary_self,
-        vec![easynet_cli::ura::hub_ura("cli")],
+        vec![easynet_cli::core::ura::hub_ura("cli")],
         seed_hex,
     ) {
         Ok(()) => vault.seal().expect("seal test keyring vault"),
@@ -440,9 +440,9 @@ impl SevenAxesHome {
         )
         .expect("write agents.json");
 
-        let loopback_caller = easynet_cli::ura::device_ura("cli", "local");
-        let testbot_ura = easynet_cli::ura::agent_ura("cli", "local", "testbot");
-        let zlearner_ura = easynet_cli::ura::agent_ura("cli", "local", "zlearner");
+        let loopback_caller = easynet_cli::core::ura::device_ura("cli", "local");
+        let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "local", "testbot");
+        let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "local", "zlearner");
         std::fs::write(
             state_dir.join("local-agents.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -481,8 +481,8 @@ added_at_unix_ms = 0
         .expect("write trust toml");
         drop(f);
 
-        let ledger_path =
-            easynet_cli::persistence::daemon_config::default_ledger_dir().join("invocations.redb");
+        let ledger_path = easynet_cli::daemon::persistence::daemon_config::default_ledger_dir()
+            .join("invocations.redb");
         let ledger = Arc::new(
             easynet_axon::invocation::InvocationLedger::open(&ledger_path)
                 .expect("open test ledger"),
@@ -530,7 +530,7 @@ added_at_unix_ms = 0
     /// minted through the same owner projection the ladder uses.
     #[allow(dead_code)]
     pub fn source_descriptor_ura(&self) -> String {
-        easynet_cli::ura::owner_ability_ura(&self.testbot_ura, "weather-probe")
+        easynet_cli::core::ura::owner_ability_ura(&self.testbot_ura, "weather-probe")
             .expect("mint source descriptor URA")
     }
 
@@ -704,7 +704,7 @@ fn receipt_proof_facts_value(receipt: &easynet_axon::pb::axon::v1::InvocationRec
 fn fixture_descriptor_ref(callee_ura: &str, function_name: &str, version: &str) -> String {
     format!(
         "{}@{version}",
-        easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
+        easynet_cli::core::ura::owner_ability_ura(callee_ura, function_name)
             .expect("fixture ability URA")
     )
 }
@@ -742,8 +742,8 @@ fn seed_hosted_agent_projection(
         "fixture hosted-agent advertise must ack: {agent_resp}"
     );
 
-    let public_name = easynet_cli::ura::owner_local_ability_name(agent_ura, "echo");
-    let ability_ura = easynet_cli::ura::owner_ability_ura(agent_ura, &public_name)
+    let public_name = easynet_cli::core::ura::owner_local_ability_name(agent_ura, "echo");
+    let ability_ura = easynet_cli::core::ura::owner_ability_ura(agent_ura, &public_name)
         .expect("fixture echo ability URA");
     let route_summary_ref = format!("route-ref::{ability_ura}");
     let (namespace, local_name) = public_name
@@ -816,7 +816,8 @@ fn start_daemon_at(
     daemon_ura: String,
     ledger: Arc<easynet_axon::invocation::InvocationLedger>,
 ) -> TestDaemon {
-    let agents = easynet_cli::registry::agents::load_agents().expect("load seeded agents.json");
+    let agents = easynet_cli::daemon::persistence::agent_registry::load_agents()
+        .expect("load seeded agents.json");
     assert!(
         agents.agents.contains_key("testbot"),
         "fixture must load the seeded agent through the production path"
@@ -911,7 +912,7 @@ fn start_daemon_at(
             // LocalRuntime — the drain task only swallows defensive
             // out-of-path frames.
             let (noop_tx, mut noop_rx) = tokio::sync::mpsc::channel(
-                easynet_cli::daemon::invocation::state::presence::DISPATCH_CHANNEL_CAPACITY,
+                easynet_cli::daemon::invocation::bidi::state::presence::DISPATCH_CHANNEL_CAPACITY,
             );
             tokio::spawn(async move { while noop_rx.recv().await.is_some() {} });
             presence.insert(daemon_ura_for_presence, noop_tx);
@@ -944,7 +945,7 @@ fn start_daemon_at(
         socket_path,
         &daemon_ura,
         &daemon_ura,
-        &easynet_cli::ura::agent_ura("cli", "local", "testbot"),
+        &easynet_cli::core::ura::agent_ura("cli", "local", "testbot"),
     );
 
     TestDaemon {

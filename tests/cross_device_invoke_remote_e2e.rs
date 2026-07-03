@@ -64,21 +64,21 @@ use easynet_axon::pb::axon::v1::{
     StreamDescriptor, SubjectIdentity as PbSubjectIdentity,
 };
 use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
-use easynet_cli::daemon::invocation::admission_facade::AdmissionFacade;
-use easynet_cli::daemon::invocation::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::daemon::invocation::invocation_wire::ProtoEnvelope;
-use easynet_cli::daemon::invocation::invoke_remote_initiator::{
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
-use easynet_cli::daemon::invocation::local_session_dispatcher::LocalAxonSessionDispatcher;
-use easynet_cli::daemon::invocation::session_initiator::{
+use easynet_cli::daemon::invocation::bidi::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
-use easynet_cli::daemon::invocation::state::pending_dispatch::PendingDispatchMap;
-use easynet_cli::daemon::invocation::state::presence::{
+use easynet_cli::daemon::invocation::bidi::state::pending_dispatch::PendingDispatchMap;
+use easynet_cli::daemon::invocation::bidi::state::presence::{
     OfflineReason, PresenceEvent, PresenceRegistry,
 };
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::invocation::dispatch::local_session_dispatcher::LocalAxonSessionDispatcher;
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use ed25519_dalek::SigningKey;
 use futures::StreamExt;
@@ -168,7 +168,7 @@ fn signed_envelope(
     let subject = AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
     let ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+        easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
             .expect("callee-owned descriptor ability"),
         DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
@@ -1225,7 +1225,7 @@ async fn run_round_trip() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::daemon::invocation::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 
@@ -1347,7 +1347,7 @@ async fn run_round_trip_via_local_dispatcher() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::daemon::invocation::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 

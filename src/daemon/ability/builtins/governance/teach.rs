@@ -28,22 +28,22 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::core::ability_spec::{AbilityExec, AbilityManifest};
+use crate::core::ability::spec::{AbilityExec, AbilityManifest};
+use crate::core::ura::AbilitySelector;
 use crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentRuntimeSyncOutcome,
 };
-use crate::persistence::config::sync_parent_dir;
-use crate::persistence::teach_grants::{
+use crate::daemon::persistence::config::sync_parent_dir;
+use crate::daemon::persistence::teach_grants::{
     AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
     DescriptorImportRecord, TeachGrant, TeachGrantAdmissionSnapshot,
     TeachGrantAdmissionSnapshotDraft, TeachGrantAuthoritySnapshot, TeachGrantDraft,
     TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
-use crate::support::errors::append_cleanup_error;
-use crate::ura::AbilitySelector;
+use crate::support::platform::errors::append_cleanup_error;
 
 pub const TEACH: &str = crate::daemon::ability::names::governance::META_TEACH;
 pub const ACQUIRE: &str = crate::daemon::ability::names::governance::META_ACQUIRE;
@@ -305,10 +305,10 @@ struct OwnerAuthority {
 /// owning agent's on-disk manifest. Precise refusals at every step —
 /// a transfer surface must never guess.
 fn resolve_owner_manifest(registry_name: &str) -> anyhow::Result<AbilityHome> {
-    let owner_local = crate::ura::OwnerLocalAbilityName::parse(registry_name)?;
+    let owner_local = crate::core::ura::OwnerLocalAbilityName::parse(registry_name)?;
     let agent = owner_local.owner();
     let public_name = owner_local.public_name();
-    let agents = crate::registry::agents::load_agents()?;
+    let agents = crate::daemon::persistence::agent_registry::load_agents()?;
     let Some(entry) = agents.agents.get(agent) else {
         anyhow::bail!("no agent {agent:?} on this device (see `easynet agent list`)");
     };
@@ -341,24 +341,23 @@ fn required_str<'a>(args: &'a Value, field: &str, surface: &str) -> anyhow::Resu
 }
 
 fn hosted_agent_by_name<'a>(
-    local: &'a crate::persistence::local_agents::LocalAgentsFile,
+    local: &'a crate::daemon::persistence::local_agents::LocalAgentsFile,
     agent_name: &str,
     surface: &str,
-) -> anyhow::Result<&'a crate::persistence::local_agents::HostedAgentEntry> {
-    crate::persistence::local_agents::lookup_hosted_agent_by_name(local, agent_name)?.ok_or_else(
-        || {
+) -> anyhow::Result<&'a crate::daemon::persistence::local_agents::HostedAgentEntry> {
+    crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(local, agent_name)?
+        .ok_or_else(|| {
             anyhow::anyhow!(
                 "{surface} cannot resolve agent {agent_name:?}: no persisted local Agent URA"
             )
-        },
-    )
+        })
 }
 
 fn hosted_agent_by_ura<'a>(
-    local: &'a crate::persistence::local_agents::LocalAgentsFile,
+    local: &'a crate::daemon::persistence::local_agents::LocalAgentsFile,
     agent_ura: &str,
     surface: &str,
-) -> anyhow::Result<&'a crate::persistence::local_agents::HostedAgentEntry> {
+) -> anyhow::Result<&'a crate::daemon::persistence::local_agents::HostedAgentEntry> {
     local
         .hosted_agents
         .iter()
@@ -382,7 +381,7 @@ fn require_owner_authority(
     owner_agent: &str,
 ) -> anyhow::Result<OwnerAuthority> {
     let caller = env.caller();
-    let local = crate::persistence::local_agents::load()?;
+    let local = crate::daemon::persistence::local_agents::load()?;
     let owner_entry = hosted_agent_by_name(&local, owner_agent, TEACH)?;
 
     if let Some(authority) = authorized_hosted_agent_delegation(
@@ -434,7 +433,7 @@ fn authorized_hosted_agent_delegation(
 
 fn require_hosted_agent_authority(
     env: &EnvelopeContext,
-    local: &crate::persistence::local_agents::LocalAgentsFile,
+    local: &crate::daemon::persistence::local_agents::LocalAgentsFile,
     agent_name: &str,
     agent_ura: &str,
     surface: &str,
@@ -481,18 +480,18 @@ fn teach_handler_with_clock(
 ) -> anyhow::Result<Value> {
     let ability = required_str(&args, "ability", TEACH)?;
     let learner_ura = required_str(&args, "learner_ura", TEACH)?;
-    let parsed = crate::ura::parse_ura(learner_ura)
+    let parsed = crate::core::ura::parse_ura(learner_ura)
         .map_err(|e| anyhow::anyhow!("invalid learner_ura {learner_ura:?}: {e}"))?;
-    if parsed.kind != crate::ura::URAKind::Agent {
+    if parsed.kind != crate::core::ura::URAKind::Agent {
         anyhow::bail!("learner_ura must be an Agent URA; descriptor grants target agents");
     }
-    let local = crate::persistence::local_agents::load()?;
+    let local = crate::daemon::persistence::local_agents::load()?;
     hosted_agent_by_ura(&local, learner_ura, TEACH)?;
 
     let home = resolve_owner_manifest(ability)?;
     let snapshot = GrantedDescriptorSnapshot::from_home(&home)?;
     let authority = require_owner_authority(&env, &home.owner_agent)?;
-    let ability_ura = crate::ura::owner_ability_ura(&authority.owner_ura, &home.public_name)
+    let ability_ura = crate::core::ura::owner_ability_ura(&authority.owner_ura, &home.public_name)
         .ok_or_else(|| anyhow::anyhow!("could not mint the granted descriptor URA"))?;
     let granted_at = clock.now_rfc3339();
     let admission_snapshot = teach_grant_admission_snapshot(
@@ -765,7 +764,7 @@ pub fn recover_forget_transactions(
     hot_registrar: Option<&SharedHotRegistrarCell>,
 ) -> anyhow::Result<usize> {
     let store = TeachGrantStore::open_default();
-    let agents = crate::registry::agents::load_agents()?;
+    let agents = crate::daemon::persistence::agent_registry::load_agents()?;
     let mut recovered = 0usize;
     for record in store.snapshot_forgetting_records()? {
         let pending = match store.resume_forget_pending(&record) {
@@ -999,7 +998,7 @@ impl AcquireRequest {
 #[derive(Debug, Clone)]
 struct AuthorizedAcquire {
     request: AcquireRequest,
-    learner_entry_for_runtime: crate::registry::agents::AgentEntry,
+    learner_entry_for_runtime: crate::daemon::persistence::agent_registry::AgentEntry,
     learner_ura: String,
     mutated_by: String,
     owner_home: AbilityHome,
@@ -1016,7 +1015,7 @@ impl AuthorizedAcquire {
                 request.ability_ura
             );
         }
-        let agents = crate::registry::agents::load_agents()?;
+        let agents = crate::daemon::persistence::agent_registry::load_agents()?;
         let learner_entry_for_runtime =
             agents
                 .agents
@@ -1038,7 +1037,7 @@ impl AuthorizedAcquire {
                 )
             })?;
 
-        let local = crate::persistence::local_agents::load()?;
+        let local = crate::daemon::persistence::local_agents::load()?;
         let learner_ura = hosted_agent_by_name(&local, &request.learner, ACQUIRE)?
             .agent_ura
             .clone();
@@ -1144,7 +1143,7 @@ impl AdmittedAcquire {
 #[derive(Debug)]
 struct CommittedAcquire {
     plan: AuthorizedAcquire,
-    acquired: crate::persistence::teach_grants::AcquiredTeachGrant,
+    acquired: crate::daemon::persistence::teach_grants::AcquiredTeachGrant,
 }
 
 impl CommittedAcquire {
@@ -1152,9 +1151,11 @@ impl CommittedAcquire {
         self,
         hot_registrar: Option<&SharedHotRegistrarCell>,
     ) -> anyhow::Result<RuntimeSyncedAcquire> {
-        let new_descriptor_ura =
-            crate::ura::owner_ability_ura(&self.plan.learner_ura, &self.plan.request.public_name)
-                .ok_or_else(|| anyhow::anyhow!("could not mint the learner's ability URA"))?;
+        let new_descriptor_ura = crate::core::ura::owner_ability_ura(
+            &self.plan.learner_ura,
+            &self.plan.request.public_name,
+        )
+        .ok_or_else(|| anyhow::anyhow!("could not mint the learner's ability URA"))?;
         let runtime_sync = sync_learner_runtime_after_acquire(
             hot_registrar,
             &self.plan.request.learner,
@@ -1172,7 +1173,7 @@ impl CommittedAcquire {
 #[derive(Debug)]
 struct RuntimeSyncedAcquire {
     plan: AuthorizedAcquire,
-    acquired: crate::persistence::teach_grants::AcquiredTeachGrant,
+    acquired: crate::daemon::persistence::teach_grants::AcquiredTeachGrant,
     new_descriptor_ura: String,
     runtime_sync: RuntimeSyncOutcome,
 }
@@ -1214,20 +1215,20 @@ impl ForgetRequest {
 #[derive(Debug, Clone)]
 struct AuthorizedForget {
     request: ForgetRequest,
-    agent_entry_for_runtime: Option<crate::registry::agents::AgentEntry>,
+    agent_entry_for_runtime: Option<crate::daemon::persistence::agent_registry::AgentEntry>,
     mutated_by: String,
     manifest: Option<PathBuf>,
 }
 
 impl AuthorizedForget {
     fn from_request(env: EnvelopeContext, request: ForgetRequest) -> anyhow::Result<Self> {
-        let agents = crate::registry::agents::load_agents()?;
+        let agents = crate::daemon::persistence::agent_registry::load_agents()?;
         let agent_entry_for_runtime = agents.agents.get(&request.agent).cloned();
-        let local = crate::persistence::local_agents::load()?;
+        let local = crate::daemon::persistence::local_agents::load()?;
         let agent_ura = hosted_agent_by_name(&local, &request.agent, FORGET)?
             .agent_ura
             .clone();
-        let expected_subject = crate::ura::owner_ability_ura(&agent_ura, &request.ability)
+        let expected_subject = crate::core::ura::owner_ability_ura(&agent_ura, &request.ability)
             .ok_or_else(|| {
                 anyhow::anyhow!("{FORGET} could not mint imported descriptor subject")
             })?;
@@ -1270,7 +1271,7 @@ impl AuthorizedForget {
 #[derive(Debug)]
 struct StagedForget {
     plan: AuthorizedForget,
-    staged: crate::persistence::teach_grants::StagedDescriptorImportRemoval<
+    staged: crate::daemon::persistence::teach_grants::StagedDescriptorImportRemoval<
         StagedDescriptorRemovalManifest,
     >,
 }
@@ -1291,7 +1292,7 @@ impl StagedForget {
 #[derive(Debug)]
 struct RuntimePendingForget {
     plan: AuthorizedForget,
-    pending: crate::persistence::teach_grants::RuntimePendingDescriptorImportRemoval,
+    pending: crate::daemon::persistence::teach_grants::RuntimePendingDescriptorImportRemoval,
     resumed: bool,
 }
 
@@ -1324,7 +1325,7 @@ impl RuntimePendingForget {
 #[derive(Debug)]
 struct RuntimeSyncedForget {
     plan: AuthorizedForget,
-    pending: crate::persistence::teach_grants::RuntimePendingDescriptorImportRemoval,
+    pending: crate::daemon::persistence::teach_grants::RuntimePendingDescriptorImportRemoval,
     resumed: bool,
     runtime_sync: RuntimeSyncOutcome,
 }
@@ -1537,7 +1538,7 @@ impl RuntimeSyncReport {
 fn collect_learner_runtime_sync(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
-    entry: &crate::registry::agents::AgentEntry,
+    entry: &crate::daemon::persistence::agent_registry::AgentEntry,
 ) -> RuntimeSyncReport {
     let Some(cell) = hot_registrar else {
         return RuntimeSyncReport::not_ready("hot_registrar_not_provided");
@@ -1560,7 +1561,7 @@ fn collect_learner_runtime_sync(
 fn sync_learner_runtime_after_acquire(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
-    entry: &crate::registry::agents::AgentEntry,
+    entry: &crate::daemon::persistence::agent_registry::AgentEntry,
 ) -> RuntimeSyncOutcome {
     let report = collect_learner_runtime_sync(hot_registrar, learner, entry);
     RuntimeSyncOutcome::after_durable_commit(report)
@@ -1610,7 +1611,7 @@ fn forget_handler_with_hot_registrar(
 fn sync_learner_runtime_after_forget(
     hot_registrar: Option<&SharedHotRegistrarCell>,
     learner: &str,
-    entry: &crate::registry::agents::AgentEntry,
+    entry: &crate::daemon::persistence::agent_registry::AgentEntry,
 ) -> RuntimeSyncOutcome {
     let report = collect_learner_runtime_sync(hot_registrar, learner, entry);
     RuntimeSyncOutcome::after_durable_commit(report)
@@ -1619,8 +1620,8 @@ fn sync_learner_runtime_after_forget(
 #[cfg(all(test, feature = "axon-pb"))]
 mod tests {
     use super::*;
-    use crate::cli::test_support::HomeGuard;
-    use crate::registry::agents::{AgentRegistry, AgentType};
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};
 
     /// Two agents on disk — mentor publishes executable `quote`,
     /// apprentice publishes nothing — both with minted URAs, all
@@ -1661,11 +1662,14 @@ mod tests {
                 format!("name = \"{name}\"\nruntime = \"claude-code\"\n"),
             )
             .expect("agent.toml");
-            let mut entry = crate::registry::agents::AgentEntry::new(AgentType::ClaudeCode, None);
+            let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
+                AgentType::ClaudeCode,
+                None,
+            );
             entry.root_path = Some(root);
             registry.agents.insert(name.to_string(), entry);
         }
-        crate::registry::agents::save_agents(&registry).expect("save agents");
+        crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save agents");
 
         std::fs::write(
             std::path::Path::new(&home).join("agents/mentor/abilities/quote.ability.toml"),
@@ -1673,33 +1677,33 @@ mod tests {
         )
         .expect("mentor manifest");
 
-        let mut local = crate::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: crate::ura::device_ura("test", "local"),
+        let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: crate::core::ura::device_ura("test", "local"),
             ..Default::default()
         };
-        let mentor_ura = crate::ura::agent_ura("localhost", "dev", "mentor");
-        let apprentice_ura = crate::ura::agent_ura("localhost", "dev", "apprentice");
-        crate::persistence::local_agents::upsert_hosted_agent(
+        let mentor_ura = crate::core::ura::agent_ura("localhost", "dev", "mentor");
+        let apprentice_ura = crate::core::ura::agent_ura("localhost", "dev", "apprentice");
+        crate::daemon::persistence::local_agents::upsert_hosted_agent(
             &mut local,
             "llm",
             "mentor",
             &mentor_ura,
         );
-        crate::persistence::local_agents::upsert_hosted_agent(
+        crate::daemon::persistence::local_agents::upsert_hosted_agent(
             &mut local,
             "llm",
             "apprentice",
             &apprentice_ura,
         );
-        crate::persistence::local_agents::save(&local).expect("save local agents");
+        crate::daemon::persistence::local_agents::save(&local).expect("save local agents");
 
         let source_descriptor_ura =
-            crate::ura::owner_ability_ura(&mentor_ura, "quote").expect("mentor ability URA");
+            crate::core::ura::owner_ability_ura(&mentor_ura, "quote").expect("mentor ability URA");
         (source_descriptor_ura, apprentice_ura, mentor_ura)
     }
 
     fn subject_for(owner_ura: &str, public_name: &str) -> String {
-        crate::ura::owner_ability_ura(owner_ura, public_name).expect("test ability subject")
+        crate::core::ura::owner_ability_ura(owner_ura, public_name).expect("test ability subject")
     }
 
     fn caller_env_with_subject(
@@ -1799,7 +1803,7 @@ mod tests {
     }
 
     fn mark_first_import_as_acquiring_for_test(manifest_path: &Path) {
-        let grants_path = crate::persistence::teach_grants::path();
+        let grants_path = crate::daemon::persistence::teach_grants::path();
         let mut grants: Value =
             serde_json::from_slice(&std::fs::read(&grants_path).expect("teach grants file"))
                 .expect("teach grants json");
@@ -1832,13 +1836,13 @@ mod tests {
         )
         .expect("owner teaches");
 
-        let file = std::fs::read_to_string(crate::persistence::teach_grants::path())
+        let file = std::fs::read_to_string(crate::daemon::persistence::teach_grants::path())
             .expect("teach grants file");
         let parsed: Value = serde_json::from_str(&file).expect("teach grants json");
         assert_eq!(parsed["grants"][0]["granted_at"], ts);
         assert_eq!(
             parsed["grants"][0]["ability_ura"],
-            crate::ura::owner_ability_ura(&mentor_ura, "quote").unwrap()
+            crate::core::ura::owner_ability_ura(&mentor_ura, "quote").unwrap()
         );
         assert_eq!(parsed["grants"][0]["owner_ura"], mentor_ura);
     }
@@ -1847,7 +1851,7 @@ mod tests {
     fn teach_rejects_non_local_hosted_learner_ura() {
         let _g = HomeGuard::new();
         let (_, _, mentor_ura) = seed();
-        let remote_agent = crate::ura::agent_ura("remote-realm", "remote-dev", "apprentice");
+        let remote_agent = crate::core::ura::agent_ura("remote-realm", "remote-dev", "apprentice");
 
         let err = teach_handler_with_clock(
             teach_env(mentor_ura.clone(), &mentor_ura),
@@ -1862,7 +1866,7 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(
-            !crate::persistence::teach_grants::path().exists(),
+            !crate::daemon::persistence::teach_grants::path().exists(),
             "rejected teach must not create a grant file"
         );
     }
@@ -1893,9 +1897,9 @@ mod tests {
         )
         .expect("owner teaches");
 
-        let forged_owner = crate::ura::agent_ura("localhost", "other-user", "mentor");
-        let forged_ability =
-            crate::ura::owner_ability_ura(&forged_owner, "quote").expect("forged ability URA");
+        let forged_owner = crate::core::ura::agent_ura("localhost", "other-user", "mentor");
+        let forged_ability = crate::core::ura::owner_ability_ura(&forged_owner, "quote")
+            .expect("forged ability URA");
         let err = acquire_handler_with_hot_registrar(
             acquire_env(apprentice_ura, &forged_ability),
             json!({ "ability_ura": forged_ability, "learner": "apprentice" }),
@@ -2081,7 +2085,7 @@ mod tests {
         assert_eq!(resp["runtime_sync"]["failed"], 0);
         assert_eq!(resp["descriptor_transaction_status"], "committed");
         assert_eq!(resp["runtime_sync"]["status"], "committed");
-        let runtime_key = crate::ura::owner_ability_ura(
+        let runtime_key = crate::core::ura::owner_ability_ura(
             &crate::daemon::identity::local_invocation::local_device_ura(),
             "apprentice.quote",
         )
@@ -2127,7 +2131,7 @@ mod tests {
                 .exists(),
             "precondition: acquire persisted the descriptor-import ledger row"
         );
-        let runtime_key = crate::ura::owner_ability_ura(
+        let runtime_key = crate::core::ura::owner_ability_ura(
             &crate::daemon::identity::local_invocation::local_device_ura(),
             "apprentice.quote",
         )
@@ -2225,7 +2229,7 @@ mod tests {
         );
 
         let grants: Value = serde_json::from_slice(
-            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+            &std::fs::read(crate::daemon::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         let imports = grants["imports"].as_array().unwrap();
@@ -2266,7 +2270,7 @@ mod tests {
         assert_eq!(retry["runtime_sync"]["status"], "committed");
         assert_eq!(retry["resumed"], true);
         let grants: Value = serde_json::from_slice(
-            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+            &std::fs::read(crate::daemon::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         assert!(
@@ -2307,7 +2311,7 @@ mod tests {
         )
         .expect_err("forget parks the tombstone until runtime cleanup converges");
         let grants: Value = serde_json::from_slice(
-            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+            &std::fs::read(crate::daemon::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         assert_eq!(grants["imports"][0]["state"], "forgetting", "{grants}");
@@ -2315,15 +2319,16 @@ mod tests {
         // The learner agent is removed from the registry — agent.stop, a
         // reset, whatever — leaving the tombstone with no runtime to ever
         // converge against.
-        let mut registry = crate::registry::agents::load_agents().expect("load agents");
+        let mut registry =
+            crate::daemon::persistence::agent_registry::load_agents().expect("load agents");
         registry.agents.remove("apprentice");
-        crate::registry::agents::save_agents(&registry).expect("save agents");
+        crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save agents");
 
         // The boot sweep must retire the orphaned tombstone, not skip it.
         let recovered = recover_forget_transactions(None).expect("boot sweep");
         assert_eq!(recovered, 1, "the orphaned tombstone must converge");
         let grants: Value = serde_json::from_slice(
-            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+            &std::fs::read(crate::daemon::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         assert!(
@@ -2385,7 +2390,7 @@ mod tests {
             "forget must remove the recovered imported descriptor"
         );
         let grants: Value = serde_json::from_slice(
-            &std::fs::read(crate::persistence::teach_grants::path()).unwrap(),
+            &std::fs::read(crate::daemon::persistence::teach_grants::path()).unwrap(),
         )
         .unwrap();
         assert!(grants["imports"].as_array().unwrap().is_empty());
@@ -2556,7 +2561,7 @@ mod tests {
         )
         .expect("teach");
 
-        let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
+        let stranger = crate::core::ura::agent_ura("localhost", "dev", "stranger");
         let err = acquire_handler_with_hot_registrar(
             acquire_env(stranger, &source_descriptor_ura),
             json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
@@ -2585,7 +2590,7 @@ mod tests {
         )
         .expect("acquire");
 
-        let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
+        let stranger = crate::core::ura::agent_ura("localhost", "dev", "stranger");
         let err = forget_handler_with_hot_registrar(
             forget_env(stranger, &apprentice_ura),
             json!({ "ability": "quote", "agent": "apprentice" }),
@@ -2629,7 +2634,7 @@ mod tests {
             "{err}"
         );
         assert!(
-            !crate::persistence::teach_grants::path().exists(),
+            !crate::daemon::persistence::teach_grants::path().exists(),
             "rejected teach must not create a grant file"
         );
     }
@@ -2638,7 +2643,7 @@ mod tests {
     fn teach_refuses_callers_that_are_not_the_owner_or_host_authority() {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
-        let stranger = crate::ura::agent_ura("localhost", "dev", "stranger");
+        let stranger = crate::core::ura::agent_ura("localhost", "dev", "stranger");
 
         let err = teach_handler(
             teach_env(stranger, &mentor_ura),
@@ -2655,7 +2660,7 @@ mod tests {
     fn teach_refuses_unsigned_host_device_authority_for_a_local_owner() {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
-        let host = crate::ura::device_ura("test", "local");
+        let host = crate::core::ura::device_ura("test", "local");
 
         let err = teach_handler(
             teach_env(host, &mentor_ura),
@@ -2675,11 +2680,11 @@ mod tests {
         // Hosted-agent delegation is a loopback path: the daemon presents the
         // signed token under its local-system identity, while the delegation's
         // host device (the envelope callee) is the authority being delegated.
-        let host = crate::ura::device_ura("test", "local");
+        let host = crate::core::ura::device_ura("test", "local");
 
         let resp = teach_handler(
             teach_env_with_hosted_delegation(
-                crate::ura::LOCAL_SYSTEM_AGENT_URA,
+                crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
                 &mentor_ura,
                 &mentor_ura,
             ),

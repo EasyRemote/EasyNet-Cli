@@ -33,32 +33,28 @@
 
 pub mod ability;
 pub mod axon_bridge;
-#[cfg(feature = "axon-pb")]
-mod client;
-pub mod context;
+pub mod boot;
 pub mod control;
-mod error;
 pub mod execution;
 pub mod federation;
-pub mod hub;
 pub mod identity;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
-pub mod kernel;
 pub mod keyring;
+pub mod persistence;
 pub mod plugins;
-mod process;
 pub mod resources;
+pub mod telemetry;
 pub mod trust;
 
-#[cfg(feature = "axon-pb")]
-pub use client::{DaemonBidiSession, DaemonClient};
-pub use error::DaemonError;
-#[cfg(feature = "axon-pb")]
-pub use invocation::{DaemonInvocation, DaemonInvocationBuilder};
-pub use process::{
+pub use boot::DaemonError;
+pub use boot::{
     start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,
 };
+#[cfg(feature = "axon-pb")]
+pub use invocation::dispatch::client::{DaemonBidiSession, DaemonClient};
+#[cfg(feature = "axon-pb")]
+pub use invocation::{DaemonInvocation, DaemonInvocationBuilder};
 
 /// Result alias for the daemon SDK surface.
 pub type Result<T> = std::result::Result<T, DaemonError>;

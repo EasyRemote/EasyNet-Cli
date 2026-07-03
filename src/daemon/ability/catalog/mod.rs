@@ -19,5 +19,5 @@ pub use catalog_metadata::*;
 pub use descriptor_paths::{
     iter_system_ability_descriptor_paths, system_ability_descriptor_path,
     system_ability_descriptor_root, try_system_ability_descriptor_path, DescriptorPathError,
-    SYSTEM_ABILITY_DESCRIPTOR_ROOT,
+    SystemAbilityDescriptorGroup, SYSTEM_ABILITY_DESCRIPTOR_ROOT,
 };

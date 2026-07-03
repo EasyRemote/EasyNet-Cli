@@ -967,7 +967,7 @@ mod tests {
     /// then mutates one field to exercise a specific reject reason.
     fn fed_peer_entry(target_hub: &str, ca_path: PathBuf) -> TrustedAgent {
         TrustedAgent {
-            agent_ura: crate::ura::hub_ura("peer-realm"),
+            agent_ura: crate::core::ura::hub_ura("peer-realm"),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,

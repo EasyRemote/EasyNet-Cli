@@ -43,7 +43,7 @@ use crate::daemon::ability::builtins::resources::media::{
 };
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
-use crate::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
 
 /// 2 MiB inline cap — same shape as camera.snapshot. This keeps
 /// base64-expanded receipts below Axon's 4 MiB IPC frame limit while
@@ -826,8 +826,8 @@ fn snapshot_handler(
     // Context page can browse it as <device>/<ability>/<artifact>.
     // Best-effort by design — a full disk must not fail the snapshot
     // the caller is waiting on.
-    if let Err(err) = crate::persistence::context_store::record_capture(
-        crate::persistence::context_store::CaptureRecord {
+    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+        crate::daemon::persistence::context_store::CaptureRecord {
             device: env.callee(),
             ability: ABILITY_SCREEN_SNAPSHOT,
             ext: "jpg",
@@ -897,8 +897,8 @@ fn resolve_screen_subject(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-    use crate::persistence::resources::{
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
 
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn handler_returns_receipt_with_base64_jpeg_when_subject_resolves() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "h-display-e2e");
         resources::save(&file).unwrap();
@@ -1000,7 +1000,7 @@ mod tests {
 
     #[test]
     fn subscribe_returns_stream_frames_with_requested_resolution() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "h-display-stream");
         resources::save(&file).unwrap();
@@ -1044,7 +1044,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
@@ -1062,7 +1062,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_camera_subject_with_resource_type_mismatch_reason() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let cam_ura = upsert_resource(
             &mut file,
@@ -1094,7 +1094,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_unknown_subject_with_resource_not_found_reason() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         resources::save(&ResourcesFile::default()).unwrap();
         let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
@@ -1113,7 +1113,7 @@ mod tests {
 
     #[test]
     fn handler_rejects_subject_in_args() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);

@@ -41,7 +41,7 @@ use super::retry::{
 };
 use super::trace::{CappedTraceBuffer, CapturedResult};
 use super::*;
-use crate::eal::ir::{IrFailurePolicy, IrLoop, IrStep as RealIrStep};
+use crate::eal::runtime::ir::{IrFailurePolicy, IrLoop, IrStep as RealIrStep};
 
 pub(super) struct PhaseRunState<'a> {
     pub global_step: &'a mut usize,
@@ -282,7 +282,7 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
         // inside each worker for the duration of its step. This is
         // the in-process channel — the process-global env-var bridge
         // it replaces let concurrent missions stomp each other's id.
-        let parent_ctx = crate::runtime::context::current();
+        let parent_ctx = crate::daemon::execution::mission::context::current();
         // Spawn rayon tasks — closure captures only Send types.
         rayon::scope(|scope| {
             for (local_idx, thread_dispatcher, merged_args, causal_parents) in tasks {
@@ -290,7 +290,8 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
                 let collector_ref = &collector;
                 let parent_ctx = parent_ctx.clone();
                 scope.spawn(move |_| {
-                    let _mission_ctx = parent_ctx.map(crate::runtime::context::enter);
+                    let _mission_ctx =
+                        parent_ctx.map(crate::daemon::execution::mission::context::enter);
                     let result = execute_step_with_retry(
                         thread_dispatcher.as_ref(),
                         run,

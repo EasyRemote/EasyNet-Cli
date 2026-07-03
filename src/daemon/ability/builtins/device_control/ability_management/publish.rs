@@ -80,11 +80,11 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::AbilityManifest;
+use crate::core::ability::spec::AbilityManifest;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::registry::agents;
-use crate::runtime::directory::ABILITY_MANIFEST_SUFFIX;
+use crate::daemon::execution::mission::directory::ABILITY_MANIFEST_SUFFIX;
+use crate::daemon::persistence::agent_registry as agents;
 
 /// Wire name of the publish meta-ability. Pinned because the
 /// curator session in `mission.think` calls it by string; a rename
@@ -152,7 +152,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let manifest = AbilityManifest::from_toml_str(&manifest_toml)?;
     let verb = manifest.name().to_string();
     reject_reserved_verb(&verb)?;
-    let ability_ura = crate::ura::owner_ability_ura(&owner_ura, &verb)
+    let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, &verb)
         .ok_or_else(|| anyhow::anyhow!("ability.publish: cannot derive ability_ura"))?;
 
     let abilities_dir = owner_root.join("abilities");
@@ -179,7 +179,7 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     // stale `schema_version`) from polluting the on-disk surface.
     let body = manifest.to_toml_string()?;
     let hash = content_hash(&body);
-    crate::persistence::config::atomic_write(&target, body.as_bytes()).map_err(|e| {
+    crate::daemon::persistence::config::atomic_write(&target, body.as_bytes()).map_err(|e| {
         anyhow::anyhow!("ability.publish: failed to write {}: {e}", target.display())
     })?;
 
@@ -353,7 +353,7 @@ fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
     let root = entry
         .root_path
         .clone()
-        .unwrap_or_else(|| crate::persistence::config::agents_root().join(owner_id));
+        .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(owner_id));
     if !root.is_dir() {
         anyhow::bail!(
             "owner agent {owner_id:?} has no on-disk workspace at {} — cannot publish \
@@ -367,31 +367,31 @@ fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
 fn agent_owner_and_public_name_from_ability_ura(
     ability_ura: &str,
 ) -> anyhow::Result<(String, String, String)> {
-    let parsed = crate::ura::parse_ura(ability_ura)
+    let parsed = crate::core::ura::parse_ura(ability_ura)
         .map_err(|e| anyhow::anyhow!("ability.unpublish: invalid `ability_ura`: {e}"))?;
-    if parsed.kind != crate::ura::URAKind::Ability {
+    if parsed.kind != crate::core::ura::URAKind::Ability {
         anyhow::bail!("ability.unpublish: `ability_ura` must be an Ability URA");
     }
     let ability = parsed
         .ability()
         .ok_or_else(|| anyhow::anyhow!("ability.unpublish: `ability_ura` has no ability tail"))?;
     let (user_id, agent_id) = match ability.owner {
-        crate::ura::AbilityOwner::Agent { user_id, agent_id } => (user_id, agent_id),
+        crate::core::ura::AbilityOwner::Agent { user_id, agent_id } => (user_id, agent_id),
         other => {
             anyhow::bail!("ability.unpublish: ability_ura must be agent-owned, got {other:?}");
         }
     };
-    let public_name = crate::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
+    let public_name = crate::core::ura::ability_name_from_parts(&parsed).ok_or_else(|| {
         anyhow::anyhow!("ability.unpublish: ability_ura `{ability_ura}` has no public ability name")
     })?;
-    let owner_ura = crate::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
+    let owner_ura = crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id);
     Ok((owner_ura, agent_id, public_name))
 }
 
 fn agent_id_from_owner_ura(context: &str, owner_ura: &str) -> anyhow::Result<String> {
-    let parsed = crate::ura::parse_ura(owner_ura)
+    let parsed = crate::core::ura::parse_ura(owner_ura)
         .map_err(|e| anyhow::anyhow!("{context}: invalid `owner_ura`: {e}"))?;
-    if parsed.kind != crate::ura::URAKind::Agent {
+    if parsed.kind != crate::core::ura::URAKind::Agent {
         anyhow::bail!("{context}: `owner_ura` must be an Agent URA");
     }
     // DEC-F048: publish/unpublish is a hosted user-agent development
@@ -493,7 +493,7 @@ pub fn unpublish_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+    use crate::core::agent::spec::{AgentSpec, RuntimeKind};
 
     #[test]
     fn owner_ura_resolution_dual_shape() {
@@ -514,9 +514,9 @@ mod tests {
         assert!(msg.contains("RFC-005 §3.1.2"), "{msg}");
         assert!(msg.contains("device-sponsored System Agent"), "{msg}");
     }
-    use crate::cli::test_support::HomeGuard;
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
-    use crate::runtime::directory::{AgentDirectory, Location};
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 
     /// Materialise a throwaway agent inside a `HomeGuard`-isolated
     /// `~/.easynet/`. The HomeGuard already holds the process-global
@@ -530,7 +530,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let name = format!("test-agent-{tag}-{pid}-{nanos}");
-        let agent_root = crate::persistence::config::agents_root().join(&name);
+        let agent_root = crate::daemon::persistence::config::agents_root().join(&name);
         let spec = AgentSpec::new(&name, RuntimeKind::ClaudeCode);
         let _ = AgentDirectory::create(
             &Location::Local {
@@ -559,11 +559,11 @@ type = "object"
     }
 
     fn owner_ura(agent_id: &str) -> String {
-        crate::ura::agent_ura("test-realm", "alice", agent_id)
+        crate::core::ura::agent_ura("test-realm", "alice", agent_id)
     }
 
     fn ability_ura(agent_id: &str, public_name: &str) -> String {
-        crate::ura::ability_ura("test-realm", "alice", agent_id, public_name)
+        crate::core::ura::ability_ura("test-realm", "alice", agent_id, public_name)
     }
 
     #[test]
@@ -592,7 +592,8 @@ type = "object"
             .get(&name)
             .cloned()
             .unwrap();
-        let manifests = crate::runtime::agent_ability_specs::manifests_for(&name, &entry);
+        let manifests =
+            crate::daemon::execution::mission::agent_ability_specs::manifests_for(&name, &entry);
         assert!(
             manifests.iter().any(|m| m.name() == "summarise"),
             "published ability must show up in manifests_for"

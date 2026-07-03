@@ -58,11 +58,11 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::core::ability_spec::{AbilityManifest, Visibility};
+use crate::core::ability::spec::{AbilityManifest, Visibility};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::local_runtime_invoker::is_not_found_error;
-use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-use crate::registry::agents::AgentRegistry;
+use crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error;
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.invoke`.
@@ -143,8 +143,8 @@ pub fn dispatch(
         // unchanged (no fed daemon = no remote dispatch attempts)
         // while letting peer-aware deployments transparently route
         // cross-device invokes.
-        if crate::runtime::keyring::forward::is_federation_target(target) {
-            if let Some(invoker) = crate::runtime::keyring::forward::forward_invoker() {
+        if crate::daemon::keyring::forward::is_federation_target(target) {
+            if let Some(invoker) = crate::daemon::keyring::forward::forward_invoker() {
                 if invoker.knows_target(target) {
                     // Emit the trace ID at stderr so an operator
                     // tailing the daemon log can correlate the
@@ -403,7 +403,7 @@ fn audit_invoke(
 }
 
 fn audit_log_path() -> std::path::PathBuf {
-    crate::persistence::config::state_dir()
+    crate::daemon::persistence::config::state_dir()
         .join("logs")
         .join("ability-audit.jsonl")
 }
@@ -434,9 +434,12 @@ fn lookup_access_policy(
     agents: &AgentRegistry,
     target_agent: &str,
     bare_ability: &str,
-) -> Option<crate::core::ability_spec::AccessPolicy> {
+) -> Option<crate::core::ability::spec::AccessPolicy> {
     let entry = agents.agents.get(target_agent)?;
-    let manifests = crate::runtime::agent_ability_specs::manifests_for_shared(target_agent, entry);
+    let manifests = crate::daemon::execution::mission::agent_ability_specs::manifests_for_shared(
+        target_agent,
+        entry,
+    );
     manifests
         .iter()
         .find(|m| m.name() == bare_ability)
@@ -503,7 +506,7 @@ impl InvokeArgs {
         if raw_ability_ura.is_empty() {
             anyhow::bail!("invalid_args: `ability_ura` must not be empty");
         }
-        let selector = crate::ura::AbilitySelector::parse(&raw_ability_ura)
+        let selector = crate::core::ura::AbilitySelector::parse(&raw_ability_ura)
             .map_err(|e| anyhow::anyhow!("invalid_args: {e}"))?;
 
         let args = match obj.get("args") {
@@ -617,8 +620,8 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ability_spec::{AbilityManifest, AccessPolicy, Visibility};
-    use crate::registry::agents::{AgentEntry, AgentRegistry, AgentType};
+    use crate::core::ability::spec::{AbilityManifest, AccessPolicy, Visibility};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -791,7 +794,7 @@ mod tests {
 
     #[test]
     fn parse_accepts_underscore_prefixed_sidecar_fields() {
-        let caller_ura = crate::ura::hub_ura("silan.localhost");
+        let caller_ura = crate::core::ura::hub_ura("silan.localhost");
         // Backend cliipc adapter ships `_caller_ura`, `_request_id`,
         // `_idempotency_key`, `_timeout_ms` as IPC-only sidecars.
         // The handler must accept them silently — they don't enter
@@ -1120,12 +1123,12 @@ mod tests {
     // and verify the dispatch layer routes federation-shaped targets
     // through it instead of returning target_not_registered.
 
-    use crate::runtime::keyring::forward as fwd;
+    use crate::daemon::keyring::forward as fwd;
 
     #[test]
     fn forward_invoke_routes_federation_target_through_invoker() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|ura| crate::ura::parse_ura(ura).is_ok());
+        fwd::set_test_knower(|ura| crate::core::ura::parse_ura(ura).is_ok());
         fwd::set_test_router(|target, ability, args| {
             assert_eq!(target, "easynet:///r/exp-realm/device/alice-node");
             assert_eq!(ability, "ping");
@@ -1168,7 +1171,7 @@ mod tests {
     #[test]
     fn forward_invoke_propagates_typed_remote_error() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|ura| crate::ura::parse_ura(ura).is_ok());
+        fwd::set_test_knower(|ura| crate::core::ura::parse_ura(ura).is_ok());
         fwd::set_test_router(|_t, _a, _x| {
             Err(anyhow::anyhow!("AXON_TARGET_OFFLINE: peer unreachable"))
         });

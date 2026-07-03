@@ -70,8 +70,10 @@ use crate::daemon::ability::builtins::resources::media::{
 };
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
-use crate::persistence::config::{atomic_write_with_permissions, state_dir, WritePermissions};
-use crate::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::persistence::config::{
+    atomic_write_with_permissions, state_dir, WritePermissions,
+};
+use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
 
 /// Maximum inline image size, in encoded JPEG bytes (NOT the base64
 /// expansion). Above this the handler refuses with an explicit
@@ -686,8 +688,8 @@ fn snapshot_handler(
     // Context page as <device>/camera.snapshot/<artifact>. The
     // legacy captures/camera tree above stays — it is keyed by
     // resource and consumed by the CLI; this one feeds the UI index.
-    if let Err(err) = crate::persistence::context_store::record_capture(
-        crate::persistence::context_store::CaptureRecord {
+    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+        crate::daemon::persistence::context_store::CaptureRecord {
             device: env.callee(),
             ability: ABILITY_CAMERA_SNAPSHOT,
             ext: "jpg",
@@ -877,8 +879,8 @@ fn record_stop_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Valu
             artifact.temp_path.display()
         )
     })?;
-    let capture = crate::persistence::context_store::record_capture(
-        crate::persistence::context_store::CaptureRecord {
+    let capture = crate::daemon::persistence::context_store::record_capture(
+        crate::daemon::persistence::context_store::CaptureRecord {
             device: &stop_lease.device_ura,
             ability: ABILITY_CAMERA_RECORD_STOP,
             ext: "mjpeg",
@@ -895,7 +897,7 @@ fn record_stop_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Valu
         },
     )?;
     let _ = fs::remove_file(&artifact.temp_path);
-    let local_path = crate::persistence::context_store::captures_dir()
+    let local_path = crate::daemon::persistence::context_store::captures_dir()
         .join(ABILITY_CAMERA_RECORD_STOP)
         .join(&capture.file);
 
@@ -1250,8 +1252,8 @@ fn parse_positive_u32(ability: &'static str, raw: &str, name: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
-    use crate::persistence::resources::{
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
 
@@ -1382,7 +1384,7 @@ mod tests {
     /// decodes back to the same JPEG the backend produced.
     #[test]
     fn handler_returns_receipt_with_base64_jpeg_when_subject_resolves() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         // Seed the on-disk resources.json so the handler's
         // `resources::load` finds it.
         let mut file = ResourcesFile::default();
@@ -1434,7 +1436,7 @@ mod tests {
 
     #[test]
     fn camera_subscribe_returns_live_preview_stream() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_camera(&mut file, "h-cam-preview");
         resources::save(&file).unwrap();
@@ -1472,7 +1474,7 @@ mod tests {
     #[test]
     fn camera_recording_start_stop_persists_mjpeg_artifact() {
         let _recording_guard = recording_session_test_guard();
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         clear_recording_sessions_for_test();
         let mut file = ResourcesFile::default();
         let ura = seed_camera(&mut file, "h-cam-recording");
@@ -1523,7 +1525,7 @@ mod tests {
     #[test]
     fn camera_recording_rejects_duplicate_start_without_orphaning_first_session() {
         let _recording_guard = recording_session_test_guard();
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         clear_recording_sessions_for_test();
         let mut file = ResourcesFile::default();
         let ura = seed_camera(&mut file, "h-cam-recording-duplicate");
@@ -1588,7 +1590,7 @@ mod tests {
 
     #[test]
     fn camera_subscribe_stream_preview_errors_name_subscribe_ability() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
@@ -1619,7 +1621,7 @@ mod tests {
     /// either of which makes auditing a lie.
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
@@ -1644,7 +1646,7 @@ mod tests {
     /// which requires a production camera backend to exercise.
     #[test]
     fn handler_rejects_unknown_subject_with_resource_not_found_reason() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         // Save an empty resources.json so load() returns Default
         // rather than picking up some prior test's state.
         resources::save(&ResourcesFile::default()).unwrap();
@@ -1672,7 +1674,7 @@ mod tests {
     /// camera backend; catching at the handler edge is much clearer.
     #[test]
     fn handler_rejects_wrong_type_subject_with_resource_type_mismatch_reason() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let mic_ura = upsert_resource(
             &mut file,
@@ -1713,7 +1715,7 @@ mod tests {
     /// args-only path; this test pins the env-aware sibling.
     #[test]
     fn handler_rejects_subject_in_args_even_on_envelope_path() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);

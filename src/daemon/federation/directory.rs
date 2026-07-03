@@ -126,8 +126,8 @@ pub fn directory_agent_summary_to_entry(
 #[cfg(feature = "axon-pb")]
 #[must_use]
 fn agent_ura_to_node_id(agent_ura: &str) -> String {
-    match crate::ura::parse_ura(agent_ura) {
-        Ok(parsed) if parsed.kind == crate::ura::URAKind::Device => parsed
+    match crate::core::ura::parse_ura(agent_ura) {
+        Ok(parsed) if parsed.kind == crate::core::ura::URAKind::Device => parsed
             .device_id()
             .map(str::to_string)
             .unwrap_or_else(|| agent_ura.to_string()),
@@ -157,7 +157,7 @@ pub fn now_unix_ms() -> i64 {
 #[cfg(feature = "axon-pb")]
 #[must_use]
 pub fn presence_event_to_directory_event(
-    event: &crate::daemon::invocation::state::presence::PresenceEvent,
+    event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
 ) -> DirectoryEvent {
     presence_event_to_directory_event_at(event, now_unix_ms())
 }
@@ -165,10 +165,10 @@ pub fn presence_event_to_directory_event(
 #[cfg(feature = "axon-pb")]
 #[must_use]
 pub fn presence_event_to_directory_event_at(
-    event: &crate::daemon::invocation::state::presence::PresenceEvent,
+    event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
     unix_ms: i64,
 ) -> DirectoryEvent {
-    use crate::daemon::invocation::state::presence::PresenceEvent;
+    use crate::daemon::invocation::bidi::state::presence::PresenceEvent;
     match event {
         PresenceEvent::Online { ura } => DirectoryEvent::AgentAdvertised {
             agent_ura: ura.clone(),
@@ -744,7 +744,7 @@ pub async fn poll_once(
         let request = InvokeRequest {
             envelope,
             function_name:
-                crate::daemon::invocation::federation_wrappers::ABILITY_FEDERATION_DISCOVER
+                crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_DISCOVER
                     .to_string(),
             arguments: br#"{}"#.to_vec(),
             ..InvokeRequest::default()
@@ -756,7 +756,7 @@ pub async fn poll_once(
         {
             Ok(response) => {
                 let parsed: Result<
-                    crate::daemon::invocation::federation_wrappers::DiscoverResponse,
+                    crate::daemon::invocation::dispatch::federation_wrappers::DiscoverResponse,
                     _,
                 > = serde_json::from_slice(&response.result);
                 match parsed {
@@ -1054,7 +1054,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         let mut nonce = vec![0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut nonce);
         // URA v4.1.4: peer hub is the realm-singleton; no sub-id tail.
-        let peer_ura_for_envelope = crate::ura::hub_ura(&peer_realm);
+        let peer_ura_for_envelope = crate::core::ura::hub_ura(&peer_realm);
         // v4.1.5 §A.URA-7 — `subject ∈ {user, device, resource}`.
         // Pre-fix this site set `subject = peer_ura_for_envelope` (the
         // peer hub URA), which violates the constraint (hub is not a
@@ -1081,7 +1081,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         };
         let request = InvokeServerStreamRequest {
             envelope: Some(envelope),
-            function_name: crate::daemon::invocation::federation_wrappers
+            function_name: crate::daemon::invocation::dispatch::federation_wrappers
                 ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
                 .to_string(),
             ..InvokeServerStreamRequest::default()
@@ -1996,7 +1996,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::ura::hub_ura("realm-a"),
+                    crate::core::ura::hub_ura("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2043,7 +2043,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::ura::hub_ura("realm-a"),
+                    crate::core::ura::hub_ura("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2066,7 +2066,7 @@ mod tests {
             assert!(
                 names.iter().any(|name| {
                     name
-                        == crate::daemon::invocation::federation_wrappers
+                        == crate::daemon::invocation::dispatch::federation_wrappers
                             ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
                 }),
                 "supervisor must dial the v2 stream ability; got {names:?}",
@@ -2074,7 +2074,7 @@ mod tests {
             assert!(
                 names.iter().all(|name| {
                     name
-                        != crate::daemon::invocation::federation_wrappers
+                        != crate::daemon::invocation::dispatch::federation_wrappers
                             ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
                 }),
                 "supervisor must not dial the legacy v1 stream ability; got {names:?}",
@@ -2240,7 +2240,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::ura::hub_ura("realm-a"),
+                    crate::core::ura::hub_ura("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2357,7 +2357,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::ura::hub_ura("realm-a"),
+                    crate::core::ura::hub_ura("realm-a"),
                     client,
                     cell_for_task,
                     cancel_rx,
@@ -2795,7 +2795,7 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     mod presence_adapter_tests {
         use super::*;
-        use crate::daemon::invocation::state::presence::{OfflineReason, PresenceEvent};
+        use crate::daemon::invocation::bidi::state::presence::{OfflineReason, PresenceEvent};
 
         #[test]
         fn presence_ura_to_directory_entry_extracts_node_id_from_canonical_shape() {
@@ -2948,7 +2948,9 @@ mod tests {
         }
 
         fn build_canned_response(entries: Vec<DirectoryEntry>) -> Vec<u8> {
-            let resp = crate::daemon::invocation::federation_wrappers::DiscoverResponse { entries };
+            let resp = crate::daemon::invocation::dispatch::federation_wrappers::DiscoverResponse {
+                entries,
+            };
             serde_json::to_vec(&resp).unwrap()
         }
 
@@ -2975,7 +2977,7 @@ mod tests {
             );
             let cell = SharedFederatedDirectoryView::default();
 
-            let local_hub = crate::ura::hub_ura("realm-a");
+            let local_hub = crate::core::ura::hub_ura("realm-a");
             let outcome = poll_once(&client, &peers, Some(&local_hub), &cell).await;
 
             assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);

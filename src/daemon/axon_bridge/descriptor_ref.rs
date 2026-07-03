@@ -120,7 +120,7 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
 
     if let Ok(descriptor_ref) = canonical_ability_descriptor_ref(ability) {
         let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)?;
-        let selector = crate::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
+        let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
             AxonError::invalid_argument(format!(
                 "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
             ))
@@ -129,14 +129,14 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
         return Ok(selector.ability_ura().to_string());
     }
 
-    let ability_ura = match crate::ura::AbilitySelector::parse(ability) {
+    let ability_ura = match crate::core::ura::AbilitySelector::parse(ability) {
         Ok(selector) => {
             ensure_ability_owner_matches_callee(callee_ura, &selector)?;
             selector.ability_ura().to_string()
         }
         Err(_) => {
             let public_ability = public_ability_name_for_wire(callee_ura, ability);
-            crate::ura::owner_ability_ura(callee_ura, &public_ability).ok_or_else(|| {
+            crate::core::ura::owner_ability_ura(callee_ura, &public_ability).ok_or_else(|| {
                 AxonError::invalid_argument(format!(
                     "derive descriptor-bound ability URA for callee `{callee_ura}` ability `{ability}`"
                 ))
@@ -166,7 +166,7 @@ pub(crate) fn ability_descriptor_ref_for_wire(
 
     if let Ok(descriptor_ref) = canonical_ability_descriptor_ref(ability) {
         let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)?;
-        crate::ura::AbilitySelector::parse(&ability_ura)
+        crate::core::ura::AbilitySelector::parse(&ability_ura)
             .map_err(|err| {
                 AxonError::invalid_argument(format!(
                     "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
@@ -188,13 +188,17 @@ pub(crate) fn ability_descriptor_ref_for_wire(
 
 fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
     let ability = ability.trim();
-    let Ok(callee) = crate::ura::parse_ura(callee_ura) else {
+    let Ok(callee) = crate::core::ura::parse_ura(callee_ura) else {
         return ability.to_string();
     };
     match callee.kind {
-        crate::ura::URAKind::Agent => crate::ura::owner_local_ability_name(callee_ura, ability),
-        crate::ura::URAKind::Hub => ability.strip_prefix("hub.").unwrap_or(ability).to_string(),
-        crate::ura::URAKind::Device => ability.to_string(),
+        crate::core::ura::URAKind::Agent => {
+            crate::core::ura::owner_local_ability_name(callee_ura, ability)
+        }
+        crate::core::ura::URAKind::Hub => {
+            ability.strip_prefix("hub.").unwrap_or(ability).to_string()
+        }
+        crate::core::ura::URAKind::Device => ability.to_string(),
         _ => ability.to_string(),
     }
 }
@@ -221,7 +225,7 @@ pub(crate) fn require_descriptor_ref_for_wire(
         ))
     })?;
     let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)?;
-    let selector = crate::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
+    let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
         AxonError::invalid_argument(format!(
             "descriptor-bound ability ref carries invalid ability URA `{ability_ura}`: {err}"
         ))
@@ -232,7 +236,7 @@ pub(crate) fn require_descriptor_ref_for_wire(
 
 fn ensure_ability_owner_matches_callee(
     callee_ura: &str,
-    selector: &crate::ura::AbilitySelector,
+    selector: &crate::core::ura::AbilitySelector,
 ) -> Result<(), AxonError> {
     if selector.owner_ura() == callee_ura {
         return Ok(());
@@ -250,9 +254,9 @@ mod tests {
 
     #[test]
     fn descriptor_ref_requires_callee_to_own_ability() {
-        let callee = crate::ura::device_ura("acme", "host-a");
-        let other = crate::ura::device_ura("acme", "host-b");
-        let ability_ura = crate::ura::owner_ability_ura(&other, "fs.read").unwrap();
+        let callee = crate::core::ura::device_ura("acme", "host-a");
+        let other = crate::core::ura::device_ura("acme", "host-b");
+        let ability_ura = crate::core::ura::owner_ability_ura(&other, "fs.read").unwrap();
         let ability_ref = format!(
             "{ability_ura}@{}",
             crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
@@ -270,8 +274,8 @@ mod tests {
 
     #[test]
     fn descriptor_ref_round_trips_when_callee_owns_ability() {
-        let callee = crate::ura::device_ura("acme", "host-a");
-        let ability_ura = crate::ura::owner_ability_ura(&callee, "fs.read").unwrap();
+        let callee = crate::core::ura::device_ura("acme", "host-a");
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
         let ability_ref = format!(
             "{ability_ura}@{}",
             crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
@@ -289,7 +293,7 @@ mod tests {
 
     #[test]
     fn explicit_descriptor_ref_is_required_when_no_version_is_available() {
-        let callee = crate::ura::device_ura("acme", "host-a");
+        let callee = crate::core::ura::device_ura("acme", "host-a");
         let err = require_descriptor_ref_for_wire(&callee, "fs.read").unwrap_err();
 
         assert!(err.to_string().contains("explicit descriptor ref"), "{err}");
@@ -305,7 +309,7 @@ mod tests {
     /// loop (commit 22187b3f tightened ingress, left this egress site behind).
     #[test]
     fn builder_constructs_ref_from_bare_ability_name_where_validator_rejects() {
-        let callee = crate::ura::device_ura("acme", "host-a");
+        let callee = crate::core::ura::device_ura("acme", "host-a");
 
         // Validator rejects the bare name (this is the failing path the prelude hit).
         assert!(require_descriptor_ref_for_wire(&callee, "fs.read").is_err());
@@ -318,7 +322,7 @@ mod tests {
         )
         .expect("builder accepts a bare ability name plus an explicit version");
 
-        let expected_ura = crate::ura::owner_ability_ura(&callee, "fs.read").unwrap();
+        let expected_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
         assert_eq!(
             built,
             format!(
@@ -333,7 +337,7 @@ mod tests {
 
     #[test]
     fn bare_agent_prefixed_name_projects_to_owner_local_ability_ura() {
-        let callee = crate::ura::agent_ura("localhost", "dev", "pages");
+        let callee = crate::core::ura::agent_ura("localhost", "dev", "pages");
         let ability_ura = ability_ura_for_wire(&callee, "pages.list")
             .expect("agent-owned registry key should project to public ability URA");
 
@@ -342,7 +346,7 @@ mod tests {
 
     #[test]
     fn bare_device_domain_name_is_preserved_in_ability_ura() {
-        let callee = crate::ura::device_ura("localhost", "dev-a");
+        let callee = crate::core::ura::device_ura("localhost", "dev-a");
         let ability_ura = ability_ura_for_wire(&callee, "device.inspect")
             .expect("device-domain ability should remain explicit");
 
@@ -354,7 +358,7 @@ mod tests {
 
     #[test]
     fn bare_hub_prefixed_name_projects_to_owner_local_ability_ura() {
-        let callee = crate::ura::hub_ura("localhost");
+        let callee = crate::core::ura::hub_ura("localhost");
         let ability_ura = ability_ura_for_wire(&callee, "hub.openai.list_models")
             .expect("hub-owned registry key should project to public ability URA");
 

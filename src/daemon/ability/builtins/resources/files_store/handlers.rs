@@ -168,9 +168,9 @@ pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow
 /// attachments resolve store blobs through this same parse.
 pub(crate) fn sha256_from_ura(ura: &str) -> anyhow::Result<String> {
     // easynet:///r/<realm>/resource/<u>.files/<sha256>
-    let parsed = crate::ura::parse_ura(ura)
+    let parsed = crate::core::ura::parse_ura(ura)
         .map_err(|e| anyhow::anyhow!("files: invalid URA `{ura}`: {e}"))?;
-    if !matches!(parsed.kind, crate::ura::URAKind::Resource) {
+    if !matches!(parsed.kind, crate::core::ura::URAKind::Resource) {
         anyhow::bail!("files: URA `{ura}` is not a resource URA");
     }
     let path = parsed
@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(sha.len(), 64);
         assert_eq!(
             put["ura"].as_str().unwrap(),
-            crate::ura::resource_dot_ura("test.local", "alice.files", sha)
+            crate::core::ura::resource_dot_ura("test.local", "alice.files", sha)
         );
 
         let got = handle_get(root.path(), json!({ "sha256": sha })).unwrap();

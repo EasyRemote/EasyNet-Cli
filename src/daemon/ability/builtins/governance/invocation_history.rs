@@ -24,7 +24,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::persistence::daemon_config::{default_config_path, default_ledger_dir, DaemonConfig};
+use crate::daemon::persistence::daemon_config::{
+    default_config_path, default_ledger_dir, DaemonConfig,
+};
 use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
 pub const ABILITY_HISTORY_LIST: &str =
@@ -448,12 +450,12 @@ fn ledger_path_from_config() -> PathBuf {
 }
 
 fn ledger_resource_ura() -> Option<String> {
-    let local = crate::persistence::local_agents::load().ok()?;
-    let parsed = crate::ura::parse_ura(&local.host_device_agent_ura).ok()?;
+    let local = crate::daemon::persistence::local_agents::load().ok()?;
+    let parsed = crate::core::ura::parse_ura(&local.host_device_agent_ura).ok()?;
     let owner = match parsed.kind {
-        crate::ura::URAKind::Device => format!("device.{}", parsed.device_id()?),
-        crate::ura::URAKind::User => format!("{}.invocations", parsed.user_id()?),
-        crate::ura::URAKind::Agent => {
+        crate::core::ura::URAKind::Device => format!("device.{}", parsed.device_id()?),
+        crate::core::ura::URAKind::User => format!("{}.invocations", parsed.user_id()?),
+        crate::core::ura::URAKind::Agent => {
             // DEC-F048 / RFC gap: `agent_ids()` is None for
             // device-sponsored System Agents, and that None is the
             // declared outcome — no resource_dot owner shape exists
@@ -464,7 +466,7 @@ fn ledger_resource_ura() -> Option<String> {
         }
         _ => return None,
     };
-    Some(crate::ura::resource_dot_ura(
+    Some(crate::core::ura::resource_dot_ura(
         &parsed.realm,
         &owner,
         "billing/invocations",
@@ -905,7 +907,7 @@ mod tests {
 
     fn sample_record(request_id: &str) -> easynet_axon::invocation::InvocationLedgerRecord {
         easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
-            .invocation_ura(crate::ura::resource_dot_ura(
+            .invocation_ura(crate::core::ura::resource_dot_ura(
                 "test",
                 "alice.invocations",
                 request_id,
@@ -940,7 +942,7 @@ mod tests {
         ability_ura: &str,
     ) -> easynet_axon::invocation::InvocationLedgerRecord {
         easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
-            .invocation_ura(crate::ura::resource_dot_ura(
+            .invocation_ura(crate::core::ura::resource_dot_ura(
                 "test",
                 "alice.invocations",
                 request_id,

@@ -155,8 +155,8 @@ Per RFC-006-B v0.6 INV-3 + INV-5:
 
 The hub can run in two shapes:
 
-  - `engineering/docker/hub-pages/full/` — full daemon container. Cross-compile the linux binaries with the existing `easynet-linux-build:bookworm-arm64` image, then `docker compose build && docker compose up -d`. Volume-mount `./sites/` to publish projects from host. Browser hits `:8787` → goes straight into container daemon.
-  - `engineering/docker/hub-pages/nginx-sidecar/` — nginx-only container, host daemon stays on `:8788`, container forwards `:8787` to host. Useful when disk pressure prevents a Rust toolchain build.
+  - `packaging/docker/hub-pages/full/` — full daemon container. Cross-compile the linux binaries with the existing `easynet-linux-build:bookworm-arm64` image, then `docker compose build && docker compose up -d`. Volume-mount `./sites/` to publish projects from host. Browser hits `:8787` → goes straight into container daemon.
+  - `packaging/docker/hub-pages/nginx-sidecar/` — nginx-only container, host daemon stays on `:8788`, container forwards `:8787` to host. Useful when disk pressure prevents a Rust toolchain build.
 
 Both containerised shapes preserve the same INV-1 (Adapter Purity): the container is the HTTP boundary, the daemon (host or container) is the substrate. Production drops the in-daemon listener and routes only through the container; dev tolerates either.
 
@@ -321,8 +321,8 @@ The same flow works for `easynet:///r/easynet.run/ability/alice.web-builder.chat
 
 ### 4.5 Containers
 
-  - `engineering/docker/hub-pages/full/{Dockerfile, docker-compose.yml, entrypoint.sh, vendor.sh, sites/}` — full-daemon container.
-  - `engineering/docker/hub-pages/nginx-sidecar/{conf/nginx.conf, docker-compose.yml}` — nginx-only fallback.
+  - `packaging/docker/hub-pages/full/{Dockerfile, docker-compose.yml, entrypoint.sh, vendor.sh, sites/}` — full-daemon container.
+  - `packaging/docker/hub-pages/nginx-sidecar/{conf/nginx.conf, docker-compose.yml}` — nginx-only fallback.
   - `.dockerignore` — keeps docker-build context lean.
 
 ---

@@ -4,9 +4,9 @@
 // File: src/daemon/execution/mod.rs
 // Description: Daemon-owned long-lived execution sub-services.
 //              Each child module owns one slice of execution
-//              state (session / permission / discuss / schedule /
+//              state (session / permission / mission / schedule /
 //              loop) and is forbidden — by CI grep in
-//              `engineering/scripts/check-subservice-isolation.sh` — from
+//              `tools/scripts/check-subservice-isolation.sh` — from
 //              importing sibling sub-services.
 //
 // Why this partition exists
@@ -19,7 +19,7 @@
 // boundaries at the module level so the CI grep can enforce them.
 //
 // Communication between sub-services always goes through the
-// Kernel (`daemon::kernel`), which holds one handle per sub-
+// Kernel (`daemon::boot::kernel`), which holds one handle per sub-
 // service and brokers every cross-module call. The execution
 // services own daemon state; the Kernel remains the chokepoint
 // for cross-service orchestration and Invocation entry.
@@ -35,16 +35,16 @@
 // ------------------
 //   session/        → one session per agent run
 //   permission/     → approval broker + pending queue
-//   discuss/        → multi-agent chat room registry
+//   mission/        → local mission runner and mission-scoped state
 //   schedule/       → cron store + tick runner
 //   loop_instance/  → EAL loop wrappers + status store
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod discuss;
 pub mod loop_instance;
-pub mod mcp_client;
+pub mod mcp;
+pub mod mission;
 pub mod permission;
 pub mod pty;
 pub mod schedule;

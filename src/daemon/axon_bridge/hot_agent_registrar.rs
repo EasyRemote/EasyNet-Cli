@@ -49,7 +49,7 @@ use crate::daemon::ability::builtins::agents::chat::{
     build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::registry::agents::AgentEntry;
+use crate::daemon::persistence::agent_registry::AgentEntry;
 
 pub(crate) fn block_on_hot_registrar<F, T>(future: F) -> Option<T>
 where
@@ -73,17 +73,19 @@ struct HotAgentRuntimeSyncContext<'a> {
 
 impl HostedAgentRuntimeBinding {
     fn load(name: &str) -> anyhow::Result<Self> {
-        let local_agents = crate::persistence::local_agents::load()
+        let local_agents = crate::daemon::persistence::local_agents::load()
             .map_err(|err| anyhow::anyhow!("load local hosted agents: {err}"))?;
-        let entry =
-            crate::persistence::local_agents::lookup_hosted_agent_by_name(&local_agents, name)?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("hosted agent {name:?} is missing from local-agents.json")
-                })?;
-        let parsed = crate::ura::parse_ura(&entry.agent_ura).map_err(|err| {
+        let entry = crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
+            &local_agents,
+            name,
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!("hosted agent {name:?} is missing from local-agents.json")
+        })?;
+        let parsed = crate::core::ura::parse_ura(&entry.agent_ura).map_err(|err| {
             anyhow::anyhow!("invalid hosted agent URA {:?}: {err}", entry.agent_ura)
         })?;
-        if parsed.kind != crate::ura::URAKind::Agent {
+        if parsed.kind != crate::core::ura::URAKind::Agent {
             anyhow::bail!(
                 "hosted agent {name:?} resolved to non-Agent URA {:?}",
                 entry.agent_ura
@@ -107,8 +109,9 @@ impl HostedAgentRuntimeBinding {
     }
 
     fn runtime_ability_ura(&self, registry_ability: &str) -> Option<String> {
-        let public_name = crate::ura::owner_local_ability_name(&self.agent_ura, registry_ability);
-        crate::ura::owner_ability_ura(&self.agent_ura, &public_name)
+        let public_name =
+            crate::core::ura::owner_local_ability_name(&self.agent_ura, registry_ability);
+        crate::core::ura::owner_ability_ura(&self.agent_ura, &public_name)
     }
 }
 
@@ -116,9 +119,9 @@ fn dispatch_key_for_hosted_agent_runtime_key(
     runtime_key: &str,
     expected_agent: &str,
 ) -> Option<String> {
-    let selector = crate::ura::AbilitySelector::parse(runtime_key).ok()?;
-    let parsed_owner = crate::ura::parse_ura(selector.owner_ura()).ok()?;
-    if parsed_owner.kind != crate::ura::URAKind::Agent {
+    let selector = crate::core::ura::AbilitySelector::parse(runtime_key).ok()?;
+    let parsed_owner = crate::core::ura::parse_ura(selector.owner_ura()).ok()?;
+    if parsed_owner.kind != crate::core::ura::URAKind::Agent {
         return None;
     }
     let (_, agent_id) = parsed_owner
@@ -127,7 +130,7 @@ fn dispatch_key_for_hosted_agent_runtime_key(
     if agent_id != expected_agent {
         return None;
     }
-    Some(crate::ura::local_dispatch_ability_key(
+    Some(crate::core::ura::local_dispatch_ability_key(
         selector.owner_ura(),
         selector.public_name(),
     ))
@@ -430,7 +433,7 @@ impl HotAgentRegistrar {
                 &mut sync_ctx,
                 &chat_ability,
                 owner.clone(),
-                crate::core::ability_spec::default_chat_manifest(),
+                crate::core::ability::spec::default_chat_manifest(),
                 chat_handler,
             )
             .await
@@ -447,7 +450,7 @@ impl HotAgentRegistrar {
                 &mut sync_ctx,
                 &chat_ability,
                 owner.clone(),
-                crate::core::ability_spec::default_chat_manifest(),
+                crate::core::ability::spec::default_chat_manifest(),
                 chat_stream_handler,
             )
             .await
@@ -494,8 +497,11 @@ impl HotAgentRegistrar {
             // `[exec]` are discoverable declarations, not invocable runtime
             // handlers.
             let chat_name = format!("{name}.chat");
-            let manifests = crate::runtime::agent_ability_specs::manifests_for(name, entry);
-            for spec in crate::runtime::agent_ability_specs::abilities_for(name, entry) {
+            let manifests =
+                crate::daemon::execution::mission::agent_ability_specs::manifests_for(name, entry);
+            for spec in
+                crate::daemon::execution::mission::agent_ability_specs::abilities_for(name, entry)
+            {
                 let ability_name = spec.name().to_string();
                 if ability_name == chat_name {
                     continue;
@@ -512,7 +518,7 @@ impl HotAgentRegistrar {
                     continue;
                 };
                 match exec {
-                    crate::core::ability_spec::AbilityExec::HostStream(stream_spec) => {
+                    crate::core::ability::spec::AbilityExec::HostStream(stream_spec) => {
                         let h = build_host_stream_handler(stream_spec.clone());
                         if Self::register_stream_with_envelope_and_spec(
                             &mut sync_ctx,
@@ -642,7 +648,7 @@ impl HotAgentRegistrar {
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: crate::daemon::ability::dispatch::LocalRpcHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -682,7 +688,7 @@ impl HotAgentRegistrar {
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: crate::daemon::ability::dispatch::LocalStreamHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -722,7 +728,7 @@ impl HotAgentRegistrar {
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
-        manifest: crate::core::ability_spec::AbilityManifest,
+        manifest: crate::core::ability::spec::AbilityManifest,
         handler: crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -810,15 +816,15 @@ impl HotAgentRegistrar {
 mod tests {
     use super::*;
 
-    use crate::registry::agents::{AgentEntry, AgentType};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
 
     fn seed_hosted_agent(name: &str) -> String {
-        let host_device_ura = crate::ura::device_ura("localhost", "dev");
-        let agent_ura = crate::ura::agent_ura("localhost", "dev", name);
-        crate::persistence::local_agents::save(
-            &crate::persistence::local_agents::LocalAgentsFile {
+        let host_device_ura = crate::core::ura::device_ura("localhost", "dev");
+        let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
+        crate::daemon::persistence::local_agents::save(
+            &crate::daemon::persistence::local_agents::LocalAgentsFile {
                 host_device_agent_ura: host_device_ura.clone(),
-                hosted_agents: vec![crate::persistence::local_agents::HostedAgentEntry {
+                hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
                     profile: "llm".to_string(),
                     name: name.to_string(),
                     agent_ura: agent_ura.clone(),
@@ -832,9 +838,9 @@ mod tests {
     }
 
     fn runtime_key(agent: &str, registry_ability: &str) -> String {
-        let agent_ura = crate::ura::agent_ura("localhost", "dev", agent);
-        let public_name = crate::ura::owner_local_ability_name(&agent_ura, registry_ability);
-        crate::ura::owner_ability_ura(&agent_ura, &public_name).expect("runtime key")
+        let agent_ura = crate::core::ura::agent_ura("localhost", "dev", agent);
+        let public_name = crate::core::ura::owner_local_ability_name(&agent_ura, registry_ability);
+        crate::core::ura::owner_ability_ura(&agent_ura, &public_name).expect("runtime key")
     }
 
     fn build_pending() -> Arc<HotAgentRegistrar> {
@@ -887,7 +893,7 @@ mod tests {
         assert!(rt.list_abilities().await.is_empty());
 
         // User-owned shape passes the same gate untouched.
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
         let outcome = registrar.register_agent("liangbing", &entry).await;
         assert!(!outcome.rejected_reserved_owner);
@@ -902,7 +908,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         // Simulate an earlier sync's TOML ability whose manifest has
@@ -913,7 +919,7 @@ mod tests {
             .hot_register_rpc_with_spec(
                 "liangbing.ghost_op",
                 OwnerKind::Agent("liangbing".to_string()),
-                crate::core::ability_spec::default_chat_manifest(),
+                crate::core::ability::spec::default_chat_manifest(),
                 Arc::new(|_args| Ok(serde_json::Value::Null)),
             )
             .expect("seed dynamic ghost ability");
@@ -955,7 +961,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
@@ -998,7 +1004,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         let first_entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
@@ -1078,7 +1084,7 @@ mod tests {
         let registrar = build_pending();
         let rt = LocalRuntime::new();
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);

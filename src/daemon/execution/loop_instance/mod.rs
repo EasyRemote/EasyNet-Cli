@@ -21,10 +21,10 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId};
-use crate::daemon::invocation::runtime_record::{
+use crate::daemon::boot::kernel::api::KernelApi;
+use crate::daemon::invocation::receipts::runtime_record::{
     runtime_invocation_id, RuntimeCausalContext, RuntimeInvocation, TerminalState,
 };
-use crate::daemon::kernel::api::KernelApi;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopInvocationKind {
@@ -72,8 +72,8 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
         prompt: &str,
         kind: LoopInvocationKind,
     ) -> anyhow::Result<String> {
-        let local_device_ura = crate::ura::device_ura("default", self.local_node.as_str());
-        let loop_subject_ura = crate::ura::resource_dot_ura(
+        let local_device_ura = crate::core::ura::device_ura("default", self.local_node.as_str());
+        let loop_subject_ura = crate::core::ura::resource_dot_ura(
             "default",
             &format!("loop.{}", loop_id.as_str()),
             &format!("{}/{}", kind.as_str(), iter),

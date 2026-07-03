@@ -33,7 +33,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::names::{federation, governance};
 use crate::daemon::federation::advertise::{self, BridgeAbilityInvoker};
 use crate::daemon::federation::client::ability_contract::{ForwardInvokeReceipt, ResolvedAgent};
-use crate::persistence::config;
+use crate::daemon::persistence::config;
 
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
 const DEVICE_NODE_LIST_ABILITY: &str = federation::NODE_LIST;
@@ -134,7 +134,10 @@ pub(crate) fn collect_device_view() -> DeviceNetworkView {
         node_id: local.node_id.clone(),
         tenant_id: local.tenant_id.clone(),
         agent_ura: if local.paired {
-            Some(crate::ura::device_ura(&local.tenant_id, &local.node_id))
+            Some(crate::core::ura::device_ura(
+                &local.tenant_id,
+                &local.node_id,
+            ))
         } else {
             None
         },
@@ -186,7 +189,7 @@ pub(crate) fn collect_device_view() -> DeviceNetworkView {
         }
     };
 
-    let caller_ura = crate::ura::device_ura(&creds.realm, &creds.node_id);
+    let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
     let invoker = BridgeAbilityInvoker::with_caller_ura(&bridge, caller_ura);
 
     let resolve_started = Instant::now();
@@ -296,7 +299,7 @@ pub(crate) fn resolve_device_record(node_id: &str) -> anyhow::Result<Option<Reso
         .map_err(|e| anyhow::anyhow!("device credentials are unavailable: {e}"))?;
     let (bridge, _state) = config::load_and_connect()
         .map_err(|e| anyhow::anyhow!("local runtime bridge is unavailable: {e}"))?;
-    let caller_ura = crate::ura::device_ura(&creds.realm, &creds.node_id);
+    let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
     let invoker = BridgeAbilityInvoker::with_caller_ura(&bridge, caller_ura);
 
     if let Some(record) = resolve_device_record_with_filter(&invoker, &creds, node_id, None)? {
@@ -337,7 +340,7 @@ fn resolve_device_record_with_filter(
             continue;
         }
 
-        let agent_realm = crate::ura::realm_from_ura(&agent.ura);
+        let agent_realm = crate::core::ura::realm_from_ura(&agent.ura);
         let is_self = resolved_node_id == creds.node_id && agent_realm == creds.realm;
         let probe = if is_self {
             ProbeOutcome {
@@ -398,7 +401,7 @@ pub(crate) fn node_to_json(node: &DeviceNodeSnapshot) -> Value {
 
 /// Extract the node id from a canonical device-profile URA.
 pub(crate) fn node_id_from_agent_ura(ura: &str) -> Option<String> {
-    if let Ok(parsed) = crate::ura::parse_ura(ura) {
+    if let Ok(parsed) = crate::core::ura::parse_ura(ura) {
         return parsed.device_id().map(str::to_string);
     }
     None
@@ -427,7 +430,7 @@ fn device_profile_public_ability_name(owner_ura: &str, summary: &Value) -> Optio
     if ability_ura.is_empty() {
         return None;
     }
-    crate::ura::public_ability_name_from_ability_ura(owner_ura, ability_ura)
+    crate::core::ura::public_ability_name_from_ability_ura(owner_ura, ability_ura)
 }
 
 fn expected_device_public_ability(registry_key: &str) -> &str {
@@ -529,7 +532,7 @@ mod tests {
         // URA v4.1.4: device-profile URA is `device/<uuid>`.
         let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
         assert_eq!(
-            node_id_from_agent_ura(&crate::ura::device_ura("localhost", uuid)),
+            node_id_from_agent_ura(&crate::core::ura::device_ura("localhost", uuid)),
             Some(uuid.to_string())
         );
     }
@@ -610,7 +613,7 @@ mod tests {
             ],
         };
         let resolved_node_id = node_id_from_agent_ura(&agent.ura).expect("node id");
-        let realm = crate::ura::realm_from_ura(&agent.ura);
+        let realm = crate::core::ura::realm_from_ura(&agent.ura);
         let record = ResolvedDeviceRecord {
             node: DeviceNodeSnapshot {
                 node_id: resolved_node_id,
@@ -638,10 +641,10 @@ mod tests {
         let device_ura = "easynet:///r/acme/device/01DEV";
         let mut health = ability_summary(device_ura, "wrong", "health");
         health["ability_ura"] =
-            json!(crate::ura::owner_ability_ura(device_ura, "observe.health").unwrap());
+            json!(crate::core::ura::owner_ability_ura(device_ura, "observe.health").unwrap());
         let mut fleet = ability_summary(device_ura, "wrong", "list");
         fleet["ability_ura"] =
-            json!(crate::ura::owner_ability_ura(device_ura, "node.list").unwrap());
+            json!(crate::core::ura::owner_ability_ura(device_ura, "node.list").unwrap());
         let device = ResolvedAgent {
             ura: device_ura.into(),
             status: "active".into(),
@@ -690,8 +693,8 @@ mod tests {
         } else {
             format!("{namespace}.{local_name}")
         };
-        let ability_ura =
-            crate::ura::owner_ability_ura(owner_ura, &public_name).expect("owner ability URA");
+        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, &public_name)
+            .expect("owner ability URA");
         json!({
             "ability_ura": ability_ura,
             "owner_ura": owner_ura,

@@ -52,7 +52,7 @@ pub fn descriptors_for(
         } else {
             Visibility::Scoped
         };
-        let public_name = crate::ura::owner_local_ability_name(owner_ura, &meta.name);
+        let public_name = crate::core::ura::owner_local_ability_name(owner_ura, &meta.name);
         let descriptor = AbilityDescriptor::new(public_name, owner_ura, visibility)
             .expect("registry-derived device names satisfy descriptor invariants")
             .with_input_schema(meta.input_schema.clone())

@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::core::domain::{ScheduleEntry, ScheduleId, TenantId};
-use crate::persistence::tenant_paths::{ensure, TenantKind};
+use crate::daemon::persistence::tenant_paths::{ensure, TenantKind};
 
 const SCHEMA_VERSION: u32 = 1;
 

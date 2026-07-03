@@ -1,7 +1,7 @@
 // EasyNet CLI — UserProfileLoader (chat context)
 // ===============================================
 //
-// File: src/runtime/system/context_loaders/user_profile.rs
+// File: src/daemon/ability/builtins/resources/context/loaders/user_profile.rs
 // Description: A `ContextLoader` that reads `~/.easynet/profile.toml`
 //              and emits its contents as a markdown "## User profile"
 //              block the chat handler prepends to the LLM context.
@@ -50,7 +50,7 @@ use crate::daemon::ability::builtins::agents::chat::ContextLoader;
 /// sees the change on the next chat invocation. Cheap enough — one
 /// stat + one read of a small TOML file.
 fn profile_path() -> PathBuf {
-    crate::persistence::config::state_dir().join("profile.toml")
+    crate::daemon::persistence::config::state_dir().join("profile.toml")
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -149,7 +149,7 @@ impl ContextLoader for UserProfileLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::test_support::HomeGuard;
+    use crate::cli::commands::test_support::HomeGuard;
 
     fn write_profile(body: &str) {
         let path = profile_path();

@@ -18,7 +18,7 @@ const PLUGIN_LOCK_FILE: &str = "plugin-lock.toml";
 
 /// Default local plugin root under `~/.easynet/plugins`.
 pub fn default_plugin_root() -> PathBuf {
-    crate::persistence::config::home_dir()
+    crate::daemon::persistence::config::home_dir()
         .join(".easynet")
         .join("plugins")
 }
@@ -81,7 +81,7 @@ impl PluginPackageIndex {
             return Ok(index.clone());
         }
         let mut packages = Vec::new();
-        for binding in crate::plugins::builtin::builtin_bindings() {
+        for binding in crate::daemon::plugins::builtin_bindings() {
             packages.push(Arc::new(PluginPackage::from_builtin(binding)?));
         }
         let index = Self::from_packages(packages)?;
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn plugin_index_default_resilient_skips_installed_collision_with_builtin() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let root = default_plugin_root();
         let shadow = root.join("installed/easynet.remote_desktop/9.9.9");
         write_test_package_with_id(&shadow, "easynet.remote_desktop", "9.9.9", "test.shadow");

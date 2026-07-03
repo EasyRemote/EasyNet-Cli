@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{json, Value};
 
-use crate::persistence::resources::{
+use crate::daemon::persistence::resources::{
     self, upsert_resource, ResourceBinding, ResourceType, ResourceUpsert, ResourcesFile,
 };
 
@@ -100,10 +100,10 @@ fn prune_stale_auto_screen_targets(
 }
 
 fn resource_ura_belongs_to_realm(
-    resource: &crate::persistence::resources::ResourceEntry,
+    resource: &crate::daemon::persistence::resources::ResourceEntry,
     realm: &str,
 ) -> bool {
-    crate::ura::parse_ura(&resource.resource_ura)
+    crate::core::ura::parse_ura(&resource.resource_ura)
         .map(|parsed| parsed.realm == realm)
         .unwrap_or(false)
 }
@@ -420,7 +420,7 @@ mod macos_screen_targets {
     use std::ptr;
 
     use super::{screen_target_area, AppAggregate, DiscoveredResource, ScreenTargetBounds};
-    use crate::persistence::resources::ResourceType;
+    use crate::daemon::persistence::resources::ResourceType;
 
     type CFArrayRef = *const c_void;
     type CFDictionaryRef = *const c_void;
@@ -835,7 +835,7 @@ fn discover_cameras() -> Vec<DiscoveredResource> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persistence::resources::{self, filter_by_kinds};
+    use crate::daemon::persistence::resources::{self, filter_by_kinds};
 
     #[test]
     fn apply_discovered_resource_mints_stable_resource_ura() {
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn seed_default_device_resources_writes_queryable_resources_file() {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         let count = seed_default_device_resources("acme", "easynet:///r/acme/device/node-1")
             .expect("seed resources");
 

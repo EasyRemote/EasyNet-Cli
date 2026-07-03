@@ -47,7 +47,8 @@ fn callee_ura() -> String {
 }
 
 fn runtime_ability_ura(ability: &str) -> String {
-    easynet_cli::ura::owner_ability_ura(&callee_ura(), ability).expect("callee-owned ability URA")
+    easynet_cli::core::ura::owner_ability_ura(&callee_ura(), ability)
+        .expect("callee-owned ability URA")
 }
 
 fn descriptor_proof_options(options: AbilityOptions) -> AbilityOptions {
@@ -103,7 +104,7 @@ fn build_signed_envelope(
     let subject = SubjectIdentity::from_callee(&callee);
     let ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(&callee.ura, ability)
+        easynet_cli::core::ura::owner_ability_ura(&callee.ura, ability)
             .expect("callee-owned ability URA"),
         DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
@@ -209,7 +210,7 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
         r.ability_name,
         format!(
             "{}@{}",
-            easynet_cli::ura::owner_ability_ura(&callee_ura(), "test.echo_bidi")
+            easynet_cli::core::ura::owner_ability_ura(&callee_ura(), "test.echo_bidi")
                 .expect("callee-owned ability URA"),
             DEFAULT_ABILITY_DESCRIPTOR_VERSION
         )

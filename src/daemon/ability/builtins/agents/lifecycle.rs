@@ -55,7 +55,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::core::agent_spec::{AgentSpec, RuntimeKind};
+use crate::core::agent::spec::{AgentSpec, RuntimeKind};
 use crate::daemon::ability::catalog::profiles::bootstrap::{
     self, BootstrapPlan, LlmSubAgent, UuidMinter,
 };
@@ -63,11 +63,12 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentAdvertiseRequest,
 };
-use crate::persistence::{config, local_agents};
-use crate::registry::agents::{
-    self, AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
+use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+use crate::daemon::persistence::agent_registry as agents;
+use crate::daemon::persistence::agent_registry::{
+    AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
 };
-use crate::runtime::directory::{AgentDirectory, Location};
+use crate::daemon::persistence::{config, local_agents};
 
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_START_AGENT: &str = crate::daemon::ability::names::agents::AGENT_START;
@@ -326,7 +327,7 @@ fn start_agent_handler(
     let mut workspace_projection_error: Option<String> = None;
     if project_workspace {
         if let Some(directory) = materialized_directory.as_ref() {
-            match crate::runtime::workspace::ensure_from_directory(directory) {
+            match crate::daemon::execution::mission::workspace::ensure_from_directory(directory) {
                 Ok(_) => workspace_projected = true,
                 Err(err) => workspace_projection_error = Some(format!("{err:#}")),
             }
@@ -422,7 +423,7 @@ fn start_agent_handler(
     let mut abilities_payload: Option<Vec<u8>> = None;
     if let Some(host_device_ura) = config::load_credentials()
         .ok()
-        .map(|creds| crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+        .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
         .filter(|ura| !ura.is_empty())
     {
         match crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
@@ -537,13 +538,16 @@ fn build_hot_agent_descriptors(
             &live_registry,
         );
     let mut descriptors = Vec::new();
-    for spec in crate::runtime::agent_ability_specs::abilities_for_publication(name, entry) {
+    for spec in crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
+        name, entry,
+    ) {
         let registry_name = spec.name();
-        let owner_local_name = crate::runtime::agent_ability_specs::public_agent_ability_name(
-            agent_ura,
-            name,
-            registry_name,
-        );
+        let owner_local_name =
+            crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
+                agent_ura,
+                name,
+                registry_name,
+            );
         match crate::daemon::ability::descriptors::AbilityDescriptor::new(
             owner_local_name,
             agent_ura,
@@ -666,7 +670,7 @@ fn stop_agent_handler(
             agent_ura_for_name(&name),
             config::load_credentials()
                 .ok()
-                .map(|creds| crate::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+                .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
                 .filter(|ura| !ura.is_empty()),
         ) {
             let advertiser = hot_registrar
@@ -906,7 +910,7 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
             let host_device_ura = if realm.is_empty() || node_id.is_empty() {
                 String::new()
             } else {
-                crate::ura::device_ura(&realm, &node_id)
+                crate::core::ura::device_ura(&realm, &node_id)
             };
             (realm, user_id, username, host_device_ura)
         })
@@ -946,7 +950,7 @@ fn agent_ura_for_name(name: &str) -> anyhow::Result<String> {
     if let Some(ura) = local_agents_ura_for_name(name) {
         return Ok(ura);
     }
-    let (realm, username) = crate::persistence::config::load_credentials()
+    let (realm, username) = crate::daemon::persistence::config::load_credentials()
         .and_then(|creds| {
             let username = creds.username_slug()?.to_string();
             let realm = creds.realm.trim().to_string();
@@ -960,11 +964,11 @@ fn agent_ura_for_name(name: &str) -> anyhow::Result<String> {
                 "agent.start requires joined credentials before deriving hosted-agent URA: {err}"
             )
         })?;
-    Ok(crate::ura::agent_ura(&realm, &username, name))
+    Ok(crate::core::ura::agent_ura(&realm, &username, name))
 }
 
 fn local_agents_ura_for_name(name: &str) -> Option<String> {
-    crate::persistence::local_agents::load()
+    crate::daemon::persistence::local_agents::load()
         .ok()?
         .hosted_agents
         .into_iter()
@@ -972,8 +976,8 @@ fn local_agents_ura_for_name(name: &str) -> Option<String> {
             entry.profile == "llm"
                 && entry.name == name
                 && matches!(
-                    crate::ura::parse_ura(&entry.agent_ura).map(|parsed| parsed.kind),
-                    Ok(crate::ura::URAKind::Agent)
+                    crate::core::ura::parse_ura(&entry.agent_ura).map(|parsed| parsed.kind),
+                    Ok(crate::core::ura::URAKind::Agent)
                 )
         })
         .map(|entry| entry.agent_ura)
@@ -1007,9 +1011,9 @@ fn stop_agent_name_from_args(args: &Value) -> anyhow::Result<String> {
 }
 
 fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
-    let parsed = crate::ura::parse_ura(ura)
+    let parsed = crate::core::ura::parse_ura(ura)
         .map_err(|err| anyhow::anyhow!("agent.stop: invalid `agent_ura`: {err}"))?;
-    if parsed.kind != crate::ura::URAKind::Agent {
+    if parsed.kind != crate::core::ura::URAKind::Agent {
         anyhow::bail!("agent.stop: `agent_ura` must be an Agent URA");
     }
     // DEC-F048: device-sponsored System Agents are not hosted user
@@ -1023,7 +1027,7 @@ fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
              lifecycle-managed as hosted agents on this surface"
         );
     }
-    if let Some(entry) = crate::persistence::local_agents::load()
+    if let Some(entry) = crate::daemon::persistence::local_agents::load()
         .ok()
         .and_then(|file| {
             file.hosted_agents
@@ -1160,7 +1164,7 @@ mod tests {
     /// the tempdir, leaving the env-var racing under parallel tests.
     /// See `docs/rfc/AXON-RFC-001-flake-localization.md` (2026-04-27).
     fn with_isolated_home<F: FnOnce()>(f: F) {
-        let _g = crate::cli::test_support::HomeGuard::new();
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
         f();
     }
 
@@ -1173,15 +1177,17 @@ mod tests {
     }
 
     fn seed_joined_credentials() {
-        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            realm: "localhost".to_string(),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            ..Default::default()
-        })
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-1".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.test:50051".to_string(),
+                realm: "localhost".to_string(),
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                ..Default::default()
+            },
+        )
         .expect("seed joined credentials");
     }
 
@@ -1328,7 +1334,7 @@ mod tests {
             )
             .unwrap();
 
-            let expected_ura = crate::ura::agent_ura("localhost", "dev", "anthropic");
+            let expected_ura = crate::core::ura::agent_ura("localhost", "dev", "anthropic");
             assert_eq!(resp["agent_ura"], json!(expected_ura));
             assert_eq!(
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
@@ -1347,7 +1353,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_agent_hot_advertises_joined_hosted_ura_when_bridge_is_wired() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_joined_credentials();
         let advertiser = Arc::new(RecordingHotAdvertiser::default());
         let hot_registrar = hot_registrar_with_advertiser(Arc::clone(&advertiser));
@@ -1362,7 +1368,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected_ura = crate::ura::agent_ura("localhost", "dev", "anthropic");
+        let expected_ura = crate::core::ura::agent_ura("localhost", "dev", "anthropic");
         assert_eq!(resp["hub_advertised"], true);
         assert_eq!(resp["hub_advertise_error"], Value::Null);
         assert_eq!(
@@ -1514,7 +1520,7 @@ mod tests {
     fn start_agent_materialize_reuses_existing_root_path_when_root_omitted() {
         with_isolated_home(|| {
             seed_joined_credentials();
-            let custom_root = crate::persistence::config::home_dir()
+            let custom_root = crate::daemon::persistence::config::home_dir()
                 .join("project")
                 .join("agents")
                 .join("claude");
@@ -1616,7 +1622,7 @@ mod tests {
             )
             .unwrap();
 
-            let agent_ura = crate::ura::agent_ura("localhost", "dev", "anthropic");
+            let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "anthropic");
             assert_eq!(
                 local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "anthropic"),
                 Some(agent_ura.clone())
@@ -1658,7 +1664,7 @@ mod tests {
                 &empty_hot_registrar(),
             )
             .unwrap();
-            let agent_ura = crate::ura::agent_ura("localhost", "dev", "claude");
+            let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "claude");
             let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &empty_hot_registrar())
                 .unwrap();
             assert_eq!(resp["ack"], true);
@@ -1669,7 +1675,7 @@ mod tests {
     #[test]
     fn stop_agent_rejects_non_agent_ura() {
         let err = stop_agent_handler(
-            json!({"agent_ura": crate::ura::device_ura("acme", "device-1")}),
+            json!({"agent_ura": crate::core::ura::device_ura("acme", "device-1")}),
             &empty_hot_registrar(),
         )
         .unwrap_err();

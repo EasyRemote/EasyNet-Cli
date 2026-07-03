@@ -122,7 +122,7 @@ fn describe_handler(
     // Identity comes from local-agents.json. Pre-join state surfaces
     // as ura:"self" so a caller still sees a well-formed describe
     // response — they can re-poll after the daemon completes join.
-    let local = crate::persistence::local_agents::load().unwrap_or_default();
+    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
     let host_ura = if local.host_device_agent_ura.is_empty() {
         "self".to_string()
     } else {
@@ -248,7 +248,7 @@ fn list_abilities_handler(
         //
         //   * `OwnerKind::Hub`   → realm hub URA, derived from
         //                          `credentials.realm` via
-        //                          `crate::ura::hub_ura`.
+        //                          `crate::core::ura::hub_ura`.
         //   * `OwnerKind::Device` → host device URA, read from
         //                          `local-agents.json::host_device_agent_ura`.
         //   * `OwnerKind::Agent(id)` → agent URA, composed from the
@@ -279,7 +279,7 @@ fn list_abilities_handler(
         } else {
             Some(build_context.local.host_device_agent_ura.clone())
         };
-        let hub_owner_ura = realm.as_deref().map(crate::ura::hub_ura);
+        let hub_owner_ura = realm.as_deref().map(crate::core::ura::hub_ura);
         // user-segment used for `OwnerKind::Agent(...)` resolution.
         // Captured at registration time from the same
         // `PagesIdentity` the registry build used, so the synth
@@ -311,19 +311,19 @@ fn list_abilities_handler(
                 }
                 Some(crate::daemon::ability::dispatch::OwnerKind::Agent(agent_id)) => {
                     match (realm.as_deref(), user_segment.as_deref()) {
-                        (Some(r), Some(u)) => Some(crate::ura::agent_ura(r, u, &agent_id)),
+                        (Some(r), Some(u)) => Some(crate::core::ura::agent_ura(r, u, &agent_id)),
                         _ => None,
                     }
                 }
-                Some(crate::daemon::ability::dispatch::OwnerKind::User(user_id)) => {
-                    realm.as_deref().map(|r| crate::ura::user_ura(r, &user_id))
-                }
+                Some(crate::daemon::ability::dispatch::OwnerKind::User(user_id)) => realm
+                    .as_deref()
+                    .map(|r| crate::core::ura::user_ura(r, &user_id)),
                 None => None,
             };
             let Some(owner) = owner_string.as_deref() else {
                 continue;
             };
-            let public_name = crate::ura::owner_local_ability_name(owner, &name);
+            let public_name = crate::core::ura::owner_local_ability_name(owner, &name);
             let transport_hints = hint_snapshot.for_name(&name);
             // Synthesised descriptor. When the registration site
             // landed an `AbilityManifest` via `register_*_with_spec`
@@ -448,14 +448,14 @@ fn list_abilities_handler(
 struct AbilityCatalogBuildContext {
     realm: Option<String>,
     host_node_id: Option<String>,
-    local: crate::persistence::local_agents::LocalAgentsFile,
-    agents: Option<crate::registry::agents::AgentRegistry>,
+    local: crate::daemon::persistence::local_agents::LocalAgentsFile,
+    agents: Option<crate::daemon::persistence::agent_registry::AgentRegistry>,
     user_segment: Option<String>,
 }
 
 impl AbilityCatalogBuildContext {
     fn load(pages_user: Option<&str>) -> Self {
-        let credentials = crate::persistence::config::load_credentials().ok();
+        let credentials = crate::daemon::persistence::config::load_credentials().ok();
         let realm = credentials
             .as_ref()
             .map(|c| c.realm.trim().to_string())
@@ -467,8 +467,8 @@ impl AbilityCatalogBuildContext {
         Self {
             realm,
             host_node_id,
-            local: crate::persistence::local_agents::load().unwrap_or_default(),
-            agents: crate::registry::agents::load_agents().ok(),
+            local: crate::daemon::persistence::local_agents::load().unwrap_or_default(),
+            agents: crate::daemon::persistence::agent_registry::load_agents().ok(),
             user_segment: pages_user
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -547,7 +547,7 @@ impl AbilityListScope {
         self.owner_ura.clone().or_else(|| {
             self.ability_ura
                 .as_deref()
-                .and_then(|ability_ura| crate::ura::AbilitySelector::parse(ability_ura).ok())
+                .and_then(|ability_ura| crate::core::ura::AbilitySelector::parse(ability_ura).ok())
                 .map(|selector| selector.owner_ura().to_string())
         })
     }
@@ -576,18 +576,18 @@ struct AbilitySubjectScope {
 
 impl AbilitySubjectScope {
     fn parse(subject_ura: &str) -> anyhow::Result<Self> {
-        let parsed = crate::ura::parse_ura(subject_ura).map_err(|e| {
+        let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|e| {
             anyhow::anyhow!("meta.list_abilities: invalid subject_ura {subject_ura:?}: {e}")
         })?;
         match parsed.kind {
-            crate::ura::URAKind::Ability => Ok(Self {
+            crate::core::ura::URAKind::Ability => Ok(Self {
                 owner_ura: None,
                 ability_ura: Some(subject_ura.to_string()),
             }),
-            crate::ura::URAKind::Agent
-            | crate::ura::URAKind::Device
-            | crate::ura::URAKind::Hub
-            | crate::ura::URAKind::User => Ok(Self {
+            crate::core::ura::URAKind::Agent
+            | crate::core::ura::URAKind::Device
+            | crate::core::ura::URAKind::Hub
+            | crate::core::ura::URAKind::User => Ok(Self {
                 owner_ura: Some(subject_ura.to_string()),
                 ability_ura: None,
             }),
@@ -609,13 +609,13 @@ fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<Stri
 }
 
 fn parse_owner_scope(field: &str, ura: &str) -> anyhow::Result<()> {
-    let parsed = crate::ura::parse_ura(ura)
+    let parsed = crate::core::ura::parse_ura(ura)
         .map_err(|e| anyhow::anyhow!("meta.list_abilities: invalid {field} {ura:?}: {e}"))?;
     match parsed.kind {
-        crate::ura::URAKind::Agent
-        | crate::ura::URAKind::Device
-        | crate::ura::URAKind::Hub
-        | crate::ura::URAKind::User => Ok(()),
+        crate::core::ura::URAKind::Agent
+        | crate::core::ura::URAKind::Device
+        | crate::core::ura::URAKind::Hub
+        | crate::core::ura::URAKind::User => Ok(()),
         other => anyhow::bail!(
             "meta.list_abilities: {field} must be an owner URA, got {:?}",
             other
@@ -638,7 +638,7 @@ fn merge_owner_scope(
             }
             if let Some(ability_ura) = subject.ability_ura.as_deref() {
                 let matches_owner =
-                    crate::ura::public_ability_name_from_ability_ura(&owner_ura, ability_ura)
+                    crate::core::ura::public_ability_name_from_ability_ura(&owner_ura, ability_ura)
                         .is_some();
                 if !matches_owner {
                     anyhow::bail!(
@@ -670,8 +670,12 @@ fn static_descriptors_for_owner(
         return Some(crate::daemon::ability::catalog::profiles::device::descriptors_for(owner_ura));
     }
 
-    if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "consent", "default")
-        .as_deref()
+    if crate::daemon::persistence::local_agents::lookup_hosted_ura(
+        &context.local,
+        "consent",
+        "default",
+    )
+    .as_deref()
         == Some(owner_ura)
     {
         return Some(
@@ -679,7 +683,7 @@ fn static_descriptors_for_owner(
         );
     }
 
-    if crate::persistence::local_agents::lookup_hosted_ura(&context.local, "mcp", "default")
+    if crate::daemon::persistence::local_agents::lookup_hosted_ura(&context.local, "mcp", "default")
         .as_deref()
         == Some(owner_ura)
     {
@@ -717,9 +721,11 @@ fn synthesize_hot_hosted_agent_descriptors(
     };
 
     for (agent_name, entry) in &agents.agents {
-        let Some(owner_ura) =
-            crate::persistence::local_agents::lookup_hosted_ura(&context.local, "llm", agent_name)
-        else {
+        let Some(owner_ura) = crate::daemon::persistence::local_agents::lookup_hosted_ura(
+            &context.local,
+            "llm",
+            agent_name,
+        ) else {
             continue;
         };
         if scope
@@ -729,19 +735,22 @@ fn synthesize_hot_hosted_agent_descriptors(
         {
             continue;
         }
-        if crate::ura::parse_ura(&owner_ura)
-            .map(|u| u.kind != crate::ura::URAKind::Agent)
+        if crate::core::ura::parse_ura(&owner_ura)
+            .map(|u| u.kind != crate::core::ura::URAKind::Agent)
             .unwrap_or(true)
         {
             continue;
         }
 
         let default_chat_name =
-            crate::core::ability_spec::default_chat_manifest().qualified_name(&agent_name);
+            crate::core::ability::spec::default_chat_manifest().qualified_name(&agent_name);
         for spec in
-            crate::runtime::agent_ability_specs::abilities_for_publication(&agent_name, &entry)
+            crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
+                &agent_name,
+                &entry,
+            )
         {
-            let public_name = crate::ura::owner_local_ability_name(&owner_ura, spec.name());
+            let public_name = crate::core::ura::owner_local_ability_name(&owner_ura, spec.name());
             if public_name.is_empty() {
                 continue;
             }
@@ -767,7 +776,7 @@ fn synthesize_hot_hosted_agent_descriptors(
                 descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
             }
             if spec.name() == default_chat_name {
-                let chat_manifest = crate::core::ability_spec::default_chat_manifest();
+                let chat_manifest = crate::core::ability::spec::default_chat_manifest();
                 if let Some(output_schema) = chat_manifest.output_schema() {
                     descriptor = descriptor.with_output_schema(output_schema.clone());
                 }
@@ -903,15 +912,17 @@ mod tests {
     }
 
     fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
-        crate::persistence::config::save_credentials(&crate::persistence::config::Credentials {
-            node_id: node_id.to_string(),
-            credential_token: "test-token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            realm: realm.to_string(),
-            username: Some(username.to_string()),
-            user_id: Some(format!("user-{username}")),
-            ..Default::default()
-        })
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: node_id.to_string(),
+                credential_token: "test-token".to_string(),
+                hub_endpoint: "axon://hub.test:50051".to_string(),
+                realm: realm.to_string(),
+                username: Some(username.to_string()),
+                user_id: Some(format!("user-{username}")),
+                ..Default::default()
+            },
+        )
         .expect("seed credentials");
     }
 
@@ -1139,7 +1150,7 @@ mod tests {
         );
         assert!(abilities.iter().all(|a| a["owner_ura"] == alice));
 
-        let subject = crate::ura::owner_ability_ura(alice, "chat").unwrap();
+        let subject = crate::core::ura::owner_ability_ura(alice, "chat").unwrap();
         let by_subject = handler(json!({ "subject_ura": subject })).unwrap();
         let abilities = by_subject["abilities"].as_array().unwrap();
         assert_eq!(
@@ -1152,7 +1163,7 @@ mod tests {
 
         let err = handler(json!({
             "agent_ura": bob,
-            "subject_ura": crate::ura::owner_ability_ura(alice, "chat").unwrap(),
+            "subject_ura": crate::core::ura::owner_ability_ura(alice, "chat").unwrap(),
         }))
         .unwrap_err()
         .to_string();
@@ -1193,7 +1204,7 @@ mod tests {
         use crate::daemon::ability::dispatch::OwnerKind;
         use std::sync::OnceLock;
 
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_test_credentials("alice-realm", "test-node", "alice");
 
         let mut reg = AxonAbilityCatalog::new();
@@ -1207,7 +1218,7 @@ mod tests {
         live_reg.register_stream_with_spec(
             "alice.chat",
             OwnerKind::Agent("alice".to_string()),
-            crate::core::ability_spec::default_chat_manifest(),
+            crate::core::ability::spec::default_chat_manifest(),
             Arc::new(|_args| {
                 Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
@@ -1217,7 +1228,7 @@ mod tests {
         live_reg.register_stream_with_spec(
             "bob.chat",
             OwnerKind::Agent("bob".to_string()),
-            crate::core::ability_spec::default_chat_manifest(),
+            crate::core::ability::spec::default_chat_manifest(),
             Arc::new(|_args| {
                 Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
@@ -1245,7 +1256,7 @@ mod tests {
             .hot_register_stream_with_spec(
                 "alice.mcp_search",
                 OwnerKind::Agent("alice".to_string()),
-                crate::core::ability_spec::AbilityManifest::new(
+                crate::core::ability::spec::AbilityManifest::new(
                     "mcp_search",
                     "Search reflected MCP content",
                     json!({
@@ -1392,10 +1403,10 @@ mod tests {
         // catalogue backing SchemaForm, so it must read static OR
         // dynamic manifests rather than the static-only map.
         use crate::daemon::ability::dispatch::OwnerKind;
-        use crate::persistence::local_agents::{save, LocalAgentsFile};
+        use crate::daemon::persistence::local_agents::{save, LocalAgentsFile};
         use std::sync::OnceLock;
 
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         save(&LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
@@ -1403,7 +1414,7 @@ mod tests {
         .expect("seed local-agents.json");
 
         let live_reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::core::ability_spec::AbilityManifest::new(
+        let manifest = crate::core::ability::spec::AbilityManifest::new(
             "hot_echo",
             "Echo a hot-reloaded MCP payload.",
             json!({
@@ -1454,14 +1465,14 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     #[test]
     fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
+        use crate::daemon::persistence::local_agents::{save, LocalAgentsFile};
         use crate::daemon::plugins::{
             DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
             PluginRequirementSet, PluginRuntimeLimits,
         };
-        use crate::persistence::local_agents::{save, LocalAgentsFile};
         use std::sync::OnceLock;
 
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         save(&LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
@@ -1478,7 +1489,7 @@ mod tests {
             PluginRequirementSet::default(),
             Vec::new(),
         );
-        crate::plugins::remote_desktop::contribute(&mut builder, limits)
+        crate::daemon::resources::remote_desktop::contribute(&mut builder, limits)
             .expect("remote desktop plugin contribution");
         let contribution = builder
             .finish()
@@ -1516,11 +1527,15 @@ mod tests {
 
     #[test]
     fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
-        use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
-        use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
+        use crate::daemon::persistence::agent_registry::{
+            save_agents, AgentEntry, AgentRegistry, AgentType,
+        };
+        use crate::daemon::persistence::local_agents::{
+            save, upsert_hosted_agent, LocalAgentsFile,
+        };
         use std::sync::OnceLock;
 
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_test_credentials("test-realm", "dev-1", "alice");
 
         let mut local = LocalAgentsFile {
@@ -1589,7 +1604,7 @@ mod tests {
         assert_eq!(chat["metadata"]["model"], "sonnet");
         assert_eq!(
             chat["description"],
-            crate::core::ability_spec::default_chat_manifest().description()
+            crate::core::ability::spec::default_chat_manifest().description()
         );
         assert!(
             chat["schema_summary"]["input"]["properties"]["prompt"].is_object(),
@@ -1599,11 +1614,15 @@ mod tests {
 
     #[test]
     fn list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents() {
-        use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
-        use crate::registry::agents::{save_agents, AgentEntry, AgentRegistry, AgentType};
+        use crate::daemon::persistence::agent_registry::{
+            save_agents, AgentEntry, AgentRegistry, AgentType,
+        };
+        use crate::daemon::persistence::local_agents::{
+            save, upsert_hosted_agent, LocalAgentsFile,
+        };
         use std::sync::OnceLock;
 
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_test_credentials("test-realm", "dev-1", "alice");
 
         let mut local = LocalAgentsFile {

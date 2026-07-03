@@ -37,9 +37,9 @@ use sha2::{Digest, Sha256};
 
 use super::trace::{CapturedResult, RetryRecord, StepOutcome, StepTrace};
 use super::{millis_u64, IrStep, RunContext, StepDispatchOutcome, StepDispatcher, StepExecResult};
-use crate::eal::error::EalError;
-use crate::eal::ir::IrFailurePolicy;
-use crate::support::output;
+use crate::eal::diagnostics::EalError;
+use crate::eal::runtime::ir::IrFailurePolicy;
+use crate::support::platform::output;
 
 pub(super) const RETRY_BASE_MS: u64 = 1000;
 pub(super) const RETRY_MAX_MS: u64 = 30_000;

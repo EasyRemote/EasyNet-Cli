@@ -132,7 +132,8 @@ pub fn handle_publish(
     super::register_project_abilities(registry.as_ref(), user, project_id)
         .context("register pages project abilities")?;
 
-    let project_ura = crate::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
+    let project_ura =
+        crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);
 
     Ok(json!({

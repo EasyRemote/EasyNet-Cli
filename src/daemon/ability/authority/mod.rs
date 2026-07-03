@@ -256,10 +256,10 @@ impl HostedAgentDelegationRequest {
         if agent_ura != self.agent_ura {
             anyhow::bail!("hosted-agent delegation request Agent URA must be trimmed");
         }
-        let parsed = crate::ura::parse_ura(agent_ura).map_err(|err| {
+        let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|err| {
             anyhow::anyhow!("hosted-agent delegation Agent URA is invalid: {err}")
         })?;
-        if parsed.kind != crate::ura::URAKind::Agent {
+        if parsed.kind != crate::core::ura::URAKind::Agent {
             anyhow::bail!(
                 "hosted-agent delegation request requires an Agent URA, got {:?}",
                 parsed.kind
@@ -532,9 +532,9 @@ impl HostedAgentDelegationContext {
         {
             anyhow::bail!("hosted-agent delegation metadata fields must be non-empty");
         }
-        let parsed_agent = crate::ura::parse_ura(agent_ura)
+        let parsed_agent = crate::core::ura::parse_ura(agent_ura)
             .map_err(|err| anyhow::anyhow!("invalid hosted-agent delegation agent_ura: {err}"))?;
-        if parsed_agent.kind != crate::ura::URAKind::Agent {
+        if parsed_agent.kind != crate::core::ura::URAKind::Agent {
             anyhow::bail!("hosted-agent delegation agent_ura must be an Agent URA");
         }
         if wire_caller_ura != envelope.caller_ura()
@@ -588,10 +588,10 @@ impl HostedAgentDelegationContext {
                 self.signing_authority
             );
         }
-        let parsed_host = crate::ura::parse_ura(&self.wire_callee_ura).map_err(|err| {
+        let parsed_host = crate::core::ura::parse_ura(&self.wire_callee_ura).map_err(|err| {
             anyhow::anyhow!("{expected_ability} hosted-agent host URA is invalid: {err}")
         })?;
-        if parsed_host.kind != crate::ura::URAKind::Device {
+        if parsed_host.kind != crate::core::ura::URAKind::Device {
             anyhow::bail!(
                 "{expected_ability} hosted-agent authority host must be a Device URA, got {:?}",
                 parsed_host.kind
@@ -626,7 +626,7 @@ pub(crate) fn public_route_ability_from_descriptor_ref(
     let ability_ura =
         crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(descriptor_ref)
             .map_err(|err| anyhow::anyhow!("invalid runtime ability descriptor ref: {err}"))?;
-    let selector = crate::ura::AbilitySelector::parse(&ability_ura)?;
+    let selector = crate::core::ura::AbilitySelector::parse(&ability_ura)?;
     Ok(selector.public_name().to_string())
 }
 
@@ -683,7 +683,7 @@ impl AuthorityBindingRecord {
         descriptor_version: impl Into<String>,
         call_mode: CallMode,
         scope: AuthorityScope,
-        manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
     ) -> Result<Self, AbilityControlPlaneError> {
         let ability = ability.into();
         let descriptor_version = descriptor_version.into();
@@ -757,10 +757,10 @@ impl AuthorityBindingRecord {
 }
 
 fn invoke_policy_hash_for_manifest(
-    manifest: Option<&crate::core::ability_spec::AbilityManifest>,
+    manifest: Option<&crate::core::ability::spec::AbilityManifest>,
 ) -> [u8; 32] {
     let access = manifest
-        .map(crate::core::ability_spec::AbilityManifest::access)
+        .map(crate::core::ability::spec::AbilityManifest::access)
         .unwrap_or_default();
     let payload = serde_json::json!({
         "policy_ref": DEFAULT_INVOKE_POLICY_REF,
@@ -900,12 +900,13 @@ mod tests {
     #[test]
     fn invoke_policy_hash_changes_with_manifest_access() {
         let input = serde_json::json!({"type": "object"});
-        let base = crate::core::ability_spec::AbilityManifest::new("quote", "quote", input.clone())
-            .unwrap();
-        let restricted = crate::core::ability_spec::AbilityManifest::new("quote", "quote", input)
+        let base =
+            crate::core::ability::spec::AbilityManifest::new("quote", "quote", input.clone())
+                .unwrap();
+        let restricted = crate::core::ability::spec::AbilityManifest::new("quote", "quote", input)
             .unwrap()
-            .with_access(crate::core::ability_spec::AccessPolicy {
-                visibility: crate::core::ability_spec::Visibility::Selfish,
+            .with_access(crate::core::ability::spec::AccessPolicy {
+                visibility: crate::core::ability::spec::Visibility::Selfish,
                 allow_callers: None,
                 deny_callers: None,
             })
@@ -944,7 +945,7 @@ mod tests {
         let subject = "easynet:///r/default/device/local";
         let nonce_hex = hex::encode([0x42u8; 16]);
         let ability = "meta.acquire";
-        let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
+        let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
             caller,
             callee,
@@ -978,7 +979,7 @@ mod tests {
 
     #[test]
     fn hosted_agent_delegation_request_round_trips_as_json() {
-        let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
+        let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
         let request = HostedAgentDelegationRequest::new(agent_ura.as_str()).unwrap();
         let raw = request.metadata_value().unwrap();
 
@@ -1005,7 +1006,7 @@ mod tests {
 
         let signer = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
         let caller = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
-        let agent_ura = crate::ura::agent_ura("default", "u", "apprentice");
+        let agent_ura = crate::core::ura::agent_ura("default", "u", "apprentice");
         let nonce_hex = hex::encode([0x24u8; 16]);
         let ability = "meta.acquire";
         let envelope = HostedAgentDelegationEnvelopeBinding::new(
@@ -1060,7 +1061,7 @@ mod tests {
         )
         .unwrap();
         let claims = HostedAgentDelegationClaims::new(
-            crate::ura::agent_ura("default", "u", "apprentice"),
+            crate::core::ura::agent_ura("default", "u", "apprentice"),
             "host_device",
             envelope,
         )
@@ -1094,8 +1095,11 @@ mod tests {
     fn hosted_agent_delegation_rejects_descriptor_ref_in_route_ability() {
         let descriptor_ref = format!(
             "{}@1.0.0",
-            crate::ura::owner_ability_ura("easynet:///r/default/device/local", "meta.acquire")
-                .unwrap()
+            crate::core::ura::owner_ability_ura(
+                "easynet:///r/default/device/local",
+                "meta.acquire"
+            )
+            .unwrap()
         );
 
         let err = HostedAgentDelegationEnvelopeBinding::new(

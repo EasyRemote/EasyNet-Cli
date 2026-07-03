@@ -72,6 +72,20 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+pub mod abilities;
+pub mod bridge_forward;
+pub mod crypto;
+pub mod federated_bindings;
+pub mod forward;
+pub mod handle;
+pub mod resolver;
+pub mod store;
+pub mod user_binding_chain;
+
+pub use handle::KeyringHandle;
+pub use resolver::{ChainResolver, KeyResolveError, LocalKeyringResolver, PeerKeyringResolver};
+pub use store::{Entry, KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus};
+
 /// Ed25519 seed length (32 bytes per RFC 8032 §5.1.5).
 pub const ED25519_SEED_LEN: usize = 32;
 
@@ -713,7 +727,9 @@ pub fn home_relative(rel: &str) -> PathBuf {
 pub fn default_socket_path() -> PathBuf {
     #[cfg(windows)]
     {
-        return PathBuf::from(crate::support::named_pipe::scoped_pipe_name("keyring"));
+        return PathBuf::from(crate::support::platform::named_pipe::scoped_pipe_name(
+            "keyring",
+        ));
     }
 
     #[cfg(not(windows))]
@@ -787,7 +803,7 @@ mod tests {
     /// afterwards. Serialised against the rest of the env-mutating tests
     /// through the shared process-env lock.
     fn with_home_and_env<R>(env_pass: Option<&str>, f: impl FnOnce(&std::path::Path) -> R) -> R {
-        let _lock = crate::cli::test_support::env_lock();
+        let _lock = crate::cli::commands::test_support::env_lock();
         let prev_home = std::env::var("HOME").ok();
         let prev_pass = std::env::var("EASYNET_KEYRING_PASSPHRASE").ok();
         let dir = TempDir::new().unwrap();
@@ -874,7 +890,7 @@ mod tests {
         let path = dir.path().join("keyring.enc");
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
         let device_ura = "easynet:///r/localhost/device/dev-uuid".to_string();
-        let hub_endpoint = crate::ura::hub_ura("localhost");
+        let hub_endpoint = crate::core::ura::hub_ura("localhost");
         vault
             .put(&device_ura, vec![hub_endpoint.clone()], fresh_seed_hex())
             .unwrap();

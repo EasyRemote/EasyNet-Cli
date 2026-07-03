@@ -163,7 +163,7 @@ fn activate_realtime(
         )
     })?;
     let surface = plugin_runtime_manager.daemon_surface_report(catalog)?;
-    let resources = crate::persistence::resources::load()?;
+    let resources = crate::daemon::persistence::resources::load()?;
     let outcomes = PluginActivationBroker::new(&resources).realtime_outcomes(
         &surface,
         &request.package_id,
@@ -220,13 +220,13 @@ fn parse_activate_realtime_args(args: Value) -> anyhow::Result<ActivateRealtimeR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::resources::{
+        ResourceBinding, ResourceEntry, ResourceType, ResourcesFile,
+    };
     use crate::daemon::plugins::surface::PluginKindView;
     use crate::daemon::plugins::{
         activation_plans_for_manifest, PluginPackageManifest, PluginPackageSurfaceRecord,
         PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus, PluginSurfaceReport,
-    };
-    use crate::persistence::resources::{
-        ResourceBinding, ResourceEntry, ResourceType, ResourcesFile,
     };
     use std::collections::BTreeSet;
 
@@ -379,11 +379,11 @@ quick_add = true
         };
         let resources = ResourcesFile {
             resources: vec![ResourceEntry {
-                resource_ura: crate::persistence::resources::build_resource_ura(
+                resource_ura: crate::daemon::persistence::resources::build_resource_ura(
                     "acme",
                     "display.1",
                 ),
-                owner_agent: crate::ura::device_ura("acme", "dev-a"),
+                owner_agent: crate::core::ura::device_ura("acme", "dev-a"),
                 kind: ResourceType::Display,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "display-1".to_string(),

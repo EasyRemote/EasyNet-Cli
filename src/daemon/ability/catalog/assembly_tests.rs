@@ -7,7 +7,7 @@ use crate::daemon::ability::catalog::{
     recover_descriptor_import_transactions_before_daemon_registry_boot, RegistryBuildConfig,
     RegistryBuildServices,
 };
-use crate::registry::agents::AgentRegistry;
+use crate::daemon::persistence::agent_registry::AgentRegistry;
 use std::sync::Arc;
 
 fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_> {
@@ -25,13 +25,13 @@ fn sha256_hex_for_test(bytes: &[u8]) -> String {
 /// `agent/<name>.<profile>` form under the local realm. Call inside a
 /// `HomeGuard` so the file lands in the test's temp HOME.
 fn seed_hosted_agents_for_chat(agents: &[(&str, &str)]) {
-    use crate::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+    use crate::daemon::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
     let mut local = LocalAgentsFile::default();
     for (profile, name) in agents {
         // Agent URA is `agent/<user>.<name>`; the registrar verifies its
         // agent-id (the after-dot segment) equals the registry name, so
         // `name` must be the third arg.
-        let agent_ura = crate::ura::agent_ura("localhost", profile, name);
+        let agent_ura = crate::core::ura::agent_ura("localhost", profile, name);
         upsert_hosted_agent(&mut local, profile, name, &agent_ura);
     }
     save(&local).expect("seed local-agents.json for chat handlers");
@@ -39,7 +39,7 @@ fn seed_hosted_agents_for_chat(agents: &[(&str, &str)]) {
 
 #[test]
 fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
 
     let home = std::env::var("HOME").expect("HomeGuard sets HOME");
     let manifest_path =
@@ -51,7 +51,7 @@ fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
     std::fs::write(&manifest_path, manifest).expect("write imported descriptor");
     let manifest_hash = sha256_hex_for_test(manifest);
 
-    let grants_path = crate::persistence::teach_grants::path();
+    let grants_path = crate::daemon::persistence::teach_grants::path();
     std::fs::create_dir_all(grants_path.parent().expect("teach grants parent"))
         .expect("create state dir");
     std::fs::write(
@@ -97,7 +97,7 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
     // runtime.register_local_tool.
     // Hold the env lock: published_ability_names() reads HOME-rooted
     // registry state, so a concurrent HOME-mutating test must not race it.
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let names = published_ability_names();
     assert!(
         names.iter().any(|n| n == "agent.list"),
@@ -141,7 +141,7 @@ fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
 
 #[test]
 fn terminal_list_is_owner_kind_device() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     use crate::daemon::ability::dispatch::OwnerKind;
     assert_eq!(
         system_ability_owner("terminal.list"),
@@ -176,7 +176,7 @@ fn discovery_hints_read_only_tracks_ability_layer() {
 
 #[test]
 fn ability_layer_classification_is_complete() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The audit story (RFC docs/AXON-RFC-001-ability-layers.md)
     // says every published ability MUST belong to exactly one
     // semantic layer. A new ability that lands without a
@@ -239,7 +239,7 @@ fn build_registry_is_non_empty_and_includes_ping() {
 
 #[test]
 fn published_ability_names_matches_live_registry() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The label-publishing helper and the publishable subset of the dispatch
     // registry must agree byte-for-byte. Local-only front doors may still live
     // in the registry for CLI/runtime calls, but must not be advertised.
@@ -254,7 +254,7 @@ fn published_ability_names_matches_live_registry() {
 
 #[test]
 fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The TOML descriptors in ability-descriptors/system/ are the
     // source of truth for external discovery tools. They are
     // GENERATED from `render_ability_toml(name,
@@ -324,7 +324,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
 ///     get_rpc() returns None" type mismatches).
 #[test]
 fn every_published_ability_resolves_to_a_handler() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let names: Vec<String> = reg.list_abilities();
     let mut unresolved: Vec<String> = Vec::new();
@@ -364,8 +364,8 @@ fn every_published_ability_resolves_to_a_handler() {
 /// tests.
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
-    let _home = crate::cli::test_support::HomeGuard::new();
-    use crate::daemon::invocation::target::{CallMode, InvocationTarget, TargetScope};
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
     let reg = build_system_registry();
     let dispatcher = Arc::clone(&reg);
@@ -421,7 +421,7 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     // human-readable output, not daemon operator events, so
     // the `[component] kind=event` schema would only add
     // unrelated noise to a developer's terminal. The `op_event!`
-    // discipline applies to `src/runtime/**` daemon code paths,
+    // discipline applies to daemon runtime code paths,
     // not to the test bodies that exercise them.
     eprintln!(
         "ability invoke smoke: {} OK, {} errored-but-reached-handler, {} skipped (non-RPC)",
@@ -536,7 +536,7 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
 
 #[test]
 fn build_registry_satisfies_device_baseline_contract() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
     let device = crate::daemon::ability::conformance::DeviceBaseline::required_abilities();
     let report = crate::daemon::ability::conformance::RegistryConformance::new(&reg)
@@ -551,7 +551,7 @@ fn build_registry_satisfies_device_baseline_contract() {
 
 #[test]
 fn published_abilities_includes_skill_list_with_real_metadata() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Load-bearing for the EasyNet frontend's Skills page: the
     // backend invokes `skill.list` against the target node.
     // A regression that dropped it from `published_abilities()`
@@ -588,7 +588,7 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
 
 #[test]
 fn published_system_abilities_excludes_plugin_package_abilities() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let plugin_leaks: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -604,7 +604,7 @@ fn published_system_abilities_excludes_plugin_package_abilities() {
 fn published_abilities_marks_server_stream_routes_as_streaming_only() {
     // Hold the env lock: published_abilities() reads HOME-rooted registry
     // state, so a concurrent HOME-mutating test must not race it.
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "consent.subscribe",
@@ -639,7 +639,7 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
 
 #[test]
 fn published_abilities_marks_bidi_routes_as_bidi_only() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "fs.transfer",
@@ -670,8 +670,8 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
 
 #[test]
 fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
-    let _home = crate::cli::test_support::HomeGuard::new();
-    use crate::registry::agents::{AgentEntry, AgentType};
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let mut agents = AgentRegistry::default();
     agents
         .agents
@@ -693,8 +693,8 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
     // system path would double-register with a synthesised schema
     // that shadows the manifest's real one. The filter in
     // `published_abilities()` enforces this; pin it.
-    use crate::registry::agents::{AgentEntry, AgentType};
-    let _home = crate::cli::test_support::HomeGuard::new();
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&[("claude", "alice")]);
     let mut agents = AgentRegistry::default();
     agents
@@ -719,7 +719,7 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
 
 #[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Adding a new ability to build_registry without also adding
     // arms to `description_for`/`input_schema_for` would let it
     // ship with the unknown-name fallback ("(system ability)" and
@@ -767,8 +767,8 @@ fn registry_includes_chat_handler_per_registered_agent() {
     // the unified AxonAbilityCatalog. This is the load-bearing
     // property that lets the proxy dispatch chat through the
     // same registry as ping/session/permission.
-    use crate::registry::agents::{AgentEntry, AgentType};
-    let _home = crate::cli::test_support::HomeGuard::new();
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&[("claude", "alice"), ("codex", "bob")]);
     let mut agents = AgentRegistry::default();
     agents
@@ -797,7 +797,7 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
     // NOTE: this test already serialises via env_lock() directly — do
     // NOT also take a HomeGuard (it acquires the same non-reentrant
     // env_lock and would deadlock).
-    let _env_lock = crate::cli::test_support::env_lock();
+    let _env_lock = crate::cli::commands::test_support::env_lock();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("keyring.json");
     let prev_disable = std::env::var_os("EASYNET_KEYRING_DISABLE");
@@ -854,7 +854,7 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
 /// as `fs.read`.
 #[test]
 fn published_catalogue_does_not_duplicate_device_owner_prefix() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -879,7 +879,7 @@ fn published_catalogue_does_not_duplicate_device_owner_prefix() {
 /// a legacy self-alias entry and getting confused.
 #[test]
 fn published_catalogue_never_contains_self_alias() {
-    let _home = crate::cli::test_support::HomeGuard::new();
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)

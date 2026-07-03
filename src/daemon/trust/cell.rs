@@ -154,7 +154,7 @@ mod tests {
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
 
     fn hub(realm: &str) -> String {
-        crate::ura::hub_ura(realm)
+        crate::core::ura::hub_ura(realm)
     }
 
     fn agent(ura: &str) -> TrustedAgent {

@@ -1,7 +1,7 @@
 // EasyNet CLI — MemoryLoader (chat context)
 // ==========================================
 //
-// File: src/runtime/system/context_loaders/memory.rs
+// File: src/daemon/ability/builtins/resources/context/loaders/memory.rs
 // Description: A `ContextLoader` that reads the agent's memory
 //              directory (`<agent-root>/memory/*.md`) and emits the
 //              N most-recent entries as a markdown block the chat
@@ -49,7 +49,7 @@ pub const MAX_CHARS_PER_ENTRY: usize = 2000;
 /// changes (`EASYNET_HOME`, `XDG_*`) should take effect immediately
 /// for the test harness.
 fn agent_memory_dir(agent_name: &str) -> PathBuf {
-    crate::persistence::config::agents_root()
+    crate::daemon::persistence::config::agents_root()
         .join(agent_name)
         .join("memory")
 }
@@ -176,10 +176,10 @@ impl ContextLoader for MemoryLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::test_support::HomeGuard;
+    use crate::cli::commands::test_support::HomeGuard;
 
     fn write_memory(agent: &str, name: &str, body: &str) -> PathBuf {
-        let dir = crate::persistence::config::agents_root()
+        let dir = crate::daemon::persistence::config::agents_root()
             .join(agent)
             .join("memory");
         fs::create_dir_all(&dir).unwrap();
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn loader_returns_none_for_empty_memory_dir() {
         let _g = HomeGuard::new();
-        let dir = crate::persistence::config::agents_root()
+        let dir = crate::daemon::persistence::config::agents_root()
             .join("alice")
             .join("memory");
         fs::create_dir_all(&dir).unwrap();
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn loader_ignores_non_md_files() {
         let _g = HomeGuard::new();
-        let dir = crate::persistence::config::agents_root()
+        let dir = crate::daemon::persistence::config::agents_root()
             .join("alice")
             .join("memory");
         fs::create_dir_all(&dir).unwrap();

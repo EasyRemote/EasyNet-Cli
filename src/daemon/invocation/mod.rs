@@ -69,57 +69,22 @@
 // large error regressions everywhere else.
 #![allow(clippy::result_large_err)]
 
-pub mod admission_facade;
-pub(crate) mod bidi_dispatcher;
-pub mod boot;
-pub mod daemon_invocation_service;
-pub(crate) mod deps;
-pub(crate) mod descriptor_binding;
-pub mod device_trust_sync;
-#[cfg(feature = "axon-pb")]
-pub mod federated_key_resolver;
-/// CLI-side `federation.forward_invoke` helper (moved from `support`,
-/// T4.1 pre-move b — it consumes this module's ProtoEnvelope).
-#[cfg(feature = "axon-pb")]
-pub(crate) mod federation_invoke;
-pub mod federation_wrappers;
-pub(crate) mod hosted_agent_delegation;
-pub mod hub_resolver;
-pub(crate) mod identity_write_gate;
-pub mod invocation_wire;
-pub mod invoke_remote_initiator;
-pub(crate) mod ledger_projection;
-pub mod list_user_pubkeys;
-pub mod local_runtime_invoker;
-pub mod local_session_dispatcher;
-pub mod origin_caller;
-pub(crate) mod peer_envelope_signer;
-pub(crate) mod quota_meter;
-pub mod receipt_subscriber;
-pub mod register_device_pubkey;
-mod request;
-pub mod revoke_user_pubkey;
-pub mod route_resolver;
-pub mod runtime_record;
-pub(crate) mod runtime_trust;
-pub(crate) mod runtime_trust_invalidator;
-pub mod session_escalation;
-pub mod session_initiator;
-pub mod state;
-pub(crate) mod stream_dispatcher;
-pub mod target;
-pub(crate) mod target_gate;
-pub(crate) mod unary_dispatcher;
+pub mod admission;
+pub mod bidi;
+pub mod dispatch;
+pub mod receipts;
+pub mod routing;
+pub mod streams;
 
-pub use admission_facade::AdmissionFacade;
-pub use boot::{start_daemon_invocation_transport, SessionShutdown};
-pub use daemon_invocation_service::DaemonInvocationService;
-pub use invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
-pub use invoke_remote_initiator::{
+pub use crate::daemon::boot::invocation::{start_daemon_invocation_transport, SessionShutdown};
+pub use admission::admission_facade::AdmissionFacade;
+pub use admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+pub use admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+pub use admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+pub use bidi::invoke_remote_initiator::{
     invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
     ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
 };
-pub use list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
-pub use register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
-pub use request::{DaemonInvocation, DaemonInvocationBuilder};
-pub use revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+pub use dispatch::daemon_invocation_service::DaemonInvocationService;
+pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
+pub use dispatch::{DaemonInvocation, DaemonInvocationBuilder};

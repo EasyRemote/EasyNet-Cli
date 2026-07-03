@@ -35,10 +35,12 @@ use std::sync::Arc;
 use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 
 use crate::core::domain::NodeId;
-use crate::daemon::invocation::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
+use crate::daemon::invocation::dispatch::local_runtime_invoker::{
+    invoke_local_rpc_sync, open_local_stream,
+};
 #[cfg(test)]
-use crate::daemon::invocation::target::LocalNodeResolver;
-use crate::daemon::invocation::target::{CallMode, InvocationPlan, TargetResolver};
+use crate::daemon::invocation::routing::target::LocalNodeResolver;
+use crate::daemon::invocation::routing::target::{CallMode, InvocationPlan, TargetResolver};
 use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 /// Daemon-internal runtime-dispatch adapter.
@@ -77,7 +79,7 @@ impl RuntimeDispatchAdapter {
     /// `observe.health` without constructing the whole daemon.
     #[cfg(test)]
     pub fn new_for_test() -> Self {
-        let agents = crate::registry::agents::AgentRegistry::default();
+        let agents = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let local_runtime = LocalRuntime::new();
         let mut config = crate::daemon::ability::catalog::RegistryBuildConfig::new(
             crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
@@ -135,7 +137,7 @@ impl RuntimeDispatchAdapter {
         args: serde_json::Value,
         call_mode: CallMode,
         subject: Option<String>,
-    ) -> Result<crate::daemon::invocation::target::InvocationTarget, String> {
+    ) -> Result<crate::daemon::invocation::routing::target::InvocationTarget, String> {
         let plan = InvocationPlan {
             ability: ability.to_string(),
             target_node_hint: extract_node_hint(&args),
@@ -175,7 +177,7 @@ mod tests {
 
     #[test]
     fn runtime_dispatch_rpc_observe_health_returns_json_object() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let adapter = RuntimeDispatchAdapter::new_for_test();
         let value = adapter
             .execute_runtime_dispatch("observe.health", serde_json::json!({}), None)
@@ -190,7 +192,7 @@ mod tests {
             .execute_runtime_dispatch("nope.does_not_exist", serde_json::json!({}), None)
             .expect_err("unknown ability must fail");
         assert!(
-            crate::daemon::invocation::local_runtime_invoker::is_not_found_error(&err),
+            crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error(&err),
             "error should classify as not_found; got {err:?}"
         );
     }
@@ -215,15 +217,17 @@ mod tests {
         fn resolve(
             &self,
             plan: InvocationPlan,
-        ) -> anyhow::Result<crate::daemon::invocation::target::InvocationTarget> {
-            Ok(crate::daemon::invocation::target::InvocationTarget {
-                scope: crate::daemon::invocation::target::TargetScope::Local,
-                ability: plan.ability,
-                normalized_args: plan.args,
-                call_mode: plan.call_mode,
-                subject: plan.subject,
-                causal_context: None,
-            })
+        ) -> anyhow::Result<crate::daemon::invocation::routing::target::InvocationTarget> {
+            Ok(
+                crate::daemon::invocation::routing::target::InvocationTarget {
+                    scope: crate::daemon::invocation::routing::target::TargetScope::Local,
+                    ability: plan.ability,
+                    normalized_args: plan.args,
+                    call_mode: plan.call_mode,
+                    subject: plan.subject,
+                    causal_context: None,
+                },
+            )
         }
     }
 

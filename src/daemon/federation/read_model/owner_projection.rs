@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
-use crate::persistence::owner_projections::{
+use crate::daemon::persistence::owner_projections::{
     self, OwnerProjectionCursor, OwnerProjectionCursorFile,
 };
 
@@ -547,14 +547,14 @@ pub(crate) struct AgentSkillSubjectProjection {
 pub(crate) fn project_agent_skill_subject(
     subject_ura: &str,
 ) -> Result<AgentSkillSubjectProjection, String> {
-    let parsed = crate::ura::parse_ura(subject_ura)
+    let parsed = crate::core::ura::parse_ura(subject_ura)
         .map_err(|e| format!("invalid subject_ura {subject_ura:?}: {e}"))?;
     match parsed.kind {
-        crate::ura::URAKind::Agent => Ok(AgentSkillSubjectProjection {
+        crate::core::ura::URAKind::Agent => Ok(AgentSkillSubjectProjection {
             agent_ura: subject_ura.to_string(),
             skill_name: None,
         }),
-        crate::ura::URAKind::Resource => {
+        crate::core::ura::URAKind::Resource => {
             let owner_id = parsed
                 .resource_owner_id()
                 .ok_or_else(|| "subject_ura resource owner missing".to_string())?;
@@ -579,7 +579,7 @@ pub(crate) fn project_agent_skill_subject(
                     )
                 })?;
             Ok(AgentSkillSubjectProjection {
-                agent_ura: crate::ura::agent_ura(&parsed.realm, &user_id, &agent_id),
+                agent_ura: crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id),
                 skill_name: Some(skill_name),
             })
         }
@@ -595,8 +595,8 @@ pub(crate) fn project_agent_skill_subject(
 /// device-sponsored System Agents (see below). The caller decides
 /// whether that should be an omitted optional field or a hard input error.
 pub(crate) fn skill_resource_ura(agent_ura: &str, skill_name: &str) -> Option<String> {
-    let parsed = crate::ura::parse_ura(agent_ura).ok()?;
-    if parsed.kind != crate::ura::URAKind::Agent {
+    let parsed = crate::core::ura::parse_ura(agent_ura).ok()?;
+    if parsed.kind != crate::core::ura::URAKind::Agent {
         return None;
     }
     // DEC-F048 / RFC gap: the resource_dot owner segment for a
@@ -608,7 +608,7 @@ pub(crate) fn skill_resource_ura(agent_ura: &str, skill_name: &str) -> Option<St
         return None;
     }
     let (user_id, agent_id) = parsed.agent_ids()?;
-    Some(crate::ura::resource_dot_ura(
+    Some(crate::core::ura::resource_dot_ura(
         &parsed.realm,
         &format!("agent.{user_id}.{agent_id}"),
         &format!("skill/{skill_name}"),

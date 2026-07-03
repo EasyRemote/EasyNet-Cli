@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::registry::agents;
+use crate::daemon::persistence::agent_registry as agents;
 
 /// Crate-internal entry for the `skill.list` walk.
 pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
@@ -74,7 +74,7 @@ pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
 /// the number of agents that can consume the pool.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let registry = agents::load_agents()?;
-    let local_agents = crate::persistence::local_agents::load().ok();
+    let local_agents = crate::daemon::persistence::local_agents::load().ok();
     let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
     let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
     let rows = SkillInventoryBuilder::new(&registry, &scope).collect();
@@ -115,7 +115,7 @@ fn list_handler(args: Value) -> anyhow::Result<Value> {
 struct SkillInventoryBuilder<'a> {
     registry: &'a agents::AgentRegistry,
     scope: &'a SkillListScope,
-    rows: Vec<crate::runtime::skill_store::InstallRecord>,
+    rows: Vec<crate::daemon::resources::skills::store::InstallRecord>,
     global_pool_cache: GlobalSkillPoolCache,
     emitted_unscoped_global_pools: BTreeSet<PathBuf>,
 }
@@ -131,7 +131,7 @@ impl<'a> SkillInventoryBuilder<'a> {
         }
     }
 
-    fn collect(mut self) -> Vec<crate::runtime::skill_store::InstallRecord> {
+    fn collect(mut self) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
         if let Some(global_pool) = self.scope.global_pool() {
             self.collect_global_pool(global_pool);
             return self.rows;
@@ -158,7 +158,7 @@ impl<'a> SkillInventoryBuilder<'a> {
         let root = entry
             .root_path
             .clone()
-            .unwrap_or_else(|| crate::persistence::config::agents_root().join(name));
+            .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(name));
         let skills_dir = managed_skill_dir_for_agent_type(&root, entry.agent_type);
         if !skills_dir.exists() {
             return;
@@ -176,7 +176,7 @@ impl<'a> SkillInventoryBuilder<'a> {
         if !record_path.exists() {
             return;
         }
-        match crate::runtime::skill_store::read_install_record(&record_path) {
+        match crate::daemon::resources::skills::store::read_install_record(&record_path) {
             Ok(record) => self.rows.push(record),
             Err(err) => {
                 let path_display = format!("{}", skill_dir.display());
@@ -193,7 +193,9 @@ impl<'a> SkillInventoryBuilder<'a> {
     }
 
     fn collect_global_pools(&mut self, agent_name: &str, agent_type: agents::AgentType) {
-        for (label, pool_dir) in crate::runtime::skill_store::global_skill_pools_for(agent_type) {
+        for (label, pool_dir) in
+            crate::daemon::resources::skills::store::global_skill_pools_for(agent_type)
+        {
             if self.scope.is_agent_scoped() {
                 self.rows.extend(
                     self.global_pool_cache
@@ -210,7 +212,7 @@ impl<'a> SkillInventoryBuilder<'a> {
 
     fn collect_global_pool(
         &mut self,
-        global_pool: &crate::runtime::skill_store::GlobalSkillPoolRef,
+        global_pool: &crate::daemon::resources::skills::store::GlobalSkillPoolRef,
     ) {
         if let Some(skill_name) = self.scope.skill_name.as_deref() {
             self.rows.extend(
@@ -232,7 +234,8 @@ impl<'a> SkillInventoryBuilder<'a> {
 
 #[derive(Default)]
 struct GlobalSkillPoolCache {
-    templates_by_dir: BTreeMap<PathBuf, Vec<crate::runtime::skill_store::InstallRecord>>,
+    templates_by_dir:
+        BTreeMap<PathBuf, Vec<crate::daemon::resources::skills::store::InstallRecord>>,
 }
 
 impl GlobalSkillPoolCache {
@@ -240,7 +243,7 @@ impl GlobalSkillPoolCache {
         &mut self,
         pool_label: &str,
         pool_dir: &std::path::Path,
-    ) -> Vec<crate::runtime::skill_store::InstallRecord> {
+    ) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
         self.templates_for(pool_label, pool_dir)
             .iter()
             .cloned()
@@ -253,13 +256,13 @@ impl GlobalSkillPoolCache {
 
     fn rows_for_global_skill(
         &mut self,
-        global_pool: &crate::runtime::skill_store::GlobalSkillPoolRef,
+        global_pool: &crate::daemon::resources::skills::store::GlobalSkillPoolRef,
         skill_name: &str,
-    ) -> Vec<crate::runtime::skill_store::InstallRecord> {
+    ) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
         let Some(skill_dir) = global_pool.skill_dir(skill_name) else {
             return Vec::new();
         };
-        crate::runtime::skill_store::global_skill_record_from_dir(
+        crate::daemon::resources::skills::store::global_skill_record_from_dir(
             &global_pool.owner_agent_id(),
             global_pool.label(),
             &skill_dir,
@@ -273,7 +276,7 @@ impl GlobalSkillPoolCache {
         agent_name: &str,
         pool_label: &str,
         pool_dir: &std::path::Path,
-    ) -> Vec<crate::runtime::skill_store::InstallRecord> {
+    ) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
         self.templates_for(pool_label, pool_dir)
             .iter()
             .cloned()
@@ -288,12 +291,12 @@ impl GlobalSkillPoolCache {
         &mut self,
         pool_label: &str,
         pool_dir: &std::path::Path,
-    ) -> &Vec<crate::runtime::skill_store::InstallRecord> {
+    ) -> &Vec<crate::daemon::resources::skills::store::InstallRecord> {
         self.templates_by_dir
             .entry(pool_dir.to_path_buf())
             .or_insert_with(|| {
                 let mut templates = Vec::new();
-                crate::runtime::skill_store::scan_global_pool_into(
+                crate::daemon::resources::skills::store::scan_global_pool_into(
                     "",
                     pool_label,
                     pool_dir,
@@ -311,7 +314,7 @@ struct HostedAgentUraIndex {
 
 impl HostedAgentUraIndex {
     fn from_local_agents(
-        local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+        local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
     ) -> Self {
         let Some(local_agents) = local_agents else {
             return Self::default();
@@ -332,13 +335,15 @@ impl HostedAgentUraIndex {
 
 fn managed_skill_dir_for_agent_type(
     root: &std::path::Path,
-    agent_type: crate::registry::agents::AgentType,
+    agent_type: crate::daemon::persistence::agent_registry::AgentType,
 ) -> std::path::PathBuf {
     match agent_type {
-        crate::registry::agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
-        crate::registry::agents::AgentType::Codex
-        | crate::registry::agents::AgentType::CodexAppServer
-        | crate::registry::agents::AgentType::External => root.join("skills"),
+        crate::daemon::persistence::agent_registry::AgentType::ClaudeCode => {
+            root.join(".claude").join("skills")
+        }
+        crate::daemon::persistence::agent_registry::AgentType::Codex
+        | crate::daemon::persistence::agent_registry::AgentType::CodexAppServer
+        | crate::daemon::persistence::agent_registry::AgentType::External => root.join("skills"),
     }
 }
 
@@ -346,13 +351,13 @@ struct SkillListScope {
     owner_agent_id: Option<String>,
     agent_ura: Option<String>,
     skill_name: Option<String>,
-    global_pool: Option<crate::runtime::skill_store::GlobalSkillPoolRef>,
+    global_pool: Option<crate::daemon::resources::skills::store::GlobalSkillPoolRef>,
 }
 
 impl SkillListScope {
     fn from_args(
         args: &Value,
-        local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+        local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
     ) -> anyhow::Result<Self> {
         let object = args
             .as_object()
@@ -375,7 +380,10 @@ impl SkillListScope {
         let global_pool = owner_agent_id
             .as_deref()
             .map(|owner| {
-                crate::runtime::skill_store::GlobalSkillPoolRef::parse_owner_id(owner, "skill.list")
+                crate::daemon::resources::skills::store::GlobalSkillPoolRef::parse_owner_id(
+                    owner,
+                    "skill.list",
+                )
             })
             .transpose()?
             .flatten();
@@ -431,7 +439,7 @@ impl SkillListScope {
             .unwrap_or(true)
     }
 
-    fn global_pool(&self) -> Option<&crate::runtime::skill_store::GlobalSkillPoolRef> {
+    fn global_pool(&self) -> Option<&crate::daemon::resources::skills::store::GlobalSkillPoolRef> {
         self.global_pool.as_ref()
     }
 }
@@ -462,7 +470,7 @@ fn merge_agent_scope(
 }
 
 fn owner_name_for_agent_ura(
-    local_agents: Option<&crate::persistence::local_agents::LocalAgentsFile>,
+    local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
     agent_ura: &str,
 ) -> anyhow::Result<String> {
     let Some(local_agents) = local_agents else {
@@ -550,8 +558,10 @@ mod tests {
     #[test]
     fn managed_skill_dir_for_claude_code_uses_native_project_dir_only() {
         let root = std::path::Path::new("/tmp/agent-root");
-        let dir =
-            managed_skill_dir_for_agent_type(root, crate::registry::agents::AgentType::ClaudeCode);
+        let dir = managed_skill_dir_for_agent_type(
+            root,
+            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+        );
         assert_eq!(dir, root.join(".claude").join("skills"));
         assert_ne!(
             dir,
@@ -564,8 +574,8 @@ mod tests {
     fn managed_skill_dir_for_codex_profiles_uses_agent_root_skills() {
         let root = std::path::Path::new("/tmp/agent-root");
         for agent_type in [
-            crate::registry::agents::AgentType::Codex,
-            crate::registry::agents::AgentType::CodexAppServer,
+            crate::daemon::persistence::agent_registry::AgentType::Codex,
+            crate::daemon::persistence::agent_registry::AgentType::CodexAppServer,
         ] {
             let dir = managed_skill_dir_for_agent_type(root, agent_type);
             assert_eq!(dir, root.join("skills"));
@@ -621,7 +631,7 @@ mod tests {
 
     #[test]
     fn list_handler_emits_unscoped_global_pool_once_across_agents() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let home = std::path::PathBuf::from(std::env::var("HOME").expect("home"));
         let skill_dir = home.join(".claude").join("skills").join("summarize");
         std::fs::create_dir_all(&skill_dir).expect("skill dir");
@@ -631,22 +641,22 @@ mod tests {
         )
         .expect("skill md");
 
-        let mut registry = crate::registry::agents::AgentRegistry::default();
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         registry.agents.insert(
             "alice".to_string(),
-            crate::registry::agents::AgentEntry::new(
-                crate::registry::agents::AgentType::ClaudeCode,
+            crate::daemon::persistence::agent_registry::AgentEntry::new(
+                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
                 None,
             ),
         );
         registry.agents.insert(
             "bob".to_string(),
-            crate::registry::agents::AgentEntry::new(
-                crate::registry::agents::AgentType::ClaudeCode,
+            crate::daemon::persistence::agent_registry::AgentEntry::new(
+                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
                 None,
             ),
         );
-        crate::registry::agents::save_agents(&registry).expect("save registry");
+        crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
 
         let unscoped = list_handler_for_args(json!({})).expect("unscoped list");
         let unscoped_items = unscoped["items"].as_array().expect("items");
@@ -674,7 +684,7 @@ mod tests {
 
     #[test]
     fn list_handler_filters_unscoped_global_pool_owner() {
-        let _home = crate::cli::test_support::HomeGuard::new();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let home = std::path::PathBuf::from(std::env::var("HOME").expect("home"));
         let skill_dir = home.join(".claude").join("skills").join("summarize");
         std::fs::create_dir_all(&skill_dir).expect("skill dir");
@@ -694,9 +704,9 @@ mod tests {
 
     #[test]
     fn hosted_agent_ura_index_resolves_rows_without_scanning_local_agents_per_row() {
-        let local = crate::persistence::local_agents::LocalAgentsFile {
+        let local = crate::daemon::persistence::local_agents::LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
-            hosted_agents: vec![crate::persistence::local_agents::HostedAgentEntry {
+            hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
                 profile: "llm".to_string(),
                 name: "claude".to_string(),
                 agent_ura: "easynet:///r/acme/agent/u1.claude".to_string(),
