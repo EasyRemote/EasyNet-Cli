@@ -110,6 +110,98 @@ pub unsafe extern "C" fn easynet_daemon_start(
     EASYNET_OK
 }
 
+/// Attach to an already-running daemon without spawning it.
+///
+/// `options_json` is reserved for future endpoint override fields and
+/// may be NULL today. Attach fails closed when control is up but the
+/// Invocation endpoint is down.
+///
+/// # Safety
+/// - `options_json` may be null; if non-null it must be valid UTF-8.
+/// - `out_daemon_handle` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_attach(
+    options_json: *const c_char,
+    out_daemon_handle: *mut EasynetDaemonHandle,
+) -> i32 {
+    if out_daemon_handle.is_null() {
+        set_last_error("easynet_daemon_attach: out_daemon_handle pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_daemon_handle = 0 };
+    if !options_json.is_null() {
+        match read_cstr(options_json) {
+            Ok(raw) => {
+                if let Err(err) = validate_attach_options(raw) {
+                    set_last_error(format!("easynet_daemon_attach: {err}"));
+                    return ERR_INVALID_ARG;
+                }
+            }
+            Err(StringError::NotUtf8) => {
+                set_last_error("easynet_daemon_attach: options_json is not valid UTF-8");
+                return ERR_INVALID_UTF8;
+            }
+            Err(StringError::Null) => {}
+        }
+    }
+    let handle = match DaemonHandle::attach_current() {
+        Ok(handle) => handle,
+        Err(err) => {
+            set_last_error(format!("easynet_daemon_attach: {err}"));
+            return ERR_DAEMON_DOWN;
+        }
+    };
+    let id = insert_daemon_handle(handle);
+    unsafe { *out_daemon_handle = id };
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Discover current daemon endpoints and readiness without allocating
+/// a lifecycle handle.
+///
+/// The returned string is caller-owned and must be freed with
+/// `easynet_string_free`.
+///
+/// # Safety
+/// - `options_json` may be null; if non-null it must be valid UTF-8.
+/// - `out_discovery_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_discover(
+    options_json: *const c_char,
+    out_discovery_json: *mut *mut c_char,
+) -> i32 {
+    if out_discovery_json.is_null() {
+        set_last_error("easynet_daemon_discover: out_discovery_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_discovery_json = std::ptr::null_mut() };
+    if !options_json.is_null() {
+        match read_cstr(options_json) {
+            Ok(raw) => {
+                if let Err(err) = validate_attach_options(raw) {
+                    set_last_error(format!("easynet_daemon_discover: {err}"));
+                    return ERR_INVALID_ARG;
+                }
+            }
+            Err(StringError::NotUtf8) => {
+                set_last_error("easynet_daemon_discover: options_json is not valid UTF-8");
+                return ERR_INVALID_UTF8;
+            }
+            Err(StringError::Null) => {}
+        }
+    }
+    let status = crate::daemon::DaemonStatus::current();
+    let ptr = alloc_output_cstring(daemon_status_json(&status).to_string());
+    if ptr.is_null() {
+        set_last_error("easynet_daemon_discover: out-of-memory allocating discovery string");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_discovery_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
 /// Stop a daemon lifecycle handle.
 ///
 /// The handle is removed only after the stop operation succeeds.
@@ -132,6 +224,24 @@ pub extern "C" fn easynet_daemon_stop(handle: EasynetDaemonHandle) -> i32 {
         return ERR_DAEMON_DOWN;
     }
     let _ = remove_daemon_handle(handle);
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Detach a daemon lifecycle handle without stopping the daemon.
+#[no_mangle]
+pub extern "C" fn easynet_daemon_detach(handle: EasynetDaemonHandle) -> i32 {
+    let Some(daemon) = remove_daemon_handle(handle) else {
+        set_last_error(format!(
+            "easynet_daemon_detach: daemon handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+    daemon
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .detach();
     clear_last_error();
     EASYNET_OK
 }
@@ -213,6 +323,42 @@ pub unsafe extern "C" fn easynet_daemon_invocation_endpoint(
         return ERR_GENERIC;
     }
     unsafe { *out_endpoint = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+/// Return all daemon endpoints as JSON.
+///
+/// # Safety
+/// `out_endpoints_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_daemon_endpoints(
+    handle: EasynetDaemonHandle,
+    out_endpoints_json: *mut *mut c_char,
+) -> i32 {
+    if out_endpoints_json.is_null() {
+        set_last_error("easynet_daemon_endpoints: out_endpoints_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_endpoints_json = std::ptr::null_mut() };
+
+    let Some(daemon) = get_daemon_handle(handle) else {
+        set_last_error(format!(
+            "easynet_daemon_endpoints: daemon handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+    let daemon = daemon
+        .inner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let json = daemon_endpoints_json(daemon.endpoints()).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_daemon_endpoints: out-of-memory allocating endpoints string");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_endpoints_json = ptr };
     clear_last_error();
     EASYNET_OK
 }
@@ -501,6 +647,25 @@ fn daemon_status_json(status: &crate::daemon::DaemonStatus) -> serde_json::Value
     })
 }
 
+fn daemon_endpoints_json(endpoints: &crate::daemon::DaemonEndpoints) -> serde_json::Value {
+    serde_json::json!({
+        "control_endpoint": endpoints.control().display().to_string(),
+        "invocation_endpoint": endpoints.invocation().display().to_string(),
+        "public_endpoint": null,
+    })
+}
+
+fn validate_attach_options(raw: &str) -> Result<(), DaemonStartConfigError> {
+    let value: serde_json::Value = serde_json::from_str(raw)?;
+    if value.is_null() {
+        return Ok(());
+    }
+    value
+        .as_object()
+        .ok_or(DaemonStartConfigError::ExpectedObject)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +728,21 @@ mod tests {
     }
 
     #[test]
+    fn daemon_attach_rejects_malformed_options_after_zeroing_handle() {
+        let raw = CString::new("{not-json").unwrap();
+        let mut handle: EasynetDaemonHandle = 42;
+        let code = unsafe { easynet_daemon_attach(raw.as_ptr(), &mut handle) };
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert_eq!(handle, 0);
+    }
+
+    #[test]
+    fn daemon_discover_rejects_null_output() {
+        let code = unsafe { easynet_daemon_discover(std::ptr::null(), std::ptr::null_mut()) };
+        assert_eq!(code, ERR_NULL_POINTER);
+    }
+
+    #[test]
     fn daemon_status_rejects_invalid_handle_after_zeroing_output() {
         let mut out: *mut c_char = std::ptr::dangling_mut();
         let code = unsafe { easynet_daemon_status(9_999_999, &mut out) };
@@ -576,6 +756,20 @@ mod tests {
         let code = unsafe { easynet_daemon_invocation_endpoint(9_999_999, &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert!(out.is_null());
+    }
+
+    #[test]
+    fn daemon_endpoints_rejects_invalid_handle_after_zeroing_output() {
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe { easynet_daemon_endpoints(9_999_999, &mut out) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn daemon_detach_rejects_invalid_handle() {
+        let code = easynet_daemon_detach(9_999_999);
+        assert_eq!(code, ERR_INVALID_HANDLE);
     }
 
     #[test]

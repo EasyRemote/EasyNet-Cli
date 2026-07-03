@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/authority.schema.json",
+  "title": "Authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode"],
+  "properties": {
+    "mode": {"type": "string", "enum": ["caller_presigned", "local_daemon_signing", "unsigned_rejected"]},
+    "signer_id": {"type": ["string", "null"]},
+    "policy": {"type": "string"},
+    "proof": {"type": ["object", "null"]}
+  }
+}

@@ -1,0 +1,15 @@
+id: invocation/local_daemon_signing_boundary
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Local daemon signing still creates a SignedInvocation before submission.
+steps:
+  - action: prepare
+    fixture: invocation.complete.v4.json
+  - action: local_daemon_sign
+expect:
+  result: ok
+  public_object: SignedInvocation

@@ -1,0 +1,15 @@
+id: version/abi_incompatible
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: SDK returns a typed version mismatch before opening invocation traffic.
+steps:
+  - action: feature_discovery
+    override:
+      abi_version: 0
+expect:
+  result: error
+  error_code: VersionIncompatible

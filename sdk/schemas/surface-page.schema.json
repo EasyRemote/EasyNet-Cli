@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/surface-page.schema.json",
+  "title": "SurfacePageRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["page_id", "owner_ura", "surface_ref"],
+  "properties": {
+    "page_id": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "surface_ref": {"type": "string", "minLength": 1},
+    "public_ref": {"type": ["string", "null"]},
+    "status": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}

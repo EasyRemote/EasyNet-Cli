@@ -1,0 +1,17 @@
+id: invocation/complete_tuple
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Builder rejects missing seven-tuple fields before prepare or submit.
+steps:
+  - action: build_invocation
+    fixture: invocation.complete.v4.json
+  - action: remove_field
+    field: caller_ura
+  - action: prepare
+expect:
+  result: error
+  error_code: InvalidArgument

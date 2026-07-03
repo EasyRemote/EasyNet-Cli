@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/mission-status.schema.json",
+  "title": "MissionStatus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mission_id", "state"],
+  "properties": {
+    "mission_id": {"type": "string", "minLength": 1},
+    "state": {"type": "string", "minLength": 1},
+    "child_receipts": {"type": "array", "items": {"type": "string"}},
+    "output_refs": {"type": "array", "items": {"type": "string"}},
+    "error": {"$ref": "error.schema.json"},
+    "metadata": {"type": "object"}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/host-stream-frame.schema.json",
+  "title": "HostStreamFrame",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["frame_type", "seq"],
+  "properties": {
+    "frame_type": {"type": "string", "enum": ["item", "error", "terminal"]},
+    "seq": {"type": "integer", "minimum": 0},
+    "value": true,
+    "error": {"$ref": "error.schema.json"},
+    "terminal": {"type": "object"},
+    "output_hash": {"type": ["string", "null"]}
+  }
+}

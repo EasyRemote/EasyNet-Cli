@@ -1,0 +1,13 @@
+id: directory/no_default_fanout
+profile: directory_identity
+required_for:
+  - go
+  - python
+description: Ordinary directory list methods do not perform per-agent live fan-out.
+steps:
+  - action: list_abilities
+    query:
+      scope: ordinary
+expect:
+  result: ok
+  fanout: none

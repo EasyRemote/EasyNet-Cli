@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::daemon::{DaemonError, Result};
 
@@ -136,6 +137,10 @@ impl DaemonInvocation {
         })
     }
 
+    pub(crate) fn into_draft(self) -> InvocationDraft {
+        InvocationDraft { invocation: self }
+    }
+
     pub(crate) fn into_server_stream_request(
         self,
     ) -> Result<easynet_axon::pb::axon::v1::InvokeServerStreamRequest> {
@@ -213,6 +218,7 @@ pub struct DaemonInvocationBuilder {
     metadata: HashMap<String, String>,
     caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
     timeout_seconds: Option<i32>,
+    args_set: bool,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -254,6 +260,7 @@ impl DaemonInvocationBuilder {
             metadata: HashMap::new(),
             caller_signature: None,
             timeout_seconds: None,
+            args_set: false,
         })
     }
 
@@ -287,6 +294,7 @@ impl DaemonInvocationBuilder {
         }
         self.args = args.into();
         self.content_type = content_type.trim().to_string();
+        self.args_set = true;
         Ok(self)
     }
 
@@ -294,7 +302,44 @@ impl DaemonInvocationBuilder {
     pub fn args_json(mut self, value: &serde_json::Value) -> Result<Self> {
         self.args = serde_json::to_vec(value).map_err(DaemonError::EncodeArguments)?;
         self.content_type = "application/json".to_string();
+        self.args_set = true;
         Ok(self)
+    }
+
+    /// Inspect the current immutable draft. SDK-stable call paths use
+    /// this instead of submitting the mutable builder directly.
+    ///
+    /// Invariant 1: the seven-tuple fields and args payload are
+    /// complete before canonical prepare.
+    /// Invariant 2: defaults already filled by the builder, such as
+    /// nonce and root causal context, are visible in the returned
+    /// `InvocationDraft`.
+    pub fn inspect(&self) -> Result<InvocationDraft> {
+        if !self.args_set {
+            return Err(DaemonError::InvalidInvocation(
+                "args must be set explicitly before building an SDK invocation draft".to_string(),
+            ));
+        }
+        Ok(InvocationDraft {
+            invocation: DaemonInvocation {
+                caller_ura: self.caller_ura.clone(),
+                callee_ura: self.callee_ura.clone(),
+                descriptor_ref: self.descriptor_ref.clone(),
+                subject_ura: self.subject_ura.clone(),
+                nonce: self.nonce,
+                causal_context: self.causal_context.clone(),
+                args: self.args.clone(),
+                content_type: self.content_type.clone(),
+                metadata: self.metadata.clone(),
+                caller_signature: self.caller_signature.clone(),
+                timeout_seconds: self.timeout_seconds,
+            },
+        })
+    }
+
+    /// Finish the SDK-stable immutable draft.
+    pub fn build_draft(self) -> Result<InvocationDraft> {
+        self.inspect()
     }
 
     /// Replace non-axiom request metadata. Metadata is transported
@@ -348,6 +393,390 @@ impl DaemonInvocationBuilder {
     }
 }
 
+/// Immutable SDK draft for a complete seven-tuple Invocation.
+///
+/// What this type is: the first non-mutable SDK object in the
+/// invocation state machine. It owns a complete tuple snapshot and can
+/// produce canonical signing material.
+///
+/// What this type is not: it is not signed and not submit-ready. The
+/// only legal next proof-bearing state is `PreparedInvocation`.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+pub struct InvocationDraft {
+    invocation: DaemonInvocation,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationDraft {
+    /// Inspect the complete tuple without exposing Axon protobuf
+    /// structures.
+    pub fn inspect_tuple(&self) -> InvocationTuple {
+        InvocationTuple::from_invocation(&self.invocation)
+    }
+
+    /// Prepare canonical signing material by delegating to Axon's
+    /// descriptor-bound envelope helpers.
+    pub fn prepare(&self, options: PrepareOptions) -> Result<PreparedInvocation> {
+        let descriptor_bound = self.invocation.descriptor_bound_envelope()?;
+        let canonical_bytes = descriptor_bound.canonical_bytes();
+        let canonical_hash_hex = hex::encode(easynet_axon::invocation::sha256(&canonical_bytes));
+        let args_digest_hex = hex::encode(descriptor_bound.envelope().args_digest);
+        let expires_at_unix_ms = unix_ms_after(options.expires_in);
+        let signer_policy = SignerPolicy {
+            mode: if options.local_daemon_signing {
+                SignerPolicyMode::LocalDaemonSigning
+            } else {
+                SignerPolicyMode::CallerSigning
+            },
+            signer_id: options.signer_id.unwrap_or_default(),
+            policy_ref: options.policy_ref.unwrap_or_default(),
+            expires_at_unix_ms,
+        };
+        Ok(PreparedInvocation {
+            draft: self.clone(),
+            request_id: canonical_hash_hex.clone(),
+            descriptor_ref: self.invocation.descriptor_ref.clone(),
+            descriptor_hash_hex: hex::encode(easynet_axon::invocation::sha256(
+                self.invocation.descriptor_ref.as_bytes(),
+            )),
+            schema_hash_hex: None,
+            canonical_hash_hex,
+            expires_at_unix_ms,
+            signing_material: SigningMaterial {
+                canonical_bytes,
+                args_digest_hex,
+                nonce_base64: base64_encode(&self.invocation.nonce),
+                signed_fields: vec![
+                    "caller".to_string(),
+                    "callee".to_string(),
+                    "subject".to_string(),
+                    "descriptor_ref".to_string(),
+                    "args_digest".to_string(),
+                    "nonce".to_string(),
+                    "causal_context".to_string(),
+                ],
+                signer_policy,
+            },
+        })
+    }
+
+    pub(crate) fn into_daemon_invocation(self) -> DaemonInvocation {
+        self.invocation
+    }
+}
+
+/// Public tuple projection for SDK bindings.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct InvocationTuple {
+    pub caller_ura: String,
+    pub callee_ura: String,
+    pub descriptor_ref: String,
+    pub subject_ura: String,
+    pub nonce_base64: String,
+    pub causal_context: serde_json::Value,
+    pub args_digest_hex: String,
+    pub content_type: String,
+    pub metadata: HashMap<String, String>,
+    pub timeout_seconds: Option<i32>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationTuple {
+    fn from_invocation(invocation: &DaemonInvocation) -> Self {
+        Self {
+            caller_ura: invocation.caller_ura.clone(),
+            callee_ura: invocation.callee_ura.clone(),
+            descriptor_ref: invocation.descriptor_ref.clone(),
+            subject_ura: invocation.subject_ura.clone(),
+            nonce_base64: base64_encode(&invocation.nonce),
+            causal_context: causal_context_json(&invocation.causal_context),
+            args_digest_hex: hex::encode(easynet_axon::invocation::sha256(&invocation.args)),
+            content_type: invocation.content_type.clone(),
+            metadata: invocation.metadata.clone(),
+            timeout_seconds: invocation.timeout_seconds,
+        }
+    }
+}
+
+/// Options for `InvocationDraft::prepare`.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+pub struct PrepareOptions {
+    pub expires_in: Duration,
+    pub signer_id: Option<String>,
+    pub policy_ref: Option<String>,
+    pub local_daemon_signing: bool,
+}
+
+#[cfg(feature = "axon-pb")]
+impl Default for PrepareOptions {
+    fn default() -> Self {
+        Self {
+            expires_in: Duration::from_secs(300),
+            signer_id: None,
+            policy_ref: None,
+            local_daemon_signing: false,
+        }
+    }
+}
+
+/// Prepared canonical signing material. This object is not
+/// submit-ready.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+pub struct PreparedInvocation {
+    draft: InvocationDraft,
+    request_id: String,
+    descriptor_ref: String,
+    descriptor_hash_hex: String,
+    schema_hash_hex: Option<String>,
+    canonical_hash_hex: String,
+    expires_at_unix_ms: u64,
+    signing_material: SigningMaterial,
+}
+
+#[cfg(feature = "axon-pb")]
+impl PreparedInvocation {
+    pub fn tuple(&self) -> InvocationTuple {
+        self.draft.inspect_tuple()
+    }
+
+    pub fn request_id(&self) -> &str {
+        &self.request_id
+    }
+
+    pub fn descriptor_ref(&self) -> &str {
+        &self.descriptor_ref
+    }
+
+    pub fn descriptor_hash_hex(&self) -> &str {
+        &self.descriptor_hash_hex
+    }
+
+    pub fn schema_hash_hex(&self) -> Option<&str> {
+        self.schema_hash_hex.as_deref()
+    }
+
+    pub fn canonical_hash_hex(&self) -> &str {
+        &self.canonical_hash_hex
+    }
+
+    pub fn expires_at_unix_ms(&self) -> u64 {
+        self.expires_at_unix_ms
+    }
+
+    pub fn signing_material(&self) -> &SigningMaterial {
+        &self.signing_material
+    }
+
+    /// Attach a caller-produced signature and move into the only
+    /// submit-ready SDK state.
+    pub fn sign_with_caller_signature(
+        self,
+        signature: CallerSignatureMaterial,
+    ) -> Result<SignedInvocation> {
+        signature.validate()?;
+        let signer_id = self.signing_material.signer_policy.signer_id.clone();
+        Ok(SignedInvocation {
+            prepared: self,
+            signature,
+            signer_id,
+        })
+    }
+}
+
+/// Signer-facing canonical material.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SigningMaterial {
+    canonical_bytes: Vec<u8>,
+    args_digest_hex: String,
+    nonce_base64: String,
+    signed_fields: Vec<String>,
+    signer_policy: SignerPolicy,
+}
+
+#[cfg(feature = "axon-pb")]
+impl SigningMaterial {
+    pub fn canonical_bytes(&self) -> &[u8] {
+        &self.canonical_bytes
+    }
+
+    pub fn canonical_bytes_base64(&self) -> String {
+        base64_encode(&self.canonical_bytes)
+    }
+
+    pub fn args_digest_hex(&self) -> &str {
+        &self.args_digest_hex
+    }
+
+    pub fn nonce_base64(&self) -> &str {
+        &self.nonce_base64
+    }
+
+    pub fn signed_fields(&self) -> &[String] {
+        &self.signed_fields
+    }
+
+    pub fn signer_policy(&self) -> &SignerPolicy {
+        &self.signer_policy
+    }
+}
+
+/// Signing policy attached to prepared material.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SignerPolicy {
+    pub mode: SignerPolicyMode,
+    pub signer_id: String,
+    pub policy_ref: String,
+    pub expires_at_unix_ms: u64,
+}
+
+/// Signer-policy mode.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SignerPolicyMode {
+    CallerSigning,
+    LocalDaemonSigning,
+}
+
+#[cfg(feature = "axon-pb")]
+impl SignerPolicyMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SignerPolicyMode::CallerSigning => "caller_signing",
+            SignerPolicyMode::LocalDaemonSigning => "local_daemon_signing",
+        }
+    }
+}
+
+/// Caller signature DTO used by SDK bindings.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CallerSignatureMaterial {
+    pub algorithm: String,
+    pub signature: Vec<u8>,
+    pub key_id_hint: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CallerSignatureMaterial {
+    pub fn new(
+        algorithm: impl Into<String>,
+        signature: impl Into<Vec<u8>>,
+        key_id_hint: impl Into<String>,
+    ) -> Self {
+        Self {
+            algorithm: algorithm.into(),
+            signature: signature.into(),
+            key_id_hint: key_id_hint.into(),
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.algorithm.trim().is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "caller signature algorithm must not be empty".to_string(),
+            ));
+        }
+        if self.signature.is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "caller signature bytes must not be empty".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn into_wire(self) -> easynet_axon::pb::axon::v1::CallerSignature {
+        easynet_axon::pb::axon::v1::CallerSignature {
+            algorithm: self.algorithm,
+            signature: self.signature,
+            key_id_hint: self.key_id_hint,
+        }
+    }
+}
+
+/// Submit-ready immutable Invocation object.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+pub struct SignedInvocation {
+    prepared: PreparedInvocation,
+    signature: CallerSignatureMaterial,
+    signer_id: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl SignedInvocation {
+    pub fn prepared(&self) -> &PreparedInvocation {
+        &self.prepared
+    }
+
+    pub fn signature(&self) -> &CallerSignatureMaterial {
+        &self.signature
+    }
+
+    pub fn signer_id(&self) -> &str {
+        &self.signer_id
+    }
+
+    pub(crate) fn into_daemon_invocation(self) -> DaemonInvocation {
+        let mut invocation = self.prepared.draft.into_daemon_invocation();
+        invocation.caller_signature = Some(self.signature.into_wire());
+        invocation
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonInvocation {
+    fn descriptor_bound_envelope(
+        &self,
+    ) -> Result<easynet_axon::invocation::DescriptorBoundEnvelope> {
+        let envelope = self.envelope();
+        let caller = envelope
+            .caller
+            .ok_or_else(|| DaemonError::InvalidInvocation("wire envelope missing caller".into()))
+            .and_then(|caller| {
+                easynet_axon::invocation::wire::try_agent_identity_from_wire(caller)
+                    .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
+            })?;
+        let callee = envelope
+            .callee
+            .ok_or_else(|| DaemonError::InvalidInvocation("wire envelope missing callee".into()))
+            .and_then(|callee| {
+                easynet_axon::invocation::wire::try_agent_identity_from_wire(callee)
+                    .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
+            })?;
+        let subject = envelope
+            .subject
+            .ok_or_else(|| DaemonError::InvalidInvocation("wire envelope missing subject".into()))
+            .and_then(|subject| {
+                easynet_axon::invocation::wire::try_subject_identity_from_wire(subject)
+                    .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
+            })?;
+        let causal_context =
+            easynet_axon::invocation::wire::causal_context_from_wire(envelope.causal_context)
+                .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
+        let descriptor_ref =
+            easynet_axon::invocation::canonical_ability_descriptor_ref(&self.descriptor_ref)
+                .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
+        easynet_axon::invocation::DescriptorBoundEnvelope::from_parts(
+            easynet_axon::invocation::DescriptorBoundEnvelopeParts {
+                caller,
+                callee,
+                ability: descriptor_ref,
+                subject,
+                invocation_nonce: self.nonce,
+                causal_context,
+                args_bytes: &self.args,
+            },
+        )
+        .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
+    }
+}
+
 #[cfg(feature = "axon-pb")]
 fn validate_bidi_streams(streams: &[easynet_axon::pb::axon::v1::StreamDescriptor]) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
@@ -396,6 +825,46 @@ fn empty_causal_context() -> easynet_axon::pb::axon::v1::CausalContext {
     use easynet_axon::pb::axon::v1::{causal_context, CausalContext, Empty};
     CausalContext {
         form: Some(causal_context::Form::None(Empty {})),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn unix_ms_after(duration: Duration) -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    now.saturating_add(duration).as_millis() as u64
+}
+
+#[cfg(feature = "axon-pb")]
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[cfg(feature = "axon-pb")]
+fn causal_context_json(context: &easynet_axon::pb::axon::v1::CausalContext) -> serde_json::Value {
+    use easynet_axon::pb::axon::v1::causal_context::Form;
+    match context.form.as_ref() {
+        Some(Form::None(_)) => serde_json::json!({"form": "none"}),
+        Some(Form::Scalar(receipt)) => serde_json::json!({
+            "form": "scalar",
+            "receipt_hash_hex": hex::encode(&receipt.receipt_hash),
+            "receipt_ura": receipt.receipt_ura,
+        }),
+        Some(Form::List(list)) => serde_json::json!({
+            "form": "list",
+            "prior": list.prior.iter().map(|receipt| serde_json::json!({
+                "receipt_hash_hex": hex::encode(&receipt.receipt_hash),
+                "receipt_ura": receipt.receipt_ura,
+            })).collect::<Vec<_>>(),
+        }),
+        Some(Form::Merkle(root)) => serde_json::json!({
+            "form": "merkle",
+            "root_hex": hex::encode(&root.root),
+            "proof_ura": root.proof_ura,
+        }),
+        None => serde_json::json!({"form": "invalid"}),
     }
 }
 
@@ -586,5 +1055,107 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("descriptor ref"));
+    }
+
+    #[test]
+    fn sdk_draft_rejects_missing_explicit_args() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let err = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .build_draft()
+        .unwrap_err();
+
+        assert!(
+            format!("{err}").contains("args must be set explicitly"),
+            "draft must reject implicit empty args: {err}"
+        );
+    }
+
+    #[test]
+    fn sdk_prepare_projects_descriptor_bound_signing_material() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let draft = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .nonce([0x11; 16])
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap();
+
+        let prepared = draft
+            .prepare(PrepareOptions {
+                expires_in: Duration::from_secs(60),
+                signer_id: Some("browser-key".to_string()),
+                policy_ref: Some("policy/local".to_string()),
+                local_daemon_signing: false,
+            })
+            .unwrap();
+
+        assert_eq!(prepared.descriptor_ref(), observe_ref);
+        assert!(!prepared.signing_material().canonical_bytes().is_empty());
+        assert_eq!(
+            prepared.signing_material().nonce_base64(),
+            "EREREREREREREREREREREQ=="
+        );
+        assert_eq!(
+            prepared.signing_material().signer_policy().mode.as_str(),
+            "caller_signing"
+        );
+        assert!(prepared
+            .signing_material()
+            .signed_fields()
+            .contains(&"descriptor_ref".to_string()));
+        assert_eq!(
+            prepared.tuple().subject_ura,
+            "easynet:///r/acme/device/dev-a"
+        );
+    }
+
+    #[test]
+    fn sdk_signed_invocation_preserves_caller_signature() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let prepared = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .nonce([0x12; 16])
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap()
+        .prepare(PrepareOptions::default())
+        .unwrap();
+
+        let signed = prepared
+            .sign_with_caller_signature(CallerSignatureMaterial::new(
+                "ed25519",
+                vec![0x7a; 64],
+                "caller-key",
+            ))
+            .unwrap();
+        let invocation = signed.into_daemon_invocation();
+        let signature = invocation
+            .caller_signature()
+            .expect("signed invocation must carry caller signature");
+
+        assert_eq!(signature.algorithm, "ed25519");
+        assert_eq!(signature.signature, vec![0x7a; 64]);
+        assert_eq!(signature.key_id_hint, "caller-key");
     }
 }

@@ -49,6 +49,13 @@ fn project_structure_v1_script_contract_holds() {
 }
 
 #[test]
+fn sdk_scaffold_script_contract_holds() {
+    // Pins the Daemon SDK Phase-A scaffold: public SDK docs, schema roots,
+    // fixtures, conformance cases, and JSON parseability.
+    run_bash_script("tests/scripts/test_check_sdk_scaffold.sh");
+}
+
+#[test]
 fn trace_parity_script_contract_holds() {
     // Covers happy, failure (missing fixture, extra key, removed key)
     // and edge cases (idempotence, path-only payload invariant).
@@ -87,17 +94,17 @@ fn kernel_boundary_script_contract_holds() {
 }
 
 #[test]
-fn ffi_abi_v3_header_script_contract_holds() {
+fn ffi_abi_v4_header_script_contract_holds() {
     // Pins the binding-facing ABI contract: version, error code table,
-    // complete Invocation symbols, daemon lifecycle symbols, and
+    // Runtime Core SDK symbols, daemon lifecycle symbols, and
     // retirement of the old auto-spawn init surface.
-    run_bash_script("tests/scripts/test_check_ffi_abi_v3_header.sh");
+    run_bash_script("tests/scripts/test_check_ffi_abi_v4_header.sh");
 }
 
 #[test]
 fn release_package_contract_script_holds() {
     // Pins the release shape consumed by install.sh: runtime binaries,
-    // dendrite bridge, and ABI v3 binding artefacts must be packaged
+    // dendrite bridge, and ABI v4 binding artefacts must be packaged
     // and installed together.
     run_bash_script("tests/scripts/test_check_release_package_contract.sh");
 }

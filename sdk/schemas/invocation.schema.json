@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/invocation.schema.json",
+  "title": "Invocation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "caller_ura",
+    "callee_ura",
+    "descriptor_ref",
+    "subject_ura",
+    "nonce_base64",
+    "causal_context",
+    "content_type"
+  ],
+  "oneOf": [
+    {"required": ["args"], "not": {"required": ["arguments_base64"]}},
+    {"required": ["arguments_base64"], "not": {"required": ["args"]}}
+  ],
+  "properties": {
+    "caller_ura": {"type": "string", "minLength": 1},
+    "callee_ura": {"type": "string", "minLength": 1},
+    "descriptor_ref": {"type": "string", "minLength": 1},
+    "subject_ura": {"type": "string", "minLength": 1},
+    "nonce_base64": {"type": "string", "minLength": 1},
+    "causal_context": {"type": "object"},
+    "args": true,
+    "arguments_base64": {"type": "string", "minLength": 1},
+    "content_type": {"type": "string", "minLength": 1},
+    "metadata": {"type": "object"},
+    "caller_signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "signature_base64", "signer_public_key_base64"],
+      "properties": {
+        "algorithm": {"type": "string", "minLength": 1},
+        "signature_base64": {"type": "string", "minLength": 1},
+        "signer_public_key_base64": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

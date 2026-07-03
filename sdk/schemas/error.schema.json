@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/error.schema.json",
+  "title": "DaemonError",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "stage", "message", "retry"],
+  "properties": {
+    "code": {"type": "string", "minLength": 1},
+    "stage": {"type": "string", "minLength": 1},
+    "message": {"type": "string"},
+    "retry": {"type": "string", "enum": ["never", "safe", "after_backoff", "unknown"]},
+    "source": {"type": ["string", "null"]},
+    "invocation_id": {"type": ["string", "null"]},
+    "receipt_ura": {"type": ["string", "null"]},
+    "details": {"type": "object"}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/directory-page.schema.json",
+  "title": "DirectoryPage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "next_cursor", "limit", "source"],
+  "properties": {
+    "items": {"type": "array"},
+    "next_cursor": {"type": ["string", "null"]},
+    "limit": {"type": "integer", "minimum": 1},
+    "source": {"type": "string", "enum": ["read_model", "snapshot", "subscription"]},
+    "metadata": {"type": "object"}
+  }
+}

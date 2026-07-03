@@ -18,7 +18,7 @@ make_sandbox() {
     cp "$REPO_ROOT/packaging/release/e2e-release-install.sh" "$sandbox/packaging/release/e2e-release-install.sh"
     cp "$REPO_ROOT/packaging/release/install.sh" "$sandbox/packaging/release/install.sh"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
-    cp "$REPO_ROOT/docs/spec/ffi-abi-v3.md" "$sandbox/docs/spec/ffi-abi-v3.md"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v4.md" "$sandbox/docs/spec/ffi-abi-v4.md"
     echo "$sandbox"
 }
 
@@ -54,12 +54,12 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "installer missing include dir should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/#define EASYNET_ABI_VERSION 3u/#define EASYNET_ABI_VERSION 2u/' \
+perl -0pi -e 's/#define EASYNET_ABI_VERSION 4u/#define EASYNET_ABI_VERSION 2u/' \
     "$SB/packaging/release/e2e-release-install.sh"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "e2e install missing ABI v3 assertion should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "e2e install missing ABI v4 assertion should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#e2e-release-install\.sh#e2e-release-packaging/release/install.sh#g' \

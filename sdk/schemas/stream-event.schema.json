@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/stream-event.schema.json",
+  "title": "StreamEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["stream_id", "event_type", "seq"],
+  "properties": {
+    "stream_id": {"type": "string", "minLength": 1},
+    "event_type": {"type": "string", "enum": ["item", "terminal", "error", "cancelled", "timeout"]},
+    "seq": {"type": "integer", "minimum": 0},
+    "payload": true,
+    "error": {"$ref": "error.schema.json"},
+    "receipt": {"$ref": "receipt.schema.json"}
+  }
+}

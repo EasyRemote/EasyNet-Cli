@@ -30,14 +30,19 @@
 //   strings/   — UTF-8 C string ↔ Rust &str conversion helpers.
 //   invocation/ — complete Axon Invocation ABI.
 //
-// v3 status (daemon Invocation ABI)
+// v4 status (daemon SDK Runtime Core ABI)
 // -------------------------------
 // - ABI version + handle registry + last-error TLS.
 // - `easynet_init` / `easynet_shutdown`: daemon handle setup.
 // - `easynet_daemon_start/stop/status/invocation_endpoint`:
 //   product daemon lifecycle and endpoint discovery.
+// - `easynet_daemon_attach/discover/endpoints/detach`:
+//   explicit lifecycle object ownership without implicit spawn.
 // - `easynet_invocation_invoke`: complete unary Axon Invocation over
 //   daemon.sock when the `axon-pb` feature is enabled.
+// - `easynet_invocation_prepare/sign_prepared/submit_signed`:
+//   additive Draft -> Prepared -> Signed -> Submitted state-machine
+//   projection over opaque handles.
 // - `easynet_invocation_stream_open/cancel`: complete server-stream
 //   Axon Invocation over daemon.sock.
 // - `easynet_invocation_bidi_open/send/close/cancel`: complete
@@ -63,7 +68,7 @@ use crate::ffi::errors::{
     clear_last_error, set_last_error, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
     ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
 };
-use crate::ffi::strings::read_cstr;
+use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 
 /// Current ABI version. Every breaking change to an exported
 /// `#[no_mangle] extern "C"` function bumps this integer; the CI
@@ -75,7 +80,10 @@ use crate::ffi::strings::read_cstr;
 /// ability+args retirement symbols.
 /// v3 = 3. Complete Invocation-only ABI; `easynet_ability_*` symbols
 /// are removed from the exported C surface.
-pub const EASYNET_ABI_VERSION: u32 = 3;
+/// v4 = 4. Additive Daemon SDK Runtime Core object-family symbols:
+/// feature discovery, attach/discover/detach/endpoints, runtime
+/// health, and prepare/sign/submit handles.
+pub const EASYNET_ABI_VERSION: u32 = 4;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when
@@ -86,6 +94,53 @@ pub const EASYNET_ABI_VERSION: u32 = 3;
 #[no_mangle]
 pub extern "C" fn easynet_abi_version() -> u32 {
     EASYNET_ABI_VERSION
+}
+
+/// Return ABI and SDK feature discovery as JSON.
+///
+/// The returned string is caller-owned and must be freed with
+/// `easynet_string_free`.
+///
+/// # Safety
+/// `out_features_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut c_char) -> i32 {
+    if out_features_json.is_null() {
+        set_last_error("easynet_feature_discovery: out_features_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_features_json = std::ptr::null_mut() };
+    let features = serde_json::json!({
+        "abi_version": EASYNET_ABI_VERSION,
+        "sdk_version": env!("CARGO_PKG_VERSION"),
+        "profiles": {
+            "runtime_core": "partial",
+            "receipt": "scaffold",
+            "directory_identity": "scaffold",
+            "publication": "scaffold",
+            "host_binding": "scaffold",
+            "mission": "scaffold",
+            "admin_gateway": "scaffold",
+            "events": "scaffold",
+            "surface": "scaffold",
+            "compatibility": "scaffold"
+        },
+        "symbols": {
+            "daemon_lifecycle": true,
+            "invocation_dispatch_v3": true,
+            "runtime_health": cfg!(feature = "axon-pb"),
+            "prepare_sign_submit": cfg!(feature = "axon-pb")
+        },
+        "axon_pb": cfg!(feature = "axon-pb")
+    });
+    let ptr = alloc_output_cstring(features.to_string());
+    if ptr.is_null() {
+        set_last_error("easynet_feature_discovery: out-of-memory allocating features string");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_features_json = ptr };
+    clear_last_error();
+    EASYNET_OK
 }
 
 /// Open an IPC connection to the local daemon and return a handle.
@@ -220,6 +275,12 @@ mod tests {
         // "did the symbol load?" test. If the ABI version ever
         // became 0, that idiom would silently pass; this pins it.
         const { assert!(EASYNET_ABI_VERSION >= 1) };
+    }
+
+    #[test]
+    fn feature_discovery_rejects_null_output_pointer() {
+        let code = unsafe { easynet_feature_discovery(std::ptr::null_mut()) };
+        assert_eq!(code, ERR_NULL_POINTER);
     }
 
     #[test]

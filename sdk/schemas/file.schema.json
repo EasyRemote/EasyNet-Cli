@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/file.schema.json",
+  "title": "FileRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["file_ref", "owner_ura", "content_type"],
+  "properties": {
+    "file_ref": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "content_type": {"type": "string", "minLength": 1},
+    "size_bytes": {"type": ["integer", "null"], "minimum": 0},
+    "content_hash": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}

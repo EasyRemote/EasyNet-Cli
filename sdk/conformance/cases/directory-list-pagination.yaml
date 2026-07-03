@@ -1,0 +1,13 @@
+id: directory/list_pagination
+profile: directory_identity
+required_for:
+  - go
+  - python
+description: Directory list APIs reject requests above MaxPageSize.
+steps:
+  - action: list_devices
+    query:
+      limit: 1000000
+expect:
+  result: error
+  error_code: InvalidArgument

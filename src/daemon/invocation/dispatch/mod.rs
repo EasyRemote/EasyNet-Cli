@@ -12,4 +12,8 @@ pub mod local_session_dispatcher;
 mod request;
 pub(crate) mod unary_dispatcher;
 
-pub use request::{DaemonInvocation, DaemonInvocationBuilder};
+pub use request::{
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
+    InvocationTuple, PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy,
+    SignerPolicyMode, SigningMaterial,
+};

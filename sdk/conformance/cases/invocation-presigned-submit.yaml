@@ -1,0 +1,17 @@
+id: invocation/presigned_submit
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: submit_signed preserves caller signature material without facade re-signing.
+steps:
+  - action: prepare
+    fixture: invocation.complete.v4.json
+  - action: attach_signature
+    algorithm: ed25519
+  - action: submit_signed
+expect:
+  result: ok
+  signature_preserved: true

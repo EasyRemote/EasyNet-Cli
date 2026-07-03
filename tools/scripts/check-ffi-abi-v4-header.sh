@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# check-ffi-abi-v3-header.sh
+# check-ffi-abi-v4-header.sh
 # ===========================
 #
-# CI gate for the libeasynet_cli ABI v3 contract.
+# CI gate for the libeasynet_cli ABI v4 contract.
 #
 # The Rust FFI implementation owns behavior. include/easynet_cli.h is
 # the language-binding contract. This script catches drift where Rust
@@ -11,13 +11,13 @@
 
 set -euo pipefail
 
-ROOT="${CHECK_FFI_ABI_V3_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ROOT="${CHECK_FFI_ABI_V4_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$ROOT"
 
 HEADER="include/easynet_cli.h"
-SPEC="docs/spec/ffi-abi-v3.md"
+SPEC="docs/spec/ffi-abi-v4.md"
 
-echo "== check-ffi-abi-v3-header.sh =="
+echo "== check-ffi-abi-v4-header.sh =="
 
 violations=0
 
@@ -70,16 +70,27 @@ require_source_literal() {
 
 expected_symbols=(
     easynet_abi_version
+    easynet_feature_discovery
     easynet_last_error
     easynet_string_free
     easynet_init
     easynet_shutdown
     easynet_daemon_start
+    easynet_daemon_attach
+    easynet_daemon_discover
     easynet_daemon_stop
+    easynet_daemon_detach
     easynet_daemon_status
+    easynet_daemon_endpoints
     easynet_daemon_invocation_endpoint
     easynet_daemon_open_client
     easynet_invocation_invoke
+    easynet_runtime_health
+    easynet_invocation_prepare
+    easynet_invocation_sign_prepared
+    easynet_invocation_submit_signed
+    easynet_prepared_invocation_free
+    easynet_signed_invocation_free
     easynet_invocation_stream_open
     easynet_invocation_stream_cancel
     easynet_invocation_bidi_open
@@ -158,7 +169,7 @@ if require_file "$HEADER"; then
         record_violation "C compiler unavailable" "cc is required to validate include/easynet_cli.h"
     fi
 
-    require_literal "$HEADER" "#define EASYNET_ABI_VERSION 3u"
+    require_literal "$HEADER" "#define EASYNET_ABI_VERSION 4u"
 
     for error_pair in \
         "EASYNET_OK 0" \
@@ -190,6 +201,8 @@ if require_file "$HEADER"; then
         "typedef uint64_t EasynetDaemonHandle;" \
         "typedef uint64_t EasynetInvocationStreamId;" \
         "typedef uint64_t EasynetInvocationBidiId;" \
+        "typedef uint64_t EasynetPreparedInvocationId;" \
+        "typedef uint64_t EasynetSignedInvocationId;" \
         "typedef void (*EasynetInvocationStreamCallback)(" \
         "typedef void (*EasynetInvocationBidiCallback)("
     do
@@ -207,8 +220,8 @@ if require_file "$HEADER"; then
     done
 
     for header_symbol in "${expected_symbols[@]}"; do
-        symbol="fn $header_symbol"
-        require_literal "$HEADER" "$header_symbol"
+        symbol="fn $header_symbol("
+        require_literal "$HEADER" "$header_symbol("
         require_source_literal "$symbol"
     done
 
@@ -231,13 +244,16 @@ fi
 require_absent_file "src/ffi/ability.rs"
 
 if require_file "src/ffi/mod.rs"; then
-    require_literal "src/ffi/mod.rs" "pub const EASYNET_ABI_VERSION: u32 = 3;"
+    require_literal "src/ffi/mod.rs" "pub const EASYNET_ABI_VERSION: u32 = 4;"
     require_absent_literal "src/ffi/mod.rs" "pub mod ability;"
 fi
 
 if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
     require_literal "$SPEC" "ERR_INVALID_ARG"
+    require_literal "$SPEC" "easynet_feature_discovery"
+    require_literal "$SPEC" "easynet_invocation_prepare"
+    require_literal "$SPEC" "easynet_invocation_submit_signed"
     require_literal "$SPEC" "easynet_invocation_bidi_open"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
@@ -253,7 +269,7 @@ for source in src/ffi/errors/mod.rs src/ffi/mod.rs; do
 done
 
 if [[ "$violations" -eq 0 ]]; then
-    echo "ok (FFI ABI v3 header contract is clean)"
+    echo "ok (FFI ABI v4 header contract is clean)"
     exit 0
 fi
 

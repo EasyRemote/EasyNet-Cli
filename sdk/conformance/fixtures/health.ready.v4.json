@@ -1,0 +1,12 @@
+{
+  "api_ready": true,
+  "daemon_ready": true,
+  "invocation_ready": true,
+  "directory_ready": true,
+  "trust_ready": true,
+  "runtime_ready": true,
+  "version": "0.1.0",
+  "abi_version": 4,
+  "mismatch": null,
+  "diagnostics": []
+}

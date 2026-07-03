@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/compatibility.schema.json",
+  "title": "CompatibilityRecord",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["profile", "kind"],
+  "properties": {
+    "profile": {"const": "compatibility"},
+    "kind": {"type": "string", "minLength": 1},
+    "model": {"type": ["string", "null"]},
+    "ability_ref": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}

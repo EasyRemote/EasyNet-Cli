@@ -61,6 +61,12 @@ pub type InvocationStreamId = u64;
 /// process-local handles, not protocol identifiers.
 pub type InvocationBidiId = u64;
 
+/// Opaque id for a prepared canonical signing-material object.
+pub type PreparedInvocationId = u64;
+
+/// Opaque id for a submit-ready signed Invocation object.
+pub type SignedInvocationId = u64;
+
 /// Callback invoked once per decoded `InvokeStreamChunk` summary, then
 /// ONCE MORE with a null `chunk_json` to mark end-of-stream.
 ///
@@ -164,6 +170,249 @@ pub unsafe extern "C" fn easynet_invocation_invoke(
     #[cfg(feature = "axon-pb")]
     {
         invoke_with_axon_pb(session, raw, out_receipt_json)
+    }
+}
+
+/// Return typed runtime readiness for an Invocation-capable client
+/// handle.
+///
+/// # Safety
+/// `out_health_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_runtime_health(
+    handle: EasynetHandle,
+    out_health_json: *mut *mut c_char,
+) -> i32 {
+    if out_health_json.is_null() {
+        set_last_error("easynet_runtime_health: out_health_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_health_json = std::ptr::null_mut() };
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            set_last_error(format!(
+                "easynet_runtime_health: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = session;
+        set_last_error("easynet_runtime_health: axon-pb feature is not enabled in this build");
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        let json = runtime_health_json(session.as_ref()).to_string();
+        let ptr = alloc_output_cstring(json);
+        if ptr.is_null() {
+            set_last_error("easynet_runtime_health: out-of-memory allocating health string");
+            return ERR_GENERIC;
+        }
+        unsafe { *out_health_json = ptr };
+        clear_last_error();
+        EASYNET_OK
+    }
+}
+
+/// Prepare an immutable complete Invocation draft into canonical
+/// signing material.
+///
+/// # Safety
+/// - `invocation_json` must be a valid UTF-8 C string.
+/// - `options_json` may be null; if non-null it must be valid UTF-8 JSON.
+/// - output pointers must be non-null caller-owned pointers.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_prepare(
+    handle: EasynetHandle,
+    invocation_json: *const c_char,
+    options_json: *const c_char,
+    out_prepared_id: *mut PreparedInvocationId,
+    out_prepared_json: *mut *mut c_char,
+) -> i32 {
+    if out_prepared_id.is_null() {
+        set_last_error("easynet_invocation_prepare: out_prepared_id pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    if out_prepared_json.is_null() {
+        set_last_error("easynet_invocation_prepare: out_prepared_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe {
+        *out_prepared_id = 0;
+        *out_prepared_json = std::ptr::null_mut();
+    }
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_prepare: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+    let raw = match read_cstr(invocation_json) {
+        Ok(value) => value,
+        Err(StringError::Null) => {
+            set_last_error("easynet_invocation_prepare: invocation_json pointer is null");
+            return ERR_NULL_POINTER;
+        }
+        Err(StringError::NotUtf8) => {
+            set_last_error("easynet_invocation_prepare: invocation_json is not valid UTF-8");
+            return ERR_INVALID_UTF8;
+        }
+    };
+    let options_raw = match read_optional_cstr(options_json) {
+        Ok(value) => value,
+        Err(StringError::NotUtf8) => {
+            set_last_error("easynet_invocation_prepare: options_json is not valid UTF-8");
+            return ERR_INVALID_UTF8;
+        }
+        Err(StringError::Null) => None,
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (raw, options_raw);
+        set_last_error("easynet_invocation_prepare: axon-pb feature is not enabled in this build");
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        prepare_with_axon_pb(raw, options_raw, out_prepared_id, out_prepared_json)
+    }
+}
+
+/// Attach caller signature material to a prepared Invocation.
+///
+/// # Safety
+/// - `signature_json` must be a valid UTF-8 C string.
+/// - output pointers must be non-null caller-owned pointers.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_sign_prepared(
+    prepared_id: PreparedInvocationId,
+    signature_json: *const c_char,
+    out_signed_id: *mut SignedInvocationId,
+    out_signed_json: *mut *mut c_char,
+) -> i32 {
+    if out_signed_id.is_null() {
+        set_last_error("easynet_invocation_sign_prepared: out_signed_id pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    if out_signed_json.is_null() {
+        set_last_error("easynet_invocation_sign_prepared: out_signed_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe {
+        *out_signed_id = 0;
+        *out_signed_json = std::ptr::null_mut();
+    }
+    let raw = match read_cstr(signature_json) {
+        Ok(value) => value,
+        Err(StringError::Null) => {
+            set_last_error("easynet_invocation_sign_prepared: signature_json pointer is null");
+            return ERR_NULL_POINTER;
+        }
+        Err(StringError::NotUtf8) => {
+            set_last_error("easynet_invocation_sign_prepared: signature_json is not valid UTF-8");
+            return ERR_INVALID_UTF8;
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (prepared_id, raw);
+        set_last_error(
+            "easynet_invocation_sign_prepared: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        sign_prepared_with_axon_pb(prepared_id, raw, out_signed_id, out_signed_json)
+    }
+}
+
+/// Submit a signed Invocation through the daemon runtime endpoint.
+///
+/// # Safety
+/// `out_result_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_submit_signed(
+    handle: EasynetHandle,
+    signed_id: SignedInvocationId,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    if out_result_json.is_null() {
+        set_last_error("easynet_invocation_submit_signed: out_result_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_result_json = std::ptr::null_mut() };
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            set_last_error(format!(
+                "easynet_invocation_submit_signed: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (session, signed_id);
+        set_last_error(
+            "easynet_invocation_submit_signed: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        submit_signed_with_axon_pb(session, signed_id, out_result_json)
+    }
+}
+
+/// Free a prepared Invocation handle.
+#[no_mangle]
+pub extern "C" fn easynet_prepared_invocation_free(prepared_id: PreparedInvocationId) -> i32 {
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = prepared_id;
+        set_last_error(
+            "easynet_prepared_invocation_free: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        remove_prepared(prepared_id);
+        clear_last_error();
+        EASYNET_OK
+    }
+}
+
+/// Free a signed Invocation handle.
+#[no_mangle]
+pub extern "C" fn easynet_signed_invocation_free(signed_id: SignedInvocationId) -> i32 {
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = signed_id;
+        set_last_error(
+            "easynet_signed_invocation_free: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        remove_signed(signed_id);
+        clear_last_error();
+        EASYNET_OK
     }
 }
 
@@ -511,6 +760,48 @@ pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
     }
 }
 
+fn read_optional_cstr(ptr: *const c_char) -> Result<Option<String>, StringError> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    read_cstr(ptr).map(|value| Some(value.to_string()))
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_health_json(session: &crate::ffi::client::handle::ClientSession) -> serde_json::Value {
+    match invocation_endpoint_for_session(session) {
+        Ok(endpoint) => {
+            let invocation_ready =
+                crate::support::platform::local_daemon_grpc::probe_accepting(&endpoint);
+            serde_json::json!({
+                "sdk_version": env!("CARGO_PKG_VERSION"),
+                "control_endpoint": session.control_path,
+                "invocation_endpoint": endpoint.display().to_string(),
+                "connection_state": if invocation_ready { "Ready" } else { "Degraded" },
+                "control_ready": true,
+                "invocation_ready": invocation_ready,
+                "runtime_ready": invocation_ready,
+                "last_error": null,
+            })
+        }
+        Err(err) => serde_json::json!({
+            "sdk_version": env!("CARGO_PKG_VERSION"),
+            "control_endpoint": session.control_path,
+            "invocation_endpoint": null,
+            "connection_state": "Degraded",
+            "control_ready": true,
+            "invocation_ready": false,
+            "runtime_ready": false,
+            "last_error": {
+                "code": "CONTROL_ONLY",
+                "stage": "runtime_health",
+                "message": err.to_string(),
+                "retryable": true
+            },
+        }),
+    }
+}
+
 #[cfg(feature = "axon-pb")]
 fn invoke_with_axon_pb(
     session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
@@ -575,6 +866,148 @@ fn invoke_with_axon_pb(
         return ERR_GENERIC;
     }
     unsafe { *out_receipt_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn prepare_with_axon_pb(
+    raw: &str,
+    options_raw: Option<String>,
+    out_prepared_id: *mut PreparedInvocationId,
+    out_prepared_json: *mut *mut c_char,
+) -> i32 {
+    let spec = match InvocationJson::parse(raw) {
+        Ok(spec) => spec,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let options = match PrepareOptionsJson::parse(options_raw.as_deref()) {
+        Ok(options) => options,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let invocation = match spec.into_daemon_invocation() {
+        Ok(invocation) => invocation,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let prepared = match invocation
+        .into_draft()
+        .prepare(options.into_prepare_options())
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let json = prepared_invocation_json(&prepared).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_invocation_prepare: out-of-memory allocating prepared JSON");
+        return ERR_GENERIC;
+    }
+    let id = insert_prepared(prepared);
+    unsafe {
+        *out_prepared_id = id;
+        *out_prepared_json = ptr;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn sign_prepared_with_axon_pb(
+    prepared_id: PreparedInvocationId,
+    raw: &str,
+    out_signed_id: *mut SignedInvocationId,
+    out_signed_json: *mut *mut c_char,
+) -> i32 {
+    let signature = match SignatureMaterialJson::parse(raw) {
+        Ok(signature) => signature.into_signature_material(),
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_sign_prepared: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let prepared = match remove_prepared(prepared_id) {
+        Some(prepared) => prepared,
+        None => {
+            set_last_error(format!(
+                "easynet_invocation_sign_prepared: prepared handle {prepared_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let signed = match prepared.sign_with_caller_signature(signature) {
+        Ok(signed) => signed,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_sign_prepared: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let json = signed_invocation_json(&signed).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_invocation_sign_prepared: out-of-memory allocating signed JSON");
+        return ERR_GENERIC;
+    }
+    let id = insert_signed(signed);
+    unsafe {
+        *out_signed_id = id;
+        *out_signed_json = ptr;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn submit_signed_with_axon_pb(
+    session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
+    signed_id: SignedInvocationId,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    let signed = match remove_signed(signed_id) {
+        Some(signed) => signed,
+        None => {
+            set_last_error(format!(
+                "easynet_invocation_submit_signed: signed handle {signed_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let endpoint = match invocation_endpoint_for_session(session.as_ref()) {
+        Ok(endpoint) => endpoint,
+        Err(err) => return ffi_daemon_error("easynet_invocation_submit_signed", err),
+    };
+    let rt = match lib_runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_submit_signed: {err}"));
+            return ERR_GENERIC;
+        }
+    };
+    let handle = match rt.block_on(async {
+        let client = crate::daemon::RuntimeClient::connect(endpoint)?;
+        client.submit_signed(signed).await
+    }) {
+        Ok(handle) => handle,
+        Err(err) => return ffi_daemon_error("easynet_invocation_submit_signed", err),
+    };
+    let json = invocation_result_json(handle.await_result()).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_invocation_submit_signed: out-of-memory allocating result JSON");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_result_json = ptr };
     clear_last_error();
     EASYNET_OK
 }
@@ -870,6 +1303,19 @@ struct BidiRegistry {
 }
 
 #[cfg(feature = "axon-pb")]
+struct PreparedRegistry {
+    next: AtomicU64,
+    entries:
+        Mutex<std::collections::HashMap<PreparedInvocationId, crate::daemon::PreparedInvocation>>,
+}
+
+#[cfg(feature = "axon-pb")]
+struct SignedRegistry {
+    next: AtomicU64,
+    entries: Mutex<std::collections::HashMap<SignedInvocationId, crate::daemon::SignedInvocation>>,
+}
+
+#[cfg(feature = "axon-pb")]
 fn stream_registry() -> &'static StreamRegistry {
     static REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| StreamRegistry {
@@ -882,6 +1328,24 @@ fn stream_registry() -> &'static StreamRegistry {
 fn bidi_registry() -> &'static BidiRegistry {
     static REGISTRY: OnceLock<BidiRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| BidiRegistry {
+        next: AtomicU64::new(1),
+        entries: Mutex::new(std::collections::HashMap::new()),
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn prepared_registry() -> &'static PreparedRegistry {
+    static REGISTRY: OnceLock<PreparedRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| PreparedRegistry {
+        next: AtomicU64::new(1),
+        entries: Mutex::new(std::collections::HashMap::new()),
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn signed_registry() -> &'static SignedRegistry {
+    static REGISTRY: OnceLock<SignedRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| SignedRegistry {
         next: AtomicU64::new(1),
         entries: Mutex::new(std::collections::HashMap::new()),
     })
@@ -908,6 +1372,30 @@ fn lock_bidi_entries(
 }
 
 #[cfg(feature = "axon-pb")]
+fn lock_prepared_entries(
+    registry: &PreparedRegistry,
+) -> MutexGuard<
+    '_,
+    std::collections::HashMap<PreparedInvocationId, crate::daemon::PreparedInvocation>,
+> {
+    registry
+        .entries
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(feature = "axon-pb")]
+fn lock_signed_entries(
+    registry: &SignedRegistry,
+) -> MutexGuard<'_, std::collections::HashMap<SignedInvocationId, crate::daemon::SignedInvocation>>
+{
+    registry
+        .entries
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(feature = "axon-pb")]
 fn insert_stream(stream: ActiveInvocationStream) -> InvocationStreamId {
     let registry = stream_registry();
     let stream_id = registry.next.fetch_add(1, Ordering::Relaxed);
@@ -921,6 +1409,58 @@ fn insert_bidi(session: ActiveInvocationBidi) -> InvocationBidiId {
     let bidi_id = registry.next.fetch_add(1, Ordering::Relaxed);
     lock_bidi_entries(registry).insert(bidi_id, Arc::new(session));
     bidi_id
+}
+
+#[cfg(feature = "axon-pb")]
+fn insert_prepared(prepared: crate::daemon::PreparedInvocation) -> PreparedInvocationId {
+    let registry = prepared_registry();
+    let prepared_id = registry.next.fetch_add(1, Ordering::Relaxed);
+    lock_prepared_entries(registry).insert(prepared_id, prepared);
+    prepared_id
+}
+
+#[cfg(feature = "axon-pb")]
+fn insert_signed(signed: crate::daemon::SignedInvocation) -> SignedInvocationId {
+    let registry = signed_registry();
+    let signed_id = registry.next.fetch_add(1, Ordering::Relaxed);
+    lock_signed_entries(registry).insert(signed_id, signed);
+    signed_id
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+fn get_prepared(prepared_id: PreparedInvocationId) -> Option<crate::daemon::PreparedInvocation> {
+    if prepared_id == 0 {
+        return None;
+    }
+    lock_prepared_entries(prepared_registry())
+        .get(&prepared_id)
+        .cloned()
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+fn get_signed(signed_id: SignedInvocationId) -> Option<crate::daemon::SignedInvocation> {
+    if signed_id == 0 {
+        return None;
+    }
+    lock_signed_entries(signed_registry())
+        .get(&signed_id)
+        .cloned()
+}
+
+#[cfg(feature = "axon-pb")]
+fn remove_prepared(prepared_id: PreparedInvocationId) -> Option<crate::daemon::PreparedInvocation> {
+    if prepared_id == 0 {
+        return None;
+    }
+    lock_prepared_entries(prepared_registry()).remove(&prepared_id)
+}
+
+#[cfg(feature = "axon-pb")]
+fn remove_signed(signed_id: SignedInvocationId) -> Option<crate::daemon::SignedInvocation> {
+    if signed_id == 0 {
+        return None;
+    }
+    lock_signed_entries(signed_registry()).remove(&signed_id)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1316,6 +1856,10 @@ enum InvocationJsonError {
     InvalidArray(&'static str),
     #[error("field `{0}` must be a JSON object")]
     InvalidObject(&'static str),
+    #[error("field `{0}` must be a positive unsigned integer")]
+    InvalidPositiveU64(&'static str),
+    #[error("field `{0}` must be a boolean")]
+    InvalidBool(&'static str),
     #[error("metadata values must be strings; invalid key `{0}`")]
     InvalidMetadataValue(String),
     #[error("caller_signature.signature_base64 is not valid base64: {0}")]
@@ -1334,6 +1878,110 @@ enum InvocationJsonError {
     EncodeArgs(serde_json::Error),
     #[error("decode invocation_json failed: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+struct PrepareOptionsJson {
+    expires_in_ms: Option<u64>,
+    signer_id: Option<String>,
+    policy_ref: Option<String>,
+    local_daemon_signing: bool,
+}
+
+#[cfg(feature = "axon-pb")]
+impl PrepareOptionsJson {
+    fn parse(raw: Option<&str>) -> Result<Self, InvocationJsonError> {
+        let Some(raw) = raw else {
+            return Ok(Self::default());
+        };
+        let value: serde_json::Value = serde_json::from_str(raw)?;
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        let obj = value
+            .as_object()
+            .ok_or(InvocationJsonError::InvalidObject("options_json"))?;
+        let expires_in_ms = match obj.get("expires_in_ms") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .filter(|value| *value > 0)
+                    .ok_or(InvocationJsonError::InvalidPositiveU64("expires_in_ms"))?,
+            ),
+        };
+        let local_daemon_signing = match obj.get("local_daemon_signing") {
+            None | Some(serde_json::Value::Null) => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or(InvocationJsonError::InvalidBool("local_daemon_signing"))?,
+        };
+        Ok(Self {
+            expires_in_ms,
+            signer_id: optional_string(obj, "signer_id")?,
+            policy_ref: optional_string(obj, "policy_ref")?,
+            local_daemon_signing,
+        })
+    }
+
+    fn into_prepare_options(self) -> crate::daemon::PrepareOptions {
+        crate::daemon::PrepareOptions {
+            expires_in: std::time::Duration::from_millis(self.expires_in_ms.unwrap_or(300_000)),
+            signer_id: self.signer_id,
+            policy_ref: self.policy_ref,
+            local_daemon_signing: self.local_daemon_signing,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl Default for PrepareOptionsJson {
+    fn default() -> Self {
+        Self {
+            expires_in_ms: None,
+            signer_id: None,
+            policy_ref: None,
+            local_daemon_signing: false,
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+struct SignatureMaterialJson {
+    algorithm: String,
+    signature: Vec<u8>,
+    key_id_hint: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl SignatureMaterialJson {
+    fn parse(raw: &str) -> Result<Self, InvocationJsonError> {
+        use base64::Engine;
+        let value: serde_json::Value = serde_json::from_str(raw)?;
+        let obj = value
+            .as_object()
+            .ok_or(InvocationJsonError::InvalidObject("signature_json"))?;
+        let algorithm = required_string(obj, "algorithm")?;
+        let signature = base64::engine::general_purpose::STANDARD
+            .decode(required_string(obj, "signature_base64")?.as_bytes())
+            .map_err(InvocationJsonError::InvalidSignatureBase64)?;
+        let key_id_hint = optional_string(obj, "key_id_hint")?.unwrap_or_default();
+        Ok(Self {
+            algorithm,
+            signature,
+            key_id_hint,
+        })
+    }
+
+    fn into_signature_material(self) -> crate::daemon::CallerSignatureMaterial {
+        crate::daemon::CallerSignatureMaterial::new(
+            self.algorithm,
+            self.signature,
+            self.key_id_hint,
+        )
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1810,6 +2458,118 @@ fn invocation_output_json(
 }
 
 #[cfg(feature = "axon-pb")]
+fn invocation_tuple_json(tuple: &crate::daemon::InvocationTuple) -> serde_json::Value {
+    serde_json::json!({
+        "caller_ura": tuple.caller_ura,
+        "callee_ura": tuple.callee_ura,
+        "descriptor_ref": tuple.descriptor_ref,
+        "subject_ura": tuple.subject_ura,
+        "nonce_base64": tuple.nonce_base64,
+        "causal_context": tuple.causal_context,
+        "args_digest_hex": tuple.args_digest_hex,
+        "content_type": tuple.content_type,
+        "metadata": tuple.metadata,
+        "timeout_seconds": tuple.timeout_seconds,
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn prepared_invocation_json(prepared: &crate::daemon::PreparedInvocation) -> serde_json::Value {
+    let material = prepared.signing_material();
+    let policy = material.signer_policy();
+    serde_json::json!({
+        "request_id": prepared.request_id(),
+        "descriptor_ref": prepared.descriptor_ref(),
+        "descriptor_hash_hex": prepared.descriptor_hash_hex(),
+        "schema_hash_hex": prepared.schema_hash_hex(),
+        "canonical_hash_hex": prepared.canonical_hash_hex(),
+        "expires_at_unix_ms": prepared.expires_at_unix_ms(),
+        "tuple": invocation_tuple_json(&prepared.tuple()),
+        "signing_material": {
+            "canonical_bytes_base64": material.canonical_bytes_base64(),
+            "args_digest_hex": material.args_digest_hex(),
+            "nonce_base64": material.nonce_base64(),
+            "signed_fields": material.signed_fields(),
+            "signer_policy": {
+                "mode": policy.mode.as_str(),
+                "signer_id": policy.signer_id.as_str(),
+                "policy_ref": policy.policy_ref.as_str(),
+                "expires_at_unix_ms": policy.expires_at_unix_ms,
+            }
+        }
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn signed_invocation_json(signed: &crate::daemon::SignedInvocation) -> serde_json::Value {
+    use base64::Engine;
+    serde_json::json!({
+        "signer_id": signed.signer_id(),
+        "prepared": {
+            "request_id": signed.prepared().request_id(),
+            "descriptor_ref": signed.prepared().descriptor_ref(),
+            "canonical_hash_hex": signed.prepared().canonical_hash_hex(),
+            "expires_at_unix_ms": signed.prepared().expires_at_unix_ms(),
+        },
+        "signature": {
+            "algorithm": signed.signature().algorithm.as_str(),
+            "signature_base64": base64::engine::general_purpose::STANDARD.encode(&signed.signature().signature),
+            "key_id_hint": signed.signature().key_id_hint.as_str(),
+        }
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_result_json(result: crate::daemon::InvocationResult) -> serde_json::Value {
+    use base64::Engine;
+    let output_json = if result.output_content_type == "application/json" {
+        serde_json::from_slice::<serde_json::Value>(&result.output).ok()
+    } else {
+        None
+    };
+    serde_json::json!({
+        "ok": result.error.is_none(),
+        "tuple": invocation_tuple_json(&result.tuple),
+        "terminal_state": result.terminal_state,
+        "output_content_type": result.output_content_type,
+        "output_base64": base64::engine::general_purpose::STANDARD.encode(&result.output),
+        "output_json": output_json,
+        "selected_node_id": result.selected_node_id,
+        "scheduling_reason": result.scheduling_reason,
+        "elapsed_ms": result.elapsed_ms,
+        "receipt": result.receipt.map(receipt_summary_dto_json),
+        "error": result.error.map(runtime_error_json),
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn receipt_summary_dto_json(receipt: crate::daemon::ReceiptSummary) -> serde_json::Value {
+    serde_json::json!({
+        "index": receipt.index,
+        "invocation_id": receipt.invocation_id,
+        "receipt_type": receipt.receipt_type,
+        "state": receipt.state,
+        "timestamp_unix_ms": receipt.timestamp_unix_ms,
+        "prev_receipt_hash_hex": receipt.prev_receipt_hash_hex,
+        "self_hash_hex": receipt.self_hash_hex,
+        "payload_content_type": receipt.payload_content_type,
+        "cleanup_complete": receipt.cleanup_complete,
+        "reason": receipt.reason,
+        "child_invocation_id": receipt.child_invocation_id,
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_error_json(error: crate::daemon::RuntimeErrorSummary) -> serde_json::Value {
+    serde_json::json!({
+        "code": error.code,
+        "stage": error.stage,
+        "message": error.message,
+        "retryable": error.retryable,
+    })
+}
+
+#[cfg(feature = "axon-pb")]
 fn stream_chunk_json(chunk: easynet_axon::pb::axon::v1::InvokeStreamChunk) -> serde_json::Value {
     use base64::Engine;
     let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.payload);
@@ -1987,7 +2747,7 @@ fn protocol_error_json(error: &easynet_axon::pb::axon::v1::Error) -> serde_json:
 mod tests {
     use super::*;
     use crate::ffi::client::handle::{alloc, test_session};
-    use std::ffi::{c_void, CString};
+    use std::ffi::{c_void, CStr, CString};
 
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
@@ -2128,6 +2888,177 @@ mod tests {
                 "timeout_seconds={bad} must be InvalidTimeoutSeconds, got {err}"
             );
         }
+    }
+
+    #[test]
+    fn invocation_prepare_and_sign_prepared_allocate_state_handles() {
+        let (handle, _session) = alloc(test_session());
+        let raw = CString::new(canonical_invocation_json(serde_json::json!({
+            "args": {"probe": true}
+        })))
+        .unwrap();
+        let options = CString::new(
+            serde_json::json!({
+                "expires_in_ms": 60_000,
+                "signer_id": "browser-key",
+                "policy_ref": "policy/local",
+                "local_daemon_signing": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut prepared_id: PreparedInvocationId = 0;
+        let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_invocation_prepare(
+                handle,
+                raw.as_ptr(),
+                options.as_ptr(),
+                &mut prepared_id,
+                &mut prepared_json_ptr,
+            )
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        assert_ne!(prepared_id, 0);
+        assert!(get_prepared(prepared_id).is_some());
+        let prepared_json: serde_json::Value = unsafe {
+            serde_json::from_str(CStr::from_ptr(prepared_json_ptr).to_str().unwrap()).unwrap()
+        };
+        unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+        assert_eq!(
+            prepared_json["signing_material"]["signer_policy"]["mode"],
+            "caller_signing"
+        );
+        assert_eq!(
+            prepared_json["signing_material"]["signer_policy"]["signer_id"],
+            "browser-key"
+        );
+        assert!(prepared_json["signing_material"]["canonical_bytes_base64"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+
+        let signature = CString::new(
+            serde_json::json!({
+                "algorithm": "ed25519",
+                "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
+                "key_id_hint": "caller-key"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut signed_id: SignedInvocationId = 0;
+        let mut signed_json_ptr: *mut c_char = std::ptr::null_mut();
+        let code = unsafe {
+            easynet_invocation_sign_prepared(
+                prepared_id,
+                signature.as_ptr(),
+                &mut signed_id,
+                &mut signed_json_ptr,
+            )
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        assert_ne!(signed_id, 0);
+        assert!(get_prepared(prepared_id).is_none());
+        assert!(get_signed(signed_id).is_some());
+        let signed_json: serde_json::Value = unsafe {
+            serde_json::from_str(CStr::from_ptr(signed_json_ptr).to_str().unwrap()).unwrap()
+        };
+        unsafe { crate::ffi::strings::easynet_string_free(signed_json_ptr) };
+        assert_eq!(signed_json["signature"]["algorithm"], "ed25519");
+        assert_eq!(signed_json["signature"]["key_id_hint"], "caller-key");
+
+        let mut duplicate_signed_id: SignedInvocationId = 0;
+        let mut duplicate_signed_json_ptr: *mut c_char = std::ptr::null_mut();
+        let duplicate_code = unsafe {
+            easynet_invocation_sign_prepared(
+                prepared_id,
+                signature.as_ptr(),
+                &mut duplicate_signed_id,
+                &mut duplicate_signed_json_ptr,
+            )
+        };
+        assert_eq!(duplicate_code, ERR_INVALID_HANDLE);
+        assert_eq!(duplicate_signed_id, 0);
+        assert!(duplicate_signed_json_ptr.is_null());
+        assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
+        assert!(get_signed(signed_id).is_none());
+    }
+
+    #[test]
+    fn invocation_submit_signed_rejects_invalid_client_before_daemon_io() {
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe { easynet_invocation_submit_signed(9_999_999, 1, &mut out) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert!(out.is_null());
+    }
+
+    #[test]
+    fn invocation_submit_signed_consumes_signed_handle_before_transport() {
+        let raw = CString::new(canonical_invocation_json(serde_json::json!({
+            "args": {"probe": true}
+        })))
+        .unwrap();
+        let (prepare_handle, _) = alloc(test_session());
+        let mut prepared_id: PreparedInvocationId = 0;
+        let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+        let prepare_code = unsafe {
+            easynet_invocation_prepare(
+                prepare_handle,
+                raw.as_ptr(),
+                std::ptr::null(),
+                &mut prepared_id,
+                &mut prepared_json_ptr,
+            )
+        };
+        assert_eq!(prepare_code, EASYNET_OK);
+        unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+
+        let signature = CString::new(
+            serde_json::json!({
+                "algorithm": "ed25519",
+                "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
+                "key_id_hint": "caller-key"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut signed_id: SignedInvocationId = 0;
+        let mut signed_json_ptr: *mut c_char = std::ptr::null_mut();
+        let sign_code = unsafe {
+            easynet_invocation_sign_prepared(
+                prepared_id,
+                signature.as_ptr(),
+                &mut signed_id,
+                &mut signed_json_ptr,
+            )
+        };
+        assert_eq!(sign_code, EASYNET_OK);
+        assert!(get_signed(signed_id).is_some());
+        unsafe { crate::ffi::strings::easynet_string_free(signed_json_ptr) };
+
+        let (client_handle, _) = alloc(
+            crate::ffi::client::handle::ClientSession::with_control_path_only(
+                "/tmp/easynet-control.json".to_string(),
+                Some("/tmp/easynet-missing-daemon.sock".to_string()),
+            ),
+        );
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let submit_code =
+            unsafe { easynet_invocation_submit_signed(client_handle, signed_id, &mut out) };
+        assert_eq!(submit_code, ERR_DAEMON_DOWN);
+        assert!(out.is_null());
+        assert!(get_signed(signed_id).is_none());
+
+        let mut second_out: *mut c_char = std::ptr::dangling_mut();
+        let second_code =
+            unsafe { easynet_invocation_submit_signed(client_handle, signed_id, &mut second_out) };
+        assert_eq!(second_code, ERR_INVALID_HANDLE);
+        assert!(second_out.is_null());
+        crate::ffi::client::handle::release(prepare_handle);
+        crate::ffi::client::handle::release(client_handle);
     }
 
     #[test]

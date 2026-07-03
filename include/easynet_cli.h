@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * EasyNet CLI C ABI v3.
+ * EasyNet CLI C ABI v4.
  *
  * This header is the binding-facing contract for libeasynet_cli.
  * The Rust sources in src/ffi own the implementation; repository
@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define EASYNET_ABI_VERSION 3u
+#define EASYNET_ABI_VERSION 4u
 
 #define EASYNET_OK 0
 #define ERR_GENERIC 1
@@ -39,6 +39,8 @@ typedef uint64_t EasynetHandle;
 typedef uint64_t EasynetDaemonHandle;
 typedef uint64_t EasynetInvocationStreamId;
 typedef uint64_t EasynetInvocationBidiId;
+typedef uint64_t EasynetPreparedInvocationId;
+typedef uint64_t EasynetSignedInvocationId;
 
 /*
  * Stream and bidi callbacks are invoked on libeasynet_cli-owned
@@ -71,6 +73,7 @@ typedef void (*EasynetInvocationBidiCallback)(
 );
 
 uint32_t easynet_abi_version(void);
+int32_t easynet_feature_discovery(char **out_features_json);
 const char *easynet_last_error(void);
 void easynet_string_free(char *s);
 
@@ -86,11 +89,28 @@ int32_t easynet_daemon_start(
     EasynetDaemonHandle *out_daemon_handle
 );
 
+int32_t easynet_daemon_attach(
+    const char *options_json,
+    EasynetDaemonHandle *out_daemon_handle
+);
+
+int32_t easynet_daemon_discover(
+    const char *options_json,
+    char **out_discovery_json
+);
+
 int32_t easynet_daemon_stop(EasynetDaemonHandle handle);
+
+int32_t easynet_daemon_detach(EasynetDaemonHandle handle);
 
 int32_t easynet_daemon_status(
     EasynetDaemonHandle handle,
     char **out_status_json
+);
+
+int32_t easynet_daemon_endpoints(
+    EasynetDaemonHandle handle,
+    char **out_endpoints_json
 );
 
 int32_t easynet_daemon_invocation_endpoint(
@@ -107,6 +127,40 @@ int32_t easynet_invocation_invoke(
     EasynetHandle handle,
     const char *invocation_json,
     char **out_receipt_json
+);
+
+int32_t easynet_runtime_health(
+    EasynetHandle handle,
+    char **out_health_json
+);
+
+int32_t easynet_invocation_prepare(
+    EasynetHandle handle,
+    const char *invocation_json,
+    const char *options_json,
+    EasynetPreparedInvocationId *out_prepared_id,
+    char **out_prepared_json
+);
+
+int32_t easynet_invocation_sign_prepared(
+    EasynetPreparedInvocationId prepared_id,
+    const char *signature_json,
+    EasynetSignedInvocationId *out_signed_id,
+    char **out_signed_json
+);
+
+int32_t easynet_invocation_submit_signed(
+    EasynetHandle handle,
+    EasynetSignedInvocationId signed_id,
+    char **out_result_json
+);
+
+int32_t easynet_prepared_invocation_free(
+    EasynetPreparedInvocationId prepared_id
+);
+
+int32_t easynet_signed_invocation_free(
+    EasynetSignedInvocationId signed_id
 );
 
 int32_t easynet_invocation_stream_open(

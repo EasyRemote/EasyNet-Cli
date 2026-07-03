@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/gateway.schema.json",
+  "title": "GatewayStatus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["gateway_id", "ready", "listeners"],
+  "properties": {
+    "gateway_id": {"type": "string", "minLength": 1},
+    "ready": {"type": "boolean"},
+    "listeners": {"type": "array", "items": {"type": "string"}},
+    "trust_ready": {"type": "boolean"},
+    "metadata": {"type": "object"}
+  }
+}

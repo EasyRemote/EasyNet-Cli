@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/health.schema.json",
+  "title": "RuntimeHealth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_ready",
+    "daemon_ready",
+    "invocation_ready",
+    "directory_ready",
+    "trust_ready",
+    "runtime_ready"
+  ],
+  "properties": {
+    "api_ready": {"type": "boolean"},
+    "daemon_ready": {"type": "boolean"},
+    "invocation_ready": {"type": "boolean"},
+    "directory_ready": {"type": "boolean"},
+    "trust_ready": {"type": "boolean"},
+    "runtime_ready": {"type": "boolean"},
+    "version": {"type": ["string", "null"]},
+    "abi_version": {"type": ["integer", "null"], "minimum": 0},
+    "mismatch": {"type": ["object", "null"]},
+    "diagnostics": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "receipt_ura": null,
+  "invocation_id": "inv-example-1",
+  "state": "completed",
+  "verified": false,
+  "output": {
+    "ok": true
+  },
+  "error": null,
+  "causal_ref": null,
+  "metadata": {}
+}

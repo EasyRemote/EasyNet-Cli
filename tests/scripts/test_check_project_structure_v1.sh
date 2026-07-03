@@ -13,7 +13,7 @@ mkfinal() {
   local dir="$1"
 
   mkdir -p "$dir"
-  touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/build.rs"
+  touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/PROJECT_STRUCTURE.md" "$dir/build.rs"
   touch "$dir/README.pdf" "$dir/VERSION"
   mkdir -p "$dir/include"
   touch "$dir/include/easynet_cli.h"
@@ -95,6 +95,7 @@ mkfinal() {
 
   mkdir -p \
     "$dir/sdk/go" "$dir/sdk/python" "$dir/sdk/node" "$dir/sdk/java" "$dir/sdk/swift" \
+    "$dir/sdk/schemas" "$dir/sdk/conformance/cases" "$dir/sdk/conformance/fixtures" "$dir/sdk/conformance/runner" \
     "$dir/ability-descriptors/system/agents" \
     "$dir/ability-descriptors/system/device_control" \
     "$dir/ability-descriptors/system/resources" \

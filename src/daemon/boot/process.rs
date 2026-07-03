@@ -418,6 +418,31 @@ pub struct DaemonHandle {
 }
 
 impl DaemonHandle {
+    /// Attach to an already-running daemon without spawning a new
+    /// process.
+    pub fn attach_current() -> Result<Self> {
+        let endpoints = DaemonEndpoints::current();
+        let control_accepting = local_daemon_grpc::probe_accepting(&endpoints.control);
+        let invocation_accepting = local_daemon_grpc::probe_accepting(&endpoints.invocation);
+        if control_accepting && !invocation_accepting {
+            return Err(DaemonError::ControlAliveInvocationDown {
+                control: endpoints.control.clone(),
+                invocation: endpoints.invocation.clone(),
+            });
+        }
+        if !invocation_accepting {
+            return Err(DaemonError::InvocationEndpointDown {
+                endpoint: endpoints.invocation.clone(),
+            });
+        }
+        Ok(Self {
+            child: None,
+            pid: discover_existing_daemon_pid(),
+            endpoints,
+            pid_path: config::easynet_daemon_pid_path(),
+        })
+    }
+
     /// PID of the daemon process, when known.
     pub fn pid(&self) -> Option<u32> {
         self.pid
@@ -436,6 +461,16 @@ impl DaemonHandle {
     /// Local Axon Invocation endpoint.
     pub fn invocation_endpoint(&self) -> &Path {
         self.endpoints.invocation()
+    }
+
+    /// Runtime endpoints owned by this handle.
+    pub fn endpoints(&self) -> &DaemonEndpoints {
+        &self.endpoints
+    }
+
+    /// Release local process ownership without stopping the daemon.
+    pub fn detach(&mut self) {
+        self.child = None;
     }
 
     /// Snapshot daemon liveness through pid and endpoint probes.

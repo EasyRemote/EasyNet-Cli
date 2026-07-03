@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/resource-ref.schema.json",
+  "title": "ResourceRef",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resource_ref", "owner_ura", "kind"],
+  "properties": {
+    "resource_ref": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "minLength": 1},
+    "content_hash": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}

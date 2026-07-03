@@ -44,6 +44,7 @@ check_root_contract() {
     Cargo.lock
     README.md
     README.pdf
+    PROJECT_STRUCTURE.md
     VERSION
     build.rs
   )
@@ -150,6 +151,7 @@ require_file Cargo.toml
 require_file Cargo.lock
 require_file README.md
 require_file README.pdf
+require_file PROJECT_STRUCTURE.md
 require_file VERSION
 require_file build.rs
 require_file include/easynet_cli.h
@@ -200,7 +202,10 @@ require_only_dirs src/support \
   async_bridge shellguard platform
 
 require_only_dirs sdk \
-  go python node java swift
+  go python node java swift schemas conformance
+
+require_only_dirs sdk/conformance \
+  cases fixtures runner
 
 require_only_dirs ability-descriptors/system \
   agents device_control resources automation integrations governance

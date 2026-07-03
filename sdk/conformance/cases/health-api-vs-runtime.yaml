@@ -1,0 +1,15 @@
+id: health/api_vs_runtime
+profile: health
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Health distinguishes API liveness from daemon runtime readiness.
+steps:
+  - action: read_health
+    fixture: health.ready.v4.json
+expect:
+  result: ok
+  api_ready_field: api_ready
+  runtime_ready_field: runtime_ready

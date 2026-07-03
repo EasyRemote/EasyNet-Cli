@@ -53,9 +53,16 @@ pub use boot::{
     start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,
 };
 #[cfg(feature = "axon-pb")]
-pub use invocation::dispatch::client::{DaemonBidiSession, DaemonClient};
+pub use invocation::dispatch::client::{
+    ClientConnectionState, DaemonBidiSession, DaemonClient, InvocationHandle, InvocationResult,
+    ReceiptSummary, RuntimeClient, RuntimeErrorSummary, RuntimeHealth,
+};
 #[cfg(feature = "axon-pb")]
-pub use invocation::{DaemonInvocation, DaemonInvocationBuilder};
+pub use invocation::{
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
+    InvocationTuple, PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy,
+    SignerPolicyMode, SigningMaterial,
+};
 
 /// Result alias for the daemon SDK surface.
 pub type Result<T> = std::result::Result<T, DaemonError>;

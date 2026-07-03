@@ -1,0 +1,16 @@
+id: daemon/control_only
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Control socket up with invocation socket down reports degraded runtime readiness.
+steps:
+  - action: attach_daemon
+    fixture: health.ready.v4.json
+    override:
+      invocation_ready: false
+expect:
+  result: error
+  error_code: DaemonDown

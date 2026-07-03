@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/agent-record.schema.json",
+  "title": "AgentRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_ura", "owner_ura", "state"],
+  "properties": {
+    "agent_ura": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "device_ura": {"type": ["string", "null"]},
+    "state": {"type": "string", "minLength": 1},
+    "abilities": {"type": "array", "items": {"type": "string"}},
+    "metadata": {"type": "object"}
+  }
+}

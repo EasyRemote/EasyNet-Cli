@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/media-session.schema.json",
+  "title": "MediaSessionRecord",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "owner_ura", "state", "media_kind"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "state": {"type": "string", "minLength": 1},
+    "media_kind": {"type": "string", "minLength": 1},
+    "stream_ref": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}

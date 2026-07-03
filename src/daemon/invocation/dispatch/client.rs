@@ -4,6 +4,10 @@ use std::time::Duration;
 use crate::support::platform::local_daemon_grpc;
 
 use super::DaemonInvocation;
+use super::{
+    DaemonInvocationBuilder, InvocationDraft, InvocationTuple, PrepareOptions, PreparedInvocation,
+    SignedInvocation,
+};
 use crate::daemon::boot::DaemonEndpoints;
 use crate::daemon::{DaemonError, Result};
 
@@ -169,6 +173,257 @@ impl DaemonClient {
             down,
             next_sequence: 1,
         })
+    }
+}
+
+/// Runtime connection state exposed by the daemon SDK.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ClientConnectionState {
+    Idle,
+    Resolving,
+    Connecting,
+    Ready,
+    Degraded,
+    Reconnecting,
+    Failed,
+    Closed,
+}
+
+impl ClientConnectionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Resolving => "Resolving",
+            Self::Connecting => "Connecting",
+            Self::Ready => "Ready",
+            Self::Degraded => "Degraded",
+            Self::Reconnecting => "Reconnecting",
+            Self::Failed => "Failed",
+            Self::Closed => "Closed",
+        }
+    }
+}
+
+/// SDK runtime client over the daemon Invocation endpoint.
+///
+/// What this type is: the public OOP Runtime Core client that owns
+/// connection readiness, prepare/sign/submit dispatch, health, and
+/// typed result projection.
+///
+/// What this type is not: it is not a daemon lifecycle handle and
+/// does not expose gRPC, UDS, or Axon protobuf types.
+#[derive(Debug, Clone)]
+pub struct RuntimeClient {
+    inner: DaemonClient,
+    state: ClientConnectionState,
+}
+
+impl RuntimeClient {
+    /// Connect to an explicit daemon Invocation endpoint.
+    pub fn connect(endpoint: impl Into<PathBuf>) -> Result<Self> {
+        let inner = DaemonClient::connect(endpoint)?;
+        Ok(Self {
+            inner,
+            state: ClientConnectionState::Ready,
+        })
+    }
+
+    /// Connect to the current local daemon Invocation endpoint.
+    pub fn local() -> Result<Self> {
+        Self::connect(DaemonEndpoints::current().invocation)
+    }
+
+    /// Current SDK-observed connection state.
+    pub fn state(&self) -> ClientConnectionState {
+        self.state
+    }
+
+    /// Endpoint this runtime client dials.
+    pub fn endpoint(&self) -> &Path {
+        self.inner.endpoint()
+    }
+
+    /// Start an SDK invocation builder.
+    pub fn new_invocation(
+        &self,
+        caller_ura: impl Into<String>,
+        callee_ura: impl Into<String>,
+        descriptor_ref: impl Into<String>,
+        subject_ura: impl Into<String>,
+    ) -> Result<DaemonInvocationBuilder> {
+        DaemonInvocation::builder(caller_ura, callee_ura, descriptor_ref, subject_ura)
+    }
+
+    /// Prepare canonical signing material for an immutable draft.
+    pub fn prepare(
+        &self,
+        draft: &InvocationDraft,
+        options: PrepareOptions,
+    ) -> Result<PreparedInvocation> {
+        if self.state != ClientConnectionState::Ready {
+            return Err(DaemonError::InvocationEndpointDown {
+                endpoint: self.inner.endpoint().to_path_buf(),
+            });
+        }
+        draft.prepare(options)
+    }
+
+    /// Submit a signed Invocation and return an observable handle.
+    pub async fn submit_signed(&self, signed: SignedInvocation) -> Result<InvocationHandle> {
+        if self.state != ClientConnectionState::Ready {
+            return Err(DaemonError::InvocationEndpointDown {
+                endpoint: self.inner.endpoint().to_path_buf(),
+            });
+        }
+        let tuple = signed.prepared().tuple();
+        let response = self.inner.invoke(signed.into_daemon_invocation()).await?;
+        Ok(InvocationHandle {
+            result: InvocationResult::from_invoke_response(tuple, response),
+        })
+    }
+
+    /// Return typed runtime readiness without using JSON control
+    /// product dispatch.
+    pub fn health(&self) -> RuntimeHealth {
+        let invocation_ready = local_daemon_grpc::probe_accepting(self.inner.endpoint());
+        RuntimeHealth {
+            sdk_version: env!("CARGO_PKG_VERSION").to_string(),
+            endpoint: self.inner.endpoint().display().to_string(),
+            connection_state: if invocation_ready {
+                self.state
+            } else {
+                ClientConnectionState::Degraded
+            },
+            invocation_ready,
+            runtime_ready: invocation_ready && self.state == ClientConnectionState::Ready,
+            last_error: None,
+        }
+    }
+
+    /// Close the client. Closing a runtime client never stops the daemon.
+    pub fn close(&mut self) {
+        self.state = ClientConnectionState::Closed;
+    }
+}
+
+/// Typed runtime health projection.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RuntimeHealth {
+    pub sdk_version: String,
+    pub endpoint: String,
+    pub connection_state: ClientConnectionState,
+    pub invocation_ready: bool,
+    pub runtime_ready: bool,
+    pub last_error: Option<RuntimeErrorSummary>,
+}
+
+/// Submitted Invocation observer. Unary submit currently resolves to a
+/// terminal result immediately, but the handle preserves the SDK object
+/// boundary required by stream/bidi and future async observation.
+#[derive(Debug, Clone)]
+pub struct InvocationHandle {
+    result: InvocationResult,
+}
+
+impl InvocationHandle {
+    pub fn await_result(self) -> InvocationResult {
+        self.result
+    }
+
+    pub fn result(&self) -> &InvocationResult {
+        &self.result
+    }
+}
+
+/// Terminal unary Invocation projection.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct InvocationResult {
+    pub tuple: InvocationTuple,
+    pub terminal_state: String,
+    pub output_content_type: String,
+    pub output: Vec<u8>,
+    pub selected_node_id: String,
+    pub scheduling_reason: String,
+    pub elapsed_ms: u64,
+    pub receipt: Option<ReceiptSummary>,
+    pub error: Option<RuntimeErrorSummary>,
+}
+
+impl InvocationResult {
+    fn from_invoke_response(
+        tuple: InvocationTuple,
+        response: easynet_axon::pb::axon::v1::InvokeResponse,
+    ) -> Self {
+        let error = response.error.as_ref().map(RuntimeErrorSummary::from_wire);
+        Self {
+            tuple,
+            terminal_state: response.state.to_string(),
+            output_content_type: response.result_content_type,
+            output: response.result,
+            selected_node_id: response.selected_node_id,
+            scheduling_reason: response.scheduling_reason,
+            elapsed_ms: response.elapsed_ms.max(0) as u64,
+            receipt: response
+                .admission_receipt
+                .as_ref()
+                .map(ReceiptSummary::from_wire),
+            error,
+        }
+    }
+}
+
+/// Receipt summary DTO. This is a projection, not a full cryptographic
+/// verification claim.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ReceiptSummary {
+    pub index: u64,
+    pub invocation_id: String,
+    pub receipt_type: String,
+    pub state: String,
+    pub timestamp_unix_ms: i64,
+    pub prev_receipt_hash_hex: String,
+    pub self_hash_hex: String,
+    pub payload_content_type: String,
+    pub cleanup_complete: bool,
+    pub reason: String,
+    pub child_invocation_id: String,
+}
+
+impl ReceiptSummary {
+    fn from_wire(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Self {
+        Self {
+            index: receipt.index,
+            invocation_id: receipt.invocation_id.clone(),
+            receipt_type: receipt.receipt_type.clone(),
+            state: receipt.state.to_string(),
+            timestamp_unix_ms: receipt.timestamp_unix_ms,
+            prev_receipt_hash_hex: hex::encode(&receipt.prev_receipt_hash),
+            self_hash_hex: hex::encode(&receipt.self_hash),
+            payload_content_type: receipt.payload_content_type.clone(),
+            cleanup_complete: receipt.cleanup_complete,
+            reason: receipt.reason.clone(),
+            child_invocation_id: receipt.child_invocation_id.clone(),
+        }
+    }
+}
+
+/// Stable SDK error summary for result DTOs and health.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RuntimeErrorSummary {
+    pub code: String,
+    pub stage: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl RuntimeErrorSummary {
+    fn from_wire(error: &easynet_axon::pb::axon::v1::Error) -> Self {
+        Self {
+            code: error.code.clone(),
+            stage: "runtime".to_string(),
+            message: error.message.clone(),
+            retryable: error.retryable,
+        }
     }
 }
 

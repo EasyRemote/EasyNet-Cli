@@ -1,0 +1,24 @@
+{
+  "prepared_id": "prepared-example-1",
+  "tuple": {
+    "caller_ura": "easynet:///r/example/agent/alice.sdk",
+    "callee_ura": "easynet:///r/example/device/dev-a",
+    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+    "subject_ura": "easynet:///r/example/device/dev-a",
+    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+    "causal_context": {
+      "form": "none"
+    },
+    "args": {},
+    "content_type": "application/json",
+    "metadata": {}
+  },
+  "signing_material": {
+    "algorithm": "ed25519",
+    "canonical_bytes_base64": "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
+    "args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+    "expires_at_unix_ms": 1783000000000
+  },
+  "submit_ready": false
+}

@@ -1,0 +1,12 @@
+{
+  "event_id": "evt-example-1",
+  "profile": "events",
+  "kind": "directory.snapshot",
+  "cursor": "cur-example-1",
+  "occurred_at": "2026-07-03T00:00:00Z",
+  "subject_ref": "easynet:///r/example/device/dev-a",
+  "dropped_count": 0,
+  "payload": {
+    "items": []
+  }
+}

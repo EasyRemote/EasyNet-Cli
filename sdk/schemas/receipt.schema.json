@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/receipt.schema.json",
+  "title": "ReceiptSummary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "verified", "output"],
+  "properties": {
+    "receipt_ura": {"type": ["string", "null"]},
+    "invocation_id": {"type": ["string", "null"]},
+    "state": {"type": "string", "minLength": 1},
+    "verified": {"type": "boolean"},
+    "output": true,
+    "error": {"$ref": "error.schema.json"},
+    "causal_ref": {"type": ["string", "null"]},
+    "metadata": {"type": "object"}
+  }
+}
