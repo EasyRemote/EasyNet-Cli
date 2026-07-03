@@ -339,6 +339,24 @@ int32_t easynet_invocation_bidi_cancel(
     EasynetInvocationBidiId bidi_id
 );
 
+int32_t easynet_receipt_project(
+    EasynetHandle handle,
+    const char *receipt_json,
+    char **out_summary_json
+);
+
+int32_t easynet_receipt_verify(
+    EasynetHandle handle,
+    const char *receipt_json,
+    char **out_verification_json
+);
+
+int32_t easynet_receipt_causal_ref(
+    EasynetHandle handle,
+    const char *receipt_json,
+    char **out_causal_ref_json
+);
+
 #ifdef __cplusplus
 }
 #endif

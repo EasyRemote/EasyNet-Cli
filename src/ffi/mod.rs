@@ -57,6 +57,7 @@ pub mod client;
 pub mod daemon;
 pub mod errors;
 pub mod invocation;
+pub mod receipt;
 pub mod strings;
 
 use std::os::raw::c_char;
@@ -129,6 +130,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "daemon_lifecycle": true,
             "invocation_dispatch_v3": true,
             "typed_error_json": true,
+            "receipt_projection": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
             "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
@@ -299,6 +301,7 @@ mod tests {
         unsafe { strings::easynet_string_free(out) };
         assert_eq!(json["abi_version"], EASYNET_ABI_VERSION);
         assert_eq!(json["symbols"]["typed_error_json"], true);
+        assert_eq!(json["symbols"]["receipt_projection"], true);
         assert_eq!(
             json["symbols"]["stream_bidi_lifecycle"],
             serde_json::json!(cfg!(feature = "axon-pb"))

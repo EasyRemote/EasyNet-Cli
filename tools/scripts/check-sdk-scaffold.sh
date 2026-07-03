@@ -116,6 +116,7 @@ case_files=(
   invocation-presigned-submit.yaml
   invocation-local-daemon-signing-boundary.yaml
   error-typed-json.yaml
+  receipt-projection-causal-ref.yaml
   stream-bidi-lifecycle-state.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml

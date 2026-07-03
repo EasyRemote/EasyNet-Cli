@@ -8,7 +8,7 @@ ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
-typed error JSON projection for language bindings.
+typed error JSON and receipt projection for language bindings.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -261,6 +261,36 @@ up-direction sends return `ERR_CANCELLED` without removing the session.
 `easynet_invocation_bidi_close` sends EOF if it has not already been sent, then
 releases the local session handle. `easynet_invocation_bidi_cancel` releases
 the local session without sending EOF.
+
+### 2.8 Receipt Projection
+
+```c
+int32_t easynet_receipt_project(
+    EasynetHandle handle,
+    const char* receipt_json,
+    char** out_summary_json
+);
+
+int32_t easynet_receipt_verify(
+    EasynetHandle handle,
+    const char* receipt_json,
+    char** out_verification_json
+);
+
+int32_t easynet_receipt_causal_ref(
+    EasynetHandle handle,
+    const char* receipt_json,
+    char** out_causal_ref_json
+);
+```
+
+Receipt projection functions are scoped to a live `EasynetHandle`, matching the
+SDK object graph's `ReceiptClient`. `project` normalizes receipt-like JSON into
+the shared `ReceiptSummary` DTO. `verify` is conservative in ABI v4: it returns
+typed JSON with `verified: false` for summary-only data and does not claim Axon
+cryptographic verification. `causal_ref` builds a scalar causal context only
+when the input contains an explicit non-empty `receipt_ura` and a valid 32-byte
+receipt hash (`self_hash_hex`, `receipt_hash_hex`, or `receipt_hash`).
 
 ## 3. Error Code Table
 

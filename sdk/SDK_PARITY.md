@@ -29,7 +29,7 @@ method spelling.
 | stream | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
 | bidi | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
 | directory + identity | gap | gap | gap | gap | gap | gap | gap |
-| receipt | summary only | summary only | gap | gap | gap | gap | gap |
+| receipt | projection partial | projection partial | gap | gap | gap | gap | gap |
 | publication | gap | gap | gap | gap | gap | gap | gap |
 | host binding | gap | gap | gap | gap | gap | gap | gap |
 | mission | gap | gap | gap | gap | gap | gap | gap |
@@ -46,6 +46,8 @@ method spelling.
   receipt fetch/verify remain incomplete.
 - C ABI now exposes schema-shaped typed error JSON for ABI return codes; broad
   language facade error classes and per-profile source refs remain incomplete.
+- Receipt projection and causal-ref guardrails exist for Rust/C ABI; daemon
+  fetch, Axon-backed full verification, and language facades remain incomplete.
 - Directory, identity, receipt fetch/verify, publication, host binding,
   mission, admin/gateway, events, surface, compatibility, and convenience
   wrappers are schema/conformance scaffolds only.
