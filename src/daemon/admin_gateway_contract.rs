@@ -37,7 +37,9 @@ use serde_json::{json, Map, Value};
 use crate::core::ura;
 use crate::daemon::persistence::agent_registry::AgentType;
 use crate::daemon::sdk_contract::{
-    build_system_invocation, object, required_string, validate_ura, SdkContractError,
+    build_system_invocation, first_optional_string_field, object, optional_bool_field,
+    optional_string_array_field, optional_string_field, required_string, validate_ura,
+    SdkContractError,
 };
 
 const ADMIN_PROFILE: &str = "admin_gateway";
@@ -84,7 +86,7 @@ pub(crate) fn build_agent_refresh_invocation(request: &Value) -> Result<Value, A
 pub(crate) fn build_session_list_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
     let obj = object(request, "AdminSessionListRequest")?;
     let mut args = Map::new();
-    if let Some(include_terminated) = optional_bool(obj, "include_terminated")? {
+    if let Some(include_terminated) = optional_bool_field(obj, "include_terminated")? {
         args.insert(
             "include_terminated".to_string(),
             Value::Bool(include_terminated),
@@ -129,15 +131,15 @@ pub(crate) fn project_gateway_status(input: &Value) -> Result<Value, AdminGatewa
         .unwrap_or(false);
     let control_ready = daemon
         .and_then(|daemon| optional_bool_value(daemon, "control_accepting"))
-        .or_else(|| optional_bool(obj, "control_ready").ok().flatten())
+        .or_else(|| optional_bool_field(obj, "control_ready").ok().flatten())
         .unwrap_or(false);
     let runtime_ready = daemon
         .and_then(|daemon| optional_bool_value(daemon, "invocation_accepting"))
-        .or_else(|| optional_bool(obj, "runtime_ready").ok().flatten())
+        .or_else(|| optional_bool_field(obj, "runtime_ready").ok().flatten())
         .unwrap_or(false);
     let directory_ready = presence
         .and_then(|presence| optional_bool_value(presence, "session_admitted"))
-        .or_else(|| optional_bool(obj, "directory_ready").ok().flatten())
+        .or_else(|| optional_bool_field(obj, "directory_ready").ok().flatten())
         .unwrap_or(false);
     let trust_ready = runtime
         .and_then(|runtime| optional_bool_value(runtime, "credential_verified"))
@@ -147,14 +149,14 @@ pub(crate) fn project_gateway_status(input: &Value) -> Result<Value, AdminGatewa
                 .and_then(Value::as_str)
                 .map(|value| !value.trim().is_empty())
         })
-        .or_else(|| optional_bool(obj, "trust_ready").ok().flatten())
+        .or_else(|| optional_bool_field(obj, "trust_ready").ok().flatten())
         .unwrap_or(false);
 
     let mut listeners = listeners_from_status(obj, daemon)?;
     let public_listener_ready = listeners
         .iter()
         .any(|listener| listener.public && listener.ready);
-    let requires_public_listener = optional_bool(obj, "require_public_listener")?
+    let requires_public_listener = optional_bool_field(obj, "require_public_listener")?
         .unwrap_or_else(|| matches!(mode, "hub" | "both"));
     let ready = process_live
         && control_ready
@@ -330,7 +332,7 @@ fn agent_start_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError
         "update_existing_spec",
         "project_workspace",
     ] {
-        if let Some(value) = optional_bool(obj, field)? {
+        if let Some(value) = optional_bool_field(obj, field)? {
             args.insert(field.to_string(), Value::Bool(value));
         }
     }
@@ -427,7 +429,7 @@ fn listeners_from_status(
                 kind: optional_string_field(listener, "kind")?
                     .unwrap_or_else(|| "public".to_string()),
                 endpoint: required_string(listener, "endpoint")?.to_string(),
-                ready: optional_bool(listener, "ready")?.unwrap_or(false),
+                ready: optional_bool_field(listener, "ready")?.unwrap_or(false),
                 public: true,
             });
         }
@@ -455,8 +457,8 @@ fn project_agent_row(row: &Value) -> Result<Value, AdminGatewayError> {
         None => (None, None),
     };
     let runtime = required_string(obj, "runtime")?;
-    let root_exists = optional_bool(obj, "root_exists")?.unwrap_or(true);
-    let abilities = optional_string_array(obj, "abilities")?.unwrap_or_default();
+    let root_exists = optional_bool_field(obj, "root_exists")?.unwrap_or(true);
+    let abilities = optional_string_array_field(obj, "abilities")?.unwrap_or_default();
     Ok(json!({
         "name": name,
         "agent_ura": agent_ura,
@@ -632,75 +634,8 @@ fn validate_absolute_path(raw: &str, field: &'static str) -> Result<(), AdminGat
     Ok(())
 }
 
-fn optional_bool(
-    obj: &Map<String, Value>,
-    field: &'static str,
-) -> Result<Option<bool>, AdminGatewayError> {
-    match obj.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(value)) => Ok(Some(*value)),
-        Some(_) => Err(AdminGatewayError::InvalidField(
-            field,
-            "must be boolean".to_string(),
-        )),
-    }
-}
-
-fn optional_string_field(
-    obj: &Map<String, Value>,
-    field: &'static str,
-) -> Result<Option<String>, AdminGatewayError> {
-    match obj.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(raw)) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
-        }
-        Some(_) => Err(AdminGatewayError::InvalidField(
-            field,
-            "must be a string".to_string(),
-        )),
-    }
-}
-
-fn first_optional_string_field(
-    obj: &Map<String, Value>,
-    primary: &'static str,
-    fallback: &'static str,
-) -> Result<Option<String>, AdminGatewayError> {
-    optional_string_field(obj, primary)?.map_or_else(
-        || optional_string_field(obj, fallback),
-        |value| Ok(Some(value)),
-    )
-}
-
 fn optional_bool_value(obj: &Map<String, Value>, field: &'static str) -> Option<bool> {
     obj.get(field).and_then(Value::as_bool)
-}
-
-fn optional_string_array(
-    obj: &Map<String, Value>,
-    field: &'static str,
-) -> Result<Option<Vec<String>>, AdminGatewayError> {
-    let Some(value) = obj.get(field).filter(|value| !value.is_null()) else {
-        return Ok(None);
-    };
-    let values = value.as_array().ok_or_else(|| {
-        AdminGatewayError::InvalidField(field, "must be an array of strings".to_string())
-    })?;
-    values
-        .iter()
-        .map(|value| {
-            value.as_str().map(str::to_string).ok_or_else(|| {
-                AdminGatewayError::InvalidField(field, "must be an array of strings".to_string())
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
 }
 
 fn optional_u64(obj: &Map<String, Value>, field: &'static str) -> Option<u64> {

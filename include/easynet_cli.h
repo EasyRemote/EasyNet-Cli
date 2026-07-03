@@ -543,6 +543,42 @@ int32_t easynet_admin_project_agent_lifecycle_result(
     char **out_result_json
 );
 
+int32_t easynet_compatibility_build_list_models_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_compatibility_build_chat_completion_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_compatibility_build_stream_chat_completion_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_compatibility_project_model_page(
+    EasynetHandle handle,
+    const char *models_json,
+    char **out_models_json
+);
+
+int32_t easynet_compatibility_project_chat_completion(
+    EasynetHandle handle,
+    const char *completion_json,
+    char **out_completion_json
+);
+
+int32_t easynet_compatibility_project_chat_stream(
+    EasynetHandle handle,
+    const char *stream_json,
+    char **out_stream_json
+);
+
 #ifdef __cplusplus
 }
 #endif

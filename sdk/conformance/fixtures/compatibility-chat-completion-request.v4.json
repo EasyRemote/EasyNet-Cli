@@ -1,0 +1,23 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "request": {
+    "model": "easynet:///r/example/ability/alice.codex.chat",
+    "messages": [
+      {
+        "role": "user",
+        "content": "reply with: ok"
+      }
+    ],
+    "temperature": 0.2
+  },
+  "metadata": {
+    "request_id": "compat-chat-completion-1"
+  }
+}

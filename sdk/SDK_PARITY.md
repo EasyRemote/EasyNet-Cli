@@ -36,7 +36,7 @@ method spelling.
 | admin + gateway | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
 | surface | gap | gap | gap | gap | gap | gap | gap |
-| compatibility | gap | gap | gap | gap | gap | gap | gap |
+| compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | conformance runner | scaffold | scaffold | gap | gap | gap | gap | gap |
 
 ## Known Gaps
@@ -69,9 +69,13 @@ method spelling.
   agent-record projections; pairing token flows, credential verification,
   certificate policy, full device-session CRUD, and language facades remain
   incomplete.
-- Directory list/subscribe convenience methods, receipt fetch/verify,
-  surface, compatibility, and convenience wrappers are schema/conformance
-  scaffolds only.
+- Compatibility carrier/projection guardrails exist for Rust/C ABI over daemon
+  `openai.list_models` and `openai.chat_completions`; compatibility file
+  create/get/delete, product API-key policy, quota/rate limits, billing,
+  backend HTTP route shaping, SSE/WebSocket fanout, and language facades remain
+  incomplete.
+- Directory list/subscribe convenience methods, receipt fetch/verify, surface,
+  and convenience wrappers are schema/conformance scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

@@ -161,6 +161,12 @@ expected_symbols=(
     easynet_admin_project_gateway_status
     easynet_admin_project_agent_records
     easynet_admin_project_agent_lifecycle_result
+    easynet_compatibility_build_list_models_invocation
+    easynet_compatibility_build_chat_completion_invocation
+    easynet_compatibility_build_stream_chat_completion_invocation
+    easynet_compatibility_project_model_page
+    easynet_compatibility_project_chat_completion
+    easynet_compatibility_project_chat_stream
 )
 
 retired_symbols=(
@@ -345,6 +351,9 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_admin_build_agent_start_invocation"
     require_literal "$SPEC" "easynet_admin_project_gateway_status"
     require_literal "$SPEC" "easynet_admin_project_agent_records"
+    require_literal "$SPEC" "easynet_compatibility_build_chat_completion_invocation"
+    require_literal "$SPEC" "easynet_compatibility_project_model_page"
+    require_literal "$SPEC" "easynet_compatibility_project_chat_stream"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 

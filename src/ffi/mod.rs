@@ -65,6 +65,9 @@
 //   `easynet_admin_project_agent_records`, and
 //   `easynet_admin_project_agent_lifecycle_result`: Admin + Gateway carrier
 //   and daemon lifecycle projection helpers.
+// - `easynet_compatibility_build_*_invocation` and
+//   `easynet_compatibility_project_*`: Compatibility carrier and OpenAI-shape
+//   model/chat projection helpers.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
 //   instead of retained as hard-fail compatibility symbols.
 //
@@ -73,6 +76,7 @@
 
 pub mod admin_gateway;
 pub mod client;
+pub mod compatibility;
 pub mod daemon;
 pub mod errors;
 pub mod events;
@@ -149,7 +153,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "events": "directory_stream_partial",
             "admin_gateway": "carrier_status_partial",
             "surface": "scaffold",
-            "compatibility": "scaffold"
+            "compatibility": "carrier_projection_partial"
         },
         "symbols": {
             "daemon_lifecycle": true,
@@ -164,6 +168,8 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "events_directory_stream": true,
             "admin_gateway_carriers": true,
             "admin_gateway_status_projection": true,
+            "compatibility_carriers": true,
+            "compatibility_projection": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
             "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
@@ -343,6 +349,8 @@ mod tests {
         assert_eq!(json["symbols"]["events_directory_stream"], true);
         assert_eq!(json["symbols"]["admin_gateway_carriers"], true);
         assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
+        assert_eq!(json["symbols"]["compatibility_carriers"], true);
+        assert_eq!(json["symbols"]["compatibility_projection"], true);
         assert_eq!(json["profiles"]["receipt"], "projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],
@@ -353,6 +361,10 @@ mod tests {
         assert_eq!(json["profiles"]["mission"], "carrier_status_partial");
         assert_eq!(json["profiles"]["events"], "directory_stream_partial");
         assert_eq!(json["profiles"]["admin_gateway"], "carrier_status_partial");
+        assert_eq!(
+            json["profiles"]["compatibility"],
+            "carrier_projection_partial"
+        );
         assert_eq!(
             json["symbols"]["stream_bidi_lifecycle"],
             serde_json::json!(cfg!(feature = "axon-pb"))

@@ -19,6 +19,9 @@ bus.
 Admin + Gateway carrier and status projection helpers expose daemon-owned
 agent/session lifecycle abilities and lifecycle readiness facts without moving
 backend account, pairing-token, or certificate policy into the SDK.
+Compatibility carrier and projection helpers expose daemon-owned OpenAI
+model/chat adapter abilities without moving product HTTP auth, billing,
+rate-limit, or SSE fanout policy into the SDK.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -622,6 +625,71 @@ results. ABI v4 Admin + Gateway support is `carrier_status_partial`: pairing
 token creation/validation, credential verification, certificate policy,
 gateway onboarding UX, and full device-session CRUD remain future daemon or
 product-profile work.
+
+### 2.15 Compatibility Carriers And Projections
+
+```c
+int32_t easynet_compatibility_build_list_models_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_compatibility_build_chat_completion_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_compatibility_build_stream_chat_completion_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_compatibility_project_model_page(
+    EasynetHandle handle,
+    const char* models_json,
+    char** out_models_json
+);
+
+int32_t easynet_compatibility_project_chat_completion(
+    EasynetHandle handle,
+    const char* completion_json,
+    char** out_completion_json
+);
+
+int32_t easynet_compatibility_project_chat_stream(
+    EasynetHandle handle,
+    const char* stream_json,
+    char** out_stream_json
+);
+```
+
+Compatibility functions are scoped to a live `EasynetHandle`, matching the SDK
+object graph's `CompatibilityClient`. The carrier builders return complete
+Invocation JSON for daemon-owned `openai.list_models` and
+`openai.chat_completions`. They require explicit caller, callee, subject,
+descriptor version, nonce, and causal context fields. Bindings submit returned
+carriers through Runtime Core; these helpers do not execute model calls
+directly.
+
+`easynet_compatibility_build_chat_completion_invocation` rejects requests whose
+OpenAI `stream` flag is true. Streaming callers use
+`easynet_compatibility_build_stream_chat_completion_invocation`, which makes
+`request.stream = true` explicit in the returned carrier. Both paths require
+`request.model` to be a canonical agent-owned chat Ability URA; provider
+nicknames such as `gpt-5` are not accepted at this daemon SDK layer.
+
+`easynet_compatibility_project_model_page`,
+`easynet_compatibility_project_chat_completion`, and
+`easynet_compatibility_project_chat_stream` validate daemon-returned
+OpenAI-compatible envelopes and project them into SDK DTOs with
+`profile = "compatibility"`. ABI v4 Compatibility support is
+`carrier_projection_partial`: OpenAI-compatible file create/get/delete,
+product API-key policy, quota/rate-limit policy, billing, HTTP route shaping,
+and SSE/WebSocket fanout remain future daemon abilities or product-profile
+work.
 
 ## 3. Error Code Table
 

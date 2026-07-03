@@ -124,6 +124,73 @@ pub(crate) fn optional_string(obj: &Map<String, Value>, key: &'static str) -> Op
         .map(str::to_string)
 }
 
+pub(crate) fn optional_string_field(
+    obj: &Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<String>, SdkContractError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(_) => Err(SdkContractError::InvalidField(
+            key,
+            "must be a string".to_string(),
+        )),
+    }
+}
+
+pub(crate) fn first_optional_string_field(
+    obj: &Map<String, Value>,
+    primary: &'static str,
+    fallback: &'static str,
+) -> Result<Option<String>, SdkContractError> {
+    optional_string_field(obj, primary)?.map_or_else(
+        || optional_string_field(obj, fallback),
+        |value| Ok(Some(value)),
+    )
+}
+
+pub(crate) fn optional_bool_field(
+    obj: &Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<bool>, SdkContractError> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(SdkContractError::InvalidField(
+            key,
+            "must be boolean".to_string(),
+        )),
+    }
+}
+
+pub(crate) fn optional_string_array_field(
+    obj: &Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<Vec<String>>, SdkContractError> {
+    let Some(value) = obj.get(key).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let values = value.as_array().ok_or_else(|| {
+        SdkContractError::InvalidField(key, "must be an array of strings".to_string())
+    })?;
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                SdkContractError::InvalidField(key, "must be an array of strings".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 pub(crate) fn typed_object_or_default(
     obj: &Map<String, Value>,
     key: &'static str,

@@ -35,6 +35,7 @@ pub mod ability;
 pub mod admin_gateway_contract;
 pub mod axon_bridge;
 pub mod boot;
+pub mod compatibility_contract;
 pub mod control;
 pub mod events_contract;
 pub mod execution;

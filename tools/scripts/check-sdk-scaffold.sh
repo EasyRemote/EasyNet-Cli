@@ -93,6 +93,9 @@ schema_files=(
   admin-session-list-request.schema.json
   surface-page.schema.json
   compatibility.schema.json
+  compatibility-list-models-request.schema.json
+  compatibility-chat-completion-request.schema.json
+  compatibility-stream-chat-completion-request.schema.json
   file.schema.json
   terminal.schema.json
   remote-desktop.schema.json
@@ -158,6 +161,15 @@ fixture_files=(
   gateway-status.v4.json
   admin-agent-records.v4.json
   admin-agent-lifecycle-result.v4.json
+  compatibility-list-models-request.v4.json
+  compatibility-chat-completion-request.v4.json
+  compatibility-stream-chat-completion-request.v4.json
+  compatibility-list-models-invocation.v4.json
+  compatibility-chat-completion-invocation.v4.json
+  compatibility-stream-chat-completion-invocation.v4.json
+  compatibility-model-page.v4.json
+  compatibility-chat-completion.v4.json
+  compatibility-chat-stream.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -186,6 +198,7 @@ case_files=(
   mission-carrier-status.yaml
   events-directory-stream.yaml
   admin-gateway-carrier-status.yaml
+  compatibility-openai-carrier-projection.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

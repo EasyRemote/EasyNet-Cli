@@ -99,6 +99,8 @@ swift test --package-path sdk/swift
   dropped-event reports, and terminal frames
 - admin/gateway agent/session carriers, lifecycle readiness flags, agent record
   projection, and lifecycle result projection
+- compatibility OpenAI model/chat carriers, canonical model id validation,
+  unary completion projection, and stream envelope projection
 - profile ownership exclusivity
 
 The scaffold in `cases/` names the first shared cases. A profile must add its
