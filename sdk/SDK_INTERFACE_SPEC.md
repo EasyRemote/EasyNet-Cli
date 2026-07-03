@@ -88,6 +88,13 @@ daemon `mission.run`, `mission.track`, and `mission.cancel`, read explicit
 local EAL source files for `RunFile`, and normalize daemon mission results into
 `MissionStatus`. It must not execute EAL, create a second mission runtime, or
 fabricate child receipt refs for receipt-less steps.
+Events directory-stream projection may build complete Invocation carriers for
+daemon `federation.subscribe_directory_v2` and normalize daemon `DirectoryEvent`
+frames into `EventFrame` DTOs with explicit cursor, resume token,
+dropped-event, and terminal state. It must not infer cursor positions from raw
+event timestamps or array indexes, create a second event bus, claim
+device/session/invocation event subscriptions, or promise daemon-side filtering
+until the daemon stream consumes those query fields.
 
 ## Invocation Tuple
 

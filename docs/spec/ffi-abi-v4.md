@@ -12,7 +12,10 @@ typed error JSON, identity projection, receipt projection, Host Binding
 host-stream codec/hash projection, and Publication carrier projection for
 language bindings. It also adds Mission/EAL carrier and status projection so
 language bindings submit daemon-owned orchestration through Runtime Core rather
-than implementing transport facades themselves.
+than implementing transport facades themselves. Events directory-stream carrier
+and frame projection helpers expose the daemon-owned
+`federation.subscribe_directory_v2` stream without creating a second SDK event
+bus.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -486,6 +489,59 @@ child invocation refs, child receipt refs, and output artifact refs. It never
 fabricates receipt anchors for receipt-less steps. Bindings submit returned
 Invocation carriers through Runtime Core; these helpers do not execute EAL,
 start a mission runtime, or replace daemon Mission/EAL semantics.
+
+### 2.13 Events Directory Stream
+
+```c
+int32_t easynet_events_build_directory_subscription_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_events_project_directory_event(
+    EasynetHandle handle,
+    const char* event_json,
+    char** out_event_json
+);
+
+int32_t easynet_events_project_terminal(
+    EasynetHandle handle,
+    const char* terminal_json,
+    char** out_event_json
+);
+
+int32_t easynet_events_project_drop_report(
+    EasynetHandle handle,
+    const char* drop_json,
+    char** out_event_json
+);
+```
+
+Events functions are scoped to a live `EasynetHandle`, matching the SDK object
+graph's `EventClient`. `build_directory_subscription_invocation` returns a
+complete Invocation JSON carrier for daemon `federation.subscribe_directory_v2`.
+It requires explicit caller, callee, subject, descriptor version, nonce, and
+causal context fields. Bindings submit the carrier through Runtime Core stream
+open; this helper does not open the stream itself.
+
+`easynet_events_project_directory_event` accepts a daemon `DirectoryEvent`
+frame plus explicit cursor information, for example
+`{"cursor":{"stream":"directory","sequence":8},"event":{"type":"heartbeat",...}}`,
+and returns a typed Events `EventFrame` with `snapshot`, live delta, heartbeat,
+typed subject/realm refs, cursor, resume token, `occurred_unix_ms`, payload,
+drop count, reconnect hint, terminal flag, and metadata. The daemon raw event
+wire shape does not carry resume state, so bindings must supply a cursor or
+sequence maintained by their stream reader; the SDK does not infer cursor
+positions from array indexes or timestamps.
+
+`easynet_events_project_drop_report` and `easynet_events_project_terminal`
+create first-class non-payload stream lifecycle frames. Dropped-event reports
+must include a non-zero `dropped_count`; terminal frames are explicit final
+states. ABI v4 Events support is `directory_stream_partial`: it stabilizes the
+real daemon directory stream carrier/projection boundary, but does not claim
+device/session/invocation event subscriptions, backend SSE/WebSocket fanout, or
+daemon-side directory filtering semantics.
 
 ## 3. Error Code Table
 

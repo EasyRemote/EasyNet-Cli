@@ -1,0 +1,31 @@
+id: events/directory_stream
+profile: events
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: EventClient builds complete Invocation carriers for the daemon directory stream and projects DirectoryEvent frames, dropped-event reports, and terminal frames into typed EventFrame DTOs with explicit cursors.
+steps:
+  - action: build_directory_subscription_invocation
+    fixture: events-directory-subscription-request.v4.json
+  - action: project_directory_event
+    fixture: event.directory.v4.json
+  - action: project_drop_report
+    fixture: event.directory-drop-report.v4.json
+  - action: project_terminal
+    fixture: event.directory-terminal.v4.json
+expect:
+  result: events_directory_stream_observed
+  request_schema: events-directory-subscription-request.schema.json
+  event_schema: events.schema.json
+  invocation_schema: invocation.schema.json
+  subscription_invocation_fixture: events-directory-subscription-invocation.v4.json
+  event_fixture: event.directory.v4.json
+  drop_report_fixture: event.directory-drop-report.v4.json
+  terminal_fixture: event.directory-terminal.v4.json
+  stream_system_ability: federation.subscribe_directory_v2
+  cursor_required: true
+  dropped_events_are_first_class: true
+  terminal_frame_explicit: true
+  other_event_streams: scaffold_only

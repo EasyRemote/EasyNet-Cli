@@ -60,6 +60,7 @@ schema_files=(
   error.schema.json
   health.schema.json
   events.schema.json
+  events-directory-subscription-request.schema.json
   directory-page.schema.json
   local-resource-ref-request.schema.json
   publication.schema.json
@@ -113,6 +114,10 @@ fixture_files=(
   receipt.summary.v4.json
   runtime.error.v4.json
   event.directory.v4.json
+  event.directory-drop-report.v4.json
+  event.directory-terminal.v4.json
+  events-directory-subscription-request.v4.json
+  events-directory-subscription-invocation.v4.json
   health.ready.v4.json
   host-stream-binding-request.v4.json
   host-stream-binding.v4.json
@@ -161,6 +166,7 @@ case_files=(
   host-binding-codec-hash.yaml
   publication-resource-carriers.yaml
   mission-carrier-status.yaml
+  events-directory-stream.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

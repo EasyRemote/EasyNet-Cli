@@ -1,0 +1,31 @@
+{
+  "profile": "events",
+  "stream": "directory",
+  "kind": "directory.terminal",
+  "event_id": "evt-directory-11",
+  "cursor": {
+    "stream": "directory",
+    "sequence": 11,
+    "token": "directory:11"
+  },
+  "resume_token": "terminal",
+  "occurred_unix_ms": 1783100000123,
+  "occurred_at": "2026-07-03T17:33:20.123Z",
+  "subject_ref": null,
+  "tenant_ref": null,
+  "payload": {
+    "reason": "client_closed"
+  },
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": true,
+  "metadata": {
+    "profile": "events",
+    "stream": "directory",
+    "carrier_owner": "daemon_sdk",
+    "source": "daemon_directory_event",
+    "stream_ability": "federation.subscribe_directory_v2",
+    "lifecycle": "terminal",
+    "reason": "client_closed"
+  }
+}

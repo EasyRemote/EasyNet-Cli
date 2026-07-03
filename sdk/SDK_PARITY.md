@@ -34,7 +34,7 @@ method spelling.
 | host binding | codec/hash partial | codec/hash partial | gap | gap | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | admin + gateway | gap | gap | gap | gap | gap | gap | gap |
-| events | gap | gap | gap | gap | gap | gap | gap |
+| events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
 | surface | gap | gap | gap | gap | gap | gap | gap |
 | compatibility | gap | gap | gap | gap | gap | gap | gap |
 | conformance runner | scaffold | scaffold | gap | gap | gap | gap | gap |
@@ -60,9 +60,13 @@ method spelling.
 - Mission carrier/status guardrails exist for Rust/C ABI; live event streams,
   daemon track/cancel convenience methods, language facades, and profile-ready
   conformance runners remain incomplete.
-- Directory list/subscribe, receipt fetch/verify,
-  admin/gateway, events, surface, compatibility, and convenience
-  wrappers are schema/conformance scaffolds only.
+- Events Directory stream carrier/frame guardrails exist for Rust/C ABI over
+  daemon `federation.subscribe_directory_v2`; device/session/invocation event
+  streams, daemon-side directory filtering, backend SSE/WebSocket fanout, and
+  language facades remain incomplete.
+- Directory list/subscribe convenience methods, receipt fetch/verify,
+  admin/gateway, surface, compatibility, and convenience wrappers are
+  schema/conformance scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

@@ -35,6 +35,7 @@ pub mod ability;
 pub mod axon_bridge;
 pub mod boot;
 pub mod control;
+pub mod events_contract;
 pub mod execution;
 pub mod federation;
 pub mod host_stream_contract;

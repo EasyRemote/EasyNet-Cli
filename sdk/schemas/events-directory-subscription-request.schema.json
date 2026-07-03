@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/events-directory-subscription-request.schema.json",
+  "title": "EventsDirectorySubscriptionRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context"
+  ],
+  "properties": {
+    "caller_ura": {"type": "string", "minLength": 1},
+    "callee_ura": {"type": "string", "minLength": 1},
+    "subject_ura": {"type": "string", "minLength": 1},
+    "descriptor_version": {"type": "string", "minLength": 1},
+    "nonce_base64": {"type": "string", "minLength": 1},
+    "causal_context": {"type": "object"},
+    "realm": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "device_ura": {"type": "string", "minLength": 1},
+    "agent_ura": {"type": "string", "minLength": 1},
+    "resume_cursor": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stream", "sequence"],
+          "properties": {
+            "stream": {"type": "string", "minLength": 1},
+            "sequence": {"type": "integer", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "heartbeat_interval_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 300000
+    },
+    "metadata": {"type": "object"}
+  }
+}

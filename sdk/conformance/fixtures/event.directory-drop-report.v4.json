@@ -1,0 +1,32 @@
+{
+  "profile": "events",
+  "stream": "directory",
+  "kind": "directory.drop_report",
+  "event_id": "evt-directory-10",
+  "cursor": {
+    "stream": "directory",
+    "sequence": 10,
+    "token": "directory:10"
+  },
+  "resume_token": "resnapshot",
+  "occurred_unix_ms": 1783100000123,
+  "occurred_at": "2026-07-03T17:33:20.123Z",
+  "subject_ref": null,
+  "tenant_ref": null,
+  "payload": {
+    "reason": "consumer_lagged",
+    "dropped_count": 4
+  },
+  "dropped_count": 4,
+  "reconnect_after_ms": 1000,
+  "terminal": false,
+  "metadata": {
+    "profile": "events",
+    "stream": "directory",
+    "carrier_owner": "daemon_sdk",
+    "source": "daemon_directory_event",
+    "stream_ability": "federation.subscribe_directory_v2",
+    "lifecycle": "drop_report",
+    "reason": "consumer_lagged"
+  }
+}

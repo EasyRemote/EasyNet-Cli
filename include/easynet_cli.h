@@ -471,6 +471,30 @@ int32_t easynet_mission_project_status(
     char **out_status_json
 );
 
+int32_t easynet_events_build_directory_subscription_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_events_project_directory_event(
+    EasynetHandle handle,
+    const char *event_json,
+    char **out_event_json
+);
+
+int32_t easynet_events_project_terminal(
+    EasynetHandle handle,
+    const char *terminal_json,
+    char **out_event_json
+);
+
+int32_t easynet_events_project_drop_report(
+    EasynetHandle handle,
+    const char *drop_json,
+    char **out_event_json
+);
+
 #ifdef __cplusplus
 }
 #endif

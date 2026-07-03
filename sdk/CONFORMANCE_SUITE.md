@@ -95,6 +95,8 @@ swift test --package-path sdk/swift
 - host binding frame codec and output-hash folding
 - mission run/track/cancel complete Invocation carriers and MissionStatus
   projection
+- events directory subscription carrier, explicit cursor projection,
+  dropped-event reports, and terminal frames
 - profile ownership exclusivity
 
 The scaffold in `cases/` names the first shared cases. A profile must add its

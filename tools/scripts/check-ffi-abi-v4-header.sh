@@ -149,6 +149,10 @@ expected_symbols=(
     easynet_mission_build_track_invocation
     easynet_mission_build_cancel_invocation
     easynet_mission_project_status
+    easynet_events_build_directory_subscription_invocation
+    easynet_events_project_directory_event
+    easynet_events_project_terminal
+    easynet_events_project_drop_report
 )
 
 retired_symbols=(
@@ -327,6 +331,9 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_publication_build_deploy_invocation"
     require_literal "$SPEC" "easynet_mission_build_run_eal_invocation"
     require_literal "$SPEC" "easynet_mission_project_status"
+    require_literal "$SPEC" "easynet_events_build_directory_subscription_invocation"
+    require_literal "$SPEC" "easynet_events_project_directory_event"
+    require_literal "$SPEC" "easynet_events_project_drop_report"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 
