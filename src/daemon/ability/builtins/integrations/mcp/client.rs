@@ -209,7 +209,7 @@ pub fn list_input_schema() -> Value {
 
 pub fn list_description() -> &'static str {
     "Aggregate tools/list across every configured upstream MCP \
-     server (~/.easynet/mcps.json). Returns one server entry \
+     server (~/.easynet/mcp_clients.json). Returns one server entry \
      per configured upstream; an entry with `error` set indicates \
      that specific upstream failed without taking the others down."
 }
@@ -231,7 +231,7 @@ pub fn call_input_schema() -> Value {
 
 pub fn call_description() -> &'static str {
     "Forward a tools/call to a configured upstream MCP server. \
-     `server` is the operator-chosen name from mcps.json; \
+     `server` is the operator-chosen name from mcp_clients.json; \
      `name` is the upstream tool's name (as it appears in that \
      upstream's tools/list). Returns the upstream's tools/call \
      response verbatim (MCP {content, isError} shape)."
