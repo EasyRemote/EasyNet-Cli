@@ -75,6 +75,7 @@ swift test --package-path sdk/swift
 - version and ABI compatibility
 - daemon lifecycle and degraded readiness
 - complete Invocation tuple
+- invocation builder handle state transitions
 - canonical material delegated to Axon
 - prepared-not-submittable
 - pre-signed submit

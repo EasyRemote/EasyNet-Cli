@@ -39,6 +39,7 @@ typedef uint64_t EasynetHandle;
 typedef uint64_t EasynetDaemonHandle;
 typedef uint64_t EasynetInvocationStreamId;
 typedef uint64_t EasynetInvocationBidiId;
+typedef uint64_t EasynetInvocationBuilderId;
 typedef uint64_t EasynetPreparedInvocationId;
 typedef uint64_t EasynetSignedInvocationId;
 
@@ -132,6 +133,93 @@ int32_t easynet_invocation_invoke(
 int32_t easynet_runtime_health(
     EasynetHandle handle,
     char **out_health_json
+);
+
+int32_t easynet_invocation_builder_new(
+    EasynetInvocationBuilderId *out_builder_id
+);
+
+int32_t easynet_invocation_builder_set_caller(
+    EasynetInvocationBuilderId builder_id,
+    const char *caller_ura
+);
+
+int32_t easynet_invocation_builder_set_callee(
+    EasynetInvocationBuilderId builder_id,
+    const char *callee_ura
+);
+
+int32_t easynet_invocation_builder_set_descriptor_ref(
+    EasynetInvocationBuilderId builder_id,
+    const char *descriptor_ref
+);
+
+int32_t easynet_invocation_builder_set_subject(
+    EasynetInvocationBuilderId builder_id,
+    const char *subject_ura
+);
+
+int32_t easynet_invocation_builder_set_nonce_base64(
+    EasynetInvocationBuilderId builder_id,
+    const char *nonce_base64
+);
+
+int32_t easynet_invocation_builder_set_causal_context_json(
+    EasynetInvocationBuilderId builder_id,
+    const char *causal_context_json
+);
+
+int32_t easynet_invocation_builder_set_args_json(
+    EasynetInvocationBuilderId builder_id,
+    const char *args_json
+);
+
+int32_t easynet_invocation_builder_set_arguments_base64(
+    EasynetInvocationBuilderId builder_id,
+    const char *arguments_base64,
+    const char *content_type
+);
+
+int32_t easynet_invocation_builder_set_metadata_json(
+    EasynetInvocationBuilderId builder_id,
+    const char *metadata_json
+);
+
+int32_t easynet_invocation_builder_set_timeout_seconds(
+    EasynetInvocationBuilderId builder_id,
+    uint32_t timeout_seconds
+);
+
+int32_t easynet_invocation_builder_set_idempotency_key(
+    EasynetInvocationBuilderId builder_id,
+    const char *idempotency_key
+);
+
+int32_t easynet_invocation_builder_set_caller_signature_json(
+    EasynetInvocationBuilderId builder_id,
+    const char *signature_json
+);
+
+int32_t easynet_invocation_builder_inspect(
+    EasynetInvocationBuilderId builder_id,
+    char **out_invocation_json
+);
+
+int32_t easynet_invocation_builder_build(
+    EasynetInvocationBuilderId builder_id,
+    char **out_invocation_json
+);
+
+int32_t easynet_invocation_builder_prepare(
+    EasynetHandle handle,
+    EasynetInvocationBuilderId builder_id,
+    const char *options_json,
+    EasynetPreparedInvocationId *out_prepared_id,
+    char **out_prepared_json
+);
+
+int32_t easynet_invocation_builder_free(
+    EasynetInvocationBuilderId builder_id
 );
 
 int32_t easynet_invocation_prepare(

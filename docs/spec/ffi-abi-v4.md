@@ -97,7 +97,35 @@ ABI v4 accepts the v4 descriptor-ref projection. Legacy v3 `ability` JSON is
 only an adapter input where explicitly documented; SDK facades must expose the
 descriptor-ref form.
 
-### 2.5 Prepare, Sign, Submit
+### 2.5 Invocation Builder Handles
+
+```c
+int32_t easynet_invocation_builder_new(EasynetInvocationBuilderId* out_builder_id);
+int32_t easynet_invocation_builder_set_caller(EasynetInvocationBuilderId builder_id, const char* caller_ura);
+int32_t easynet_invocation_builder_set_callee(EasynetInvocationBuilderId builder_id, const char* callee_ura);
+int32_t easynet_invocation_builder_set_descriptor_ref(EasynetInvocationBuilderId builder_id, const char* descriptor_ref);
+int32_t easynet_invocation_builder_set_subject(EasynetInvocationBuilderId builder_id, const char* subject_ura);
+int32_t easynet_invocation_builder_set_nonce_base64(EasynetInvocationBuilderId builder_id, const char* nonce_base64);
+int32_t easynet_invocation_builder_set_causal_context_json(EasynetInvocationBuilderId builder_id, const char* causal_context_json);
+int32_t easynet_invocation_builder_set_args_json(EasynetInvocationBuilderId builder_id, const char* args_json);
+int32_t easynet_invocation_builder_set_arguments_base64(EasynetInvocationBuilderId builder_id, const char* arguments_base64, const char* content_type);
+int32_t easynet_invocation_builder_set_metadata_json(EasynetInvocationBuilderId builder_id, const char* metadata_json);
+int32_t easynet_invocation_builder_set_timeout_seconds(EasynetInvocationBuilderId builder_id, uint32_t timeout_seconds);
+int32_t easynet_invocation_builder_set_idempotency_key(EasynetInvocationBuilderId builder_id, const char* idempotency_key);
+int32_t easynet_invocation_builder_set_caller_signature_json(EasynetInvocationBuilderId builder_id, const char* signature_json);
+int32_t easynet_invocation_builder_inspect(EasynetInvocationBuilderId builder_id, char** out_invocation_json);
+int32_t easynet_invocation_builder_build(EasynetInvocationBuilderId builder_id, char** out_invocation_json);
+int32_t easynet_invocation_builder_prepare(EasynetHandle handle, EasynetInvocationBuilderId builder_id, const char* options_json, EasynetPreparedInvocationId* out_prepared_id, char** out_prepared_json);
+int32_t easynet_invocation_builder_free(EasynetInvocationBuilderId builder_id);
+```
+
+Builder handles are mutable SDK objects. `inspect`, `build`, and `prepare`
+reject incomplete seven-tuples. `inspect` does not consume the builder. `build`
+and successful `builder_prepare` consume the builder handle so tuple fields
+cannot be mutated after the immutable draft or canonical signing material is
+created.
+
+### 2.6 Prepare, Sign, Submit
 
 ```c
 int32_t easynet_invocation_prepare(
@@ -130,7 +158,11 @@ int32_t easynet_signed_invocation_free(EasynetSignedInvocationId signed_id);
 preserves caller signature material; bindings MUST NOT re-sign or mutate tuple
 fields after prepare.
 
-### 2.6 Stream And Bidi Dispatch
+The direct JSON `easynet_invocation_prepare` entry point remains available for
+bindings that already own an Invocation JSON DTO. New language facades should
+prefer builder handles so the public object graph is observable before prepare.
+
+### 2.7 Stream And Bidi Dispatch
 
 ```c
 int32_t easynet_invocation_stream_open(

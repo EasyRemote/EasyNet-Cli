@@ -128,6 +128,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
         "symbols": {
             "daemon_lifecycle": true,
             "invocation_dispatch_v3": true,
+            "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "runtime_health": cfg!(feature = "axon-pb"),
             "prepare_sign_submit": cfg!(feature = "axon-pb")
         },

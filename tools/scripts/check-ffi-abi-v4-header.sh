@@ -61,11 +61,15 @@ require_absent_literal() {
     fi
 }
 
-require_source_literal() {
-    local literal="$1"
-    if ! grep -R -Fq "$literal" src/ffi 2>/dev/null; then
-        record_violation "required Rust FFI literal missing" "$literal"
+require_source_symbol() {
+    local symbol="$1"
+    if grep -R -Fq "fn $symbol(" src/ffi 2>/dev/null; then
+        return 0
     fi
+    if grep -R -Fq "$symbol," src/ffi 2>/dev/null; then
+        return 0
+    fi
+    record_violation "required Rust FFI symbol source missing" "$symbol"
 }
 
 expected_symbols=(
@@ -86,6 +90,23 @@ expected_symbols=(
     easynet_daemon_open_client
     easynet_invocation_invoke
     easynet_runtime_health
+    easynet_invocation_builder_new
+    easynet_invocation_builder_set_caller
+    easynet_invocation_builder_set_callee
+    easynet_invocation_builder_set_descriptor_ref
+    easynet_invocation_builder_set_subject
+    easynet_invocation_builder_set_nonce_base64
+    easynet_invocation_builder_set_causal_context_json
+    easynet_invocation_builder_set_args_json
+    easynet_invocation_builder_set_arguments_base64
+    easynet_invocation_builder_set_metadata_json
+    easynet_invocation_builder_set_timeout_seconds
+    easynet_invocation_builder_set_idempotency_key
+    easynet_invocation_builder_set_caller_signature_json
+    easynet_invocation_builder_inspect
+    easynet_invocation_builder_build
+    easynet_invocation_builder_prepare
+    easynet_invocation_builder_free
     easynet_invocation_prepare
     easynet_invocation_sign_prepared
     easynet_invocation_submit_signed
@@ -201,6 +222,7 @@ if require_file "$HEADER"; then
         "typedef uint64_t EasynetDaemonHandle;" \
         "typedef uint64_t EasynetInvocationStreamId;" \
         "typedef uint64_t EasynetInvocationBidiId;" \
+        "typedef uint64_t EasynetInvocationBuilderId;" \
         "typedef uint64_t EasynetPreparedInvocationId;" \
         "typedef uint64_t EasynetSignedInvocationId;" \
         "typedef void (*EasynetInvocationStreamCallback)(" \
@@ -220,9 +242,8 @@ if require_file "$HEADER"; then
     done
 
     for header_symbol in "${expected_symbols[@]}"; do
-        symbol="fn $header_symbol("
         require_literal "$HEADER" "$header_symbol("
-        require_source_literal "$symbol"
+        require_source_symbol "$header_symbol"
     done
 
     for retired in "${retired_symbols[@]}"; do
@@ -252,6 +273,8 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
     require_literal "$SPEC" "ERR_INVALID_ARG"
     require_literal "$SPEC" "easynet_feature_discovery"
+    require_literal "$SPEC" "easynet_invocation_builder_new"
+    require_literal "$SPEC" "easynet_invocation_builder_prepare"
     require_literal "$SPEC" "easynet_invocation_prepare"
     require_literal "$SPEC" "easynet_invocation_submit_signed"
     require_literal "$SPEC" "easynet_invocation_bidi_open"

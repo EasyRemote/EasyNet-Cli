@@ -61,6 +61,9 @@ pub type InvocationStreamId = u64;
 /// process-local handles, not protocol identifiers.
 pub type InvocationBidiId = u64;
 
+/// Opaque id for a mutable Invocation builder object.
+pub type InvocationBuilderId = u64;
+
 /// Opaque id for a prepared canonical signing-material object.
 pub type PreparedInvocationId = u64;
 
@@ -214,6 +217,296 @@ pub unsafe extern "C" fn easynet_runtime_health(
             return ERR_GENERIC;
         }
         unsafe { *out_health_json = ptr };
+        clear_last_error();
+        EASYNET_OK
+    }
+}
+
+/// Allocate a mutable Invocation builder handle.
+///
+/// The builder starts empty. Bindings must set the complete seven-tuple
+/// fields before inspect/build/prepare.
+///
+/// # Safety
+/// `out_builder_id` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_builder_new(
+    out_builder_id: *mut InvocationBuilderId,
+) -> i32 {
+    if out_builder_id.is_null() {
+        set_last_error("easynet_invocation_builder_new: out_builder_id pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_builder_id = 0 };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        set_last_error(
+            "easynet_invocation_builder_new: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        let id = insert_builder(InvocationBuilderState::default());
+        unsafe { *out_builder_id = id };
+        clear_last_error();
+        EASYNET_OK
+    }
+}
+
+macro_rules! builder_string_setter {
+    ($fn_name:ident, $arg_name:literal, $field:expr) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $fn_name(
+            builder_id: InvocationBuilderId,
+            value: *const c_char,
+        ) -> i32 {
+            #[cfg(not(feature = "axon-pb"))]
+            {
+                let _ = (builder_id, value);
+                set_last_error(format!(
+                    "{}: axon-pb feature is not enabled in this build",
+                    stringify!($fn_name)
+                ));
+                ERR_NOT_IMPLEMENTED
+            }
+
+            #[cfg(feature = "axon-pb")]
+            {
+                set_builder_string_field(builder_id, value, stringify!($fn_name), $arg_name, $field)
+            }
+        }
+    };
+}
+
+builder_string_setter!(
+    easynet_invocation_builder_set_caller,
+    "caller_ura",
+    InvocationBuilderStringField::Caller
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_callee,
+    "callee_ura",
+    InvocationBuilderStringField::Callee
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_descriptor_ref,
+    "descriptor_ref",
+    InvocationBuilderStringField::DescriptorRef
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_subject,
+    "subject_ura",
+    InvocationBuilderStringField::Subject
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_nonce_base64,
+    "nonce_base64",
+    InvocationBuilderStringField::NonceBase64
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_causal_context_json,
+    "causal_context_json",
+    InvocationBuilderStringField::CausalContextJson
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_args_json,
+    "args_json",
+    InvocationBuilderStringField::ArgsJson
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_metadata_json,
+    "metadata_json",
+    InvocationBuilderStringField::MetadataJson
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_idempotency_key,
+    "idempotency_key",
+    InvocationBuilderStringField::IdempotencyKey
+);
+builder_string_setter!(
+    easynet_invocation_builder_set_caller_signature_json,
+    "signature_json",
+    InvocationBuilderStringField::CallerSignatureJson
+);
+
+/// Set raw non-JSON Invocation arguments on a builder.
+///
+/// # Safety
+/// `arguments_base64` and `content_type` must be non-null valid UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_builder_set_arguments_base64(
+    builder_id: InvocationBuilderId,
+    arguments_base64: *const c_char,
+    content_type: *const c_char,
+) -> i32 {
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (builder_id, arguments_base64, content_type);
+        set_last_error(
+            "easynet_invocation_builder_set_arguments_base64: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        let arguments_base64 = match read_builder_arg(
+            "easynet_invocation_builder_set_arguments_base64",
+            "arguments_base64",
+            arguments_base64,
+        ) {
+            Ok(value) => value,
+            Err(code) => return code,
+        };
+        let content_type = match read_builder_arg(
+            "easynet_invocation_builder_set_arguments_base64",
+            "content_type",
+            content_type,
+        ) {
+            Ok(value) => value,
+            Err(code) => return code,
+        };
+        mutate_builder(
+            builder_id,
+            "easynet_invocation_builder_set_arguments_base64",
+            |builder| builder.set_arguments_base64(arguments_base64, content_type),
+        )
+    }
+}
+
+/// Set per-call timeout in seconds on a builder.
+#[no_mangle]
+pub extern "C" fn easynet_invocation_builder_set_timeout_seconds(
+    builder_id: InvocationBuilderId,
+    timeout_seconds: u32,
+) -> i32 {
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (builder_id, timeout_seconds);
+        set_last_error(
+            "easynet_invocation_builder_set_timeout_seconds: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        mutate_builder(
+            builder_id,
+            "easynet_invocation_builder_set_timeout_seconds",
+            |builder| builder.set_timeout_seconds(timeout_seconds),
+        )
+    }
+}
+
+/// Inspect a complete immutable Invocation draft without consuming the builder.
+///
+/// # Safety
+/// `out_invocation_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_builder_inspect(
+    builder_id: InvocationBuilderId,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    builder_output_invocation_json(
+        builder_id,
+        out_invocation_json,
+        false,
+        "easynet_invocation_builder_inspect",
+    )
+}
+
+/// Build a complete Invocation JSON draft and consume the builder on success.
+///
+/// # Safety
+/// `out_invocation_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_builder_build(
+    builder_id: InvocationBuilderId,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    builder_output_invocation_json(
+        builder_id,
+        out_invocation_json,
+        true,
+        "easynet_invocation_builder_build",
+    )
+}
+
+/// Prepare a builder into canonical signing material and consume the builder
+/// on success.
+///
+/// # Safety
+/// - `options_json` may be null; if non-null it must be valid UTF-8 JSON.
+/// - output pointers must be non-null caller-owned pointers.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_builder_prepare(
+    handle: EasynetHandle,
+    builder_id: InvocationBuilderId,
+    options_json: *const c_char,
+    out_prepared_id: *mut PreparedInvocationId,
+    out_prepared_json: *mut *mut c_char,
+) -> i32 {
+    if out_prepared_id.is_null() {
+        set_last_error("easynet_invocation_builder_prepare: out_prepared_id pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    if out_prepared_json.is_null() {
+        set_last_error("easynet_invocation_builder_prepare: out_prepared_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe {
+        *out_prepared_id = 0;
+        *out_prepared_json = std::ptr::null_mut();
+    }
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_builder_prepare: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+    let options_raw = match read_optional_cstr(options_json) {
+        Ok(value) => value,
+        Err(StringError::NotUtf8) => {
+            set_last_error("easynet_invocation_builder_prepare: options_json is not valid UTF-8");
+            return ERR_INVALID_UTF8;
+        }
+        Err(StringError::Null) => None,
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (builder_id, options_raw);
+        set_last_error(
+            "easynet_invocation_builder_prepare: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        prepare_builder_with_axon_pb(builder_id, options_raw, out_prepared_id, out_prepared_json)
+    }
+}
+
+/// Free a mutable builder handle.
+#[no_mangle]
+pub extern "C" fn easynet_invocation_builder_free(builder_id: InvocationBuilderId) -> i32 {
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = builder_id;
+        set_last_error(
+            "easynet_invocation_builder_free: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        remove_builder(builder_id);
         clear_last_error();
         EASYNET_OK
     }
@@ -803,6 +1096,183 @@ fn runtime_health_json(session: &crate::ffi::client::handle::ClientSession) -> s
 }
 
 #[cfg(feature = "axon-pb")]
+fn read_builder_arg<'a>(
+    function: &str,
+    argument: &'static str,
+    ptr: *const c_char,
+) -> Result<&'a str, i32> {
+    match read_cstr(ptr) {
+        Ok(value) => Ok(value),
+        Err(StringError::Null) => {
+            set_last_error(format!("{function}: {argument} pointer is null"));
+            Err(ERR_NULL_POINTER)
+        }
+        Err(StringError::NotUtf8) => {
+            set_last_error(format!("{function}: {argument} is not valid UTF-8"));
+            Err(ERR_INVALID_UTF8)
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn mutate_builder(
+    builder_id: InvocationBuilderId,
+    function: &str,
+    mutate: impl FnOnce(&mut InvocationBuilderState) -> Result<(), InvocationJsonError>,
+) -> i32 {
+    let registry = builder_registry();
+    let mut entries = lock_builder_entries(registry);
+    let Some(builder) = entries.get_mut(&builder_id) else {
+        set_last_error(format!(
+            "{function}: builder handle {builder_id} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    };
+    if let Err(err) = mutate(builder) {
+        set_last_error(format!("{function}: {err}"));
+        return ERR_INVALID_ARG;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn set_builder_string_field(
+    builder_id: InvocationBuilderId,
+    value: *const c_char,
+    function: &str,
+    argument: &'static str,
+    field: InvocationBuilderStringField,
+) -> i32 {
+    let value = match read_builder_arg(function, argument, value) {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    mutate_builder(builder_id, function, |builder| {
+        builder.set_string_field(field, value)
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn builder_output_invocation_json(
+    builder_id: InvocationBuilderId,
+    out_invocation_json: *mut *mut c_char,
+    consume_on_success: bool,
+    function: &str,
+) -> i32 {
+    if out_invocation_json.is_null() {
+        set_last_error(format!("{function}: out_invocation_json pointer is null"));
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_invocation_json = std::ptr::null_mut() };
+
+    let builder = if consume_on_success {
+        match take_builder(builder_id) {
+            Some(builder) => builder,
+            None => {
+                set_last_error(format!(
+                    "{function}: builder handle {builder_id} is not registered"
+                ));
+                return ERR_INVALID_HANDLE;
+            }
+        }
+    } else {
+        match get_builder(builder_id) {
+            Some(builder) => builder,
+            None => {
+                set_last_error(format!(
+                    "{function}: builder handle {builder_id} is not registered"
+                ));
+                return ERR_INVALID_HANDLE;
+            }
+        }
+    };
+    let invocation = match builder.build_invocation() {
+        Ok(invocation) => invocation,
+        Err(err) => {
+            if consume_on_success {
+                restore_builder(builder_id, builder);
+            }
+            set_last_error(format!("{function}: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let ptr = alloc_output_cstring(invocation_json(&invocation).to_string());
+    if ptr.is_null() {
+        if consume_on_success {
+            restore_builder(builder_id, builder);
+        }
+        set_last_error(format!(
+            "{function}: out-of-memory allocating invocation JSON"
+        ));
+        return ERR_GENERIC;
+    }
+    unsafe { *out_invocation_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn prepare_builder_with_axon_pb(
+    builder_id: InvocationBuilderId,
+    options_raw: Option<String>,
+    out_prepared_id: *mut PreparedInvocationId,
+    out_prepared_json: *mut *mut c_char,
+) -> i32 {
+    let builder = match take_builder(builder_id) {
+        Some(builder) => builder,
+        None => {
+            set_last_error(format!(
+                "easynet_invocation_builder_prepare: builder handle {builder_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let options = match PrepareOptionsJson::parse(options_raw.as_deref()) {
+        Ok(options) => options,
+        Err(err) => {
+            restore_builder(builder_id, builder);
+            set_last_error(format!("easynet_invocation_builder_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let invocation = match builder.build_invocation() {
+        Ok(invocation) => invocation,
+        Err(err) => {
+            restore_builder(builder_id, builder);
+            set_last_error(format!("easynet_invocation_builder_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let prepared = match invocation
+        .into_draft()
+        .prepare(options.into_prepare_options())
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            restore_builder(builder_id, builder);
+            set_last_error(format!("easynet_invocation_builder_prepare: {err}"));
+            return ERR_INVALID_ARG;
+        }
+    };
+    let ptr = alloc_output_cstring(prepared_invocation_json(&prepared).to_string());
+    if ptr.is_null() {
+        restore_builder(builder_id, builder);
+        set_last_error(
+            "easynet_invocation_builder_prepare: out-of-memory allocating prepared JSON",
+        );
+        return ERR_GENERIC;
+    }
+    let id = insert_prepared(prepared);
+    unsafe {
+        *out_prepared_id = id;
+        *out_prepared_json = ptr;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
 fn invoke_with_axon_pb(
     session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
     raw: &str,
@@ -1303,6 +1773,12 @@ struct BidiRegistry {
 }
 
 #[cfg(feature = "axon-pb")]
+struct BuilderRegistry {
+    next: AtomicU64,
+    entries: Mutex<std::collections::HashMap<InvocationBuilderId, InvocationBuilderState>>,
+}
+
+#[cfg(feature = "axon-pb")]
 struct PreparedRegistry {
     next: AtomicU64,
     entries:
@@ -1328,6 +1804,15 @@ fn stream_registry() -> &'static StreamRegistry {
 fn bidi_registry() -> &'static BidiRegistry {
     static REGISTRY: OnceLock<BidiRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| BidiRegistry {
+        next: AtomicU64::new(1),
+        entries: Mutex::new(std::collections::HashMap::new()),
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn builder_registry() -> &'static BuilderRegistry {
+    static REGISTRY: OnceLock<BuilderRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| BuilderRegistry {
         next: AtomicU64::new(1),
         entries: Mutex::new(std::collections::HashMap::new()),
     })
@@ -1365,6 +1850,16 @@ fn lock_stream_entries(
 fn lock_bidi_entries(
     registry: &BidiRegistry,
 ) -> MutexGuard<'_, std::collections::HashMap<InvocationBidiId, Arc<ActiveInvocationBidi>>> {
+    registry
+        .entries
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(feature = "axon-pb")]
+fn lock_builder_entries(
+    registry: &BuilderRegistry,
+) -> MutexGuard<'_, std::collections::HashMap<InvocationBuilderId, InvocationBuilderState>> {
     registry
         .entries
         .lock()
@@ -1412,6 +1907,14 @@ fn insert_bidi(session: ActiveInvocationBidi) -> InvocationBidiId {
 }
 
 #[cfg(feature = "axon-pb")]
+fn insert_builder(builder: InvocationBuilderState) -> InvocationBuilderId {
+    let registry = builder_registry();
+    let builder_id = registry.next.fetch_add(1, Ordering::Relaxed);
+    lock_builder_entries(registry).insert(builder_id, builder);
+    builder_id
+}
+
+#[cfg(feature = "axon-pb")]
 fn insert_prepared(prepared: crate::daemon::PreparedInvocation) -> PreparedInvocationId {
     let registry = prepared_registry();
     let prepared_id = registry.next.fetch_add(1, Ordering::Relaxed);
@@ -1425,6 +1928,32 @@ fn insert_signed(signed: crate::daemon::SignedInvocation) -> SignedInvocationId 
     let signed_id = registry.next.fetch_add(1, Ordering::Relaxed);
     lock_signed_entries(registry).insert(signed_id, signed);
     signed_id
+}
+
+#[cfg(feature = "axon-pb")]
+fn get_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderState> {
+    if builder_id == 0 {
+        return None;
+    }
+    lock_builder_entries(builder_registry())
+        .get(&builder_id)
+        .cloned()
+}
+
+#[cfg(feature = "axon-pb")]
+fn take_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderState> {
+    if builder_id == 0 {
+        return None;
+    }
+    lock_builder_entries(builder_registry()).remove(&builder_id)
+}
+
+#[cfg(feature = "axon-pb")]
+fn restore_builder(builder_id: InvocationBuilderId, builder: InvocationBuilderState) {
+    if builder_id == 0 {
+        return;
+    }
+    lock_builder_entries(builder_registry()).insert(builder_id, builder);
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -1461,6 +1990,14 @@ fn remove_signed(signed_id: SignedInvocationId) -> Option<crate::daemon::SignedI
         return None;
     }
     lock_signed_entries(signed_registry()).remove(&signed_id)
+}
+
+#[cfg(feature = "axon-pb")]
+fn remove_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderState> {
+    if builder_id == 0 {
+        return None;
+    }
+    lock_builder_entries(builder_registry()).remove(&builder_id)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1882,6 +2419,192 @@ enum InvocationJsonError {
 
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone)]
+enum InvocationBuilderStringField {
+    Caller,
+    Callee,
+    DescriptorRef,
+    Subject,
+    NonceBase64,
+    CausalContextJson,
+    ArgsJson,
+    MetadataJson,
+    IdempotencyKey,
+    CallerSignatureJson,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+enum InvocationBuilderArgs {
+    Json(serde_json::Value),
+    Raw {
+        bytes: Vec<u8>,
+        content_type: String,
+    },
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Default)]
+struct InvocationBuilderState {
+    caller_ura: Option<String>,
+    callee_ura: Option<String>,
+    descriptor_ref: Option<String>,
+    subject_ura: Option<String>,
+    nonce: Option<[u8; 16]>,
+    causal_context: Option<easynet_axon::pb::axon::v1::CausalContext>,
+    args: Option<InvocationBuilderArgs>,
+    metadata: std::collections::HashMap<String, String>,
+    caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
+    timeout_seconds: Option<i32>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationBuilderState {
+    fn set_string_field(
+        &mut self,
+        field: InvocationBuilderStringField,
+        raw: &str,
+    ) -> Result<(), InvocationJsonError> {
+        match field {
+            InvocationBuilderStringField::Caller => {
+                self.caller_ura = Some(non_empty_builder_string(raw, "caller_ura")?);
+            }
+            InvocationBuilderStringField::Callee => {
+                self.callee_ura = Some(non_empty_builder_string(raw, "callee_ura")?);
+            }
+            InvocationBuilderStringField::DescriptorRef => {
+                self.descriptor_ref = Some(non_empty_builder_string(raw, "descriptor_ref")?);
+            }
+            InvocationBuilderStringField::Subject => {
+                self.subject_ura = Some(non_empty_builder_string(raw, "subject_ura")?);
+            }
+            InvocationBuilderStringField::NonceBase64 => {
+                self.nonce = Some(decode_nonce(non_empty_builder_string(
+                    raw,
+                    "nonce_base64",
+                )?)?);
+            }
+            InvocationBuilderStringField::CausalContextJson => {
+                self.causal_context = Some(parse_causal_context_value(raw)?);
+            }
+            InvocationBuilderStringField::ArgsJson => {
+                let value: serde_json::Value = serde_json::from_str(raw)?;
+                self.args = Some(InvocationBuilderArgs::Json(value));
+            }
+            InvocationBuilderStringField::MetadataJson => {
+                self.metadata = parse_metadata_value(raw)?;
+            }
+            InvocationBuilderStringField::IdempotencyKey => {
+                self.metadata.insert(
+                    "idempotency_key".to_string(),
+                    non_empty_builder_string(raw, "idempotency_key")?,
+                );
+            }
+            InvocationBuilderStringField::CallerSignatureJson => {
+                self.caller_signature =
+                    Some(SignatureMaterialJson::parse(raw)?.into_wire_signature());
+            }
+        }
+        Ok(())
+    }
+
+    fn set_arguments_base64(
+        &mut self,
+        arguments_base64: &str,
+        content_type: &str,
+    ) -> Result<(), InvocationJsonError> {
+        use base64::Engine;
+        let content_type = non_empty_builder_string(content_type, "content_type")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(non_empty_builder_string(arguments_base64, "arguments_base64")?.as_bytes())
+            .map_err(InvocationJsonError::InvalidArgumentsBase64)?;
+        self.args = Some(InvocationBuilderArgs::Raw {
+            bytes,
+            content_type,
+        });
+        Ok(())
+    }
+
+    fn set_timeout_seconds(&mut self, timeout_seconds: u32) -> Result<(), InvocationJsonError> {
+        if timeout_seconds == 0 || timeout_seconds > i32::MAX as u32 {
+            return Err(InvocationJsonError::InvalidTimeoutSeconds);
+        }
+        self.timeout_seconds = Some(timeout_seconds as i32);
+        Ok(())
+    }
+
+    fn build_invocation(&self) -> crate::daemon::Result<crate::daemon::DaemonInvocation> {
+        let caller_ura = self
+            .caller_ura
+            .clone()
+            .ok_or_else(|| missing_builder_field("caller_ura"))?;
+        let callee_ura = self
+            .callee_ura
+            .clone()
+            .ok_or_else(|| missing_builder_field("callee_ura"))?;
+        let descriptor_ref = self
+            .descriptor_ref
+            .clone()
+            .ok_or_else(|| missing_builder_field("descriptor_ref"))?;
+        let subject_ura = self
+            .subject_ura
+            .clone()
+            .ok_or_else(|| missing_builder_field("subject_ura"))?;
+        let nonce = self
+            .nonce
+            .ok_or_else(|| missing_builder_field("nonce_base64"))?;
+        let causal_context = self
+            .causal_context
+            .clone()
+            .ok_or_else(|| missing_builder_field("causal_context"))?;
+        let args = self
+            .args
+            .clone()
+            .ok_or_else(|| missing_builder_field("args or arguments_base64"))?;
+
+        let mut builder = crate::daemon::DaemonInvocation::builder(
+            caller_ura,
+            callee_ura,
+            descriptor_ref,
+            subject_ura,
+        )?
+        .nonce(nonce)
+        .causal_context(causal_context)
+        .metadata(self.metadata.clone());
+        builder = match args {
+            InvocationBuilderArgs::Json(value) => builder.args_json(&value)?,
+            InvocationBuilderArgs::Raw {
+                bytes,
+                content_type,
+            } => builder.args_bytes(bytes, content_type)?,
+        };
+        if let Some(signature) = self.caller_signature.clone() {
+            builder = builder.caller_signature(signature);
+        }
+        if let Some(timeout_seconds) = self.timeout_seconds {
+            builder = builder.timeout_seconds(timeout_seconds)?;
+        }
+        Ok(builder.build_draft()?.into_daemon_invocation())
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn missing_builder_field(field: &'static str) -> crate::daemon::DaemonError {
+    crate::daemon::DaemonError::InvalidInvocation(format!(
+        "builder field `{field}` must be set before inspect, build, or prepare"
+    ))
+}
+
+#[cfg(feature = "axon-pb")]
+fn non_empty_builder_string(raw: &str, field: &'static str) -> Result<String, InvocationJsonError> {
+    let value = raw.trim().to_string();
+    if value.is_empty() {
+        return Err(InvocationJsonError::InvalidString(field));
+    }
+    Ok(value)
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
 struct PrepareOptionsJson {
     expires_in_ms: Option<u64>,
     signer_id: Option<String>,
@@ -1981,6 +2704,14 @@ impl SignatureMaterialJson {
             self.signature,
             self.key_id_hint,
         )
+    }
+
+    fn into_wire_signature(self) -> easynet_axon::pb::axon::v1::CallerSignature {
+        easynet_axon::pb::axon::v1::CallerSignature {
+            algorithm: self.algorithm,
+            signature: self.signature,
+            key_id_hint: self.key_id_hint,
+        }
     }
 }
 
@@ -2271,6 +3002,22 @@ fn parse_metadata(
 }
 
 #[cfg(feature = "axon-pb")]
+fn parse_metadata_value(
+    raw: &str,
+) -> Result<std::collections::HashMap<String, String>, InvocationJsonError> {
+    let value: serde_json::Value = serde_json::from_str(raw)?;
+    let obj = value
+        .as_object()
+        .ok_or(InvocationJsonError::InvalidObject("metadata"))?;
+    let mut envelope = serde_json::Map::new();
+    envelope.insert(
+        "metadata".to_string(),
+        serde_json::Value::Object(obj.clone()),
+    );
+    parse_metadata(&envelope)
+}
+
+#[cfg(feature = "axon-pb")]
 fn parse_caller_signature(
     obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<Option<easynet_axon::pb::axon::v1::CallerSignature>, InvocationJsonError> {
@@ -2412,6 +3159,14 @@ fn parse_causal_context(
 }
 
 #[cfg(feature = "axon-pb")]
+fn parse_causal_context_value(
+    raw: &str,
+) -> Result<easynet_axon::pb::axon::v1::CausalContext, InvocationJsonError> {
+    let value: serde_json::Value = serde_json::from_str(raw)?;
+    parse_causal_context(&value)
+}
+
+#[cfg(feature = "axon-pb")]
 fn decode_hash(
     obj: &serde_json::Map<String, serde_json::Value>,
     field: &'static str,
@@ -2471,6 +3226,73 @@ fn invocation_tuple_json(tuple: &crate::daemon::InvocationTuple) -> serde_json::
         "metadata": tuple.metadata,
         "timeout_seconds": tuple.timeout_seconds,
     })
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_json(invocation: &crate::daemon::DaemonInvocation) -> serde_json::Value {
+    use base64::Engine;
+    let mut obj = serde_json::json!({
+        "caller_ura": invocation.caller_ura(),
+        "callee_ura": invocation.callee_ura(),
+        "descriptor_ref": invocation.descriptor_ref(),
+        "subject_ura": invocation.subject_ura(),
+        "nonce_base64": base64::engine::general_purpose::STANDARD.encode(invocation.nonce()),
+        "causal_context": causal_context_json(invocation.causal_context()),
+        "content_type": invocation.content_type(),
+        "metadata": invocation.metadata(),
+    });
+    if invocation.content_type() == "application/json" {
+        match serde_json::from_slice::<serde_json::Value>(invocation.args()) {
+            Ok(args) => {
+                obj["args"] = args;
+            }
+            Err(_) => {
+                obj["arguments_base64"] = serde_json::json!(
+                    base64::engine::general_purpose::STANDARD.encode(invocation.args())
+                );
+            }
+        }
+    } else {
+        obj["arguments_base64"] =
+            serde_json::json!(base64::engine::general_purpose::STANDARD.encode(invocation.args()));
+    }
+    if let Some(timeout_seconds) = invocation.timeout_seconds() {
+        obj["timeout_seconds"] = serde_json::json!(timeout_seconds);
+    }
+    if let Some(signature) = invocation.caller_signature() {
+        obj["caller_signature"] = serde_json::json!({
+            "algorithm": signature.algorithm.as_str(),
+            "signature_base64": base64::engine::general_purpose::STANDARD.encode(&signature.signature),
+            "key_id_hint": signature.key_id_hint.as_str(),
+        });
+    }
+    obj
+}
+
+#[cfg(feature = "axon-pb")]
+fn causal_context_json(context: &easynet_axon::pb::axon::v1::CausalContext) -> serde_json::Value {
+    use easynet_axon::pb::axon::v1::causal_context::Form;
+    match context.form.as_ref() {
+        Some(Form::None(_)) => serde_json::json!({"form": "none"}),
+        Some(Form::Scalar(receipt)) => serde_json::json!({
+            "form": "scalar",
+            "receipt_hash_hex": hex::encode(&receipt.receipt_hash),
+            "receipt_ura": receipt.receipt_ura,
+        }),
+        Some(Form::List(list)) => serde_json::json!({
+            "form": "list",
+            "prior": list.prior.iter().map(|receipt| serde_json::json!({
+                "receipt_hash_hex": hex::encode(&receipt.receipt_hash),
+                "receipt_ura": receipt.receipt_ura,
+            })).collect::<Vec<_>>(),
+        }),
+        Some(Form::Merkle(root)) => serde_json::json!({
+            "form": "merkle",
+            "root_hex": hex::encode(&root.root),
+            "proof_ura": root.proof_ura,
+        }),
+        None => serde_json::json!({"form": "invalid"}),
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2845,6 +3667,224 @@ mod tests {
             }
         }
         obj.to_string()
+    }
+
+    fn new_builder_handle() -> InvocationBuilderId {
+        let mut builder_id: InvocationBuilderId = 0;
+        let code = unsafe { easynet_invocation_builder_new(&mut builder_id) };
+        assert_eq!(code, EASYNET_OK);
+        assert_ne!(builder_id, 0);
+        builder_id
+    }
+
+    fn set_complete_builder(builder_id: InvocationBuilderId) {
+        let callee_ura = CString::new("easynet:///r/acme/device/dev-a").unwrap();
+        let caller_ura = CString::new("easynet:///r/acme/device/dev-a").unwrap();
+        let descriptor = CString::new(descriptor_ref(
+            "easynet:///r/acme/device/dev-a",
+            "observe.health",
+            "2.4.0",
+        ))
+        .unwrap();
+        let subject = CString::new("easynet:///r/acme/device/dev-a").unwrap();
+        let nonce = CString::new("AQIDBAUGBwgJCgsMDQ4PEA==").unwrap();
+        let causal = CString::new(serde_json::json!({"form": "none"}).to_string()).unwrap();
+        let args = CString::new(serde_json::json!({"probe": true}).to_string()).unwrap();
+        let metadata =
+            CString::new(serde_json::json!({"trace": "sdk-builder"}).to_string()).unwrap();
+        let idempotency_key = CString::new("idem-1").unwrap();
+
+        assert_eq!(
+            unsafe { easynet_invocation_builder_set_caller(builder_id, caller_ura.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_builder_set_callee(builder_id, callee_ura.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe {
+                easynet_invocation_builder_set_descriptor_ref(builder_id, descriptor.as_ptr())
+            },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_builder_set_subject(builder_id, subject.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_builder_set_nonce_base64(builder_id, nonce.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe {
+                easynet_invocation_builder_set_causal_context_json(builder_id, causal.as_ptr())
+            },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_builder_set_args_json(builder_id, args.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_builder_set_metadata_json(builder_id, metadata.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe {
+                easynet_invocation_builder_set_idempotency_key(builder_id, idempotency_key.as_ptr())
+            },
+            EASYNET_OK
+        );
+        assert_eq!(
+            easynet_invocation_builder_set_timeout_seconds(builder_id, 45),
+            EASYNET_OK
+        );
+    }
+
+    #[test]
+    fn invocation_builder_inspect_rejects_incomplete_tuple() {
+        let builder_id = new_builder_handle();
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe { easynet_invocation_builder_inspect(builder_id, &mut out) };
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert!(out.is_null());
+        assert!(get_builder(builder_id).is_some());
+        assert_eq!(easynet_invocation_builder_free(builder_id), EASYNET_OK);
+    }
+
+    #[test]
+    fn invocation_builder_inspect_and_build_preserve_complete_tuple_state() {
+        let builder_id = new_builder_handle();
+        set_complete_builder(builder_id);
+
+        let mut inspect_ptr: *mut c_char = std::ptr::null_mut();
+        let inspect_code =
+            unsafe { easynet_invocation_builder_inspect(builder_id, &mut inspect_ptr) };
+        assert_eq!(inspect_code, EASYNET_OK);
+        assert!(get_builder(builder_id).is_some());
+        let inspect_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(inspect_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(inspect_ptr) };
+        assert_eq!(inspect_json["args"]["probe"], true);
+        assert_eq!(inspect_json["metadata"]["trace"], "sdk-builder");
+        assert_eq!(inspect_json["metadata"]["idempotency_key"], "idem-1");
+        assert_eq!(inspect_json["timeout_seconds"], 45);
+
+        let mut build_ptr: *mut c_char = std::ptr::null_mut();
+        let build_code = unsafe { easynet_invocation_builder_build(builder_id, &mut build_ptr) };
+        assert_eq!(build_code, EASYNET_OK);
+        assert!(get_builder(builder_id).is_none());
+        let build_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(build_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(build_ptr) };
+        assert_eq!(build_json["descriptor_ref"], inspect_json["descriptor_ref"]);
+
+        let mut second_ptr: *mut c_char = std::ptr::dangling_mut();
+        let second_code =
+            unsafe { easynet_invocation_builder_inspect(builder_id, &mut second_ptr) };
+        assert_eq!(second_code, ERR_INVALID_HANDLE);
+        assert!(second_ptr.is_null());
+    }
+
+    #[test]
+    fn invocation_builder_prepare_consumes_builder_on_success() {
+        let (handle, _session) = alloc(test_session());
+        let builder_id = new_builder_handle();
+        set_complete_builder(builder_id);
+        let options = CString::new(
+            serde_json::json!({
+                "expires_in_ms": 60_000,
+                "signer_id": "browser-key"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut prepared_id: PreparedInvocationId = 0;
+        let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+        let code = unsafe {
+            easynet_invocation_builder_prepare(
+                handle,
+                builder_id,
+                options.as_ptr(),
+                &mut prepared_id,
+                &mut prepared_json_ptr,
+            )
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        assert_ne!(prepared_id, 0);
+        assert!(get_builder(builder_id).is_none());
+        assert!(get_prepared(prepared_id).is_some());
+        let prepared_json: serde_json::Value = unsafe {
+            serde_json::from_str(CStr::from_ptr(prepared_json_ptr).to_str().unwrap()).unwrap()
+        };
+        unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+        assert_eq!(
+            prepared_json["signing_material"]["signer_policy"]["signer_id"],
+            "browser-key"
+        );
+        assert_eq!(easynet_prepared_invocation_free(prepared_id), EASYNET_OK);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_builder_prepare_failure_keeps_builder_mutable() {
+        let (handle, _session) = alloc(test_session());
+        let builder_id = new_builder_handle();
+        set_complete_builder(builder_id);
+        let invalid_options = CString::new("{not-json").unwrap();
+        let mut prepared_id: PreparedInvocationId = 999;
+        let mut prepared_json_ptr: *mut c_char = std::ptr::dangling_mut();
+        let code = unsafe {
+            easynet_invocation_builder_prepare(
+                handle,
+                builder_id,
+                invalid_options.as_ptr(),
+                &mut prepared_id,
+                &mut prepared_json_ptr,
+            )
+        };
+
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert_eq!(prepared_id, 0);
+        assert!(prepared_json_ptr.is_null());
+        assert!(get_builder(builder_id).is_some());
+
+        let mut build_ptr: *mut c_char = std::ptr::null_mut();
+        let build_code = unsafe { easynet_invocation_builder_build(builder_id, &mut build_ptr) };
+        assert_eq!(build_code, EASYNET_OK);
+        assert!(get_builder(builder_id).is_none());
+        unsafe { crate::ffi::strings::easynet_string_free(build_ptr) };
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_builder_raw_arguments_round_trip_as_base64() {
+        let builder_id = new_builder_handle();
+        set_complete_builder(builder_id);
+        let payload = CString::new("AQID").unwrap();
+        let content_type = CString::new("application/octet-stream").unwrap();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_builder_set_arguments_base64(
+                    builder_id,
+                    payload.as_ptr(),
+                    content_type.as_ptr(),
+                )
+            },
+            EASYNET_OK
+        );
+
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { easynet_invocation_builder_build(builder_id, &mut out) };
+        assert_eq!(code, EASYNET_OK);
+        let json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(out) };
+        assert_eq!(json["arguments_base64"], "AQID");
+        assert_eq!(json["content_type"], "application/octet-stream");
+        assert!(json.get("args").is_none());
     }
 
     #[test]
