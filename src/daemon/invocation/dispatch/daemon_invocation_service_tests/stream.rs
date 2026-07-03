@@ -221,6 +221,10 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
         }
         other => panic!("expected Heartbeat after idle window; got {other:?}"),
     }
+    assert!(
+        presence.snapshot().is_empty(),
+        "directory heartbeat is stream keepalive only; it must not create product presence"
+    );
 
     drop(svc);
     drop(presence);

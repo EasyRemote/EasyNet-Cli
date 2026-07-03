@@ -870,6 +870,11 @@ mod tests {
     #[derive(Default)]
     struct SilentSessionHub;
 
+    #[derive(Clone)]
+    struct NotifyingSessionHub {
+        opened: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    }
+
     #[tonic::async_trait]
     impl Invocation for SilentSessionHub {
         type InvokeStreamStream = TestInvokeStream;
@@ -909,6 +914,57 @@ mod tests {
             // Hold the bidi open forever without producing any
             // down-stream frames. The session-side idle watchdog
             // must turn this silent hang into a bounded error.
+            Ok(Response::new(
+                Box::pin(stream::pending()) as Self::InvokeBidiStream
+            ))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl Invocation for NotifyingSessionHub {
+        type InvokeStreamStream = TestInvokeStream;
+        type InvokeBidiStream = TestInvokeBidiStream;
+
+        async fn invoke(
+            &self,
+            _request: Request<InvokeRequest>,
+        ) -> Result<Response<InvokeResponse>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_stream(
+            &self,
+            _request: Request<InvokeServerStreamRequest>,
+        ) -> Result<Response<Self::InvokeStreamStream>, Status> {
+            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+        }
+
+        async fn invoke_bidi(
+            &self,
+            request: Request<tonic::Streaming<InvokeBidiUp>>,
+        ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+            let mut up = request.into_inner();
+            let frame0 = up
+                .next()
+                .await
+                .ok_or_else(|| Status::invalid_argument("expected frame 0"))?
+                .map_err(|status| Status::internal(format!("frame 0 recv: {status}")))?;
+            let UpPayload::EnvelopeOpen(_) = frame0.payload.ok_or_else(|| {
+                Status::invalid_argument("frame 0 must carry EnvelopeOpen payload")
+            })?
+            else {
+                return Err(Status::invalid_argument("frame 0 must be EnvelopeOpen"));
+            };
+
+            if let Some(tx) = self
+                .opened
+                .lock()
+                .expect("notifying hub opened mutex")
+                .take()
+            {
+                let _ = tx.send(());
+            }
+
             Ok(Response::new(
                 Box::pin(stream::pending()) as Self::InvokeBidiStream
             ))
@@ -1102,6 +1158,37 @@ mod tests {
                 .expect("silent session hub server");
         });
         (addr, handle)
+    }
+
+    fn reserve_loopback_addr() -> SocketAddr {
+        let listener = StdTcpListener::bind("127.0.0.1:0").expect("reserve loopback addr");
+        let addr = listener.local_addr().expect("reserved addr");
+        drop(listener);
+        addr
+    }
+
+    async fn spawn_notifying_session_hub_on(
+        addr: SocketAddr,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind(addr)
+            .await
+            .expect("bind notifying session hub");
+        let incoming = TcpListenerStream::new(listener);
+        let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
+        let hub = NotifyingSessionHub {
+            opened: Arc::new(std::sync::Mutex::new(Some(opened_tx))),
+        };
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InvocationServer::new(hub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("notifying session hub server");
+        });
+        (opened_rx, handle)
     }
 
     async fn spawn_clean_close_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
@@ -1843,6 +1930,57 @@ mod tests {
         supervisor_handle
             .await
             .expect("supervisor task did not panic");
+    }
+
+    #[tokio::test]
+    async fn supervisor_reconnects_when_hub_starts_after_cli_daemon() {
+        // Regression guard for the product-lifecycle split: a
+        // device-mode daemon may be locally running while the Hub is
+        // down. The session supervisor must keep running after the
+        // first connect-refused admission failure and create
+        // `session.open` automatically when the Hub appears at the
+        // same endpoint.
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let hub_addr = reserve_loopback_addr();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let (probe, admission_rx) = initial_session_admission_probe();
+
+        let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: format!("http://{hub_addr}"),
+            caller_ura: "easynet:///r/realm/device/n1".to_string(),
+            signing_seed: None,
+            hub_ca_pem_path: None,
+            dispatcher,
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: Some(probe),
+            user_trust_sync: None,
+            cancel: cancel_rx,
+        }));
+
+        let initial = tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, admission_rx)
+            .await
+            .expect("initial hub-down admission result is reported")
+            .expect("initial admission channel remains open");
+        let err = initial.expect_err("missing Hub must fail first admission");
+        assert!(
+            err.contains("failed to connect to hub"),
+            "initial failure should be a connect failure, got: {err}"
+        );
+
+        let (opened_rx, hub_handle) = spawn_notifying_session_hub_on(hub_addr).await;
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, opened_rx)
+            .await
+            .expect("supervisor reconnects after Hub starts")
+            .expect("notifying Hub observes session.open");
+
+        let _ = cancel_tx.send(());
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)
+            .await
+            .expect("supervisor exits promptly after cancel")
+            .expect("supervisor task did not panic");
+        hub_handle.abort();
     }
 
     #[tokio::test]
