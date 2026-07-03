@@ -5,7 +5,7 @@ expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 """
 
 from .client import Client, DiscoveryTransport, FeatureSet, Version
-from .errors import ErrorCode, RetryHint, SDKError, is_code
+from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .health import HealthClient, HealthTransport, RuntimeHealth
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "HealthTransport",
     "RetryHint",
     "RuntimeHealth",
+    "RuntimeError",
     "SDKError",
     "Version",
     "is_code",

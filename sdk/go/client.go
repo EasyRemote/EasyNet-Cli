@@ -31,10 +31,11 @@ type Client struct {
 func NewClient(transport DiscoveryTransport) (*Client, error) {
 	if transport == nil {
 		return nil, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "discovery transport is required",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "discovery transport is required",
 		}
 	}
 	return &Client{transport: transport}, nil
@@ -67,46 +68,51 @@ type Version struct {
 func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	if c == nil || c.transport == nil {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "client is not initialized",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "client is not initialized",
 		}
 	}
 	if ctx == nil {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "context is required",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "context is required",
 		}
 	}
 	raw, err := c.transport.FeatureDiscovery(ctx)
 	if err != nil {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorTransport,
-			Stage:   "transport",
-			Retry:   RetrySafe,
-			Message: "feature discovery transport failed",
-			Cause:   err,
+			Code:      ErrorTransport,
+			Stage:     "transport",
+			Retry:     RetrySafe,
+			Retryable: RetryableForHint(RetrySafe),
+			Message:   "feature discovery transport failed",
+			Cause:     err,
 		}
 	}
 	var features FeatureSet
 	if err := json.Unmarshal(raw, &features); err != nil {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "decode",
-			Retry:   RetryNever,
-			Message: fmt.Sprintf("decode feature discovery JSON: %v", err),
-			Cause:   err,
+			Code:      ErrorInvalidArgument,
+			Stage:     "decode",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   fmt.Sprintf("decode feature discovery JSON: %v", err),
+			Cause:     err,
 		}
 	}
 	if features.ABIVersion == 0 {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "decode",
-			Retry:   RetryNever,
-			Message: "abi_version must be non-zero",
+			Code:      ErrorInvalidArgument,
+			Stage:     "decode",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "abi_version must be non-zero",
 		}
 	}
 	if features.Profiles == nil {
@@ -123,10 +129,11 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, error) {
 	if expected == 0 {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "expected ABI version must be non-zero",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "expected ABI version must be non-zero",
 		}
 	}
 	features, err := c.FeatureDiscovery(ctx)
@@ -135,10 +142,11 @@ func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, e
 	}
 	if features.ABIVersion != expected {
 		return FeatureSet{}, &SDKError{
-			Code:    ErrorVersionIncompatible,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: fmt.Sprintf("daemon ABI version %d does not match expected %d", features.ABIVersion, expected),
+			Code:      ErrorVersionIncompatible,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   fmt.Sprintf("daemon ABI version %d does not match expected %d", features.ABIVersion, expected),
 		}
 	}
 	return features, nil

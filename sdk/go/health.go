@@ -31,10 +31,11 @@ type HealthClient struct {
 func NewHealthClient(transport HealthTransport) (*HealthClient, error) {
 	if transport == nil {
 		return nil, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "health transport is required",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "health transport is required",
 		}
 	}
 	return &HealthClient{transport: transport}, nil
@@ -68,28 +69,31 @@ func (h RuntimeHealth) Ready() bool {
 func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error) {
 	if c == nil || c.transport == nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "health client is not initialized",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "health client is not initialized",
 		}
 	}
 	if ctx == nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "sdk",
-			Retry:   RetryNever,
-			Message: "context is required",
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "context is required",
 		}
 	}
 	raw, err := c.transport.RuntimeHealth(ctx)
 	if err != nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:    ErrorTransport,
-			Stage:   "transport",
-			Retry:   RetrySafe,
-			Message: "runtime health transport failed",
-			Cause:   err,
+			Code:      ErrorTransport,
+			Stage:     "transport",
+			Retry:     RetrySafe,
+			Retryable: RetryableForHint(RetrySafe),
+			Message:   "runtime health transport failed",
+			Cause:     err,
 		}
 	}
 	return decodeRuntimeHealth(raw)
@@ -99,11 +103,12 @@ func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:    ErrorInvalidArgument,
-			Stage:   "decode",
-			Retry:   RetryNever,
-			Message: fmt.Sprintf("decode runtime health JSON: %v", err),
-			Cause:   err,
+			Code:      ErrorInvalidArgument,
+			Stage:     "decode",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   fmt.Sprintf("decode runtime health JSON: %v", err),
+			Cause:     err,
 		}
 	}
 	apiReady, err := requiredHealthBool(fields, "api_ready")
@@ -185,9 +190,10 @@ func requiredHealthBool(fields map[string]json.RawMessage, name string) (bool, e
 
 func invalidHealthField(name string, message string) error {
 	return &SDKError{
-		Code:    ErrorInvalidArgument,
-		Stage:   "decode",
-		Retry:   RetryNever,
-		Message: fmt.Sprintf("%s %s", name, message),
+		Code:      ErrorInvalidArgument,
+		Stage:     "decode",
+		Retry:     RetryNever,
+		Retryable: RetryableForHint(RetryNever),
+		Message:   fmt.Sprintf("%s %s", name, message),
 	}
 }

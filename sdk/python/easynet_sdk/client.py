@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol, runtime_checkable
 
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 
 
 @runtime_checkable
@@ -64,6 +64,7 @@ class Client:
                 code=ErrorCode.TRANSPORT,
                 stage="transport",
                 retry=RetryHint.SAFE,
+                retryable=retryable_for_hint(RetryHint.SAFE),
                 message="feature discovery transport failed",
                 cause=exc,
             ) from exc
