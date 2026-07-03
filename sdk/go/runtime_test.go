@@ -43,6 +43,15 @@ func signedForRuntimeTest(t *testing.T) SignedInvocation {
 	return signed
 }
 
+func submittedHandleForRuntimeTest(t *testing.T) InvocationHandle {
+	t.Helper()
+	handle, err := NewInvocationHandleFromJSON([]byte(`{"handle_id": 7, "state": "Submitted", "terminal": false, "events": [{"sequence": 1, "kind": "submitted", "state": "Submitted", "terminal": false}], "result": null}`))
+	if err != nil {
+		t.Fatalf("NewInvocationHandleFromJSON: %v", err)
+	}
+	return handle
+}
+
 func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	var seenDraft map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
@@ -246,5 +255,81 @@ func TestInvocationResultRejectsInconsistentFailure(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
+	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("Marshal draft: %v", err)
+	}
+	var seenAwaitID uint64
+	var seenCancelReason string
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			t.Fatalf("Invoke should not be called")
+			return nil, nil
+		},
+		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+			t.Fatalf("Prepare should not be called")
+			return nil, nil
+		},
+		SubmitSignedFunc: func(ctx context.Context, signedJSON []byte) ([]byte, error) {
+			t.Fatalf("SubmitSigned should not be called")
+			return nil, nil
+		},
+		AwaitHandleFunc: func(ctx context.Context, handleID uint64) ([]byte, error) {
+			seenAwaitID = handleID
+			return []byte(fmt.Sprintf(`{
+				"ok": true,
+				"tuple": %s,
+				"terminal_state": "Completed",
+				"output_content_type": "application/json",
+				"output_base64": "e30=",
+				"output_json": {},
+				"elapsed_ms": 8,
+				"receipt": null,
+				"error": null
+			}`, draftJSON)), nil
+		},
+		CancelHandleFunc: func(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
+			if handleID != 7 {
+				t.Fatalf("handleID = %d, want 7", handleID)
+			}
+			seenCancelReason = reason
+			return []byte(`{"handle_id": 7, "cancelled": true, "state": "Cancelled", "terminal": true}`), nil
+		},
+		HandleEventsFunc: func(ctx context.Context, handleID uint64) ([]byte, error) {
+			if handleID != 7 {
+				t.Fatalf("handleID = %d, want 7", handleID)
+			}
+			return []byte(`{"handle_id": 7, "state": "Cancelled", "terminal": true, "events": [{"sequence": 1, "kind": "submitted", "state": "Submitted", "terminal": false}, {"sequence": 2, "kind": "cancelled", "state": "Cancelled", "terminal": true, "reason": "client stop"}], "result": null}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	handle := submittedHandleForRuntimeTest(t)
+
+	result, err := client.Await(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("Await: %v", err)
+	}
+	if seenAwaitID != 7 || !result.OK() {
+		t.Fatalf("await did not use handle id/result: id=%d result=%#v", seenAwaitID, result)
+	}
+	cancelled, err := client.Cancel(context.Background(), handle, "client stop")
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if !cancelled.Cancelled() || !cancelled.Terminal() || seenCancelReason != "client stop" {
+		t.Fatalf("unexpected cancellation: %#v reason=%q", cancelled, seenCancelReason)
+	}
+	events, err := client.Events(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if !events.Terminal() || len(events.Events()) != 2 || events.Events()[1].Reason() != "client stop" {
+		t.Fatalf("unexpected events: %#v", events.Events())
 	}
 }

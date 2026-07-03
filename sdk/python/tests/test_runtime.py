@@ -22,6 +22,8 @@ class MemoryRuntimeTransport:
         self.seen_options: dict[str, object] | None = None
         self.seen_signed: dict[str, object] | None = None
         self.prepare_error: BaseException | None = None
+        self.seen_await_id = 0
+        self.seen_cancel_reason = ""
         self.handle_json = (
             b'{"handle_id":7,"state":"Submitted","terminal":false,'
             b'"events":[{"sequence":1,"kind":"submitted",'
@@ -58,6 +60,41 @@ class MemoryRuntimeTransport:
     def submit_signed(self, signed_json: bytes) -> bytes:
         self.seen_signed = json.loads(signed_json.decode("utf-8"))
         return self.handle_json
+
+    def await_handle(self, handle_id: int) -> bytes:
+        self.seen_await_id = handle_id
+        draft = self.seen_draft or complete_draft().to_json_dict()
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": draft,
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_base64": "e30=",
+                "output_json": {},
+                "elapsed_ms": 8,
+                "receipt": None,
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+        self.seen_cancel_reason = reason
+        return (
+            b'{"handle_id":7,"cancelled":true,'
+            b'"state":"Cancelled","terminal":true}'
+        )
+
+    def handle_events(self, handle_id: int) -> bytes:
+        return (
+            b'{"handle_id":7,"state":"Cancelled","terminal":true,'
+            b'"events":[{"sequence":1,"kind":"submitted",'
+            b'"state":"Submitted","terminal":false},{"sequence":2,'
+            b'"kind":"cancelled","state":"Cancelled","terminal":true,'
+            b'"reason":"client stop"}],"result":null}'
+        )
 
 
 def complete_draft():
@@ -140,6 +177,24 @@ class RuntimeTests(unittest.TestCase):
             transport.seen_signed["signature"]["signature_base64"],
             "c2lnbmF0dXJl",
         )
+
+    def test_handle_observation_delegates_to_transport(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        handle = client.submit_signed(signed_fixture())
+
+        result = client.await_result(handle)
+        cancelled = client.cancel(handle, "client stop")
+        events = client.events(handle)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(transport.seen_await_id, 7)
+        self.assertTrue(cancelled.cancelled)
+        self.assertTrue(cancelled.terminal)
+        self.assertEqual(transport.seen_cancel_reason, "client stop")
+        self.assertTrue(events.terminal)
+        self.assertEqual(len(events.events), 2)
+        self.assertEqual(events.events[1].reason, "client stop")
 
     def test_prepare_wraps_transport_failure(self) -> None:
         transport = MemoryRuntimeTransport()

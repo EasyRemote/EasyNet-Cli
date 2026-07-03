@@ -12,6 +12,9 @@ type RuntimeTransport interface {
 	Invoke(ctx context.Context, draftJSON []byte) ([]byte, error)
 	Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error)
+	AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error)
+	CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error)
+	HandleEvents(ctx context.Context, handleID uint64) ([]byte, error)
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
@@ -19,6 +22,9 @@ type RuntimeTransportFunc struct {
 	InvokeFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
 	PrepareFunc      func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSignedFunc func(ctx context.Context, signedJSON []byte) ([]byte, error)
+	AwaitHandleFunc  func(ctx context.Context, handleID uint64) ([]byte, error)
+	CancelHandleFunc func(ctx context.Context, handleID uint64, reason string) ([]byte, error)
+	HandleEventsFunc func(ctx context.Context, handleID uint64) ([]byte, error)
 }
 
 func (f RuntimeTransportFunc) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -40,6 +46,27 @@ func (f RuntimeTransportFunc) SubmitSigned(ctx context.Context, signedJSON []byt
 		return nil, invalidRuntimeClient("runtime submit-signed transport function is required")
 	}
 	return f.SubmitSignedFunc(ctx, signedJSON)
+}
+
+func (f RuntimeTransportFunc) AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error) {
+	if f.AwaitHandleFunc == nil {
+		return nil, invalidRuntimeClient("runtime await-handle transport function is required")
+	}
+	return f.AwaitHandleFunc(ctx, handleID)
+}
+
+func (f RuntimeTransportFunc) CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
+	if f.CancelHandleFunc == nil {
+		return nil, invalidRuntimeClient("runtime cancel-handle transport function is required")
+	}
+	return f.CancelHandleFunc(ctx, handleID, reason)
+}
+
+func (f RuntimeTransportFunc) HandleEvents(ctx context.Context, handleID uint64) ([]byte, error) {
+	if f.HandleEventsFunc == nil {
+		return nil, invalidRuntimeClient("runtime handle-events transport function is required")
+	}
+	return f.HandleEventsFunc(ctx, handleID)
 }
 
 // RuntimeClient is the Runtime Core invocation facade.
@@ -145,6 +172,72 @@ func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocatio
 			return InvocationHandle{}, sdkErr
 		}
 		return InvocationHandle{}, transportRuntimeError("submit signed transport failed", err)
+	}
+	return NewInvocationHandleFromJSON(raw)
+}
+
+// Await waits for a submitted invocation handle to reach a terminal result.
+func (c *RuntimeClient) Await(ctx context.Context, handle InvocationHandle) (InvocationResult, error) {
+	if c == nil || c.transport == nil {
+		return InvocationResult{}, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return InvocationResult{}, invalidRuntimeClient("context is required")
+	}
+	if handle.HandleID() == 0 {
+		return InvocationResult{}, invalidRuntimePayload("handle_id is required", nil)
+	}
+	raw, err := c.transport.AwaitHandle(ctx, handle.HandleID())
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return InvocationResult{}, sdkErr
+		}
+		return InvocationResult{}, transportRuntimeError("await handle transport failed", err)
+	}
+	return NewInvocationResultFromJSON(raw)
+}
+
+// Cancel requests terminal cancellation for a submitted invocation handle.
+func (c *RuntimeClient) Cancel(ctx context.Context, handle InvocationHandle, reason string) (InvocationCancel, error) {
+	if c == nil || c.transport == nil {
+		return InvocationCancel{}, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return InvocationCancel{}, invalidRuntimeClient("context is required")
+	}
+	if handle.HandleID() == 0 {
+		return InvocationCancel{}, invalidRuntimePayload("handle_id is required", nil)
+	}
+	raw, err := c.transport.CancelHandle(ctx, handle.HandleID(), reason)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return InvocationCancel{}, sdkErr
+		}
+		return InvocationCancel{}, transportRuntimeError("cancel handle transport failed", err)
+	}
+	return NewInvocationCancelFromJSON(raw)
+}
+
+// Events returns the current event snapshot for a submitted invocation handle.
+func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (InvocationHandle, error) {
+	if c == nil || c.transport == nil {
+		return InvocationHandle{}, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return InvocationHandle{}, invalidRuntimeClient("context is required")
+	}
+	if handle.HandleID() == 0 {
+		return InvocationHandle{}, invalidRuntimePayload("handle_id is required", nil)
+	}
+	raw, err := c.transport.HandleEvents(ctx, handle.HandleID())
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return InvocationHandle{}, sdkErr
+		}
+		return InvocationHandle{}, transportRuntimeError("handle events transport failed", err)
 	}
 	return NewInvocationHandleFromJSON(raw)
 }
@@ -316,6 +409,55 @@ func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {
 		stage:     dto.Stage,
 		message:   dto.Message,
 		retryable: dto.Retryable,
+	}, nil
+}
+
+// InvocationCancel is the daemon cancellation outcome for a submitted handle.
+type InvocationCancel struct {
+	handleID  uint64
+	cancelled bool
+	state     string
+	terminal  bool
+}
+
+func (c InvocationCancel) HandleID() uint64 {
+	return c.handleID
+}
+
+func (c InvocationCancel) Cancelled() bool {
+	return c.cancelled
+}
+
+func (c InvocationCancel) State() string {
+	return c.state
+}
+
+func (c InvocationCancel) Terminal() bool {
+	return c.terminal
+}
+
+// NewInvocationCancelFromJSON decodes the daemon cancellation outcome projection.
+func NewInvocationCancelFromJSON(raw []byte) (InvocationCancel, error) {
+	var dto struct {
+		HandleID  uint64 `json:"handle_id"`
+		Cancelled bool   `json:"cancelled"`
+		State     string `json:"state"`
+		Terminal  bool   `json:"terminal"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return InvocationCancel{}, invalidRuntimePayload(fmt.Sprintf("decode invocation cancel JSON: %v", err), err)
+	}
+	if dto.HandleID == 0 {
+		return InvocationCancel{}, invalidRuntimePayload("handle_id is required", nil)
+	}
+	if dto.State == "" {
+		return InvocationCancel{}, invalidRuntimePayload("state is required", nil)
+	}
+	return InvocationCancel{
+		handleID:  dto.HandleID,
+		cancelled: dto.Cancelled,
+		state:     dto.State,
+		terminal:  dto.Terminal,
 	}, nil
 }
 

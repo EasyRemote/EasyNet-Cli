@@ -11,6 +11,7 @@ from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
 from .runtime import (
     InvocationHandle,
     InvocationHandleEvent,
+    InvocationCancel,
     InvocationFailure,
     InvocationResult,
     PrepareOptions,
@@ -35,6 +36,7 @@ __all__ = [
     "InvocationDraft",
     "InvocationHandle",
     "InvocationHandleEvent",
+    "InvocationCancel",
     "InvocationFailure",
     "InvocationResult",
     "InvocationSignature",

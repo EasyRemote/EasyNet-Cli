@@ -24,6 +24,15 @@ class RuntimeTransport(Protocol):
     def submit_signed(self, signed_json: bytes) -> bytes:
         ...
 
+    def await_handle(self, handle_id: int) -> bytes:
+        ...
+
+    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+        ...
+
+    def handle_events(self, handle_id: int) -> bytes:
+        ...
+
 
 @dataclass(frozen=True)
 class PrepareOptions:
@@ -171,6 +180,32 @@ class InvocationResult:
         )
 
 
+@dataclass(frozen=True)
+class InvocationCancel:
+    """Daemon cancellation outcome for a submitted handle."""
+
+    handle_id: int
+    cancelled: bool
+    state: str
+    terminal: bool
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "InvocationCancel":
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            decoded = json.loads(text)
+        except Exception as exc:
+            raise _invalid_runtime(f"decode invocation cancel JSON: {exc}", exc) from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_runtime("invocation cancel JSON must be an object")
+        return cls(
+            handle_id=_required_positive_int(decoded, "handle_id"),
+            cancelled=_required_bool(decoded, "cancelled"),
+            state=_required_string(decoded, "state"),
+            terminal=_required_bool(decoded, "terminal"),
+        )
+
+
 class RuntimeClient:
     """Runtime Core invocation facade over an application transport."""
 
@@ -214,6 +249,41 @@ class RuntimeClient:
         except Exception as exc:
             raise _transport_error("submit signed transport failed", exc) from exc
         return InvocationHandle.from_json(raw)
+
+    def await_result(self, handle: InvocationHandle) -> InvocationResult:
+        _require_handle(handle)
+        try:
+            raw = self._transport.await_handle(handle.handle_id)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("await handle transport failed", exc) from exc
+        return InvocationResult.from_json(raw)
+
+    def cancel(self, handle: InvocationHandle, reason: str = "") -> InvocationCancel:
+        _require_handle(handle)
+        try:
+            raw = self._transport.cancel_handle(handle.handle_id, reason)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("cancel handle transport failed", exc) from exc
+        return InvocationCancel.from_json(raw)
+
+    def events(self, handle: InvocationHandle) -> InvocationHandle:
+        _require_handle(handle)
+        try:
+            raw = self._transport.handle_events(handle.handle_id)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("handle events transport failed", exc) from exc
+        return InvocationHandle.from_json(raw)
+
+
+def _require_handle(handle: InvocationHandle) -> None:
+    if handle.handle_id <= 0:
+        raise _invalid_runtime("handle_id is required")
 
 
 def _handle_event(value: object) -> InvocationHandleEvent:
