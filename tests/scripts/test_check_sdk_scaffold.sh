@@ -13,6 +13,8 @@ make_sandbox() {
   local dir="$1"
   mkdir -p "$dir"
   cp -R "$ROOT/sdk" "$dir/sdk"
+  mkdir -p "$dir/src/bin"
+  cp "$ROOT/src/bin/sdk-conformance-runner.rs" "$dir/src/bin/sdk-conformance-runner.rs"
   cp "$ROOT/PROJECT_STRUCTURE.md" "$dir/PROJECT_STRUCTURE.md"
 }
 

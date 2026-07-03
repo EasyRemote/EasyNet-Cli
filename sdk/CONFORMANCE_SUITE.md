@@ -55,6 +55,8 @@ A language runner must:
 ## Minimum Commands
 
 ```text
+cargo run --bin sdk-conformance-runner -- --language rust --format jsonl
+cargo run --bin sdk-conformance-runner -- --language c_abi --format jsonl
 cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh

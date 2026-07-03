@@ -2,10 +2,15 @@
 
 This directory defines the runner contract for language SDK conformance.
 
-The runner is intentionally not implemented as a single language harness yet.
-Each SDK facade may provide its own adapter, but it must load the same cases
-from `../cases`, the same fixtures from `../fixtures`, and emit equivalent
-machine-readable results.
+The repository ships a manifest runner as `cargo run --bin
+sdk-conformance-runner`. It loads the shared cases from `../cases`, validates
+fixture and schema references, and emits machine-readable result records. This
+is the common integrity gate for every language adapter; it does not by itself
+claim that a language facade executed every action.
+
+Each SDK facade may provide its own action adapter, but it must consume the
+same cases from `../cases`, the same fixtures from `../fixtures`, and emit
+equivalent machine-readable results.
 
 Minimum result record:
 

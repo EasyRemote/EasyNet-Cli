@@ -37,7 +37,7 @@ method spelling.
 | events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
-| conformance runner | scaffold | scaffold | gap | gap | gap | gap | gap |
+| conformance runner | manifest partial | manifest partial | gap | gap | gap | gap | gap |
 
 ## Known Gaps
 
@@ -58,11 +58,11 @@ method spelling.
   exist for Rust/C ABI; daemon list/show/enable/disable read models, execution
   wrappers, and language facades remain incomplete.
 - Host Binding codec/hash guardrails exist for Rust/C ABI; product host
-  lifecycle, language facades, and profile-ready conformance runners remain
-  incomplete.
+  lifecycle, language facades, and behavior-executing profile conformance
+  adapters remain incomplete.
 - Mission carrier/status guardrails exist for Rust/C ABI; live event streams,
-  daemon track/cancel convenience methods, language facades, and profile-ready
-  conformance runners remain incomplete.
+  daemon track/cancel convenience methods, language facades, and
+  behavior-executing profile conformance adapters remain incomplete.
 - Events Directory stream carrier/frame guardrails exist for Rust/C ABI over
   daemon `federation.subscribe_directory_v2`; device/session/invocation event
   streams, daemon-side directory filtering, backend SSE/WebSocket fanout, and

@@ -40,6 +40,7 @@ fi
 
 for path in \
   PROJECT_STRUCTURE.md \
+  src/bin/sdk-conformance-runner.rs \
   sdk/README.md \
   sdk/SDK_INTERFACE_SPEC.md \
   sdk/SDK_PARITY.md \
@@ -267,11 +268,13 @@ for case_file in "${case_files[@]}"; do
 done
 
 require_file sdk/conformance/runner/README.md
+require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
+require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
 require_literal sdk/SDK_INTERFACE_SPEC.md "PreparedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "SignedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "No public object in this graph may expose raw Axon"
 require_literal sdk/SDK_PARITY.md "No current language is"
-require_literal sdk/CONFORMANCE_SUITE.md "Runner Contract"
+require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 
 if [[ "${#failures[@]}" -eq 0 ]]; then
   printf 'check-sdk-scaffold ok\n'

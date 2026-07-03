@@ -119,6 +119,10 @@ path = "src/bin/real-user-smoke.rs"
 name = "real-publish-smoke"
 path = "src/bin/real-publish-smoke.rs"
 
+[[bin]]
+name = "sdk-conformance-runner"
+path = "src/bin/sdk-conformance-runner.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
