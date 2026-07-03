@@ -232,13 +232,38 @@ async fn spawn_user_trust_resync(
     Some(AbortOnDrop(tokio::spawn(async move {
         let mut resync_client = InvocationClient::new(resync_channel);
         loop {
-            tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
+            tokio::time::sleep(next_user_trust_resync_interval(&sync)).await;
             sync_realm_hub_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
                 .await;
             sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
                 .await;
         }
     })))
+}
+
+fn next_user_trust_resync_interval(sync: &UserTrustSync) -> Duration {
+    user_trust_resync_interval(paired_user_trust_missing(sync))
+}
+
+fn user_trust_resync_interval(user_trust_missing: bool) -> Duration {
+    if user_trust_missing {
+        USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL
+    } else {
+        USER_TRUST_STEADY_RESYNC_INTERVAL
+    }
+}
+
+fn paired_user_trust_missing(sync: &UserTrustSync) -> bool {
+    let Ok(creds) = crate::daemon::persistence::config::load_credentials() else {
+        return false;
+    };
+    let Ok(user_ura) = creds.user_ura() else {
+        return false;
+    };
+    if creds.realm.trim() != sync.daemon_realm {
+        return false;
+    }
+    sync.cell.snapshot().lookup(&user_ura).is_none()
 }
 
 async fn run_hosted_agent_advertise_prelude(
@@ -768,7 +793,8 @@ pub struct UserTrustSync {
     pub cell: crate::daemon::trust::cell::SharedTrustAnchor,
 }
 
-const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
+const USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL: Duration = Duration::from_secs(2);
+const USER_TRUST_STEADY_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
 
 async fn sync_realm_hub_trust_prelude(
     client: &mut InvocationClient<Channel>,
@@ -1092,7 +1118,10 @@ pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::resolved_public_keys;
+    use super::{
+        resolved_public_keys, user_trust_resync_interval, USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL,
+        USER_TRUST_STEADY_RESYNC_INTERVAL,
+    };
 
     #[test]
     fn resolved_public_keys_prefers_array_response() {
@@ -1119,5 +1148,21 @@ mod tests {
         assert!(resolved_public_keys(br#"{"public_keys_b64":[]}"#).is_empty());
         assert!(resolved_public_keys(br#"not-json"#).is_empty());
         assert!(resolved_public_keys(br#"{ "public_key_b64": " " }"#).is_empty());
+    }
+
+    #[test]
+    fn user_trust_resync_uses_bootstrap_interval_until_key_is_present() {
+        assert_eq!(
+            user_trust_resync_interval(true),
+            USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL
+        );
+    }
+
+    #[test]
+    fn user_trust_resync_returns_to_steady_interval_after_key_is_present() {
+        assert_eq!(
+            user_trust_resync_interval(false),
+            USER_TRUST_STEADY_RESYNC_INTERVAL
+        );
     }
 }
