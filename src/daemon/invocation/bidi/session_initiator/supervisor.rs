@@ -130,6 +130,7 @@ pub enum DeviceSessionPhase {
 pub enum PreludeStep {
     Join,
     OwnerProjection,
+    TrustBootstrap,
     Advertise,
 }
 
@@ -142,6 +143,9 @@ impl DeviceSessionPhase {
             DeviceSessionPhase::Preluding(PreludeStep::Join) => "preluding_join",
             DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection) => {
                 "preluding_owner_projection"
+            }
+            DeviceSessionPhase::Preluding(PreludeStep::TrustBootstrap) => {
+                "preluding_trust_bootstrap"
             }
             DeviceSessionPhase::Preluding(PreludeStep::Advertise) => "preluding_advertise",
             DeviceSessionPhase::Live => "live",

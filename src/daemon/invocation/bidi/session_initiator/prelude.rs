@@ -96,14 +96,19 @@ pub(super) async fn run_session_preludes(
     )
     .await?;
 
-    let user_trust_resync = spawn_user_trust_resync(
+    let user_trust_resync = run_user_trust_bootstrap_and_spawn_resync(
         client,
+        phase,
         channels.user_trust_resync,
         caller_ura,
         signing_seed,
         user_trust_sync,
     )
-    .await;
+    .await
+    .map_err(|source| SessionError::UserTrustBootstrapFailed {
+        endpoint: hub_endpoint.to_string(),
+        source,
+    })?;
     let federation_heartbeat = spawn_federation_heartbeat(
         channels.federation_heartbeat,
         caller_ura.to_string(),
@@ -217,53 +222,49 @@ async fn run_owner_projection_prelude(
     Ok(())
 }
 
-async fn spawn_user_trust_resync(
+async fn run_user_trust_bootstrap_and_spawn_resync(
     client: &mut InvocationClient<Channel>,
+    phase: &mut SessionPhaseTracker,
     resync_channel: Channel,
     caller_ura: &str,
     signing_seed: Option<SessionSigningSeed>,
     user_trust_sync: Option<&UserTrustSync>,
-) -> Option<AbortOnDrop> {
-    let sync = user_trust_sync?;
+) -> Result<Option<AbortOnDrop>, UserTrustBootstrapError> {
+    let Some(sync) = user_trust_sync else {
+        return Ok(None);
+    };
+    phase.transition(
+        DeviceSessionPhase::Preluding(PreludeStep::TrustBootstrap),
+        "owner_projection_published",
+    );
     sync_realm_hub_trust_prelude(client, caller_ura, signing_seed, sync).await;
-    sync_paired_user_trust_prelude(client, caller_ura, signing_seed, sync).await;
+    let outcome = sync_paired_user_trust_prelude(client, caller_ura, signing_seed, sync).await?;
+    log_user_trust_bootstrap_outcome(&outcome);
     let sync = sync.clone();
     let resync_caller = caller_ura.to_string();
-    Some(AbortOnDrop(tokio::spawn(async move {
+    Ok(Some(AbortOnDrop(tokio::spawn(async move {
         let mut resync_client = InvocationClient::new(resync_channel);
         loop {
-            tokio::time::sleep(next_user_trust_resync_interval(&sync)).await;
+            tokio::time::sleep(USER_TRUST_RESYNC_INTERVAL).await;
             sync_realm_hub_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
                 .await;
-            sync_paired_user_trust_prelude(&mut resync_client, &resync_caller, signing_seed, &sync)
-                .await;
+            if let Err(err) = sync_paired_user_trust_prelude(
+                &mut resync_client,
+                &resync_caller,
+                signing_seed,
+                &sync,
+            )
+            .await
+            {
+                let error = err.to_string();
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_resync_failed,
+                    error = error,
+                );
+            }
         }
-    })))
-}
-
-fn next_user_trust_resync_interval(sync: &UserTrustSync) -> Duration {
-    user_trust_resync_interval(paired_user_trust_missing(sync))
-}
-
-fn user_trust_resync_interval(user_trust_missing: bool) -> Duration {
-    if user_trust_missing {
-        USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL
-    } else {
-        USER_TRUST_STEADY_RESYNC_INTERVAL
-    }
-}
-
-fn paired_user_trust_missing(sync: &UserTrustSync) -> bool {
-    let Ok(creds) = crate::daemon::persistence::config::load_credentials() else {
-        return false;
-    };
-    let Ok(user_ura) = creds.user_ura() else {
-        return false;
-    };
-    if creds.realm.trim() != sync.daemon_realm {
-        return false;
-    }
-    sync.cell.snapshot().lookup(&user_ura).is_none()
+    }))))
 }
 
 async fn run_hosted_agent_advertise_prelude(
@@ -793,8 +794,62 @@ pub struct UserTrustSync {
     pub cell: crate::daemon::trust::cell::SharedTrustAnchor,
 }
 
-const USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL: Duration = Duration::from_secs(2);
-const USER_TRUST_STEADY_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
+#[derive(Debug, thiserror::Error)]
+pub enum UserTrustBootstrapError {
+    #[error("paired user `{user_ura}` has no public key registered at the Hub")]
+    MissingAtHub { user_ura: String },
+
+    #[error("Hub resolve_key for paired user `{user_ura}` failed: {status}")]
+    ResolveFailed {
+        user_ura: String,
+        status: tonic::Status,
+    },
+
+    #[error("importing Hub-attested paired user key for `{user_ura}` failed: {status}")]
+    ImportFailed {
+        user_ura: String,
+        status: tonic::Status,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UserTrustBootstrapOutcome {
+    NotRequired,
+    AlreadyTrusted { user_ura: String },
+    Imported { user_ura: String, key_count: usize },
+}
+
+const USER_TRUST_RESYNC_INTERVAL: Duration = Duration::from_secs(60);
+
+fn log_user_trust_bootstrap_outcome(outcome: &UserTrustBootstrapOutcome) {
+    match outcome {
+        UserTrustBootstrapOutcome::NotRequired => {
+            crate::op_event!(
+                component = session,
+                kind = user_trust_bootstrap_not_required,
+            );
+        }
+        UserTrustBootstrapOutcome::AlreadyTrusted { user_ura } => {
+            crate::op_event!(
+                component = session,
+                kind = user_trust_bootstrap_already_trusted,
+                user_ura = user_ura,
+            );
+        }
+        UserTrustBootstrapOutcome::Imported {
+            user_ura,
+            key_count,
+        } => {
+            let key_count = *key_count as u64;
+            crate::op_event!(
+                component = session,
+                kind = user_trust_bootstrap_imported,
+                user_ura = user_ura,
+                key_count = key_count,
+            );
+        }
+    }
+}
 
 async fn sync_realm_hub_trust_prelude(
     client: &mut InvocationClient<Channel>,
@@ -900,21 +955,31 @@ async fn sync_paired_user_trust_prelude(
     caller_ura: &str,
     signing_seed: Option<SessionSigningSeed>,
     sync: &UserTrustSync,
-) {
+) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {
     let Ok(creds) = crate::daemon::persistence::config::load_credentials() else {
-        return;
+        return Ok(UserTrustBootstrapOutcome::NotRequired);
     };
     let Ok(user_ura) = creds.user_ura() else {
-        return;
+        return Ok(UserTrustBootstrapOutcome::NotRequired);
     };
     let realm = creds.realm.trim();
     if realm != sync.daemon_realm {
-        return;
+        return Ok(UserTrustBootstrapOutcome::NotRequired);
+    }
+    if paired_user_trust_present(sync, &user_ura) {
+        return Ok(UserTrustBootstrapOutcome::AlreadyTrusted { user_ura });
     }
 
     let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
-        Ok(v) => v,
-        Err(_) => return,
+        Ok(value) => value,
+        Err(err) => {
+            return Err(UserTrustBootstrapError::ResolveFailed {
+                user_ura,
+                status: tonic::Status::internal(format!(
+                    "federation.resolve_key user args encode failed: {err}"
+                )),
+            });
+        }
     };
     let request = match signed_prelude_request(
         caller_ura,
@@ -924,7 +989,9 @@ async fn sync_paired_user_trust_prelude(
         signing_seed,
     ) {
         Ok(req) => req,
-        Err(_) => return,
+        Err(status) => {
+            return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
+        }
     };
     let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
         Ok(resp) => resp,
@@ -938,7 +1005,7 @@ async fn sync_paired_user_trust_prelude(
                 error = msg,
                 user_ura = user_ura,
             );
-            return;
+            return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
         }
     };
 
@@ -950,9 +1017,11 @@ async fn sync_paired_user_trust_prelude(
             user_ura = user_ura,
             message = "hub returned no user keys — user key not registered at hub yet",
         );
-        return;
+        return Err(UserTrustBootstrapError::MissingAtHub { user_ura });
     }
 
+    let mut accepted_key_count = 0_usize;
+    let mut last_import_error = None;
     for pubkey_b64 in pubkeys {
         let register_args = match serde_json::to_vec(&serde_json::json!({
             "agent_ura": user_ura,
@@ -969,6 +1038,7 @@ async fn sync_paired_user_trust_prelude(
             &sync.cell,
         ) {
             Ok(_) => {
+                accepted_key_count += 1;
                 crate::op_event!(
                     component = session,
                     kind = user_trust_sync_ok,
@@ -976,6 +1046,7 @@ async fn sync_paired_user_trust_prelude(
                 );
             }
             Err(status) if status.code() == tonic::Code::AlreadyExists => {
+                accepted_key_count += 1;
                 crate::op_event!(
                     component = session,
                     kind = user_trust_sync_already_present,
@@ -992,9 +1063,24 @@ async fn sync_paired_user_trust_prelude(
                     error = msg,
                     user_ura = user_ura,
                 );
+                last_import_error = Some(status);
             }
         }
     }
+    if paired_user_trust_present(sync, &user_ura) {
+        return Ok(UserTrustBootstrapOutcome::Imported {
+            user_ura,
+            key_count: accepted_key_count,
+        });
+    }
+    Err(UserTrustBootstrapError::ImportFailed {
+        user_ura,
+        status: last_import_error.unwrap_or_else(|| {
+            tonic::Status::failed_precondition(
+                "federation.resolve_key returned no importable paired user keys",
+            )
+        }),
+    })
 }
 
 fn resolved_public_keys(result: &[u8]) -> Vec<String> {
@@ -1024,6 +1110,10 @@ fn resolved_public_keys(result: &[u8]) -> Vec<String> {
         }
     }
     pubkeys
+}
+
+fn paired_user_trust_present(sync: &UserTrustSync, user_ura: &str) -> bool {
+    !sync.cell.snapshot().lookup_user_all(user_ura).is_empty()
 }
 
 pub(super) async fn invoke_prelude_unary(
@@ -1118,10 +1208,10 @@ pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        resolved_public_keys, user_trust_resync_interval, USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL,
-        USER_TRUST_STEADY_RESYNC_INTERVAL,
-    };
+    use super::{paired_user_trust_present, resolved_public_keys, UserTrustSync};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::cell::SharedTrustAnchor;
+    use std::sync::Arc;
 
     #[test]
     fn resolved_public_keys_prefers_array_response() {
@@ -1150,19 +1240,34 @@ mod tests {
         assert!(resolved_public_keys(br#"{ "public_key_b64": " " }"#).is_empty());
     }
 
-    #[test]
-    fn user_trust_resync_uses_bootstrap_interval_until_key_is_present() {
-        assert_eq!(
-            user_trust_resync_interval(true),
-            USER_TRUST_BOOTSTRAP_RESYNC_INTERVAL
-        );
+    fn user_trust_sync_with_key(user_ura: &str) -> UserTrustSync {
+        UserTrustSync {
+            daemon_realm: "realm".to_string(),
+            trust_anchor_path: std::path::PathBuf::from("/tmp/easynet-test-realm-trust.toml"),
+            cell: SharedTrustAnchor::new(Arc::new(
+                RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                    agent_ura: user_ura.to_string(),
+                    public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                    role: TrustedAgentRole::User,
+                    added_at_unix_ms: 1_700_000_000_000,
+                    origin_realm: None,
+                    hub_endpoint: None,
+                    tls_ca_pem_path: None,
+                }])
+                .expect("user anchor"),
+            )),
+        }
     }
 
     #[test]
-    fn user_trust_resync_returns_to_steady_interval_after_key_is_present() {
-        assert_eq!(
-            user_trust_resync_interval(false),
-            USER_TRUST_STEADY_RESYNC_INTERVAL
-        );
+    fn paired_user_trust_present_reads_user_key_bucket() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let sync = user_trust_sync_with_key(user_ura);
+
+        assert!(paired_user_trust_present(&sync, user_ura));
+        assert!(!paired_user_trust_present(
+            &sync,
+            "easynet:///r/realm/user/other"
+        ));
     }
 }

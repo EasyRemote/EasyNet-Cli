@@ -110,7 +110,7 @@ use frame_loop::{run_live_session, LiveSessionRun};
 #[cfg(test)]
 use prelude::build_synthetic_pages_ability_descriptors;
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
-pub use prelude::{SessionPreludeInputs, UserTrustSync};
+pub use prelude::{SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync};
 pub use supervisor::SessionCloseStats;
 use supervisor::{
     backoff_after_clean_close, full_jitter, next_backoff, DeviceSessionPhase, SessionPhaseTracker,
@@ -731,6 +731,13 @@ pub enum SessionError {
 
     #[error("hub `{endpoint}` rejected owner projection publish: {status}")]
     OwnerProjectionFailed { endpoint: String, status: Status },
+
+    #[error("hub `{endpoint}` cannot satisfy paired user trust bootstrap: {source}")]
+    UserTrustBootstrapFailed {
+        endpoint: String,
+        #[source]
+        source: UserTrustBootstrapError,
+    },
 
     #[error("{reason}: hub `{endpoint}` sent down frame sequence {actual}, expected {expected}")]
     DownStreamSequence {
@@ -1376,11 +1383,19 @@ mod tests {
     fn session_phase_edge_relation() {
         use DeviceSessionPhase::*;
         let join = Preluding(PreludeStep::Join);
+        let trust_bootstrap = Preluding(PreludeStep::TrustBootstrap);
         let advertise = Preluding(PreludeStep::Advertise);
         // The forward chain.
         assert!(Idle.may_transition_to(&Dialing));
         assert!(Dialing.may_transition_to(&join));
-        assert!(join.may_transition_to(&advertise), "prelude steps chain");
+        assert!(
+            join.may_transition_to(&trust_bootstrap),
+            "prelude steps chain"
+        );
+        assert!(
+            trust_bootstrap.may_transition_to(&advertise),
+            "prelude steps chain"
+        );
         assert!(advertise.may_transition_to(&Live));
         assert!(Live.may_transition_to(&Backoff));
         assert!(Backoff.may_transition_to(&Dialing));
@@ -1405,6 +1420,10 @@ mod tests {
         t.transition(DeviceSessionPhase::Preluding(PreludeStep::Join), "test");
         t.transition(
             DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
+            "test",
+        );
+        t.transition(
+            DeviceSessionPhase::Preluding(PreludeStep::TrustBootstrap),
             "test",
         );
         t.transition(
@@ -1720,6 +1739,75 @@ mod tests {
             }
             other => panic!("expected OwnerProjectionFailed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn missing_paired_user_trust_blocks_session_before_bidi_open() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, invokes, _server) = spawn_recording_prelude_hub().await;
+        let device_ura = "easynet:///r/realm/device/n1";
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "n1".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: format!("http://{addr}"),
+                realm: "realm".to_string(),
+                deploy_signature: String::new(),
+                hub_api_base: None,
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                hub_pubkey_b64: None,
+                hub_tls_ca_pem_b64: None,
+                join_receipt_hash: None,
+            },
+        )
+        .expect("save test credentials");
+        let trust_dir = tempfile::tempdir().expect("trust tempdir");
+        let user_trust_sync = UserTrustSync {
+            daemon_realm: "realm".to_string(),
+            trust_anchor_path: trust_dir.path().join("realm-trust.toml"),
+            cell: crate::daemon::trust::cell::SharedTrustAnchor::default(),
+        };
+
+        let result = dial_and_run_session_with_idle_timeout(
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                caller_ura: device_ura.to_string(),
+                signing_seed: None,
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                idle_timeout: Duration::from_millis(80),
+                initial_admission: None,
+                user_trust_sync: Some(&user_trust_sync),
+            },
+            &mut SessionPhaseTracker::new(),
+        )
+        .await;
+
+        match result {
+            Err(SessionError::UserTrustBootstrapFailed { endpoint, source }) => {
+                assert_eq!(endpoint, format!("http://{addr}"));
+                match source {
+                    UserTrustBootstrapError::MissingAtHub { user_ura } => {
+                        assert_eq!(user_ura, "easynet:///r/realm/user/user-dev");
+                    }
+                    other => panic!("expected MissingAtHub, got {other:?}"),
+                }
+            }
+            other => panic!("expected UserTrustBootstrapFailed, got {other:?}"),
+        }
+        let calls = invokes.lock().await.clone();
+        assert!(
+            calls
+                .iter()
+                .any(|(name, body)| name == "federation.resolve_key"
+                    && body.get("agent_ura").and_then(Value::as_str)
+                        == Some("easynet:///r/realm/user/user-dev")),
+            "prelude must explicitly resolve paired user key before session.open: {calls:#?}"
+        );
     }
 
     #[tokio::test]
