@@ -104,6 +104,8 @@ swift test --package-path sdk/swift
   projection, and lifecycle result projection
 - compatibility OpenAI model/chat carriers, canonical model id validation,
   unary completion projection, and stream envelope projection
+- convenience wrapper file/session/media record projections without execution
+  transport ownership
 - profile ownership exclusivity
 
 The scaffold in `cases/` names the first shared cases. A profile must add its

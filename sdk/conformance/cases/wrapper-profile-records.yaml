@@ -1,0 +1,35 @@
+id: wrappers/profile_records
+profile: wrappers
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Convenience wrapper profile projects file, terminal, remote desktop, browser, and media session facts into SDK-owned DTO records without starting sessions or bypassing Runtime Core stream/bidi paths.
+steps:
+  - action: project_file_record
+    fixture: wrapper-file-record.v4.json
+  - action: project_terminal_session
+    fixture: wrapper-terminal-session.v4.json
+  - action: project_remote_desktop_session
+    fixture: wrapper-remote-desktop-session.v4.json
+  - action: project_browser_session
+    fixture: wrapper-browser-session.v4.json
+  - action: project_media_session
+    fixture: wrapper-media-session.v4.json
+expect:
+  result: wrapper_profile_records_observed
+  file_schema: file.schema.json
+  terminal_schema: terminal.schema.json
+  remote_desktop_schema: remote-desktop.schema.json
+  browser_schema: browser-session.schema.json
+  media_schema: media-session.schema.json
+  file_fixture: wrapper-file-record.v4.json
+  terminal_fixture: wrapper-terminal-session.v4.json
+  remote_desktop_fixture: wrapper-remote-desktop-session.v4.json
+  browser_fixture: wrapper-browser-session.v4.json
+  media_fixture: wrapper-media-session.v4.json
+  execution_transport_owner: runtime_core
+  product_http_websocket_owner: backend
+  rejects_invalid_owner_ura: true
+  rejects_missing_session_state: true

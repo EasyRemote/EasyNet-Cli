@@ -1,0 +1,12 @@
+{
+  "profile": "wrappers",
+  "kind": "browser_session",
+  "session_id": "browser-1",
+  "owner_ura": "easynet:///r/example/agent/alice.sdk",
+  "state": "starting",
+  "browser_ref": "browser-main",
+  "metadata": {
+    "profile": "wrappers",
+    "source": "wrappers.browser_session"
+  }
+}

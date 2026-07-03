@@ -37,6 +37,7 @@ method spelling.
 | events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
+| wrappers | record projection partial | record projection partial | gap | gap | gap | gap | gap |
 | conformance runner | manifest partial | manifest partial | gap | gap | gap | gap | gap |
 
 ## Known Gaps
@@ -83,8 +84,11 @@ method spelling.
   upload/storage policy, SSE/WebSocket fanout, and language facades remain
   incomplete.
 - Directory subscribe convenience methods, Axon-backed receipt verification,
-  full surface status, and convenience wrappers are schema/conformance
-  scaffolds only.
+  and full surface status are schema/conformance scaffolds only.
+- Convenience wrapper record projections exist for Rust/C ABI over file,
+  terminal, remote desktop, browser, and media session DTOs; execution helpers,
+  backend HTTP/WebSocket bridges, storage policy, and language facades remain
+  incomplete.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

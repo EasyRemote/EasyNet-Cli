@@ -705,6 +705,36 @@ int32_t easynet_compatibility_project_file_delete_result(
     char **out_result_json
 );
 
+int32_t easynet_wrappers_project_file_record(
+    EasynetHandle handle,
+    const char *file_json,
+    char **out_file_json
+);
+
+int32_t easynet_wrappers_project_terminal_session(
+    EasynetHandle handle,
+    const char *session_json,
+    char **out_session_json
+);
+
+int32_t easynet_wrappers_project_remote_desktop_session(
+    EasynetHandle handle,
+    const char *session_json,
+    char **out_session_json
+);
+
+int32_t easynet_wrappers_project_browser_session(
+    EasynetHandle handle,
+    const char *session_json,
+    char **out_session_json
+);
+
+int32_t easynet_wrappers_project_media_session(
+    EasynetHandle handle,
+    const char *session_json,
+    char **out_session_json
+);
+
 #ifdef __cplusplus
 }
 #endif

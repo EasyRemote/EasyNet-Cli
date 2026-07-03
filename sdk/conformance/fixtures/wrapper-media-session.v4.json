@@ -1,0 +1,13 @@
+{
+  "profile": "wrappers",
+  "kind": "media_session",
+  "session_id": "media-1",
+  "owner_ura": "easynet:///r/example/agent/alice.sdk",
+  "state": "active",
+  "media_kind": "voice",
+  "stream_ref": "stream-voice-1",
+  "metadata": {
+    "profile": "wrappers",
+    "source": "wrappers.media_session"
+  }
+}

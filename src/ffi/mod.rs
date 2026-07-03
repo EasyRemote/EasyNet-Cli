@@ -79,6 +79,8 @@
 //   model/chat/file projection helpers.
 // - `easynet_surface_build_*_invocation` and
 //   `easynet_surface_project_*`: Surface page carrier and projection helpers.
+// - `easynet_wrappers_project_*`: Convenience Wrapper file/session/media
+//   record projection helpers.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
 //   instead of retained as hard-fail compatibility symbols.
 //
@@ -101,6 +103,7 @@ pub mod publication;
 pub mod receipt;
 pub mod strings;
 pub mod surface;
+pub mod wrappers;
 
 use std::os::raw::c_char;
 
@@ -166,7 +169,8 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "events": "directory_stream_partial",
             "admin_gateway": "carrier_status_partial",
             "surface": "carrier_projection_partial",
-            "compatibility": "carrier_projection_partial"
+            "compatibility": "carrier_projection_partial",
+            "wrappers": "record_projection_partial"
         },
         "symbols": {
             "daemon_lifecycle": true,
@@ -189,6 +193,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "compatibility_carriers": true,
             "compatibility_projection": true,
             "compatibility_file_adapters": true,
+            "wrapper_record_projection": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
             "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
@@ -376,6 +381,7 @@ mod tests {
         assert_eq!(json["symbols"]["compatibility_carriers"], true);
         assert_eq!(json["symbols"]["compatibility_projection"], true);
         assert_eq!(json["symbols"]["compatibility_file_adapters"], true);
+        assert_eq!(json["symbols"]["wrapper_record_projection"], true);
         assert_eq!(json["profiles"]["receipt"], "fetch_projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],
@@ -391,6 +397,7 @@ mod tests {
             json["profiles"]["compatibility"],
             "carrier_projection_partial"
         );
+        assert_eq!(json["profiles"]["wrappers"], "record_projection_partial");
         assert_eq!(
             json["symbols"]["stream_bidi_lifecycle"],
             serde_json::json!(cfg!(feature = "axon-pb"))

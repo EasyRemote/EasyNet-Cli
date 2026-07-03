@@ -57,6 +57,7 @@ pub mod sdk_contract;
 pub mod surface_contract;
 pub mod telemetry;
 pub mod trust;
+pub mod wrapper_contract;
 
 pub use boot::lifecycle;
 pub use boot::DaemonError;

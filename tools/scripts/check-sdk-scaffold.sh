@@ -219,6 +219,11 @@ fixture_files=(
   compatibility-file.v4.json
   compatibility-file-delete-request.v4.json
   compatibility-file-delete-result.v4.json
+  wrapper-file-record.v4.json
+  wrapper-terminal-session.v4.json
+  wrapper-remote-desktop-session.v4.json
+  wrapper-browser-session.v4.json
+  wrapper-media-session.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -250,6 +255,7 @@ case_files=(
   admin-gateway-carrier-status.yaml
   surface-page-carriers.yaml
   compatibility-openai-carrier-projection.yaml
+  wrapper-profile-records.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

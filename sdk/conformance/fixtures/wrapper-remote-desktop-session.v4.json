@@ -1,0 +1,12 @@
+{
+  "profile": "wrappers",
+  "kind": "remote_desktop_session",
+  "session_id": "rdp-1",
+  "owner_ura": "easynet:///r/example/agent/alice.sdk",
+  "state": "active",
+  "display_ref": "display-main",
+  "metadata": {
+    "profile": "wrappers",
+    "source": "wrappers.remote_desktop_session"
+  }
+}

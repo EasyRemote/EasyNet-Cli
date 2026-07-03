@@ -4,8 +4,10 @@
   "title": "MediaSessionRecord",
   "type": "object",
   "additionalProperties": false,
-  "required": ["session_id", "owner_ura", "state", "media_kind"],
+  "required": ["profile", "kind", "session_id", "owner_ura", "state", "media_kind"],
   "properties": {
+    "profile": {"const": "wrappers"},
+    "kind": {"const": "media_session"},
     "session_id": {"type": "string", "minLength": 1},
     "owner_ura": {"type": "string", "minLength": 1},
     "state": {"type": "string", "minLength": 1},

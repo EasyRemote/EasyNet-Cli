@@ -1,0 +1,12 @@
+{
+  "profile": "wrappers",
+  "kind": "terminal_session",
+  "session_id": "term-1",
+  "owner_ura": "easynet:///r/example/agent/alice.sdk",
+  "state": "active",
+  "terminal_ref": "terminal-main",
+  "metadata": {
+    "profile": "wrappers",
+    "source": "wrappers.terminal_session"
+  }
+}

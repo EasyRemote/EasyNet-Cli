@@ -125,6 +125,10 @@ file/resource facts into Compatibility file DTOs. It must not invent daemon
 `openai.files.*` abilities, own multipart upload or storage policy, own product
 API-key policy, quota/rate limits, billing, HTTP route shaping, SSE fanout, or
 treat OpenAI schemas as daemon protocol.
+Convenience wrapper record projection may normalize file, terminal, remote
+desktop, browser, and media session facts into shared SDK DTOs. It must not
+start sessions, own backend HTTP/WebSocket/auth policy, or bypass Runtime Core
+Invocation, StreamHandle, or BidiSession execution paths.
 
 ## Invocation Tuple
 

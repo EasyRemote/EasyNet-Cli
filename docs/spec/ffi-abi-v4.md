@@ -872,6 +872,49 @@ product API-key policy, quota/rate-limit policy, billing, HTTP route shaping,
 multipart upload handling, and SSE/WebSocket fanout remain product-profile or
 wrapper-profile work.
 
+### 2.17 Convenience Wrapper Record Projections
+
+```c
+int32_t easynet_wrappers_project_file_record(
+    EasynetHandle handle,
+    const char* file_json,
+    char** out_file_json
+);
+
+int32_t easynet_wrappers_project_terminal_session(
+    EasynetHandle handle,
+    const char* session_json,
+    char** out_session_json
+);
+
+int32_t easynet_wrappers_project_remote_desktop_session(
+    EasynetHandle handle,
+    const char* session_json,
+    char** out_session_json
+);
+
+int32_t easynet_wrappers_project_browser_session(
+    EasynetHandle handle,
+    const char* session_json,
+    char** out_session_json
+);
+
+int32_t easynet_wrappers_project_media_session(
+    EasynetHandle handle,
+    const char* session_json,
+    char** out_session_json
+);
+```
+
+Wrapper functions are scoped to a live `EasynetHandle`, matching the SDK object
+graph's file, terminal, remote desktop, browser, and media wrapper clients.
+They project daemon/resource/session facts into schema-backed SDK DTO records
+with `profile = "wrappers"`. They do not start sessions, open product
+WebSockets, parse multipart requests, own backend storage/auth policy, or
+replace Runtime Core Invocation, StreamHandle, or BidiSession execution paths.
+ABI v4 wrapper support is `record_projection_partial`: execution helpers and
+language facades remain future wrapper-profile work.
+
 ## 3. Error Code Table
 
 | code | name | meaning |
