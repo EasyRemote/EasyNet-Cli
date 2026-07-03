@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, and Mission seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, and Mission seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, and Admin + Gateway seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, and Admin + Gateway seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -34,7 +34,7 @@ method spelling.
 | publication | carrier partial | carrier partial | carrier/read-model seam partial | carrier/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
-| admin + gateway | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
+| admin + gateway | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
@@ -72,7 +72,7 @@ method spelling.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
   `agent.list/start/stop/refresh`, `session.list`, lifecycle status, and
   agent-record projections; pairing token flows, credential verification,
-  certificate policy, full device-session CRUD, and language facades remain
+  certificate policy, full device-session CRUD, and product cutovers remain
   incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
   `pages.list/publish/get/unpublish`; backend route serving, browser auth,
@@ -127,6 +127,11 @@ method spelling.
   daemon mission execution carriers, live mission events, child Invocation
   behavior conformance, scheduler/retry policy, and backend automation cutover
   remain incomplete.
+- Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh
+  and session-list Invocation carrier builders plus `GatewayStatus`,
+  `AdminAgentPage`, and lifecycle-result projection seams; pairing token flows,
+  credential verification, certificate policy, concrete device-session CRUD,
+  and backend route cutover remain incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime state seams, runtime health readiness
@@ -165,6 +170,12 @@ method spelling.
   daemon mission execution carriers, live mission events, child Invocation
   behavior conformance, EasyRemote Pipeline extraction, and scheduler/retry
   policy remain incomplete.
+- Python Admin + Gateway facade exposes `AdminClient` agent
+  list/start/stop/refresh and session-list Invocation carrier builders plus
+  `GatewayStatus`, `AdminAgentPage`, and lifecycle-result projection seams;
+  pairing token flows, credential verification, certificate policy, concrete
+  device-session CRUD, and EasyRemote Server/AgentControl extraction remain
+  incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.

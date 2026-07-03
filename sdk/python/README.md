@@ -6,7 +6,8 @@ handles, Invocation JSON codecs, or host-stream wire/hash semantics.
 
 Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
 errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
-Directory + Identity, Receipt, Publication, Host Binding, and Mission seam
+Directory + Identity, Receipt, Publication, Host Binding, Mission, and
+Admin + Gateway seam
 partial. The package exposes typed
 feature/version discovery, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
@@ -24,9 +25,13 @@ package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, and published-ability read-model seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
 output-hash folding seams. MissionClient exposes run/run-file/track/cancel
-Invocation carrier builders and MissionStatus projection seams. Concrete daemon
+Invocation carrier builders and MissionStatus projection seams. AdminClient
+exposes agent list/start/stop/refresh and session-list Invocation carrier
+builders plus GatewayStatus, AdminAgentPage, and lifecycle-result projection
+seams. Concrete daemon
 process spawn/local transport, directory subscriptions, signer key lifecycle,
 Axon-backed receipt verification, concrete publication/host-binding/mission
-carriers, mission event streams, Admin + Gateway, Events, Surface,
+carriers, mission event streams, pairing/credential/device-session Admin
+flows, Events, Surface,
 Compatibility, wrappers, concrete bidi adapters, and EasyRemote cutover gates
 remain incomplete. See `../SDK_PARITY.md` before claiming package stability.

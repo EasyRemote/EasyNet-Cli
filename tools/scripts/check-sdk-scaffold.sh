@@ -61,6 +61,8 @@ for path in \
   sdk/go/host_binding_test.go \
   sdk/go/mission.go \
   sdk/go/mission_test.go \
+  sdk/go/admin.go \
+  sdk/go/admin_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -86,6 +88,7 @@ for path in \
   sdk/python/easynet_sdk/publication.py \
   sdk/python/easynet_sdk/host_binding.py \
   sdk/python/easynet_sdk/mission.py \
+  sdk/python/easynet_sdk/admin.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -102,6 +105,7 @@ for path in \
   sdk/python/tests/test_publication.py \
   sdk/python/tests/test_host_binding.py \
   sdk/python/tests/test_mission.py \
+  sdk/python/tests/test_admin.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -375,6 +379,11 @@ require_literal sdk/go/mission.go "MissionTransport"
 require_literal sdk/go/mission.go "MissionRunRequest"
 require_literal sdk/go/mission.go "MissionStatus"
 require_literal sdk/go/mission.go "MissionChildReceipt"
+require_literal sdk/go/admin.go "AdminClient"
+require_literal sdk/go/admin.go "AdminTransport"
+require_literal sdk/go/admin.go "AdminAgentStartRequest"
+require_literal sdk/go/admin.go "GatewayStatus"
+require_literal sdk/go/admin.go "AdminGatewayResult"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -442,6 +451,11 @@ require_literal sdk/python/easynet_sdk/mission.py "MissionTransport"
 require_literal sdk/python/easynet_sdk/mission.py "MissionRunRequest"
 require_literal sdk/python/easynet_sdk/mission.py "MissionStatus"
 require_literal sdk/python/easynet_sdk/mission.py "MissionChildReceipt"
+require_literal sdk/python/easynet_sdk/admin.py "AdminClient"
+require_literal sdk/python/easynet_sdk/admin.py "AdminTransport"
+require_literal sdk/python/easynet_sdk/admin.py "AdminAgentStartRequest"
+require_literal sdk/python/easynet_sdk/admin.py "GatewayStatus"
+require_literal sdk/python/easynet_sdk/admin.py "AdminGatewayResult"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"
