@@ -53,6 +53,8 @@ for path in \
   sdk/go/directory_test.go \
   sdk/go/identity.go \
   sdk/go/identity_test.go \
+  sdk/go/receipt.go \
+  sdk/go/receipt_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -74,6 +76,7 @@ for path in \
   sdk/python/easynet_sdk/daemon.py \
   sdk/python/easynet_sdk/directory.py \
   sdk/python/easynet_sdk/identity.py \
+  sdk/python/easynet_sdk/receipt.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -86,6 +89,7 @@ for path in \
   sdk/python/tests/test_daemon.py \
   sdk/python/tests/test_directory.py \
   sdk/python/tests/test_identity.py \
+  sdk/python/tests/test_receipt.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -339,6 +343,11 @@ require_literal sdk/go/identity.go "IdentityClient"
 require_literal sdk/go/identity.go "IdentityTransport"
 require_literal sdk/go/identity.go "IdentityProjection"
 require_literal sdk/go/identity.go "ResourceRef"
+require_literal sdk/go/receipt.go "ReceiptClient"
+require_literal sdk/go/receipt.go "ReceiptTransport"
+require_literal sdk/go/receipt.go "ReceiptSummary"
+require_literal sdk/go/receipt.go "ReceiptVerification"
+require_literal sdk/go/receipt.go "CausalRef"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -386,6 +395,11 @@ require_literal sdk/python/easynet_sdk/identity.py "IdentityClient"
 require_literal sdk/python/easynet_sdk/identity.py "IdentityTransport"
 require_literal sdk/python/easynet_sdk/identity.py "IdentityProjection"
 require_literal sdk/python/easynet_sdk/identity.py "ResourceRef"
+require_literal sdk/python/easynet_sdk/receipt.py "ReceiptClient"
+require_literal sdk/python/easynet_sdk/receipt.py "ReceiptTransport"
+require_literal sdk/python/easynet_sdk/receipt.py "ReceiptSummary"
+require_literal sdk/python/easynet_sdk/receipt.py "ReceiptVerification"
+require_literal sdk/python/easynet_sdk/receipt.py "CausalRef"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"

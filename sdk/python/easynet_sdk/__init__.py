@@ -72,6 +72,14 @@ from .runtime import (
     RuntimeClient,
     RuntimeTransport,
 )
+from .receipt import (
+    CausalRef,
+    ReceiptClient,
+    ReceiptFetchRequest,
+    ReceiptSummary,
+    ReceiptTransport,
+    ReceiptVerification,
+)
 from .signing import (
     PreparedInvocation,
     SignedInvocation,
@@ -132,6 +140,12 @@ __all__ = [
     "MAX_STREAM_BUFFERED_EVENTS",
     "PrepareOptions",
     "PreparedInvocation",
+    "CausalRef",
+    "ReceiptClient",
+    "ReceiptFetchRequest",
+    "ReceiptSummary",
+    "ReceiptTransport",
+    "ReceiptVerification",
     "RetryHint",
     "ResolvedRef",
     "ResolveQuery",
