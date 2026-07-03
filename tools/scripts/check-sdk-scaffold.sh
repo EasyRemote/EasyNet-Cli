@@ -55,6 +55,8 @@ for path in \
   sdk/go/identity_test.go \
   sdk/go/receipt.go \
   sdk/go/receipt_test.go \
+  sdk/go/publication.go \
+  sdk/go/publication_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -77,6 +79,7 @@ for path in \
   sdk/python/easynet_sdk/directory.py \
   sdk/python/easynet_sdk/identity.py \
   sdk/python/easynet_sdk/receipt.py \
+  sdk/python/easynet_sdk/publication.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -90,6 +93,7 @@ for path in \
   sdk/python/tests/test_directory.py \
   sdk/python/tests/test_identity.py \
   sdk/python/tests/test_receipt.py \
+  sdk/python/tests/test_publication.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -348,6 +352,11 @@ require_literal sdk/go/receipt.go "ReceiptTransport"
 require_literal sdk/go/receipt.go "ReceiptSummary"
 require_literal sdk/go/receipt.go "ReceiptVerification"
 require_literal sdk/go/receipt.go "CausalRef"
+require_literal sdk/go/publication.go "PublicationClient"
+require_literal sdk/go/publication.go "PublicationTransport"
+require_literal sdk/go/publication.go "AbilityDeployRequest"
+require_literal sdk/go/publication.go "PackageValidation"
+require_literal sdk/go/publication.go "PublishedAbility"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -400,6 +409,11 @@ require_literal sdk/python/easynet_sdk/receipt.py "ReceiptTransport"
 require_literal sdk/python/easynet_sdk/receipt.py "ReceiptSummary"
 require_literal sdk/python/easynet_sdk/receipt.py "ReceiptVerification"
 require_literal sdk/python/easynet_sdk/receipt.py "CausalRef"
+require_literal sdk/python/easynet_sdk/publication.py "PublicationClient"
+require_literal sdk/python/easynet_sdk/publication.py "PublicationTransport"
+require_literal sdk/python/easynet_sdk/publication.py "AbilityDeployRequest"
+require_literal sdk/python/easynet_sdk/publication.py "PackageValidation"
+require_literal sdk/python/easynet_sdk/publication.py "PublishedAbility"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"
