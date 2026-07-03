@@ -8,7 +8,7 @@ Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
 errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
 Directory + Identity, Receipt, Publication, Host Binding, Mission,
 Admin + Gateway, Events directory-stream, Surface page seam, and Compatibility
-OpenAI adapter seam
+OpenAI adapter seam, and Convenience Wrapper record seam
 partial. The package exposes typed
 feature/version discovery, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
@@ -35,11 +35,14 @@ exposes page list/create/delete/manifest Invocation carriers plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams. CompatibilityClient exposes
 OpenAI-compatible list-models/chat/stream-chat Invocation carriers plus model,
-chat, stream, file, and file-delete projection seams. Concrete daemon
+chat, stream, file, and file-delete projection seams. WrapperClient exposes
+file, terminal, remote desktop, browser, and media session record projection
+seams. Concrete daemon
 process spawn/local transport, directory subscriptions, signer key lifecycle,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, pairing/credential/device-session Admin
 flows, device/session/invocation Events streams, surface health/status,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE
-product cutovers, wrappers, concrete bidi adapters, and EasyRemote cutover gates
-remain incomplete. See `../SDK_PARITY.md` before claiming package stability.
+product cutovers, wrapper execution helpers and backend HTTP/WebSocket bridges,
+concrete bidi adapters, and EasyRemote cutover gates remain incomplete. See
+`../SDK_PARITY.md` before claiming package stability.

@@ -69,6 +69,8 @@ for path in \
   sdk/go/surface_test.go \
   sdk/go/compatibility.go \
   sdk/go/compatibility_test.go \
+  sdk/go/wrappers.go \
+  sdk/go/wrappers_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -98,6 +100,7 @@ for path in \
   sdk/python/easynet_sdk/events.py \
   sdk/python/easynet_sdk/surface.py \
   sdk/python/easynet_sdk/compatibility.py \
+  sdk/python/easynet_sdk/wrappers.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -118,6 +121,7 @@ for path in \
   sdk/python/tests/test_events.py \
   sdk/python/tests/test_surface.py \
   sdk/python/tests/test_compatibility.py \
+  sdk/python/tests/test_wrappers.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -411,6 +415,11 @@ require_literal sdk/go/compatibility.go "CompatibilityTransport"
 require_literal sdk/go/compatibility.go "CompatibilityChatCompletionRequest"
 require_literal sdk/go/compatibility.go "CompatibilityModelPage"
 require_literal sdk/go/compatibility.go "CompatibilityFileDeleteResult"
+require_literal sdk/go/wrappers.go "WrapperClient"
+require_literal sdk/go/wrappers.go "WrapperFileRecord"
+require_literal sdk/go/wrappers.go "WrapperTerminalSessionRecord"
+require_literal sdk/go/wrappers.go "WrapperRemoteDesktopSessionRecord"
+require_literal sdk/go/wrappers.go "WrapperMediaSessionRecord"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -498,6 +507,11 @@ require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityTransport"
 require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityChatCompletionRequest"
 require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityModelPage"
 require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityFileDeleteResult"
+require_literal sdk/python/easynet_sdk/wrappers.py "WrapperClient"
+require_literal sdk/python/easynet_sdk/wrappers.py "WrapperFileRecord"
+require_literal sdk/python/easynet_sdk/wrappers.py "WrapperTerminalSessionRecord"
+require_literal sdk/python/easynet_sdk/wrappers.py "WrapperRemoteDesktopSessionRecord"
+require_literal sdk/python/easynet_sdk/wrappers.py "WrapperMediaSessionRecord"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"
