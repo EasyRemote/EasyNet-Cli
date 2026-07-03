@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -20,7 +20,7 @@ method spelling.
 | Capability | Rust | C ABI | Go | Python | Node | Java | Swift |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ABI/version discovery | partial | partial | partial | partial | gap | gap | gap |
-| daemon start/attach/discover/stop/detach | partial | partial | gap | gap | gap | gap | gap |
+| daemon start/attach/discover/stop/detach | partial | partial | state seam partial | state seam partial | gap | gap | gap |
 | runtime connection state | partial | partial | transport seam partial | transport seam partial | gap | gap | gap |
 | runtime health | partial | partial | partial | partial | gap | gap | gap |
 | typed errors | partial | typed JSON partial | partial | partial | gap | gap | gap |
@@ -91,23 +91,27 @@ method spelling.
   backend HTTP/WebSocket bridges, storage policy, and language facades remain
   incomplete.
 - Go package exposes Runtime Core feature/version discovery, runtime connection
-  state, runtime health readiness facts, schema-backed typed SDK error
-  projection, complete Invocation draft construction, prepared/signed Invocation
-  DTOs, unary InvocationResult projection, StreamHandle state observation,
-  BidiSession frame ordering/half-close/cancel/terminal-close observation,
-  InvocationHandle await/cancel/events observation, and RuntimeClient
+  state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
+  detach/open-runtime state seams, runtime health readiness facts,
+  schema-backed typed SDK error projection, complete Invocation draft
+  construction, prepared/signed Invocation DTOs, unary InvocationResult
+  projection, StreamHandle state observation, BidiSession frame ordering/
+  half-close/cancel/terminal-close observation, InvocationHandle
+  await/cancel/events observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow JSON
-  transport seams; concrete daemon lifecycle/transport, concrete bidi adapters, profile
+  transport seams; concrete daemon process spawn/local transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
 - Python package exposes Runtime Core feature/version discovery, runtime
-  connection state, runtime health readiness facts, schema-backed typed SDK
-  error projection, complete Invocation draft construction, prepared/signed
-  Invocation DTOs, unary InvocationResult projection, StreamHandle state
-  observation, BidiSession frame ordering/half-close/cancel/terminal-close
-  observation, InvocationHandle await/cancel/events observation, and
+  connection state, DaemonHandle lifecycle status/endpoints/start/attach/
+  discover/stop/detach/open-runtime state seams, runtime health readiness
+  facts, schema-backed typed SDK error projection, complete Invocation draft
+  construction, prepared/signed Invocation DTOs, unary InvocationResult
+  projection, StreamHandle state observation, BidiSession frame ordering/
+  half-close/cancel/terminal-close observation, InvocationHandle
+  await/cancel/events observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow
-  transport protocols; concrete daemon lifecycle/transport, concrete bidi adapters,
+  transport protocols; concrete daemon process spawn/local transport, concrete bidi adapters,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
   error source refs, and conformance action execution remain incomplete before
   EasyRemote cutover.

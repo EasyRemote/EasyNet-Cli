@@ -21,6 +21,22 @@ from .connection import (
     RuntimeConnector,
     RuntimeEndpoint,
 )
+from .daemon import (
+    AttachOptions,
+    DaemonControl,
+    DaemonHandle,
+    DaemonLifecycleState,
+    DaemonMode,
+    DaemonStatus,
+    DaemonTransport,
+    DiscoverOptions,
+    Endpoints,
+    StartConfig,
+    StopOptions,
+    attach_daemon,
+    discover_daemon,
+    start_daemon,
+)
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .health import HealthClient, HealthTransport, RuntimeHealth
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
@@ -53,7 +69,16 @@ __all__ = [
     "Client",
     "ConnectOptions",
     "ConnectionState",
+    "AttachOptions",
+    "DaemonControl",
+    "DaemonHandle",
+    "DaemonLifecycleState",
+    "DaemonMode",
+    "DaemonStatus",
+    "DaemonTransport",
+    "DiscoverOptions",
     "DiscoveryTransport",
+    "Endpoints",
     "ErrorCode",
     "FeatureSet",
     "HealthClient",
@@ -82,6 +107,8 @@ __all__ = [
     "SignedInvocation",
     "SignerPolicy",
     "SigningMaterial",
+    "StartConfig",
+    "StopOptions",
     "BidiFrame",
     "BidiOutcome",
     "BidiSession",
@@ -94,5 +121,8 @@ __all__ = [
     "StreamState",
     "StreamTransport",
     "Version",
+    "attach_daemon",
+    "discover_daemon",
     "is_code",
+    "start_daemon",
 ]

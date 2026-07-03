@@ -47,6 +47,8 @@ for path in \
   sdk/CONFORMANCE_SUITE.md \
   sdk/go/go.mod \
   sdk/go/client.go \
+  sdk/go/daemon.go \
+  sdk/go/daemon_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -65,6 +67,7 @@ for path in \
   sdk/go/import_boundary_test.go \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
+  sdk/python/easynet_sdk/daemon.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -74,6 +77,7 @@ for path in \
   sdk/python/easynet_sdk/signing.py \
   sdk/python/easynet_sdk/stream.py \
   sdk/python/tests/test_health.py \
+  sdk/python/tests/test_daemon.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -313,6 +317,11 @@ require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
 require_literal sdk/go/client.go "DiscoveryTransport"
+require_literal sdk/go/daemon.go "DaemonHandle"
+require_literal sdk/go/daemon.go "DaemonLifecycleState"
+require_literal sdk/go/daemon.go "DaemonTransport"
+require_literal sdk/go/daemon.go "StartConfig"
+require_literal sdk/go/daemon.go "OpenRuntime"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -346,6 +355,11 @@ require_literal sdk/go/bidi.go "BidiTransport"
 require_literal sdk/go/bidi.go "MaxBidiBufferedFrames"
 require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
 require_literal sdk/python/easynet_sdk/client.py "DiscoveryTransport"
+require_literal sdk/python/easynet_sdk/daemon.py "DaemonHandle"
+require_literal sdk/python/easynet_sdk/daemon.py "DaemonLifecycleState"
+require_literal sdk/python/easynet_sdk/daemon.py "DaemonTransport"
+require_literal sdk/python/easynet_sdk/daemon.py "StartConfig"
+require_literal sdk/python/easynet_sdk/daemon.py "open_runtime"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"
