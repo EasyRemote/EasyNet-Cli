@@ -32,11 +32,32 @@ Planned checks:
   - passed.
 - `cargo test --test cross_realm_directory_streaming_e2e streaming_chain_propagates_presence_remove`
   - passed.
+- `EASYNET_RELEASE_PROFILE=debug bash packaging/release/build-release-tarball.sh`
+  - passed; produced
+    `target/release-tarball/easynet-aarch64-apple-darwin.tar.gz` without
+    shipping `axon-runtime`.
+- `EASYNET_TEST_BACKEND_NO_BUILD=1 EASYNET_TEST_BACKEND_PORT=18080 EASYNET_TEST_HUB_TLS_PORT=15443 bash packaging/release/e2e-release-flow.sh`
+  - passed against the Docker EasyNet backend/Hub using the release-shape
+    sandbox install.
+  - `device join --boot no` wrote credentials without starting the daemon, so
+    `runtime start` remained the single lifecycle authority under test.
+  - Backend SSE emitted device-online invalidation in 1227 ms; the backend
+    `/api/v1/devices` read model returned `ONLINE` in 52 ms after that
+    invalidation.
+  - Graceful `runtime stop` emitted backend SSE `removed` in 235 ms; the
+    backend read model reported `UNKNOWN` for the device afterward.
+  - Restart restored backend product presence, local ability listing passed,
+    hosted-agent URAs were minted for `dev.consent-default`, `dev.codex`, and
+    `dev.claude`, and the structured advertise prelude reported all five
+    hosted agents.
+  - Abrupt `SIGKILL` of the sandbox `easynet-daemon` emitted backend SSE
+    `removed` in 143 ms; the backend read model reported `UNKNOWN` afterward.
+  - The flow cleaned up the Docker backend stack and left no matching host
+    `easynet-daemon` process.
 
-External/manual gates still required for full product release confidence:
+External product gates closed:
 
-- Backend SSE/read-model product presence propagation test.
-- Full process-level graceful stop and abrupt-kill propagation budgets against
-  a running backend/Hub. Daemon-local session close and directory-stream
-  propagation are covered above; the remaining gate needs the external product
-  subscriber/read-model path.
+- Backend SSE/read-model product presence propagation is covered by the
+  release-flow gate above.
+- Full process-level graceful stop and abrupt-kill propagation budgets are
+  covered against a running backend/Hub by the same release-flow gate.
