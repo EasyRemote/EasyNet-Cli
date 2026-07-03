@@ -27,6 +27,34 @@ use serde_json::{json, Value};
 
 use crate::daemon::persistence::config;
 
+/// Concrete store for the CLI runtime session projection.
+///
+/// Invariants:
+/// 1. Loading this store observes `runtime.json` as metadata only.
+/// 2. Saves and removals are process-local filesystem side effects
+///    owned by the lifecycle service, not by pure state classifiers.
+/// 3. The on-disk wire shape remains `RuntimeState` until the public
+///    compatibility contract is intentionally revised.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RuntimeProjectionStore;
+
+impl RuntimeProjectionStore {
+    /// Load the current session projection, if it exists.
+    pub fn load(&self) -> Option<RuntimeSessionProjection> {
+        RuntimeSessionProjection::load_current()
+    }
+
+    /// Persist the current session projection.
+    pub fn save(&self, state: &config::RuntimeState) -> anyhow::Result<()> {
+        config::save(state)
+    }
+
+    /// Remove the current session projection.
+    pub fn remove(&self) -> anyhow::Result<()> {
+        config::remove()
+    }
+}
+
 /// Lifecycle-domain process kind for `runtime.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeProcessKind {

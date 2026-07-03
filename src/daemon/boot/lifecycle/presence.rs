@@ -24,6 +24,24 @@ use serde_json::{json, Value};
 
 use crate::daemon::boot::join_connection_state::{self, JoinConnectionSnapshot};
 
+/// Read-only observer for product presence projections available to
+/// the local CLI.
+///
+/// Invariants:
+/// 1. It never probes pidfiles or sockets to decide product presence.
+/// 2. It only projects already-recorded session/join facts; Hub/backend
+///    directory authority remains outside this local lifecycle layer.
+/// 3. Missing local evidence is represented as `None`, not as `Online`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProductPresenceObserver;
+
+impl ProductPresenceObserver {
+    /// Capture the current local product-presence projection.
+    pub fn capture(&self) -> Option<ProductPresenceSnapshot> {
+        ProductPresenceSnapshot::capture_current()
+    }
+}
+
 /// Product-facing presence status observed by the local lifecycle layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProductPresenceStatus {

@@ -24,7 +24,6 @@
 //! parse CLI flags and it does not spawn the daemon.
 
 use crate::daemon::control::discovery::DaemonIdentity;
-use crate::daemon::persistence::config;
 
 use super::{RuntimeLifecycleError, RuntimeLifecycleStatus, RuntimeStatusReport};
 
@@ -120,9 +119,6 @@ pub(crate) fn preflight_start(
     let action = match report.status() {
         RuntimeLifecycleStatus::Stopped => RuntimeStartPreflightAction::CleanStart,
         RuntimeLifecycleStatus::ProjectionPresentProcessMissing => {
-            config::remove().map_err(|source| RuntimeLifecycleError::ProjectionRemoveFailed {
-                message: source.to_string(),
-            })?;
             RuntimeStartPreflightAction::RemovedStaleProjection
         }
         RuntimeLifecycleStatus::ProjectionMissingProcessRunning => {

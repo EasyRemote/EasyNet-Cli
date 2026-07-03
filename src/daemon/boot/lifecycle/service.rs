@@ -28,9 +28,9 @@ use crate::daemon::persistence::config;
 use crate::daemon::DaemonHandle;
 
 use super::{
-    start, DaemonDiscoverySnapshot, ProductPresenceSnapshot, RuntimeLifecycleError,
-    RuntimeSessionProjection, RuntimeStartPreflightReport, RuntimeStartRequest,
-    RuntimeStatusReport, RuntimeStopPlan,
+    start, DaemonDiscoveryObserver, ProductPresenceObserver, RuntimeLifecycleError,
+    RuntimeProjectionStore, RuntimeStartPreflightAction, RuntimeStartPreflightReport,
+    RuntimeStartRequest, RuntimeStatusReport, RuntimeStopPlan,
 };
 
 /// Entry point for runtime lifecycle operations.
@@ -42,22 +42,36 @@ use super::{
 ///    its product Invocation endpoint.
 /// 3. If projection persistence fails after this service started a
 ///    daemon, it attempts to stop that daemon before returning.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct RuntimeLifecycleService;
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeLifecycleService {
+    discovery: DaemonDiscoveryObserver,
+    projection_store: RuntimeProjectionStore,
+    presence_observer: ProductPresenceObserver,
+}
+
+impl Default for RuntimeLifecycleService {
+    fn default() -> Self {
+        Self {
+            discovery: DaemonDiscoveryObserver,
+            projection_store: RuntimeProjectionStore,
+            presence_observer: ProductPresenceObserver,
+        }
+    }
+}
 
 impl RuntimeLifecycleService {
     /// Construct a lifecycle service using the current process
     /// environment and EasyNet state directory.
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
     /// Observe the current lifecycle state.
     pub fn status(&self) -> RuntimeStatusReport {
         RuntimeStatusReport::from_parts_with_presence(
-            RuntimeSessionProjection::load_current(),
-            DaemonDiscoverySnapshot::capture_current(),
-            ProductPresenceSnapshot::capture_current(),
+            self.projection_store.load(),
+            self.discovery.capture(),
+            self.presence_observer.capture(),
         )
     }
 
@@ -67,7 +81,18 @@ impl RuntimeLifecycleService {
         &self,
         request: &RuntimeStartRequest,
     ) -> Result<RuntimeStartPreflightReport, RuntimeLifecycleError> {
-        start::preflight_start(request, &self.status())
+        let report = start::preflight_start(request, &self.status())?;
+        if matches!(
+            report.action(),
+            RuntimeStartPreflightAction::RemovedStaleProjection
+        ) {
+            self.projection_store.remove().map_err(|source| {
+                RuntimeLifecycleError::ProjectionRemoveFailed {
+                    message: source.to_string(),
+                }
+            })?;
+        }
+        Ok(report)
     }
 
     /// Build the side-effect-free stop plan for the current host.
@@ -82,7 +107,7 @@ impl RuntimeLifecycleService {
         handle: &mut DaemonHandle,
         state: &config::RuntimeState,
     ) -> Result<(), RuntimeLifecycleError> {
-        if let Err(err) = config::save(state) {
+        if let Err(err) = self.projection_store.save(state) {
             let message = err.to_string();
             if handle.child_mut().is_some() {
                 return match handle.stop() {
@@ -102,6 +127,7 @@ impl RuntimeLifecycleService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
 
     #[test]
     fn service_reports_without_requiring_runtime_projection() {
@@ -118,6 +144,38 @@ mod tests {
                     | super::super::status::RuntimeLifecycleStatus::LegacyAxonBridge
             ),
             "Invariant 1: status observation must classify every host state"
+        );
+    }
+
+    #[test]
+    fn service_removes_stale_projection_during_start_preflight() {
+        let _home = HomeGuard::new();
+        let state = config::RuntimeState {
+            endpoint: "/tmp/easynet-stale-daemon.sock".to_string(),
+            runtime_kind: config::RuntimeKind::DaemonOnly,
+            pid: Some(999_999),
+            hub: None,
+            tenant: Some("tenant-test".to_string()),
+            label: Some("node-test".to_string()),
+            started_at: None,
+            credential_verified: None,
+        };
+        config::save(&state).expect("seed stale runtime projection");
+
+        let report = RuntimeLifecycleService::new()
+            .preflight_start(&RuntimeStartRequest::device("tenant-test", "node-test"))
+            .expect("stale projection should be removable");
+
+        assert!(
+            matches!(
+                report.action(),
+                RuntimeStartPreflightAction::RemovedStaleProjection
+            ),
+            "service owns stale projection removal after pure start classification"
+        );
+        assert!(
+            config::load().is_err(),
+            "runtime.json must be removed only by the lifecycle service side-effect boundary"
         );
     }
 }

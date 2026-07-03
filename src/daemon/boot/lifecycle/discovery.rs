@@ -33,6 +33,24 @@ use crate::daemon::control::discovery::{self, ControlDiscovery, DaemonIdentity};
 use crate::daemon::persistence::config;
 use crate::support::platform::{local_daemon_grpc, net};
 
+/// Concrete observer for daemon-owned discovery facts.
+///
+/// Invariants:
+/// 1. It reads only process/discovery inputs, never `runtime.json`.
+/// 2. Each call returns a fresh point-in-time snapshot; callers must
+///    not cache it across start/stop side effects.
+/// 3. It is concrete, not trait-based, because production has one
+///    discovery source in this crate.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DaemonDiscoveryObserver;
+
+impl DaemonDiscoveryObserver {
+    /// Capture the current daemon process facts.
+    pub fn capture(&self) -> DaemonDiscoverySnapshot {
+        DaemonDiscoverySnapshot::capture_current()
+    }
+}
+
 /// Point-in-time daemon process facts.
 ///
 /// Invariants:

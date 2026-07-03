@@ -38,10 +38,10 @@ pub mod start;
 pub mod status;
 pub mod stop;
 
-pub use discovery::DaemonDiscoverySnapshot;
+pub use discovery::{DaemonDiscoveryObserver, DaemonDiscoverySnapshot};
 pub use errors::RuntimeLifecycleError;
-pub use presence::{ProductPresenceSnapshot, ProductPresenceStatus};
-pub use projection::{RuntimeProcessKind, RuntimeSessionProjection};
+pub use presence::{ProductPresenceObserver, ProductPresenceSnapshot, ProductPresenceStatus};
+pub use projection::{RuntimeProcessKind, RuntimeProjectionStore, RuntimeSessionProjection};
 pub use service::RuntimeLifecycleService;
 pub use start::{RuntimeStartPreflightAction, RuntimeStartPreflightReport, RuntimeStartRequest};
 pub use status::{RuntimeLifecycleStatus, RuntimeStatusReport};

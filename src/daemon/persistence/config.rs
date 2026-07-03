@@ -10,8 +10,9 @@
 // Three persistence domains
 // -------------------------
 //
-//   1. `RuntimeState` (runtime.json) — ephemeral, one session:
-//      `easynet start` → save()  |  `easynet *` → load()  |  `easynet stop` → remove()
+//   1. `RuntimeState` (runtime.json) — ephemeral session projection:
+//      `runtime start` → save()  |  lifecycle/status may load as metadata
+//      `runtime stop` → remove() only after process facts are gone.
 //      Fields: endpoint (required), pid, hub, tenant, label, started_at.
 //
 //   2. `Credentials` (credentials.json) — long-lived, survives reboots:
@@ -627,8 +628,9 @@ fn credentials_path() -> PathBuf {
     state_dir().join("credentials.json")
 }
 
-/// Path to the heartbeat daemon PID file.
-/// Used by start.rs (write) and stop.rs (read + cleanup).
+/// Path to the retired heartbeat sidecar PID file.
+/// Current runtime start does not write it; stop reads and removes it
+/// only as legacy janitor state from pre-session-heartbeat builds.
 pub fn heartbeat_pid_path() -> PathBuf {
     state_dir().join("heartbeat.pid")
 }

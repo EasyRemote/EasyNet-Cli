@@ -9,4 +9,6 @@
 - [x] Update CLI start/status/stop to consume lifecycle reports cleanly.
 - [x] Run project-structure guard and narrow cargo checks.
 - [x] Fix release E2E harness install path and guard it.
-- [ ] Commit semantically coherent changes with canonical author.
+- [x] Commit semantically coherent changes with canonical author.
+- [x] Refactor lifecycle facade into concrete discovery/projection/presence collaborators.
+- [x] Move stale projection removal out of pure start classification and into the service boundary.

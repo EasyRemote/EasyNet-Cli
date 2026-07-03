@@ -3,15 +3,15 @@
 //
 // File: src/cli/commands/start.rs
 // Description: `easynet runtime start` — starts the EasyNet product daemon,
-//              joins Hub, registers node, and maintains heartbeat.
+//              joins Hub, registers node, and opens the product session.
 //              Supports both foreground and background modes.
 //
 // Lifecycle:
-// - Ensures no runtime is already running (checks ~/.easynet/runtime.json).
+// - Reads daemon process facts first, then treats runtime.json as a projection.
 // - Both device and hub modes start `easynet-daemon` (mode=device / mode=hub) — the single product policy owner — not a raw Axon runtime.
-// - If credentials exist (from `easynet device join`), registers the node and starts heartbeat.
+// - If credentials exist (from `easynet device join`), registers the node and opens the session path.
 // - In foreground mode: blocks on Ctrl-C, then gracefully deregisters + shuts down.
-// - In background mode: forks a heartbeat daemon process, detaches the runtime.
+// - In background mode: detaches the daemon and leaves stop ownership to `runtime stop`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

@@ -3,8 +3,8 @@
 //
 // File: src/cli/groups/runtime.rs
 // Description: `easynet runtime …` — every operation that affects the
-//              *local* runtime process on this host (daemon-only device
-//              mode or the legacy bridge/hub runtime).
+//              *local* EasyNet product daemon on this host, plus explicit
+//              cleanup for retired bridge projections.
 //
 // Verbs:
 //   start    Spawn (or attach to) a local runtime  (-> cli::start)
@@ -33,12 +33,11 @@ pub struct RuntimeArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum RuntimeAction {
-    /// Start the local runtime (daemon-only device mode, or the
-    /// legacy bridge/hub runtime) and record state in
-    /// `~/.easynet/runtime.json`.
+    /// Start or attach to the local EasyNet daemon and update the
+    /// `~/.easynet/runtime.json` session projection.
     Start(start::StartArgs),
-    /// Signal the running runtime to shut down cleanly, then remove
-    /// `~/.easynet/runtime.json`.
+    /// Stop daemon process facts first, then remove the session
+    /// projection when shutdown postconditions hold.
     Stop(stop::StopArgs),
     /// Report runtime liveness, transport details, Hub reachability,
     /// and online/offline node counts.
