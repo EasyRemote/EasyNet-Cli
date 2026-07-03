@@ -47,6 +47,7 @@ pub mod resources;
 pub mod telemetry;
 pub mod trust;
 
+pub use boot::lifecycle;
 pub use boot::DaemonError;
 pub use boot::{
     start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,

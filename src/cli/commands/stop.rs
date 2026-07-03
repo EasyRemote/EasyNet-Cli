@@ -13,35 +13,38 @@
 // saw a different log shape per branch and the maintainer paid a
 // branch-tax every time a step was added.
 //
-// The rewrite keeps every single side effect of the old code and
-// every guard (pid-alive checks, easynet-process verification,
-// pgrep sweep, federation revoke gated on axon-pb feature). It only
-// reorganises them into a `StopPlan` object whose `execute()` method
-// walks a fixed sequence of stages, each rendered through the
-// shared `StageRenderer` from `presentation::stage`. A stage that
-// has nothing to do reports itself as `skipped("(reason)")` instead
-// of disappearing; the operator reads the same column of stages on
-// every shutdown.
+// The current version keeps the same stage object, but feeds it from
+// `daemon::lifecycle::RuntimeStatusReport` instead of treating
+// `runtime.json` as authority. That lets stop clean up migration
+// states where the projection is missing but `control.json`, a PID,
+// or an accepting socket proves the daemon is still alive.
 //
-// Stage order (matches the previous behaviour; not invented):
+// Stage order:
 //   1. revoke          — federation.revoke against the daemon
 //                        (best-effort; gated on axon-pb feature
 //                        and on the runtime being DaemonOnly)
-//   2. stop-heartbeat  — pidfile -> SIGTERM -> wait 3s on the
-//                        heartbeat helper process
-//   3. stop-daemon     — pidfile -> SIGTERM -> wait 3s on the
+//   2. stop-daemon     — pidfile -> SIGTERM -> wait 3s on the
 //                        easynet-daemon child
+//   3. stop-discovered-daemon
+//                     — SIGTERM daemon PID advertised in control.json
 //   4. sweep-daemons   — pgrep `easynet-daemon` to catch ghosts
 //                        whose pidfile was lost
-//   5. stop-axon       — non-DaemonOnly only: SIGTERM the axon
+//   5. cleanup-discovery
+//                     — remove stale control.json after daemon exit
+//   6. legacy-heartbeat-cleanup
+//                     — stale retired heartbeat pidfile cleanup only
+//   7. legacy-axon-cleanup
+//                     — non-DaemonOnly only: SIGTERM the axon
 //                        runtime PID (or lsof-discovered one)
-//   6. cleanup-state   — remove runtime.json
+//   8. cleanup-state   — remove runtime.json when it existed
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::Args;
 
+use crate::daemon::control::discovery;
+use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeStopPlan, RuntimeStopShape};
 use crate::daemon::persistence::config;
 use crate::support::platform::net;
 
@@ -65,31 +68,8 @@ pub(crate) struct StopOptions {
 }
 
 pub(crate) fn run_with_options(_args: StopArgs, options: StopOptions) -> anyhow::Result<()> {
-    let state = config::load().ok();
-    let plan = StopPlan::from_state(state.as_ref(), options);
+    let plan = StopPlan::from_runtime_plan(RuntimeLifecycleService::new().stop_plan(), options);
     plan.execute()
-}
-
-/// What we are about to shut down. Computed once from runtime.json
-/// (or its absence) so every stage decision below reads the same
-/// snapshot.
-enum StopShape {
-    /// No `runtime.json` on disk. There may still be live processes
-    /// (an operator-spawned daemon, or a crashed start that left a
-    /// daemon orphaned); the sweep stage handles that case. The
-    /// axon-runtime and revoke stages are skipped because we have
-    /// no endpoint to talk to.
-    Stateless,
-    /// `runtime.json` exists and reports a daemon-only runtime —
-    /// no axon-runtime PID, just the IPC daemon. This is the
-    /// shape every modern device boots into; the revoke stage
-    /// runs against the daemon before we tear it down.
-    DaemonOnly,
-    /// `runtime.json` exists and reports the legacy embedded axon
-    /// runtime. The axon PID gets its own stop stage; revoke is
-    /// skipped because the historical path deferred deregister to
-    /// the heartbeat process's exit handler.
-    WithAxonRuntime { endpoint: String, pid: Option<u32> },
 }
 
 /// Bundle the shape decision and stage execution. Methods on
@@ -97,30 +77,21 @@ enum StopShape {
 /// stage; nothing outside this file should call StageRenderer or
 /// the low-level `stop_*` helpers directly.
 struct StopPlan {
-    shape: StopShape,
+    shape: RuntimeStopShape,
+    discovery_pid: Option<u32>,
+    cleanup_runtime_projection: bool,
+    stop_timed_out: bool,
     options: StopOptions,
     renderer: StageRenderer,
 }
 
 impl StopPlan {
-    fn from_state(state: Option<&config::RuntimeState>, options: StopOptions) -> Self {
-        let shape = match state {
-            None => StopShape::Stateless,
-            Some(s) if matches!(s.runtime_kind, config::RuntimeKind::DaemonOnly) => {
-                StopShape::DaemonOnly
-            }
-            Some(s) => {
-                let pid = s
-                    .pid
-                    .or_else(|| net::discover_pid_from_endpoint(&s.endpoint));
-                StopShape::WithAxonRuntime {
-                    endpoint: s.endpoint.clone(),
-                    pid,
-                }
-            }
-        };
+    fn from_runtime_plan(plan: RuntimeStopPlan, options: StopOptions) -> Self {
         Self {
-            shape,
+            shape: plan.shape().clone(),
+            discovery_pid: plan.discovery_pid(),
+            cleanup_runtime_projection: plan.should_cleanup_runtime_projection(),
+            stop_timed_out: false,
             options,
             renderer: StageRenderer::new(),
         }
@@ -128,13 +99,24 @@ impl StopPlan {
 
     fn execute(mut self) -> anyhow::Result<()> {
         self.stage_revoke();
-        self.stage_stop_heartbeat();
         self.stage_stop_daemon();
+        self.stage_stop_discovered_daemon();
         self.stage_sweep_daemons();
-        self.stage_stop_axon_runtime();
+        let discovery_cleanup = self.stage_cleanup_discovery();
+        self.stage_legacy_heartbeat_cleanup();
+        self.stage_legacy_axon_cleanup();
         let cleanup = self.stage_cleanup_state();
         self.renderer.finish();
-        cleanup
+        discovery_cleanup?;
+        cleanup?;
+        let post = RuntimeLifecycleService::new().status();
+        if self.stop_timed_out && post.daemon().has_daemon_fact() {
+            anyhow::bail!(
+                "runtime stop timed out; daemon facts remain visible (status={})",
+                post.status().as_wire_str()
+            );
+        }
+        Ok(())
     }
 
     // ── Stages ────────────────────────────────────────────────────
@@ -151,7 +133,7 @@ impl StopPlan {
                 .stage_skipped("revoke", "(already attempted by caller)");
             return;
         }
-        if !matches!(self.shape, StopShape::DaemonOnly) {
+        if !matches!(self.shape, RuntimeStopShape::DaemonOnly) {
             self.renderer
                 .stage_skipped("revoke", "(only runs in daemon-only mode)");
             return;
@@ -181,27 +163,31 @@ impl StopPlan {
         }
     }
 
-    /// Pidfile-driven SIGTERM on the heartbeat helper. Skipped
-    /// when no pidfile exists OR the PID is stale.
-    fn stage_stop_heartbeat(&mut self) {
-        self.renderer.set_active("stop-heartbeat");
+    /// Legacy janitor for the retired heartbeat helper pidfile.
+    fn stage_legacy_heartbeat_cleanup(&mut self) {
+        self.renderer.set_active("legacy-heartbeat-cleanup");
         match stop_pidfile_process(&config::heartbeat_pid_path()) {
             PidfileStopOutcome::Stopped { pid } => self
                 .renderer
-                .stage_ok(&format!("stop-heartbeat (pid {pid})")),
+                .stage_ok(&format!("legacy-heartbeat-cleanup (pid {pid})")),
             PidfileStopOutcome::NoPidfile => self
                 .renderer
-                .stage_skipped("stop-heartbeat", "(no pidfile)"),
-            PidfileStopOutcome::StalePidfile { pid } => self
-                .renderer
-                .stage_skipped("stop-heartbeat", &format!("(pid {pid} already exited)")),
+                .stage_skipped("legacy-heartbeat-cleanup", "(no retired pidfile)"),
+            PidfileStopOutcome::StalePidfile { pid } => self.renderer.stage_skipped(
+                "legacy-heartbeat-cleanup",
+                &format!("(pid {pid} already exited)"),
+            ),
             PidfileStopOutcome::PidReuseRefused { pid } => self.renderer.stage_skipped(
-                "stop-heartbeat",
+                "legacy-heartbeat-cleanup",
                 &format!("(pid {pid} no longer an easynet process)"),
             ),
-            PidfileStopOutcome::TimedOut { pid } => self
-                .renderer
-                .stage_failed("stop-heartbeat", &format!("pid {pid} did not exit in time")),
+            PidfileStopOutcome::TimedOut { pid } => {
+                self.stop_timed_out = true;
+                self.renderer.stage_failed(
+                    "legacy-heartbeat-cleanup",
+                    &format!("pid {pid} did not exit in time"),
+                );
+            }
         }
     }
 
@@ -222,9 +208,43 @@ impl StopPlan {
                 "stop-daemon",
                 &format!("(pid {pid} no longer an easynet process)"),
             ),
-            PidfileStopOutcome::TimedOut { pid } => self
+            PidfileStopOutcome::TimedOut { pid } => {
+                self.stop_timed_out = true;
+                self.renderer
+                    .stage_failed("stop-daemon", &format!("pid {pid} did not exit in time"));
+            }
+        }
+    }
+
+    /// Discovery-driven daemon shutdown. This is the repair path for
+    /// migration states where `control.json` survived but the daemon
+    /// pidfile did not.
+    fn stage_stop_discovered_daemon(&mut self) {
+        self.renderer.set_active("stop-discovered-daemon");
+        let Some(pid) = self.discovery_pid else {
+            self.renderer
+                .stage_skipped("stop-discovered-daemon", "(no discovery pid)");
+            return;
+        };
+        match stop_discovered_daemon_process(pid) {
+            LiveProcessStopOutcome::Stopped { pid } => self
                 .renderer
-                .stage_failed("stop-daemon", &format!("pid {pid} did not exit in time")),
+                .stage_ok(&format!("stop-discovered-daemon (pid {pid})")),
+            LiveProcessStopOutcome::StalePid { pid } => self.renderer.stage_skipped(
+                "stop-discovered-daemon",
+                &format!("(pid {pid} already exited)"),
+            ),
+            LiveProcessStopOutcome::PidReuseRefused { pid } => self.renderer.stage_skipped(
+                "stop-discovered-daemon",
+                &format!("(pid {pid} no longer an easynet process)"),
+            ),
+            LiveProcessStopOutcome::TimedOut { pid } => {
+                self.stop_timed_out = true;
+                self.renderer.stage_failed(
+                    "stop-discovered-daemon",
+                    &format!("pid {pid} did not exit in time"),
+                );
+            }
         }
     }
 
@@ -248,41 +268,84 @@ impl StopPlan {
         }
     }
 
+    /// Remove stale daemon discovery after shutdown. If a daemon still
+    /// appears live, keep `control.json` so operators do not lose the
+    /// remaining process evidence.
+    fn stage_cleanup_discovery(&mut self) -> anyhow::Result<()> {
+        self.renderer.set_active("cleanup-discovery");
+        let path = discovery::default_path();
+        if !path.exists() {
+            self.renderer
+                .stage_skipped("cleanup-discovery", "(no control.json)");
+            return Ok(());
+        }
+        let report = RuntimeLifecycleService::new().status();
+        if report.daemon().has_daemon_fact() {
+            self.renderer
+                .stage_skipped("cleanup-discovery", "(daemon still appears live)");
+            return Ok(());
+        }
+        match discovery::remove(&path) {
+            Ok(()) => {
+                self.renderer.stage_ok("cleanup-discovery");
+                Ok(())
+            }
+            Err(e) => {
+                self.renderer
+                    .stage_failed("cleanup-discovery", &format!("{e}"));
+                Err(e)
+            }
+        }
+    }
+
     /// SIGTERM the legacy axon runtime PID. Skipped for DaemonOnly
     /// and Stateless shapes — there is no axon process to stop.
-    fn stage_stop_axon_runtime(&mut self) {
-        self.renderer.set_active("stop-axon");
+    fn stage_legacy_axon_cleanup(&mut self) {
+        self.renderer.set_active("legacy-axon-cleanup");
         let (endpoint, pid) = match &self.shape {
-            StopShape::WithAxonRuntime { endpoint, pid } => (endpoint.clone(), *pid),
+            RuntimeStopShape::LegacyAxonRuntime { endpoint, pid } => (endpoint.clone(), *pid),
             _ => {
                 self.renderer
-                    .stage_skipped("stop-axon", "(daemon-only runtime)");
+                    .stage_skipped("legacy-axon-cleanup", "(daemon-only runtime)");
                 return;
             }
         };
         let Some(pid) = pid else {
             self.renderer.stage_failed(
-                "stop-axon",
+                "legacy-axon-cleanup",
                 &format!("could not determine pid for endpoint {endpoint}"),
             );
             return;
         };
         if net::kill_and_wait(pid, std::time::Duration::from_secs(5)) {
-            self.renderer.stage_ok(&format!("stop-axon (pid {pid})"));
-        } else {
             self.renderer
-                .stage_failed("stop-axon", &format!("pid {pid} did not exit in time"));
+                .stage_ok(&format!("legacy-axon-cleanup (pid {pid})"));
+        } else {
+            self.stop_timed_out = true;
+            self.renderer.stage_failed(
+                "legacy-axon-cleanup",
+                &format!("pid {pid} did not exit in time"),
+            );
         }
     }
 
-    /// Remove `runtime.json`. Skipped when there was no state file
-    /// to begin with — preserves the pre-rewrite behaviour where
-    /// the "no state found" branch never called `config::remove`.
+    /// Remove `runtime.json` when a projection existed at plan time.
     fn stage_cleanup_state(&mut self) -> anyhow::Result<()> {
         self.renderer.set_active("cleanup-state");
-        if matches!(self.shape, StopShape::Stateless) {
+        if !self.cleanup_runtime_projection {
             self.renderer
                 .stage_skipped("cleanup-state", "(no runtime.json)");
+            return Ok(());
+        }
+        if self.stop_timed_out {
+            self.renderer
+                .stage_skipped("cleanup-state", "(stop timed out)");
+            return Ok(());
+        }
+        let report = RuntimeLifecycleService::new().status();
+        if report.daemon().has_daemon_fact() {
+            self.renderer
+                .stage_skipped("cleanup-state", "(daemon still appears live)");
             return Ok(());
         }
         match config::remove() {
@@ -308,6 +371,14 @@ impl StopPlan {
 enum PidfileStopOutcome {
     NoPidfile,
     StalePidfile { pid: u32 },
+    PidReuseRefused { pid: u32 },
+    Stopped { pid: u32 },
+    TimedOut { pid: u32 },
+}
+
+/// Result of stopping a live process discovered outside a pidfile.
+enum LiveProcessStopOutcome {
+    StalePid { pid: u32 },
     PidReuseRefused { pid: u32 },
     Stopped { pid: u32 },
     TimedOut { pid: u32 },
@@ -344,6 +415,20 @@ fn stop_pidfile_process(pid_path: &std::path::Path) -> PidfileStopOutcome {
         PidfileStopOutcome::Stopped { pid }
     } else {
         PidfileStopOutcome::TimedOut { pid }
+    }
+}
+
+fn stop_discovered_daemon_process(pid: u32) -> LiveProcessStopOutcome {
+    if !net::is_pid_alive(pid) {
+        return LiveProcessStopOutcome::StalePid { pid };
+    }
+    if !net::is_easynet_process(pid) {
+        return LiveProcessStopOutcome::PidReuseRefused { pid };
+    }
+    if net::kill_and_wait(pid, std::time::Duration::from_secs(3)) {
+        LiveProcessStopOutcome::Stopped { pid }
+    } else {
+        LiveProcessStopOutcome::TimedOut { pid }
     }
 }
 

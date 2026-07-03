@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 
 use crate::core::ura;
 use crate::daemon::boot::join_connection_state;
+use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
 use crate::support::platform::local_invoke::invoke_local_ability;
 use crate::support::platform::net;
@@ -66,7 +67,9 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         eprintln!();
     }
 
-    let Ok(state) = config::load() else {
+    let lifecycle = RuntimeLifecycleService::new();
+    let report = lifecycle.status();
+    if report.status() == RuntimeLifecycleStatus::Stopped {
         output::info("Runtime: not running");
         output::info("Run 'easynet runtime start' to start.");
         return Ok(());
@@ -83,45 +86,102 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     // diagnostics command, not the status table. Keep the runtime
     // block scoped to mode + transport + pid.
     let mut rows: Vec<(&str, String)> = Vec::new();
-    match state.runtime_kind {
-        config::RuntimeKind::DaemonOnly => {
-            rows.push(("Mode", "daemon-only".to_string()));
-            rows.push(("gRPC socket", state.endpoint.clone()));
-            rows.push((
-                "Control socket",
-                crate::daemon::control::transport::default_socket_path()
-                    .display()
-                    .to_string(),
-            ));
-        }
-        config::RuntimeKind::AxonBridge => {
-            // Legacy raw axon-runtime state. Both device and hub product
-            // paths now record DaemonOnly; this arm is reached only by
-            // pre-unification runtime.json or non-product axon-runtime use.
-            rows.push(("Mode", "bridge (legacy)".to_string()));
-            rows.push(("Bridge endpoint", state.endpoint.clone()));
-            if let Some(pid) = state.pid {
-                rows.push(("PID", pid.to_string()));
+    if let Some(projection) = report.projection() {
+        let state = projection.as_runtime_state();
+        match state.runtime_kind {
+            config::RuntimeKind::DaemonOnly => {
+                rows.push(("Mode", "daemon-only".to_string()));
+                rows.push(("gRPC socket", state.endpoint.clone()));
+                rows.push((
+                    "Control socket",
+                    crate::daemon::control::transport::default_socket_path()
+                        .display()
+                        .to_string(),
+                ));
+            }
+            config::RuntimeKind::AxonBridge => {
+                // Legacy raw axon-runtime state. Both device and hub product
+                // paths now record DaemonOnly; this arm is reached only by
+                // pre-unification runtime.json or non-product axon-runtime use.
+                rows.push(("Mode", "bridge (legacy)".to_string()));
+                rows.push(("Bridge endpoint", state.endpoint.clone()));
+                if let Some(pid) = state.pid {
+                    rows.push(("PID", pid.to_string()));
+                }
             }
         }
+    } else if let Some(discovery) = report.daemon().control_discovery() {
+        rows.push((
+            "Mode",
+            discovery
+                .daemon_identity
+                .as_ref()
+                .map(|identity| identity.mode.clone())
+                .unwrap_or_else(|| "daemon-only".to_string()),
+        ));
+        if let Some(endpoint) = discovery.invocation_endpoint.as_ref() {
+            rows.push(("gRPC socket", endpoint.display().to_string()));
+        }
+        if let Some(socket) = discovery.socket_path.as_ref() {
+            rows.push(("Control socket", socket.display().to_string()));
+        }
+        rows.push(("PID", discovery.pid.to_string()));
+        rows.push(("Projection", "missing runtime.json".to_string()));
     }
+    rows.push(("Status", report.status().as_wire_str().to_string()));
     let kv: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
     output::kv_section(&kv);
-    if state.credential_verified == Some(false) {
-        output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
+    if matches!(
+        report.status(),
+        RuntimeLifecycleStatus::ProjectionMissingProcessRunning
+    ) {
+        output::warn("Runtime projection is missing, but daemon facts are present.");
     }
-    if state.uses_bridge() {
-        let alive = state.pid.is_some_and(net::is_pid_alive)
-            || net::discover_pid_from_endpoint(&state.endpoint).is_some();
-        if alive {
-            output::info(
-                "Bridge-mode runtime is up. Local daemon-only device and ability probes are skipped in this mode.",
-            );
-        } else {
-            output::warn(
-                "Runtime metadata exists, but the recorded bridge process is not responding.",
-            );
+    if let Some(projection) = report.projection() {
+        let state = projection.as_runtime_state();
+        if state.credential_verified == Some(false) {
+            output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
         }
+        if state.uses_bridge() {
+            let alive = state.pid.is_some_and(net::is_pid_alive)
+                || net::discover_pid_from_endpoint(&state.endpoint).is_some();
+            if alive {
+                output::info(
+                    "Bridge-mode runtime is up. Local daemon-only device and ability probes are skipped in this mode.",
+                );
+            } else {
+                output::warn(
+                    "Runtime metadata exists, but the recorded bridge process is not responding.",
+                );
+            }
+            return Ok(());
+        }
+    }
+
+    if let Some(presence) = report.product_presence() {
+        eprintln!();
+        output::info("Product presence:");
+        let admitted = if presence.session_admitted() {
+            "true"
+        } else {
+            "false"
+        };
+        let mut rows = vec![
+            (
+                "Status",
+                presence.directory_status().as_wire_str().to_string(),
+            ),
+            ("Session admitted", admitted.to_string()),
+        ];
+        if let Some(device_ura) = presence.device_ura() {
+            rows.push(("Device URA", device_ura.to_string()));
+        }
+        let kv: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        output::kv_section(&kv);
+    }
+
+    if !report.daemon().invocation_accepting() {
+        output::warn("Local daemon invocation endpoint is not accepting connections.");
         return Ok(());
     }
 
@@ -217,23 +277,9 @@ fn render_connection_state() {
 
 fn run_json() -> anyhow::Result<()> {
     let connection = join_connection_state::latest_snapshot();
-    let runtime = config::load().ok();
-    let payload = json!({
-        "connection": connection,
-        "runtime": runtime.as_ref().map(|state| json!({
-            "endpoint": state.endpoint,
-            "runtime_kind": match state.runtime_kind {
-                config::RuntimeKind::DaemonOnly => "daemon_only",
-                config::RuntimeKind::AxonBridge => "axon_bridge",
-            },
-            "pid": state.pid,
-            "hub": state.hub,
-            "tenant": state.tenant,
-            "label": state.label,
-            "started_at": state.started_at,
-            "credential_verified": state.credential_verified,
-        })),
-    });
+    let payload = RuntimeLifecycleService::new()
+        .status()
+        .to_json(json!(connection));
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }

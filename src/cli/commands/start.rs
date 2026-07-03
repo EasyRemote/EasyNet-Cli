@@ -27,8 +27,11 @@ use crate::daemon::boot::join_connection_state::{
     classify_boot_failure, record_snapshot, JoinConnectionSnapshot, JoinConnectionState,
     JoinFailureCode, JoinTransition,
 };
+use crate::daemon::lifecycle::{
+    RuntimeLifecycleService, RuntimeStartPreflightAction, RuntimeStartRequest,
+};
 use crate::daemon::persistence::config;
-use crate::support::platform::{net, output, shutdown::ShutdownSignal};
+use crate::support::platform::{output, shutdown::ShutdownSignal};
 
 /// Register a Ctrl-C handler that triggers `shutdown`. Safe to call multiple
 /// times — only the first call installs the handler; subsequent calls are
@@ -163,21 +166,38 @@ enum CredentialCheck {
 const HUB_SESSION_ENDPOINT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 
 pub fn run(args: StartArgs) -> anyhow::Result<()> {
-    if let Ok(state) = config::load() {
-        if state.pid.is_some_and(net::is_pid_alive) {
-            anyhow::bail!(
-                "runtime already running (run 'easynet runtime stop' first, or remove ~/.easynet/runtime.json)"
-            );
-        }
-        output::info("Detected stale runtime state (process not running). Cleaning up...");
-        config::remove().ok();
-    }
-
     if args.as_hub {
         return run_as_hub(&args);
     }
 
     run_device_mode(&args)
+}
+
+fn preflight_runtime_start(request: &RuntimeStartRequest) -> anyhow::Result<()> {
+    let report = RuntimeLifecycleService::new().preflight_start(request)?;
+    match report.action() {
+        RuntimeStartPreflightAction::CleanStart => Ok(()),
+        RuntimeStartPreflightAction::RemovedStaleProjection => {
+            output::info("Detected stale runtime projection (process not running). Cleaning up...");
+            Ok(())
+        }
+        RuntimeStartPreflightAction::AttachAndRebuildProjection => {
+            output::warn(
+                "Detected live daemon without runtime.json; attaching and rebuilding runtime projection.",
+            );
+            Ok(())
+        }
+        RuntimeStartPreflightAction::AlreadyRunning => Ok(()),
+    }
+}
+
+fn save_runtime_projection_after_ready(
+    handle: &mut crate::daemon::DaemonHandle,
+    state: &config::RuntimeState,
+) -> anyhow::Result<()> {
+    RuntimeLifecycleService::new()
+        .save_projection_after_ready(handle, state)
+        .context("persist runtime projection after daemon Ready")
 }
 
 // ── Device mode ─────────────────────────────────────────────────────────────
@@ -220,6 +240,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
     let _ = (args.token.as_deref(), args.insecure);
+    preflight_runtime_start(&RuntimeStartRequest::device(&tenant, &creds.node_id))?;
     // EASYNET_PAGES_PORT is parsed by the daemon — it is the only
     // process that needs to validate the value and decide a default.
     // CLI just peeks at it for the progress UI's "fell back from N"
@@ -259,6 +280,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
             return Err(err).context("start easynet-daemon");
         }
     };
+    let attached_existing_daemon = daemon_handle.child_mut().is_none();
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::DaemonBooting,
         Some(JoinTransition::BootDaemon),
@@ -310,7 +332,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         started_at: Some(chrono::Utc::now().to_rfc3339()),
         credential_verified: Some(credential_verified),
     };
-    config::save(&state)?;
+    save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
     // The daemon process is up and the local runtime is ready, but the hub
     // `session.open` bidi has NOT been admitted yet — that handshake runs
     // asynchronously in the session initiator. Reporting ConnectedOnline here
@@ -327,7 +349,11 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         "cli.start",
     ));
 
-    output::success("EasyNet daemon started");
+    if attached_existing_daemon {
+        output::success("EasyNet daemon attached");
+    } else {
+        output::success("EasyNet daemon started");
+    }
     let control_socket = daemon_handle.control_endpoint().display().to_string();
     let hub_api = creds.api_base();
     let pages_url_root = format!(
@@ -868,9 +894,11 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     // plaintext (load Invariant 2).
     let cfg = resolve_hub_config(args)?;
     let realm = cfg.realm().to_string();
+    preflight_runtime_start(&RuntimeStartRequest::hub(&realm))?;
 
     let start_cfg = with_bridge_lib_env(crate::daemon::DaemonStartConfig::hub().with_realm(&realm));
     let mut daemon_handle = start_cfg.start().context("start hub easynet-daemon")?;
+    let attached_existing_daemon = daemon_handle.child_mut().is_none();
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
     super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
@@ -892,9 +920,13 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
         started_at: Some(chrono::Utc::now().to_rfc3339()),
         credential_verified: None, // Not applicable in hub mode.
     };
-    config::save(&state)?;
+    save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
 
-    output::success("EasyNet hub started");
+    if attached_existing_daemon {
+        output::success("EasyNet hub attached");
+    } else {
+        output::success("EasyNet hub started");
+    }
     let control_socket = daemon_handle.control_endpoint().display().to_string();
     let listen_tcp = cfg
         .listen_tcp()

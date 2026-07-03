@@ -5,6 +5,7 @@ mod error;
 pub mod invocation;
 pub mod join_connection_state;
 pub mod kernel;
+pub mod lifecycle;
 mod process;
 
 pub use error::DaemonError;
