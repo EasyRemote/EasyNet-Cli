@@ -20,9 +20,12 @@ Planned checks:
   `runtime stop` + `runtime status --json` stopped assertions, using debug
   `easynet`/`easynet-daemon`, self-signed TLS, `listen_tcp = 127.0.0.1:0`,
   fixed sandbox Pages port, and a temporary `HOME`.
+- `cargo test --lib --features axon-pb handle_heartbeat_renews_owner_projection_lease`
+  - passed.
+- `cargo test --lib --features axon-pb heartbeat_includes_owner_projection_refresh_batch`
+  - passed.
 
 External/manual gates still required for full product release confidence:
 
 - Backend SSE/read-model product presence propagation test.
 - Graceful stop and abrupt kill propagation budgets against a running Hub.
-- Heartbeat lease renewal test after owner-projection TTL.
