@@ -2,6 +2,7 @@ import json
 import unittest
 
 from easynet_sdk import (
+    BidiStreamDescriptor,
     ErrorCode,
     InvocationBuilder,
     InvocationResult,
@@ -21,6 +22,7 @@ class MemoryRuntimeTransport:
         self.seen_draft: dict[str, object] | None = None
         self.seen_options: dict[str, object] | None = None
         self.seen_signed: dict[str, object] | None = None
+        self.seen_streams: list[dict[str, object]] | None = None
         self.prepare_error: BaseException | None = None
         self.seen_await_id = 0
         self.seen_cancel_reason = ""
@@ -59,6 +61,16 @@ class MemoryRuntimeTransport:
                 [b'{"sequence":1,"event":"terminal","state":"Completed","terminal":true}']
             ),
             b'{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}',
+        )
+
+    def open_bidi(self, draft_json: bytes, streams_json: bytes):
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        self.seen_streams = json.loads(streams_json.decode("utf-8"))
+        from test_bidi import MemoryBidiTransport
+
+        return (
+            MemoryBidiTransport(),
+            b'{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}',
         )
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
@@ -167,6 +179,32 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(
             transport.seen_draft["caller_ura"],
             "easynet:///r/example/agent/alice.sdk",
+        )
+
+    def test_open_bidi_opens_session(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        session = client.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1,
+                    content_type="application/json",
+                    ordering="ordered",
+                ),
+            ),
+        )
+
+        self.assertEqual(session.session_id, "bidi-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            transport.seen_streams,
+            [{"content_type": "application/json", "ordering": "ordered", "stream_id": 1}],
         )
 
     def test_prepare_delegates_to_transport(self) -> None:

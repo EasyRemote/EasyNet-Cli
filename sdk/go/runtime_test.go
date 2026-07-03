@@ -265,6 +265,45 @@ func TestRuntimeClientInvokeStreamOpensStreamHandle(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientOpenBidiOpensSession(t *testing.T) {
+	var seenDraft map[string]any
+	var seenStreams []map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			t.Fatalf("Invoke should not be called")
+			return nil, nil
+		},
+		OpenBidiFunc: func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("draft JSON: %v", err)
+			}
+			if err := json.Unmarshal(streamsJSON, &seenStreams); err != nil {
+				t.Fatalf("streams JSON: %v", err)
+			}
+			return &memoryBidiTransport{}, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	session, err := client.OpenBidi(context.Background(), completeDraftForRuntimeTest(t), []BidiStreamDescriptor{
+		{StreamID: 1, ContentType: "application/json", Ordering: "ordered"},
+	})
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	if session.SessionID() != "bidi-1" || session.State() != BidiOpen {
+		t.Fatalf("unexpected bidi session: id=%q state=%s", session.SessionID(), session.State())
+	}
+	if seenDraft["caller_ura"] != "easynet:///r/example/agent/alice.sdk" {
+		t.Fatalf("draft not forwarded: %#v", seenDraft)
+	}
+	if len(seenStreams) != 1 || seenStreams[0]["stream_id"] != float64(1) || seenStreams[0]["content_type"] != "application/json" {
+		t.Fatalf("streams not forwarded: %#v", seenStreams)
+	}
+}
+
 func TestInvocationResultRejectsInconsistentFailure(t *testing.T) {
 	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
 	if err != nil {

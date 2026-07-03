@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/connection/health/errors/invocation-draft/unary/stream/handle/prepare-submit seam partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/connection/health/errors/invocation-draft/unary/stream/handle/prepare-submit seam partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -28,7 +28,7 @@ method spelling.
 | prepare/sign/submit | partial | handle observation partial | transport seam partial | transport seam partial | gap | gap | gap |
 | unary invoke | partial | partial | transport seam partial | transport seam partial | gap | gap | gap |
 | stream | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
-| bidi | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
+| bidi | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | gap | gap | gap | gap | gap |
 | receipt | fetch/projection partial | fetch/projection partial | gap | gap | gap | gap | gap |
 | publication | carrier partial | carrier partial | gap | gap | gap | gap | gap |
@@ -94,18 +94,20 @@ method spelling.
   state, runtime health readiness facts, schema-backed typed SDK error
   projection, complete Invocation draft construction, prepared/signed Invocation
   DTOs, unary InvocationResult projection, StreamHandle state observation,
+  BidiSession frame ordering/half-close/cancel/terminal-close observation,
   InvocationHandle await/cancel/events observation, and RuntimeClient
-  invoke/invoke-stream/prepare/submit-signed methods behind narrow JSON
-  transport seams; concrete daemon lifecycle/transport, bidi adapters, profile
+  invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow JSON
+  transport seams; concrete daemon lifecycle/transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, runtime health readiness facts, schema-backed typed SDK
   error projection, complete Invocation draft construction, prepared/signed
   Invocation DTOs, unary InvocationResult projection, StreamHandle state
+  observation, BidiSession frame ordering/half-close/cancel/terminal-close
   observation, InvocationHandle await/cancel/events observation, and
-  RuntimeClient invoke/invoke-stream/prepare/submit-signed methods behind narrow
-  transport protocols; concrete daemon lifecycle/transport, bidi adapters,
+  RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow
+  transport protocols; concrete daemon lifecycle/transport, concrete bidi adapters,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
   error source refs, and conformance action execution remain incomplete before
   EasyRemote cutover.

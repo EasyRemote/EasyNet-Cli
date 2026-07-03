@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationDraft
 from .stream import StreamHandle, StreamTransport
 from .signing import PreparedInvocation, SignedInvocation, SigningMaterial
@@ -20,6 +21,11 @@ class RuntimeTransport(Protocol):
         ...
 
     def open_stream(self, draft_json: bytes) -> tuple[StreamTransport, bytes]:
+        ...
+
+    def open_bidi(
+        self, draft_json: bytes, streams_json: bytes
+    ) -> tuple[BidiTransport, bytes]:
         ...
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
@@ -237,6 +243,27 @@ class RuntimeClient:
         except Exception as exc:
             raise _transport_error("open stream transport failed", exc) from exc
         return StreamHandle.from_json(stream_transport, open_json)
+
+    def open_bidi(
+        self,
+        draft: InvocationDraft,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        try:
+            streams_json = json.dumps(
+                [stream.to_json_dict() for stream in streams],
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            bidi_transport, open_json = self._transport.open_bidi(
+                draft.to_json().encode("utf-8"),
+                streams_json,
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("open bidi transport failed", exc) from exc
+        return BidiSession.from_json(bidi_transport, open_json)
 
     def prepare(
         self,

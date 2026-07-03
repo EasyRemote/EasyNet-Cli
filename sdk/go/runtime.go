@@ -11,6 +11,7 @@ import (
 type RuntimeTransport interface {
 	Invoke(ctx context.Context, draftJSON []byte) ([]byte, error)
 	OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error)
+	OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error)
 	Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error)
 	AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error)
@@ -22,6 +23,7 @@ type RuntimeTransport interface {
 type RuntimeTransportFunc struct {
 	InvokeFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
 	OpenStreamFunc   func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error)
+	OpenBidiFunc     func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error)
 	PrepareFunc      func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSignedFunc func(ctx context.Context, signedJSON []byte) ([]byte, error)
 	AwaitHandleFunc  func(ctx context.Context, handleID uint64) ([]byte, error)
@@ -41,6 +43,13 @@ func (f RuntimeTransportFunc) OpenStream(ctx context.Context, draftJSON []byte) 
 		return nil, nil, invalidRuntimeClient("runtime open-stream transport function is required")
 	}
 	return f.OpenStreamFunc(ctx, draftJSON)
+}
+
+func (f RuntimeTransportFunc) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+	if f.OpenBidiFunc == nil {
+		return nil, nil, invalidRuntimeClient("runtime open-bidi transport function is required")
+	}
+	return f.OpenBidiFunc(ctx, draftJSON, streamsJSON)
 }
 
 func (f RuntimeTransportFunc) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
@@ -149,6 +158,33 @@ func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft)
 		return nil, transportRuntimeError("open stream transport failed", err)
 	}
 	return NewStreamHandleFromJSON(streamTransport, rawOpen)
+}
+
+// OpenBidi opens a bidirectional session over a complete Invocation tuple.
+func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	if c == nil || c.transport == nil {
+		return nil, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return nil, invalidRuntimeClient("context is required")
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
+	}
+	streamsJSON, err := json.Marshal(streams)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode bidi stream descriptors: %v", err), err)
+	}
+	bidiTransport, rawOpen, err := c.transport.OpenBidi(ctx, draftJSON, streamsJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return nil, sdkErr
+		}
+		return nil, transportRuntimeError("open bidi transport failed", err)
+	}
+	return NewBidiSessionFromJSON(bidiTransport, rawOpen)
 }
 
 // Prepare delegates canonical material generation to the daemon transport.

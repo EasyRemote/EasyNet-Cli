@@ -5,6 +5,15 @@ expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 """
 
 from .client import Client, DiscoveryTransport, FeatureSet, Version
+from .bidi import (
+    MAX_BIDI_BUFFERED_FRAMES,
+    BidiFrame,
+    BidiOutcome,
+    BidiSession,
+    BidiState,
+    BidiStreamDescriptor,
+    BidiTransport,
+)
 from .connection import (
     ConnectOptions,
     ConnectionState,
@@ -57,6 +66,7 @@ __all__ = [
     "InvocationFailure",
     "InvocationResult",
     "InvocationSignature",
+    "MAX_BIDI_BUFFERED_FRAMES",
     "MAX_STREAM_BUFFERED_EVENTS",
     "PrepareOptions",
     "PreparedInvocation",
@@ -72,6 +82,12 @@ __all__ = [
     "SignedInvocation",
     "SignerPolicy",
     "SigningMaterial",
+    "BidiFrame",
+    "BidiOutcome",
+    "BidiSession",
+    "BidiState",
+    "BidiStreamDescriptor",
+    "BidiTransport",
     "StreamCancel",
     "StreamEvent",
     "StreamHandle",

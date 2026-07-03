@@ -56,6 +56,8 @@ for path in \
   sdk/go/invocation_test.go \
   sdk/go/runtime.go \
   sdk/go/runtime_test.go \
+  sdk/go/bidi.go \
+  sdk/go/bidi_test.go \
   sdk/go/stream.go \
   sdk/go/stream_test.go \
   sdk/go/signing.go \
@@ -68,12 +70,14 @@ for path in \
   sdk/python/easynet_sdk/health.py \
   sdk/python/easynet_sdk/invocation.py \
   sdk/python/easynet_sdk/runtime.py \
+  sdk/python/easynet_sdk/bidi.py \
   sdk/python/easynet_sdk/signing.py \
   sdk/python/easynet_sdk/stream.py \
   sdk/python/tests/test_health.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
+  sdk/python/tests/test_bidi.py \
   sdk/python/tests/test_signing.py \
   sdk/python/tests/test_stream.py \
   sdk/python/tests/test_import_boundary.py
@@ -322,6 +326,7 @@ require_literal sdk/go/invocation.go "InvocationDraft"
 require_literal sdk/go/runtime.go "RuntimeClient"
 require_literal sdk/go/runtime.go "RuntimeTransport"
 require_literal sdk/go/runtime.go "InvokeStream"
+require_literal sdk/go/runtime.go "OpenBidi"
 require_literal sdk/go/runtime.go "InvocationResult"
 require_literal sdk/go/runtime.go "InvocationCancel"
 require_literal sdk/go/runtime.go "Invoke"
@@ -335,6 +340,10 @@ require_literal sdk/go/stream.go "StreamHandle"
 require_literal sdk/go/stream.go "StreamState"
 require_literal sdk/go/stream.go "StreamTransport"
 require_literal sdk/go/stream.go "MaxStreamBufferedEvents"
+require_literal sdk/go/bidi.go "BidiSession"
+require_literal sdk/go/bidi.go "BidiState"
+require_literal sdk/go/bidi.go "BidiTransport"
+require_literal sdk/go/bidi.go "MaxBidiBufferedFrames"
 require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
 require_literal sdk/python/easynet_sdk/client.py "DiscoveryTransport"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
@@ -350,6 +359,7 @@ require_literal sdk/python/easynet_sdk/invocation.py "InvocationDraft"
 require_literal sdk/python/easynet_sdk/runtime.py "RuntimeClient"
 require_literal sdk/python/easynet_sdk/runtime.py "RuntimeTransport"
 require_literal sdk/python/easynet_sdk/runtime.py "invoke_stream"
+require_literal sdk/python/easynet_sdk/runtime.py "open_bidi"
 require_literal sdk/python/easynet_sdk/runtime.py "InvocationResult"
 require_literal sdk/python/easynet_sdk/runtime.py "InvocationCancel"
 require_literal sdk/python/easynet_sdk/runtime.py "invoke"
@@ -363,6 +373,10 @@ require_literal sdk/python/easynet_sdk/stream.py "StreamHandle"
 require_literal sdk/python/easynet_sdk/stream.py "StreamState"
 require_literal sdk/python/easynet_sdk/stream.py "StreamTransport"
 require_literal sdk/python/easynet_sdk/stream.py "MAX_STREAM_BUFFERED_EVENTS"
+require_literal sdk/python/easynet_sdk/bidi.py "BidiSession"
+require_literal sdk/python/easynet_sdk/bidi.py "BidiState"
+require_literal sdk/python/easynet_sdk/bidi.py "BidiTransport"
+require_literal sdk/python/easynet_sdk/bidi.py "MAX_BIDI_BUFFERED_FRAMES"
 require_literal sdk/python/tests/test_import_boundary.py "test_public_python_sdk_does_not_import_forbidden_runtime_boundaries"
 require_literal sdk/SDK_INTERFACE_SPEC.md "PreparedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "SignedInvocation"
