@@ -15,10 +15,14 @@ Planned checks:
 - `bash tests/scripts/test_check_release_package_contract.sh` - passed.
 - `cargo test --test script_checks release_package_contract_script_holds` -
   passed.
+- Hermetic hub-mode lifecycle soak - passed 50 cycles:
+  `runtime start --as-hub` + `runtime status --json` running assertions +
+  `runtime stop` + `runtime status --json` stopped assertions, using debug
+  `easynet`/`easynet-daemon`, self-signed TLS, `listen_tcp = 127.0.0.1:0`,
+  fixed sandbox Pages port, and a temporary `HOME`.
 
 External/manual gates still required for full product release confidence:
 
-- 50-cycle sandbox `easynet runtime start` / `runtime stop` process test.
 - Backend SSE/read-model product presence propagation test.
 - Graceful stop and abrupt kill propagation budgets against a running Hub.
 - Heartbeat lease renewal test after owner-projection TTL.
