@@ -19,7 +19,7 @@
 //
 // Who reads this
 // --------------
-// * `runtime::directory` enumerates the files on disk.
+// * `daemon::execution::mission::directory` enumerates the files on disk.
 // * `publish` (dry-run in PR-4; live in PR-5b) converts each manifest
 //   into the `<agent>.<verb>` ToolSpec it would register on an
 //   `AbilityToolAdapter`.
@@ -37,11 +37,11 @@
 //
 // What is NOT in this file
 // ------------------------
-// * Filesystem enumeration — `runtime::directory` walks
+// * Filesystem enumeration — `daemon::execution::mission::directory` walks
 //   `<agent-root>/abilities/` and parses each file.
 // * Invocation plumbing — `publish/` turns a manifest into a
-//   tool-registration call; `runtime::dispatch` does the actual
-//   subprocess wrangling when an invocation lands.
+//   tool-registration call; `daemon::execution::mission::dispatch` does the
+//   actual subprocess wrangling when an invocation lands.
 // * Any agent-name awareness — the manifest does NOT know which
 //   agent it belongs to. The agent name is contributed by the
 //   enclosing directory: `<agent>` + `<verb>` → `<agent>.<verb>`
@@ -1287,12 +1287,13 @@ impl McpExec {
 /// as a `chat` ability so external callers can reach it over the
 /// network without any extra operator action.
 ///
-/// Parity with `runtime::agent_ability_specs::chat_ability`
-/// ----------------------------------------------
+/// Parity with `daemon::execution::mission::agent_ability_specs::chat_ability`
+/// --------------------------------------------------------------------------
 /// Two sources of truth exist for the `chat` ability's shape until
 /// a later PR collapses them: this helper (on-disk template) and
-/// `runtime::agent_ability_specs::chat_ability` (hardcoded baseline used by
-/// today's dispatch + discovery). Only the **input_schema** is a
+/// `daemon::execution::mission::agent_ability_specs::chat_ability`
+/// (hardcoded baseline used by today's dispatch + discovery). Only
+/// the **input_schema** is a
 /// protocol contract that must match — publishing two different
 /// tool specs depending on which path discovery goes through is
 /// exactly the silent-fail the parity guard exists to catch.
@@ -1303,8 +1304,9 @@ impl McpExec {
 ///
 /// The input_schema parity is pinned by
 /// `hardcoded_chat_ability_input_schema_agrees_with_default_chat_manifest`
-/// in `runtime::agent_ability_specs`'s test module — if you touch the shape
-/// on either side, update both or the parity test will fail loud.
+/// in `daemon::execution::mission::agent_ability_specs`'s test module — if
+/// you touch the shape on either side, update both or the parity test will
+/// fail loud.
 pub fn default_chat_manifest() -> AbilityManifest {
     // The schema below is the wire contract for the chat ability. It
     // is intentionally backward-compatible: only `prompt` is required;
@@ -1657,9 +1659,9 @@ mod tests {
     #[test]
     fn default_chat_manifest_matches_hardcoded_baseline_shape() {
         // Guards against the default-manifest helper drifting away
-        // from the runtime::agent_ability_specs baseline before the two paths
-        // converge in a later PR. If this breaks, update both
-        // sides in the same PR, not one at a time.
+        // from the daemon::execution::mission::agent_ability_specs baseline
+        // before the two paths converge in a later PR. If this breaks, update
+        // both sides in the same PR, not one at a time.
         let m = default_chat_manifest();
         assert_eq!(m.name(), "chat");
         let props = m

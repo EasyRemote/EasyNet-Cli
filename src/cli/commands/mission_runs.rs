@@ -212,7 +212,7 @@ impl MissionRunDir {
 /// Allocate a unique mission run directory for `stamp_name` under `root`,
 /// retrying with `-1`, `-2`, ... on collision.
 ///
-/// Concurrency note: the same TOCTOU bug the iter-2 `runtime::run_store`
+/// Concurrency note: the same TOCTOU bug the iter-2 mission run store
 /// fix addressed applies here verbatim — `while exists() { ... }
 /// create_dir_all(...)` lets two racers both pass the existence check
 /// and then both succeed (since `create_dir_all` treats "already
@@ -488,9 +488,10 @@ pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
 // logic without a corresponding gain.
 //
 // The former MCP mission handler bypass has been collapsed onto this entry:
-// `daemon::ability::builtins::automation::mission` and `runtime::executors::eal` both
-// delegate here. Keep this comment in sync with the grep invariant above; a
-// second production mission execution path is a release blocker, not a TODO.
+// `daemon::ability::builtins::automation::mission` and
+// `daemon::execution::mission::executors::eal` both delegate here. Keep this
+// comment in sync with the grep invariant above; a second production mission
+// execution path is a release blocker, not a TODO.
 
 /// Options for `run_mission_inproc`. Kept narrow on purpose: anything that
 /// is not strictly required by both the CLI `mission run` path and the
@@ -683,8 +684,9 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
         .to_string();
 
     // Execute. The mission-context env var is set here so the dispatch
-    // invariant in `runtime::dispatch::send_to_agent_with_depth` can verify
-    // that every cross-agent call originates from a real mission run dir.
+    // invariant in
+    // `daemon::execution::mission::dispatch::send_to_agent_with_depth` can
+    // verify that every cross-agent call originates from a real mission run dir.
     // The RAII guard restores the previous value (or removes the var)
     // even if the interpreter panics.
     let _ctx = MissionContextGuard::enter(&run_id, opts.invocation_context.clone());
@@ -801,7 +803,7 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
 // `EASYNET_MISSION_ID` is reserved for the cross-process boundary. When the
 // runtime spawns an external agent CLI, `DispatchContext::serialize_to_env`
 // writes the child command's env map; the parent process env is never mutated.
-// See `runtime::context` for the design rationale.
+// See `daemon::execution::mission::context` for the design rationale.
 /// RAII scope for the mission's typed dispatch context.
 ///
 /// Audit invariant: NOTHING in-process writes `EASYNET_MISSION_ID`.

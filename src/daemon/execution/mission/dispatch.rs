@@ -369,7 +369,7 @@ pub fn send_to_agent_with_depth_and_progress(
     }
 
     // Resolve the active dispatch context. The typed channel
-    // (`runtime::context`) is consulted first; the env-var reader inside
+    // (`daemon::execution::mission::context`) is consulted first; the env-var reader inside
     // `context::current()` is the explicit subprocess boundary for children
     // that inherit their parent context through env vars.
     //
@@ -484,7 +484,7 @@ pub fn send_to_agent_with_depth_and_progress(
 
     // Build env for the child subprocess. The env vars are how the typed
     // context crosses the process boundary into the spawned agent CLI —
-    // see `runtime::context` for the design rationale. We always emit the
+    // see `daemon::execution::mission::context` for the design rationale. We always emit the
     // depth (incremented by one for the child) and propagate the mission
     // id when one is active.
     //

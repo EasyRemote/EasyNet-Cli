@@ -8,10 +8,11 @@
 // ----------------------
 // Two call sites used to hand-roll TOML quoting:
 //
-//   1. `runtime::codex::invoke_exec` formats `-c key=value` overrides for
-//      the `codex` CLI, which parses each value as a TOML expression.
-//   2. `runtime::workspace::write_codex_config` emits a `~/<workspace>/
-//      .codex/config.toml` file consumed by the same parser.
+//   1. `daemon::execution::mission::drivers::codex::invoke_exec` formats
+//      `-c key=value` overrides for the `codex` CLI, which parses each value
+//      as a TOML expression.
+//   2. `daemon::execution::mission::workspace::write_codex_config` emits a
+//      `~/<workspace>/.codex/config.toml` file consumed by the same parser.
 //
 // Both did the same thing — `format!("\"{}\"", s.replace('"', "\\\""))`
 // — and both had the same bug: backslashes (`\`), control characters,

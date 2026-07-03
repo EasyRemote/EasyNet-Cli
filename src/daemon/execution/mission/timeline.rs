@@ -162,7 +162,7 @@ impl TimelineWriter {
     /// Subscribers obtained *after* some events have already been
     /// emitted do NOT see those past events on the channel — only
     /// events emitted from this call forward. Resume semantics
-    /// (see `Session::resume` in `runtime::session`) explicitly
+    /// (see `Session::resume` in `daemon::execution::mission::session`) explicitly
     /// replay the on-disk prefix before attaching the live
     /// subscriber, so the two pieces compose into a full
     /// "replay + tail" stream.
@@ -186,7 +186,7 @@ impl TimelineWriter {
     /// monotonicity at the state-machine layer above this writer.
     /// The writer does not enforce that invariant; enforcing it
     /// here would require terminal-state tracking that duplicates
-    /// the state machine in `runtime::dispatch`.
+    /// the state machine in `daemon::execution::mission::dispatch`.
     pub fn emit(
         &self,
         event_type: impl Into<String>,

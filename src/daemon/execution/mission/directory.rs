@@ -19,7 +19,7 @@
 //     mcp_servers.json      — per-agent MCP server list (opt-in)
 //     .env                  — per-agent env vars, chmod 600 on unix
 //     runs/                 — per-run artefact directories (run_store)
-//     CLAUDE.md / AGENTS.md — populated by `runtime::workspace` when a
+//     CLAUDE.md / AGENTS.md — populated by `daemon::execution::mission::workspace` when a
 //                             runtime-native projection runs. Their
 //                             presence is not an AgentDirectory invariant;
 //                             workspace-layer calls ensure them before
@@ -34,7 +34,7 @@
 // --------------------------------------------------------
 // `.mcp.json`, `.codex/config.toml`, `.agents/skills/`, and the `git
 // init` call are projections of the spec into runtime-native shapes.
-// That is the job of `runtime::workspace` — and the reversal of
+// That is the job of `daemon::execution::mission::workspace` — and the reversal of
 // workspace.rs from "creator" to "projector" is a separate PR. This
 // module's only contract is the agent root layout itself.
 //

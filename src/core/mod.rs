@@ -31,11 +31,10 @@
 
 pub mod ability;
 pub mod agent;
-/// Pure runtime-domain identifier types (TenantId/NodeId/ScheduleId).
-/// Moved from `runtime::domain` (T4.1 pre-move a): they have zero
-/// internal dependencies, and their old home made `persistence`
-/// reach upward into `runtime` — the only production edge keeping
-/// the future `easynet-domain` leaf crate from being a leaf.
+/// Pure domain identifier types (TenantId/NodeId/ScheduleId).
+/// These have zero internal dependencies; keeping them in `core`
+/// prevents persistence and execution modules from depending upward
+/// on a higher-level owner.
 pub mod domain;
 pub mod identity;
 pub mod ura;

@@ -25,7 +25,7 @@
 //
 // Reuses the runtime package store
 // --------------------------------
-// `runtime::skill_store::{install_skill, upgrade_skill, remove_skill}`
+// `daemon::resources::skills::store::{install_skill, upgrade_skill, remove_skill}`
 // is the canonical filesystem implementation. CLI commands call
 // these abilities; they do not import or duplicate the store.
 //

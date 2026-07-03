@@ -156,7 +156,7 @@ impl From<Value> for StepDispatchOutcome {
 // ── Agent-Aware Dispatcher ──
 //
 // Matches on `IrTarget` to choose between agent CLI dispatch (via
-// `runtime::dispatch::send_to_agent`) and bridge dispatch. There is no
+// `daemon::execution::mission::dispatch::send_to_agent`) and bridge dispatch. There is no
 // `is_agent` string check anywhere — the surface form already chose
 // the variant at parse time, and the planner baked it into the IR.
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.

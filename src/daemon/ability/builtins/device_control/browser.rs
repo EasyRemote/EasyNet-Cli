@@ -337,7 +337,7 @@ impl BrowserSessionService {
         // session URA: easynet:///r/local/resource/daemon.browser/<ulid>
         // v0 uses "local" as realm; RFC-013 will anchor realm/device from
         // the daemon's self-identity. The id segment reuses the existing
-        // process-wide ULID minter (`runtime::keyring::store::ulid_like`)
+        // process-wide ULID minter (`daemon::keyring::store::ulid_like`)
         // so we don't fork a second generator with weaker uniqueness.
         // The URA literal is built through `crate::core::ura::resource_dot_ura`
         // so the centralised URA construction lint

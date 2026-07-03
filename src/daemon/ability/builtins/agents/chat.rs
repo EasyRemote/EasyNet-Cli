@@ -9,10 +9,10 @@
 //              same registered handler instead of each maintaining
 //              their own special-case path into `send_external`.
 //
-// Why this is in `system::*` even though the wire name is `<agent>.chat`
-// ----------------------------------------------------------------------
-// The directory `runtime::system/` is the registration surface — every
-// file here mounts handlers on the registry. The `system.<feature>`
+// Why this lives in daemon builtins even though the wire name is `<agent>.chat`
+// --------------------------------------------------------------------------------
+// The daemon ability builtins tree is the registration surface: files here
+// mount handlers on the registry. The `system.<feature>`
 // naming convention is a rule about *which abilities are device-level*,
 // not a rule about which files are allowed to register handlers. Chat
 // is bound to a specific agent (so its name is `<agent>.chat`, not
@@ -94,7 +94,7 @@ use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
 /// rename here would have to ripple through:
-///   * the parity test in `runtime::agent_ability_specs`
+///   * the parity test in `daemon::execution::mission::agent_ability_specs`
 ///   * the manifest seed in `core::ability_spec::default_chat_manifest`
 ///   * the EasyNet backend's frontend that synthesizes / renders chat
 ///
@@ -1083,7 +1083,7 @@ fn stream_handler(
 /// Build the list of ability names that would be exposed as tools to
 /// the LLM under the requested `skills` filter. Pulls the agent's
 /// abilities from the same enumerator the rest of the system uses
-/// (`runtime::agent_ability_specs::abilities_for`) so an operator's
+/// (`daemon::execution::mission::agent_ability_specs::abilities_for`) so an operator's
 /// hand-edited manifest is reflected here too.
 ///
 /// The `<agent>.chat` ability itself is never exposed as a tool to
@@ -2887,7 +2887,7 @@ mod tests {
     ///     │
     ///     ▼
     ///   build_agent_ability_handler() spots manifest.exec().is_some()
-    ///   and routes to runtime::executors::shell::run_shell_exec
+    ///   and routes to daemon::execution::mission::executors::shell::run_shell_exec
     ///     │
     ///     ▼
     ///   subprocess `printf %s ok` is spawned (no LLM, no chat)

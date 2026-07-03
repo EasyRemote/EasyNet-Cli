@@ -54,7 +54,7 @@ use crate::daemon::invocation::receipts::runtime_record::{
 /// router, not a state owner.
 ///
 /// Sub-services are held as `Arc` so the same handle can be
-/// shared with the `runtime::system::*` ability handlers without
+/// shared with the `daemon::ability::builtins::*` ability handlers without
 /// the Kernel having to re-vend through method delegation. The
 /// daemon bin builds the registry off the same Arcs the Kernel
 /// holds, so dispatch and direct KernelApi calls observe one
@@ -530,7 +530,7 @@ fn receipt_event_payload(
 /// permission gate. Device-host/control-plane abilities run inside the
 /// daemon authority; agent-shaped abilities require broker approval.
 ///
-/// A future per-ability sensitivity config (`runtime::agent_ability_specs` or
+/// A future per-ability sensitivity config (`daemon::execution::mission::agent_ability_specs` or
 /// the manifest layer) would replace this name-prefix check with a
 /// lookup; until then the prefix-based rule is exactly what was
 /// there before, just generalised away from "is_chat" to "is_agent".

@@ -200,7 +200,7 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
 
     /// Template substitution must run BEFORE the EAL parser AND
-    /// before `run_mission_inproc` reaches `runtime::config::load`.
+    /// before `run_mission_inproc` reaches `daemon::persistence::config::load`.
     /// A missing arg error attributable to the executor's caller
     /// label — not to a parser or daemon-state error several layers
     /// down — is the contract this test pins. It fires entirely on

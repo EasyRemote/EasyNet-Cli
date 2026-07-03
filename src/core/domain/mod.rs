@@ -95,8 +95,8 @@ impl TenantId {
 }
 
 /// A live agent run. v1 equivalent of the handle the existing
-/// `runtime::session::Session` already owns; the domain object here
-/// is the public face that KernelApi hands to a subscriber (or to
+/// `daemon::execution::mission::session::Session` already owns; the domain
+/// object here is the public face that KernelApi hands to a subscriber (or to
 /// `session.attach` ability handler).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {

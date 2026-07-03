@@ -209,7 +209,7 @@ impl FederatedUserResolver {
 
 /// Parse the realm slice from a canonical EasyNet user URA
 /// (`easynet:///r/<realm>/user/<id>`). Mirrors
-/// `runtime::keyring::abilities::parse_realm_from_user_ura` —
+/// `daemon::keyring::abilities::parse_realm_from_user_ura` —
 /// duplicated rather than re-exported to keep the resolver
 /// layer free of any cross-module imports beyond
 /// `super::federated_bindings`.

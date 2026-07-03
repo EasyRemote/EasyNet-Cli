@@ -735,7 +735,7 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
         let desc = description_for(&name);
         assert_ne!(
             desc, "(system ability)",
-            "{name} is missing a description_for arm — add one in runtime::system::mod"
+            "{name} is missing a description_for arm — add one in daemon::ability::catalog::catalog_metadata"
         );
         let schema = input_schema_for(&name);
         // The default fallback returns `{"type":"object"}` with

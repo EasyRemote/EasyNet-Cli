@@ -7,7 +7,7 @@
 // The CLI layer is intentionally thin: it maps terminal arguments to
 // daemon-hosted Axon abilities and renders their responses. The
 // filesystem package-store implementation lives in
-// `runtime::skill_store`, which is what the daemon abilities call.
+// `daemon::resources::skills::store`, which is what the daemon abilities call.
 
 use clap::{Args, Subcommand};
 use console::style;

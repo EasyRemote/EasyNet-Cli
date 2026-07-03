@@ -2076,7 +2076,7 @@ fn every_published_ability_has_a_real_invoke_test() {
         .filter(|n| !n.ends_with(".chat")) // dynamic per-agent, not in this catalog
         // RFC-002 §3.3: keyring abilities are owner-namespaced and
         // covered by their own unit tests in
-        // `runtime::keyring::abilities::tests`.
+        // `daemon::keyring::abilities::tests`.
         .filter(|n| !n.starts_with("device.keyring."))
         .collect();
     let mut covered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

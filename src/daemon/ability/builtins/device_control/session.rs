@@ -24,7 +24,7 @@
 // Resume + tail composition
 // -------------------------
 // The "replay then subscribe" pattern is already in
-// `runtime::session::Session::resume_replay` + `subscribe`. This
+// `daemon::execution::mission::session::Session::resume_replay` + `subscribe`. This
 // handler composes them: read the on-disk prefix from `since_seq`
 // (P3 contract), then attach a broadcast subscriber for live
 // tailing. Boundary handoff is sequence-numbered so a Client sees

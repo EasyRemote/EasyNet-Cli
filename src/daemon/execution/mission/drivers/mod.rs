@@ -5,22 +5,21 @@
 // Description: Per-runtime subprocess drivers. Each file here owns
 //              exactly one runtime binary (claude-code, codex, …)
 //              and exports an `impl AgentAdapter` consumed by
-//              `runtime::dispatch`.
+//              `daemon::execution::mission::dispatch`.
 //
 // New-driver checklist:
 //   1. Add `pub(crate) mod <name>;` below.
 //   2. Implement spawn + stream parse + usage accounting inside
-//      `<name>.rs`. Share subprocess helpers through
-//      `runtime::process_runner`, NOT by reaching into sibling
-//      drivers.
+//      `<name>.rs`. Share subprocess helpers through mission-owned helper
+//      modules, NOT by reaching into sibling drivers.
 //   3. Write `impl AgentAdapter for <name>::<Name>Adapter { ... }`.
 //   4. Add a row to `registry()` below mapping the matching
 //      `AgentType` variant to the adapter singleton.
 //
 // What does NOT live here:
-//   - Multi-agent orchestration (`runtime::conversation`).
-//   - Shared stream rendering (`runtime::stream_ui`).
-//   - Per-run persistence (`runtime::run_store`).
+//   - Multi-agent orchestration.
+//   - Shared stream rendering.
+//   - Per-run persistence (`daemon::execution::mission::run_store`).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

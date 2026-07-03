@@ -15,3 +15,7 @@
 - Decision: Preserve `VERSION` and `README.pdf` as retained root release
   artifacts, and make the structure guard require them instead of treating them
   as old-root debt.
+- Decision: Track root `Cargo.lock`; the final repository layout names it as a
+  root file, so a local ignored lockfile is not sufficient.
+- Decision: Rewrite active source comments that pointed at retired
+  EasyNet-Cli `runtime::...` ownership paths to current semantic modules.

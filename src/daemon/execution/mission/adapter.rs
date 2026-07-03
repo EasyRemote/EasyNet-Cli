@@ -63,7 +63,7 @@ pub struct InvokeOpts {
     /// trait signature unchanged (still sync, no async_trait) —
     /// the driver emits synchronously and the P2 discipline is
     /// upheld by `TimelineWriter::emit` holding the fsync
-    /// barrier before broadcast wake (see `runtime::timeline`).
+    /// barrier before broadcast wake (see `daemon::execution::mission::timeline`).
     pub timeline: Option<Arc<TimelineWriter>>,
     /// Optional live-progress callback. When Some, the driver
     /// invokes it once per stdout line emitted by the spawned

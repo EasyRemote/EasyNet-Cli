@@ -32,6 +32,10 @@
 - `cargo run --bin gen-ability-tomls --features axon-pb`: passed with
   `0 updated, 129 unchanged, 0 deleted` on final run.
 - `cargo check --all-targets --features axon-pb`: passed.
+- `rg -n "runtime::(agent_ability_specs|system|workspace|directory|dispatch|context|keyring|skill_store|session|timeline|run_store|executors|codex|process_runner|conversation|stream_ui|config|domain)" src --glob '!target/**'`:
+  passed with no matches.
+- `git ls-files --error-unmatch Cargo.lock`: passed after adding the lockfile
+  to version control.
 
 ## Residual Risk
 

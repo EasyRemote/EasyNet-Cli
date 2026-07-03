@@ -419,7 +419,7 @@ pub enum PriorChain {
 }
 
 /// One event in a runtime invocation's lifetime, replicated here for
-/// compatibility with `runtime::timeline::TimelineEvent`. The
+/// compatibility with `daemon::execution::mission::timeline::TimelineEvent`. The
 /// timeline layer remains authoritative; this struct only mirrors
 /// the fields a Receipt needs to embed post-terminal.
 #[derive(Debug, Clone, Serialize, Deserialize)]

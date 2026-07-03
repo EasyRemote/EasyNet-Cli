@@ -119,7 +119,7 @@ pub struct AgentEntry {
     /// Path to this agent's on-disk root directory. v2-only
     /// field: absent on v1 rows (load-path fills it from the
     /// legacy workspace path). Having it present is what lets
-    /// `runtime::workspace` and `cli::agent list`
+    /// `daemon::execution::mission::workspace` and `cli::agent list`
     /// resolve where an agent lives without re-computing the
     /// path from `state_dir + name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

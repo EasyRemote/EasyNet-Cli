@@ -35,7 +35,7 @@
 // ------------------------
 // * The `AgentDirectory` struct that walks the filesystem, creates
 //   a fresh layout, or lists existing agents — lives in
-//   `runtime::directory` (future PR).
+//   `daemon::execution::mission::directory` (future PR).
 // * The `AgentRegistry` entry that resolves `name -> path`. That
 //   still lives in `registry::agents` for now; a future PR
 //   replaces today's `AgentEntry::{command, args, model, env, …}`

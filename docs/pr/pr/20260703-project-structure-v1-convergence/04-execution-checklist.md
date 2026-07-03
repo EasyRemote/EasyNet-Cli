@@ -11,5 +11,8 @@
 - [x] Preserve `VERSION` and `README.pdf` as retained root release artifacts.
 - [x] Extend the structure guard to require retained root artifacts and reject
       extra tracked root product files.
+- [x] Track root `Cargo.lock` as part of the final repository layout.
+- [x] Remove active source comments that still point at retired EasyNet-Cli
+      `runtime::...` ownership paths.
 - [x] Re-run formatting, compile, structure, and script checks after cleanup.
 - [x] Split commits by semantic boundary if the verified state is coherent.

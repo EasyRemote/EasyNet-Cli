@@ -9,7 +9,7 @@
 //              knowledge docs. This module materialises those
 //              *derived* files; the *source* (agent.toml, per-agent
 //              abilities and skills) lives under `AgentDirectory`
-//              and is owned by `runtime::directory`.
+//              and is owned by `daemon::execution::mission::directory`.
 //
 // Why "projection"
 // ----------------
@@ -220,8 +220,9 @@ fn write_codex_config(ws: &Path, model: Option<&str>, agent_name: &str) -> anyho
     // `toml_basic_string` — the previous open-coded `format!("\"{s}\"")`
     // emitted invalid TOML for any value containing `\` (e.g. Windows
     // paths) or embedded quotes, silently dropping the override. The
-    // same encoder is used by `runtime::codex` so the runtime form (`-c`
-    // overrides) and the on-disk form (this file) stay in lock-step.
+    // same encoder is used by `daemon::execution::mission::drivers::codex`
+    // so the runtime form (`-c` overrides) and the on-disk form (this file)
+    // stay in lock-step.
     let (cmd, args, env) = build_mcp_entry(agent_name);
     let args_toml = args
         .iter()

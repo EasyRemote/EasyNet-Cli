@@ -16,7 +16,8 @@
 // PersistentLog in PR-7 Commit 2. `meta.json::invocation_id` is the
 // cross-reference key: operators locate the event stream at
 // `$AXON_INVOCATION_LOG_DIR/<invocation_id>.jsonl`. See
-// `runtime::session::Session` and `runtime::timeline::TimelineWriter`.
+// `daemon::execution::mission::session::Session` and
+// `daemon::execution::mission::timeline::TimelineWriter`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -127,8 +128,8 @@ pub struct RunMeta {
     /// id lets an operator cross-reference the run directory with
     /// the on-disk event log at `$AXON_INVOCATION_LOG_DIR/<id>.jsonl`,
     /// which carries the P1-P6-compliant event stream (see
-    /// `runtime::session::Session`). `#[serde(default)]` keeps
-    /// deserialisation backward-compatible with meta.json files
+    /// `daemon::execution::mission::session::Session`). `#[serde(default)]`
+    /// keeps deserialisation backward-compatible with meta.json files
     /// written before this field existed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub invocation_id: String,
