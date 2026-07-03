@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-release-packaging/release/install.sh — sandbox-mode replay of `packaging/release/install.sh` against
+# e2e-release-install.sh — sandbox-mode replay of `packaging/release/install.sh` against
 # a Phase-A tarball.
 #
 # What this proves
@@ -41,7 +41,7 @@
 #
 # Usage
 # -----
-#   packaging/release/e2e-release-packaging/release/install.sh \
+#   packaging/release/e2e-release-install.sh \
 #     [--tarball <path>] \
 #     [--prefix <path>] \
 #     [--keep-prefix]
@@ -74,7 +74,7 @@ while [ $# -gt 0 ]; do
             exit 0
             ;;
         *)
-            echo "e2e-release-packaging/release/install.sh: unknown flag $1" >&2
+            echo "e2e-release-install.sh: unknown flag $1" >&2
             exit 2
             ;;
     esac
@@ -84,13 +84,13 @@ done
 if [ -z "$tarball" ]; then
     tarball="$(ls -t "$cli_root/target/release-tarball"/easynet-*.tar.gz 2>/dev/null | head -1 || true)"
     if [ -z "$tarball" ]; then
-        echo "e2e-release-packaging/release/install.sh: no tarball passed and none in $cli_root/target/release-tarball/" >&2
+        echo "e2e-release-install.sh: no tarball passed and none in $cli_root/target/release-tarball/" >&2
         echo "  Run packaging/release/build-release-tarball.sh first." >&2
         exit 1
     fi
 fi
 if [ ! -f "$tarball" ]; then
-    echo "e2e-release-packaging/release/install.sh: tarball not found: $tarball" >&2
+    echo "e2e-release-install.sh: tarball not found: $tarball" >&2
     exit 1
 fi
 
@@ -115,7 +115,7 @@ trap cleanup EXIT
 case "$(uname -s)" in
     Linux)  lib_ext="so" ;;
     Darwin) lib_ext="dylib" ;;
-    *) echo "e2e-release-packaging/release/install.sh: unsupported OS" >&2; exit 1 ;;
+    *) echo "e2e-release-install.sh: unsupported OS" >&2; exit 1 ;;
 esac
 
 echo "==> sandbox prefix: $prefix"

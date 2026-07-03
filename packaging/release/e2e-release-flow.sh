@@ -14,7 +14,7 @@
 #
 # What this harness asserts
 # -------------------------
-# Against a release-shape sandbox install (see e2e-release-packaging/release/install.sh):
+# Against a release-shape sandbox install (see e2e-release-install.sh):
 #
 #   1. `easynet device join <token>` against a local dev-backend
 #      succeeds and writes credentials.json + daemon-config.toml.
@@ -74,7 +74,7 @@ baseline_axon_pids=""
 own_backend=0
 
 # Allow caller to pass an existing sandbox prefix (skips the install
-# step). When empty, run e2e-release-packaging/release/install.sh first.
+# step). When empty, run e2e-release-install.sh first.
 prefix="${EASYNET_TEST_PREFIX:-}"
 keep_prefix=0
 keep_state=0
@@ -137,7 +137,7 @@ trap cleanup EXIT
 # ── 1. Install the release tarball into a sandbox ────────────────
 if [ -z "$prefix" ]; then
     echo "==> [1/7] install release tarball under a sandbox prefix"
-    install_out="$(bash "$script_dir/e2e-release-packaging/release/install.sh" --keep-prefix 2>&1)"
+    install_out="$(bash "$script_dir/e2e-release-install.sh" --keep-prefix 2>&1)"
     if [ $? -ne 0 ]; then
         echo "$install_out"
         exit 1

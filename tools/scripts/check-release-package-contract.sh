@@ -43,6 +43,14 @@ require_literal() {
     fi
 }
 
+forbid_literal() {
+    local file="$1"
+    local literal="$2"
+    if grep -Fq -- "$literal" "$file"; then
+        record_violation "forbidden literal present in $file" "$literal"
+    fi
+}
+
 if require_file "packaging/release/build-release-tarball.sh"; then
     for literal in \
         "--bin easynet-keyring" \
@@ -77,6 +85,11 @@ if require_file "packaging/release/e2e-release-install.sh"; then
     do
         require_literal "packaging/release/e2e-release-install.sh" "$literal"
     done
+fi
+
+if require_file "packaging/release/e2e-release-flow.sh"; then
+    require_literal "packaging/release/e2e-release-flow.sh" 'bash "$script_dir/e2e-release-install.sh"'
+    forbid_literal "packaging/release/e2e-release-flow.sh" "e2e-release-packaging/release/install.sh"
 fi
 
 if require_file "include/easynet_cli.h"; then
