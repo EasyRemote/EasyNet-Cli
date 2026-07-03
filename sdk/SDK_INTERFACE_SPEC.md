@@ -95,6 +95,12 @@ dropped-event, and terminal state. It must not infer cursor positions from raw
 event timestamps or array indexes, create a second event bus, claim
 device/session/invocation event subscriptions, or promise daemon-side filtering
 until the daemon stream consumes those query fields.
+Admin + Gateway carrier/status projection may build complete Invocation
+carriers for daemon `agent.list`, `agent.start`, `agent.stop`,
+`agent.refresh`, and `session.list`; project daemon lifecycle facts into
+`GatewayStatus`; and normalize daemon agent rows/lifecycle results into SDK
+DTOs. It must not own backend account state, pairing-token HTTP, certificate
+policy, browser session UX, or fabricate hosted-agent URAs.
 
 ## Invocation Tuple
 

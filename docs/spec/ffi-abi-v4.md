@@ -16,6 +16,9 @@ than implementing transport facades themselves. Events directory-stream carrier
 and frame projection helpers expose the daemon-owned
 `federation.subscribe_directory_v2` stream without creating a second SDK event
 bus.
+Admin + Gateway carrier and status projection helpers expose daemon-owned
+agent/session lifecycle abilities and lifecycle readiness facts without moving
+backend account, pairing-token, or certificate policy into the SDK.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -542,6 +545,83 @@ states. ABI v4 Events support is `directory_stream_partial`: it stabilizes the
 real daemon directory stream carrier/projection boundary, but does not claim
 device/session/invocation event subscriptions, backend SSE/WebSocket fanout, or
 daemon-side directory filtering semantics.
+
+### 2.14 Admin + Gateway Carriers And Status
+
+```c
+int32_t easynet_admin_build_agent_list_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_admin_build_agent_start_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_admin_build_agent_stop_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_admin_build_agent_refresh_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_admin_build_session_list_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_admin_project_gateway_status(
+    EasynetHandle handle,
+    const char* status_json,
+    char** out_status_json
+);
+
+int32_t easynet_admin_project_agent_records(
+    EasynetHandle handle,
+    const char* agents_json,
+    char** out_agents_json
+);
+
+int32_t easynet_admin_project_agent_lifecycle_result(
+    EasynetHandle handle,
+    const char* result_json,
+    char** out_result_json
+);
+```
+
+Admin + Gateway functions are scoped to a live `EasynetHandle`, matching the
+SDK object graph's `AdminClient`. The carrier builders return complete
+Invocation JSON for daemon-owned `agent.list`, `agent.start`, `agent.stop`,
+`agent.refresh`, and `session.list`. They require explicit caller, callee,
+subject, descriptor version, nonce, and causal context fields. Bindings submit
+returned carriers through Runtime Core; these helpers do not execute admin
+operations directly.
+
+`easynet_admin_project_gateway_status` accepts daemon lifecycle/status JSON
+with `runtime_status`, `daemon`, `runtime`, and `product_presence` facts and
+returns `GatewayStatus`. The projection keeps process liveness, control
+readiness, Invocation runtime readiness, directory readiness, trust readiness,
+and public listener readiness as separate booleans. A control-only daemon is
+reported as degraded rather than collapsed into a generic failure.
+
+`easynet_admin_project_agent_records` projects daemon `agent.list` results into
+SDK `AgentRecord` page DTOs. Missing hosted-agent URAs remain null; the SDK
+derives owner refs only from valid Agent URAs and never fabricates identities.
+`easynet_admin_project_agent_lifecycle_result` normalizes daemon
+`agent.start`, `agent.stop`, and `agent.refresh` outcomes into typed lifecycle
+results. ABI v4 Admin + Gateway support is `carrier_status_partial`: pairing
+token creation/validation, credential verification, certificate policy,
+gateway onboarding UX, and full device-session CRUD remain future daemon or
+product-profile work.
 
 ## 3. Error Code Table
 

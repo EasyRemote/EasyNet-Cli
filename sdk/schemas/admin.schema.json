@@ -1,16 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://easynet.run/sdk/schemas/admin.schema.json",
-  "title": "AdminRecord",
+  "title": "AdminGatewayResult",
   "type": "object",
   "additionalProperties": true,
-  "required": ["profile", "kind", "state"],
+  "required": ["profile", "kind", "state", "metadata"],
   "properties": {
     "profile": {"const": "admin_gateway"},
     "kind": {"type": "string", "minLength": 1},
+    "operation": {"type": "string", "minLength": 1},
     "state": {"type": "string", "minLength": 1},
-    "device_ura": {"type": ["string", "null"]},
     "agent_ura": {"type": ["string", "null"]},
+    "device_ura": {"type": ["string", "null"]},
+    "ack": {"type": ["boolean", "null"]},
+    "runtime_not_ready": {"type": "boolean"},
+    "runtime_catalog_not_ready": {"type": "boolean"},
+    "items": {"type": "array"},
+    "next_cursor": true,
     "metadata": {"type": "object"}
   }
 }

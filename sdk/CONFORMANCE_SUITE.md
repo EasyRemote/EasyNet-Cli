@@ -97,6 +97,8 @@ swift test --package-path sdk/swift
   projection
 - events directory subscription carrier, explicit cursor projection,
   dropped-event reports, and terminal frames
+- admin/gateway agent/session carriers, lifecycle readiness flags, agent record
+  projection, and lifecycle result projection
 - profile ownership exclusivity
 
 The scaffold in `cases/` names the first shared cases. A profile must add its

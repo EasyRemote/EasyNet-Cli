@@ -1,0 +1,42 @@
+id: admin_gateway/carrier_status
+profile: admin_gateway
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: AdminClient builds complete Invocation carriers for daemon agent/session lifecycle abilities and projects daemon lifecycle status plus agent records into typed Admin + Gateway DTOs without backend admin state leakage.
+steps:
+  - action: build_agent_list_invocation
+    fixture: admin-agent-list-request.v4.json
+  - action: build_agent_start_invocation
+    fixture: admin-agent-start-request.v4.json
+  - action: build_agent_stop_invocation
+    fixture: admin-agent-stop-request.v4.json
+  - action: build_agent_refresh_invocation
+    fixture: admin-agent-refresh-request.v4.json
+  - action: build_session_list_invocation
+    fixture: admin-session-list-request.v4.json
+  - action: project_gateway_status
+    fixture: gateway-status.v4.json
+  - action: project_agent_records
+    fixture: admin-agent-records.v4.json
+  - action: project_agent_lifecycle_result
+    fixture: admin-agent-lifecycle-result.v4.json
+expect:
+  result: admin_gateway_carrier_status_observed
+  gateway_schema: gateway.schema.json
+  admin_result_schema: admin.schema.json
+  agent_record_schema: agent-record.schema.json
+  invocation_schema: invocation.schema.json
+  agent_start_invocation_fixture: admin-agent-start-invocation.v4.json
+  agent_stop_invocation_fixture: admin-agent-stop-invocation.v4.json
+  agent_list_invocation_fixture: admin-agent-list-invocation.v4.json
+  session_list_invocation_fixture: admin-session-list-invocation.v4.json
+  gateway_status_fixture: gateway-status.v4.json
+  agent_records_fixture: admin-agent-records.v4.json
+  agent_lifecycle_fixture: admin-agent-lifecycle-result.v4.json
+  rejects_incomplete_invocation_tuple: true
+  rejects_system_agent_lifecycle: true
+  preserves_control_only_degraded_state: true
+  pairing_and_device_session_crud: scaffold_only

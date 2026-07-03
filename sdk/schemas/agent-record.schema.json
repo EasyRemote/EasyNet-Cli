@@ -4,12 +4,27 @@
   "title": "AgentRecord",
   "type": "object",
   "additionalProperties": false,
-  "required": ["agent_ura", "owner_ura", "state"],
+  "required": [
+    "name",
+    "agent_ura",
+    "owner_ura",
+    "device_ura",
+    "state",
+    "runtime",
+    "model",
+    "label",
+    "abilities",
+    "metadata"
+  ],
   "properties": {
-    "agent_ura": {"type": "string", "minLength": 1},
-    "owner_ura": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "agent_ura": {"type": ["string", "null"]},
+    "owner_ura": {"type": ["string", "null"]},
     "device_ura": {"type": ["string", "null"]},
     "state": {"type": "string", "minLength": 1},
+    "runtime": {"type": "string", "minLength": 1},
+    "model": {"type": ["string", "null"]},
+    "label": {"type": ["string", "null"]},
     "abilities": {"type": "array", "items": {"type": "string"}},
     "metadata": {"type": "object"}
   }

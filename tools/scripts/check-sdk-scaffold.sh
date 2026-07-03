@@ -86,6 +86,11 @@ schema_files=(
   admin.schema.json
   gateway.schema.json
   agent-record.schema.json
+  admin-agent-list-request.schema.json
+  admin-agent-start-request.schema.json
+  admin-agent-stop-request.schema.json
+  admin-agent-refresh-request.schema.json
+  admin-session-list-request.schema.json
   surface-page.schema.json
   compatibility.schema.json
   file.schema.json
@@ -140,6 +145,19 @@ fixture_files=(
   mission-track-invocation.v4.json
   mission-cancel-invocation.v4.json
   mission-status.v4.json
+  admin-agent-list-request.v4.json
+  admin-agent-start-request.v4.json
+  admin-agent-stop-request.v4.json
+  admin-agent-refresh-request.v4.json
+  admin-session-list-request.v4.json
+  admin-agent-list-invocation.v4.json
+  admin-agent-start-invocation.v4.json
+  admin-agent-stop-invocation.v4.json
+  admin-agent-refresh-invocation.v4.json
+  admin-session-list-invocation.v4.json
+  gateway-status.v4.json
+  admin-agent-records.v4.json
+  admin-agent-lifecycle-result.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -167,6 +185,7 @@ case_files=(
   publication-resource-carriers.yaml
   mission-carrier-status.yaml
   events-directory-stream.yaml
+  admin-gateway-carrier-status.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

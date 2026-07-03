@@ -153,6 +153,14 @@ expected_symbols=(
     easynet_events_project_directory_event
     easynet_events_project_terminal
     easynet_events_project_drop_report
+    easynet_admin_build_agent_list_invocation
+    easynet_admin_build_agent_start_invocation
+    easynet_admin_build_agent_stop_invocation
+    easynet_admin_build_agent_refresh_invocation
+    easynet_admin_build_session_list_invocation
+    easynet_admin_project_gateway_status
+    easynet_admin_project_agent_records
+    easynet_admin_project_agent_lifecycle_result
 )
 
 retired_symbols=(
@@ -334,6 +342,9 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_events_build_directory_subscription_invocation"
     require_literal "$SPEC" "easynet_events_project_directory_event"
     require_literal "$SPEC" "easynet_events_project_drop_report"
+    require_literal "$SPEC" "easynet_admin_build_agent_start_invocation"
+    require_literal "$SPEC" "easynet_admin_project_gateway_status"
+    require_literal "$SPEC" "easynet_admin_project_agent_records"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 

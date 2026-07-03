@@ -1,0 +1,37 @@
+{
+  "profile": "admin_gateway",
+  "gateway_id": "device:example:dev-a",
+  "ready": true,
+  "state": "ready",
+  "process_live": true,
+  "control_ready": true,
+  "runtime_ready": true,
+  "directory_ready": true,
+  "trust_ready": true,
+  "public_listener_ready": false,
+  "listeners": [
+    {
+      "kind": "control",
+      "endpoint": "/tmp/easynet-control.sock",
+      "ready": true,
+      "public": false
+    },
+    {
+      "kind": "invocation",
+      "endpoint": "/tmp/easynet-daemon.sock",
+      "ready": true,
+      "public": false
+    }
+  ],
+  "identity": {
+    "mode": "device",
+    "realm": "example",
+    "node_id": "dev-a"
+  },
+  "metadata": {
+    "profile": "admin_gateway",
+    "source": "daemon_lifecycle_status",
+    "lifecycle_state": "running",
+    "requires_public_listener": false
+  }
+}

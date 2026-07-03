@@ -1,0 +1,26 @@
+{
+  "profile": "admin_gateway",
+  "kind": "agent_lifecycle_result",
+  "operation": "agent.start",
+  "state": "ok",
+  "agent_ura": "easynet:///r/example/agent/alice.codex",
+  "ack": null,
+  "runtime_not_ready": false,
+  "runtime_catalog_not_ready": false,
+  "metadata": {
+    "profile": "admin_gateway",
+    "source": "agent_lifecycle",
+    "runtime_registered": 3,
+    "runtime_failed": 0,
+    "runtime_removed": 0,
+    "raw_result": {
+      "agent_ura": "easynet:///r/example/agent/alice.codex",
+      "replaced_prior": false,
+      "runtime_registered": 3,
+      "runtime_failed": 0,
+      "runtime_removed": 0,
+      "runtime_not_ready": false,
+      "runtime_catalog_not_ready": false
+    }
+  }
+}

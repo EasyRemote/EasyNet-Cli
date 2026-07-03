@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/admin-agent-start-request.schema.json",
+  "title": "AdminAgentStartRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["caller_ura", "callee_ura", "subject_ura", "descriptor_version", "nonce_base64", "causal_context", "name"],
+  "anyOf": [
+    {"required": ["agent_type"]},
+    {"required": ["entry"]}
+  ],
+  "properties": {
+    "caller_ura": {"type": "string", "minLength": 1},
+    "callee_ura": {"type": "string", "minLength": 1},
+    "subject_ura": {"type": "string", "minLength": 1},
+    "descriptor_version": {"type": "string", "minLength": 1},
+    "nonce_base64": {"type": "string", "minLength": 1},
+    "causal_context": {"type": "object"},
+    "name": {"type": "string", "minLength": 1},
+    "agent_type": {"type": "string", "minLength": 1},
+    "entry": {"type": "object"},
+    "model": {"type": "string"},
+    "label": {"type": "string"},
+    "command": {"type": "string"},
+    "command_args": {"type": "array", "items": {"type": "string"}},
+    "root_path": {"type": "string", "minLength": 1},
+    "model_present": {"type": "boolean"},
+    "materialize_directory": {"type": "boolean"},
+    "update_existing_spec": {"type": "boolean"},
+    "project_workspace": {"type": "boolean"},
+    "metadata": {"type": "object"}
+  }
+}

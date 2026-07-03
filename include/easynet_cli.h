@@ -495,6 +495,54 @@ int32_t easynet_events_project_drop_report(
     char **out_event_json
 );
 
+int32_t easynet_admin_build_agent_list_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_agent_start_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_agent_stop_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_agent_refresh_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_session_list_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_project_gateway_status(
+    EasynetHandle handle,
+    const char *status_json,
+    char **out_status_json
+);
+
+int32_t easynet_admin_project_agent_records(
+    EasynetHandle handle,
+    const char *agents_json,
+    char **out_agents_json
+);
+
+int32_t easynet_admin_project_agent_lifecycle_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
 #ifdef __cplusplus
 }
 #endif
