@@ -63,6 +63,8 @@ for path in \
   sdk/go/mission_test.go \
   sdk/go/admin.go \
   sdk/go/admin_test.go \
+  sdk/go/events.go \
+  sdk/go/events_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -89,6 +91,7 @@ for path in \
   sdk/python/easynet_sdk/host_binding.py \
   sdk/python/easynet_sdk/mission.py \
   sdk/python/easynet_sdk/admin.py \
+  sdk/python/easynet_sdk/events.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -106,6 +109,7 @@ for path in \
   sdk/python/tests/test_host_binding.py \
   sdk/python/tests/test_mission.py \
   sdk/python/tests/test_admin.py \
+  sdk/python/tests/test_events.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -384,6 +388,11 @@ require_literal sdk/go/admin.go "AdminTransport"
 require_literal sdk/go/admin.go "AdminAgentStartRequest"
 require_literal sdk/go/admin.go "GatewayStatus"
 require_literal sdk/go/admin.go "AdminGatewayResult"
+require_literal sdk/go/events.go "EventClient"
+require_literal sdk/go/events.go "EventTransport"
+require_literal sdk/go/events.go "EventsDirectorySubscriptionRequest"
+require_literal sdk/go/events.go "EventFrame"
+require_literal sdk/go/events.go "EventCursor"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -456,6 +465,11 @@ require_literal sdk/python/easynet_sdk/admin.py "AdminTransport"
 require_literal sdk/python/easynet_sdk/admin.py "AdminAgentStartRequest"
 require_literal sdk/python/easynet_sdk/admin.py "GatewayStatus"
 require_literal sdk/python/easynet_sdk/admin.py "AdminGatewayResult"
+require_literal sdk/python/easynet_sdk/events.py "EventClient"
+require_literal sdk/python/easynet_sdk/events.py "EventTransport"
+require_literal sdk/python/easynet_sdk/events.py "EventsDirectorySubscriptionRequest"
+require_literal sdk/python/easynet_sdk/events.py "EventFrame"
+require_literal sdk/python/easynet_sdk/events.py "EventCursor"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"

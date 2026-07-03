@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, and Admin + Gateway seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, and Admin + Gateway seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, and Events directory-stream seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, and Events directory-stream seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -35,7 +35,7 @@ method spelling.
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | admin + gateway | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
-| events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
+| events | directory stream partial | directory stream partial | directory stream seam partial | directory stream seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | wrappers | record projection partial | record projection partial | gap | gap | gap | gap | gap |
@@ -68,7 +68,7 @@ method spelling.
 - Events Directory stream carrier/frame guardrails exist for Rust/C ABI over
   daemon `federation.subscribe_directory_v2`; device/session/invocation event
   streams, daemon-side directory filtering, backend SSE/WebSocket fanout, and
-  language facades remain incomplete.
+  product cutovers remain incomplete.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
   `agent.list/start/stop/refresh`, `session.list`, lifecycle status, and
   agent-record projections; pairing token flows, credential verification,
@@ -132,6 +132,11 @@ method spelling.
   `AdminAgentPage`, and lifecycle-result projection seams; pairing token flows,
   credential verification, certificate policy, concrete device-session CRUD,
   and backend route cutover remain incomplete.
+- Go Events facade exposes `EventClient` directory subscription Invocation
+  carrier builders plus `EventFrame` cursor, resume-token, drop-report, and
+  terminal projection seams; device/session/invocation streams, daemon-side
+  directory filtering, live stream transport adapters, and backend SSE/WebSocket
+  cutover remain incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime state seams, runtime health readiness
@@ -176,6 +181,11 @@ method spelling.
   pairing token flows, credential verification, certificate policy, concrete
   device-session CRUD, and EasyRemote Server/AgentControl extraction remain
   incomplete.
+- Python Events facade exposes `EventClient` directory subscription Invocation
+  carrier builders plus `EventFrame` cursor, resume-token, drop-report, and
+  terminal projection seams; device/session/invocation streams, daemon-side
+  directory filtering, live stream transport adapters, and product cutovers
+  remain incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.
