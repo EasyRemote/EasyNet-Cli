@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/directory-list-devices-request.schema.json",
+  "title": "DirectoryListDevicesRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["caller_ura", "callee_ura", "subject_ura", "descriptor_version", "nonce_base64", "causal_context"],
+  "properties": {
+    "caller_ura": {"type": "string", "minLength": 1},
+    "callee_ura": {"type": "string", "minLength": 1},
+    "subject_ura": {"type": "string", "minLength": 1},
+    "descriptor_version": {"type": "string", "minLength": 1},
+    "nonce_base64": {"type": "string", "minLength": 1},
+    "causal_context": {"type": "object"},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+    "cursor": {"type": "string", "pattern": "^[0-9]+$"},
+    "metadata": {"type": "object"}
+  }
+}

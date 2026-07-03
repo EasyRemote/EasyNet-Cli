@@ -61,6 +61,9 @@ schema_files=(
   health.schema.json
   events.schema.json
   events-directory-subscription-request.schema.json
+  directory-list-devices-request.schema.json
+  directory-list-agents-request.schema.json
+  directory-list-abilities-request.schema.json
   directory-page.schema.json
   local-resource-ref-request.schema.json
   publication.schema.json
@@ -126,6 +129,15 @@ fixture_files=(
   event.directory-terminal.v4.json
   events-directory-subscription-request.v4.json
   events-directory-subscription-invocation.v4.json
+  directory-list-devices-request.v4.json
+  directory-list-agents-request.v4.json
+  directory-list-abilities-request.v4.json
+  directory-list-devices-invocation.v4.json
+  directory-list-agents-invocation.v4.json
+  directory-list-abilities-invocation.v4.json
+  directory-device-page.v4.json
+  directory-agent-page.v4.json
+  directory-ability-page.v4.json
   health.ready.v4.json
   host-stream-binding-request.v4.json
   host-stream-binding.v4.json

@@ -33,10 +33,12 @@
 
 pub mod ability;
 pub mod admin_gateway_contract;
+pub mod agent_record_contract;
 pub mod axon_bridge;
 pub mod boot;
 pub mod compatibility_contract;
 pub mod control;
+pub mod directory_contract;
 pub mod events_contract;
 pub mod execution;
 pub mod federation;

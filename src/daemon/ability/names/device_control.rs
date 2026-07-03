@@ -19,6 +19,10 @@ pub const SESSION_LIST: &str = "session.list";
 pub const SESSION_ATTACH: &str = "session.attach";
 pub const SESSION_OPEN: &str = "session.open";
 
+pub const NODE_LIST: &str = "node.list";
+pub const NODE_DESCRIBE: &str = "node.describe";
+pub const NODE_REMOVE: &str = "node.remove";
+
 pub const TERMINAL_ATTACH: &str = "terminal.attach";
 pub const TERMINAL_CREATE: &str = "terminal.create";
 pub const TERMINAL_LIST: &str = "terminal.list";

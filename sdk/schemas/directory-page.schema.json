@@ -4,12 +4,15 @@
   "title": "DirectoryPage",
   "type": "object",
   "additionalProperties": false,
-  "required": ["items", "next_cursor", "limit", "source"],
+  "required": ["profile", "kind", "item_kind", "items", "next_cursor", "limit", "source", "metadata"],
   "properties": {
+    "profile": {"const": "directory_identity"},
+    "kind": {"type": "string", "enum": ["device_page", "agent_page", "ability_page"]},
+    "item_kind": {"type": "string", "enum": ["device", "agent", "ability"]},
     "items": {"type": "array"},
     "next_cursor": {"type": ["string", "null"]},
-    "limit": {"type": "integer", "minimum": 1},
-    "source": {"type": "string", "enum": ["read_model", "snapshot", "subscription"]},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+    "source": {"const": "read_model"},
     "metadata": {"type": "object"}
   }
 }

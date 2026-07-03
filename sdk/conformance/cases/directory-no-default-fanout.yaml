@@ -1,13 +1,20 @@
 id: directory/no_default_fanout
 profile: directory_identity
 required_for:
+  - rust
+  - c_abi
   - go
   - python
-description: Ordinary directory list methods do not perform per-agent live fan-out.
+description: Ordinary Directory ability listing uses the daemon ability catalog read model and does not perform per-agent live fan-out.
 steps:
-  - action: list_abilities
-    query:
-      scope: ordinary
+  - action: build_list_abilities_invocation
+    fixture: directory-list-abilities-request.v4.json
+  - action: project_ability_page
+    fixture: directory-ability-page.v4.json
 expect:
-  result: ok
+  result: directory_ability_catalog_observed
+  request_schema: directory-list-abilities-request.schema.json
+  page_schema: directory-page.schema.json
+  invocation_fixture: directory-list-abilities-invocation.v4.json
+  daemon_ability: meta.list_abilities
   fanout: none

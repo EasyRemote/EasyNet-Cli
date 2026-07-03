@@ -35,11 +35,11 @@ use std::str::FromStr;
 use serde_json::{json, Map, Value};
 
 use crate::core::ura;
+use crate::daemon::agent_record_contract;
 use crate::daemon::persistence::agent_registry::AgentType;
 use crate::daemon::sdk_contract::{
     build_system_invocation, first_optional_string_field, object, optional_bool_field,
-    optional_string_array_field, optional_string_field, required_string, validate_ura,
-    SdkContractError,
+    optional_string_field, required_string, validate_ura, SdkContractError,
 };
 
 const ADMIN_PROFILE: &str = "admin_gateway";
@@ -205,11 +205,8 @@ pub(crate) fn project_gateway_status(input: &Value) -> Result<Value, AdminGatewa
 }
 
 pub(crate) fn project_agent_records(input: &Value) -> Result<Value, AdminGatewayError> {
-    let rows = agent_rows(input)?;
-    let mut records = Vec::with_capacity(rows.len());
-    for row in rows {
-        records.push(project_agent_row(row)?);
-    }
+    let records =
+        agent_record_contract::project_agent_record_items_for_profile(input, ADMIN_PROFILE)?;
     Ok(json!({
         "profile": ADMIN_PROFILE,
         "kind": "agent_records",
@@ -435,69 +432,6 @@ fn listeners_from_status(
         }
     }
     Ok(listeners)
-}
-
-fn agent_rows(input: &Value) -> Result<&Vec<Value>, AdminGatewayError> {
-    if let Some(rows) = input.as_array() {
-        return Ok(rows);
-    }
-    let obj = object(input, "AgentRowsInput")?;
-    obj.get("agents")
-        .and_then(Value::as_array)
-        .ok_or(AdminGatewayError::MissingField("agents"))
-}
-
-fn project_agent_row(row: &Value) -> Result<Value, AdminGatewayError> {
-    let obj = object(row, "AgentRow")?;
-    let name = required_string(obj, "name")?;
-    validate_agent_name(name, "name")?;
-    let agent_ura = first_optional_string_field(obj, "ura", "agent_ura")?;
-    let (owner_ura, device_ura) = match agent_ura.as_deref() {
-        Some(agent_ura) => owner_refs_from_agent_ura(agent_ura)?,
-        None => (None, None),
-    };
-    let runtime = required_string(obj, "runtime")?;
-    let root_exists = optional_bool_field(obj, "root_exists")?.unwrap_or(true);
-    let abilities = optional_string_array_field(obj, "abilities")?.unwrap_or_default();
-    Ok(json!({
-        "name": name,
-        "agent_ura": agent_ura,
-        "owner_ura": owner_ura,
-        "device_ura": device_ura,
-        "state": if root_exists { "registered" } else { "degraded" },
-        "runtime": runtime,
-        "model": optional_string_field(obj, "model")?,
-        "label": optional_string_field(obj, "label")?,
-        "abilities": abilities,
-        "metadata": {
-            "profile": ADMIN_PROFILE,
-            "source": "agent.list",
-            "root_path": optional_string_field(obj, "root_path")?,
-            "root_exists": root_exists,
-            "timeout_secs": optional_u64(obj, "timeout_secs"),
-        },
-    }))
-}
-
-fn owner_refs_from_agent_ura(
-    agent_ura: &str,
-) -> Result<(Option<String>, Option<String>), AdminGatewayError> {
-    let parsed = ura::parse_ura(agent_ura)
-        .map_err(|err| AdminGatewayError::InvalidField("agent_ura", err.to_string()))?;
-    if parsed.kind != ura::URAKind::Agent {
-        return Err(AdminGatewayError::InvalidField(
-            "agent_ura",
-            "must be an Agent URA".to_string(),
-        ));
-    }
-    if let Some((user_id, _)) = parsed.agent_ids() {
-        return Ok((Some(ura::user_ura(&parsed.realm, user_id)), None));
-    }
-    if let Some((device_id, _)) = parsed.device_agent_ids() {
-        let device_ura = ura::device_ura(&parsed.realm, device_id);
-        return Ok((Some(device_ura.clone()), Some(device_ura)));
-    }
-    Ok((None, None))
 }
 
 fn lifecycle_state(obj: &Map<String, Value>) -> &'static str {

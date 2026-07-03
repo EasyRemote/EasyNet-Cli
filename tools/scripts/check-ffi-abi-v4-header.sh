@@ -131,6 +131,12 @@ expected_symbols=(
     easynet_identity_build_ura
     easynet_identity_project_descriptor_ref
     easynet_identity_build_descriptor_ref
+    easynet_directory_build_list_devices_invocation
+    easynet_directory_build_list_agents_invocation
+    easynet_directory_build_list_abilities_invocation
+    easynet_directory_project_device_page
+    easynet_directory_project_agent_page
+    easynet_directory_project_ability_page
     easynet_receipt_project
     easynet_receipt_verify
     easynet_receipt_causal_ref
@@ -335,6 +341,8 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_invocation_bidi_close_send"
     require_literal "$SPEC" "easynet_identity_project_ura"
     require_literal "$SPEC" "easynet_identity_build_descriptor_ref"
+    require_literal "$SPEC" "easynet_directory_build_list_devices_invocation"
+    require_literal "$SPEC" "easynet_directory_project_ability_page"
     require_literal "$SPEC" "easynet_receipt_project"
     require_literal "$SPEC" "easynet_receipt_causal_ref"
     require_literal "$SPEC" "easynet_host_binding_build"

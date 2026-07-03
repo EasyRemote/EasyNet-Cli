@@ -60,6 +60,9 @@
 //   `easynet_events_project_terminal`, and
 //   `easynet_events_project_drop_report`: Events directory stream carrier and
 //   typed frame projection helpers.
+// - `easynet_directory_build_list_*_invocation` and
+//   `easynet_directory_project_*_page`: Directory read-model carrier and
+//   paginated page projection helpers.
 // - `easynet_admin_build_*_invocation`,
 //   `easynet_admin_project_gateway_status`,
 //   `easynet_admin_project_agent_records`, and
@@ -78,6 +81,7 @@ pub mod admin_gateway;
 pub mod client;
 pub mod compatibility;
 pub mod daemon;
+pub mod directory;
 pub mod errors;
 pub mod events;
 pub mod host_binding;
@@ -146,7 +150,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
         "profiles": {
             "runtime_core": "partial",
             "receipt": "projection_partial",
-            "directory_identity": "identity_projection_partial",
+            "directory_identity": "read_model_projection_partial",
             "publication": "carrier_partial",
             "host_binding": "codec_partial",
             "mission": "carrier_status_partial",
@@ -161,6 +165,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "typed_error_json": true,
             "receipt_projection": true,
             "directory_identity_projection": true,
+            "directory_read_model": true,
             "host_binding_codec": true,
             "publication_carriers": true,
             "mission_carriers": true,
@@ -342,6 +347,7 @@ mod tests {
         assert_eq!(json["symbols"]["typed_error_json"], true);
         assert_eq!(json["symbols"]["receipt_projection"], true);
         assert_eq!(json["symbols"]["directory_identity_projection"], true);
+        assert_eq!(json["symbols"]["directory_read_model"], true);
         assert_eq!(json["symbols"]["host_binding_codec"], true);
         assert_eq!(json["symbols"]["publication_carriers"], true);
         assert_eq!(json["symbols"]["mission_carriers"], true);
@@ -354,7 +360,7 @@ mod tests {
         assert_eq!(json["profiles"]["receipt"], "projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],
-            "identity_projection_partial"
+            "read_model_projection_partial"
         );
         assert_eq!(json["profiles"]["host_binding"], "codec_partial");
         assert_eq!(json["profiles"]["publication"], "carrier_partial");

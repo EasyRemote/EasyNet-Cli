@@ -72,6 +72,13 @@ Profile clients must not become one-method-per-ability protocol forks.
 Identity projection may validate/build URAs and AbilityDescriptorRefs through
 Axon-delegated helpers, but directory list/subscribe and signing-key lifecycle
 remain separate Directory + Identity methods rather than string utilities.
+Directory read-model carrier projection may build complete Invocation carriers
+for daemon `node.list`, `agent.list`, and `meta.list_abilities`; project daemon
+rows into paginated `DirectoryPage` DTOs; and expose named
+`DefaultPageSize`/`MaxPageSize` guardrails. It must not perform per-agent or
+per-device live fan-out, hide unpaginated all-row reads behind public list
+methods, or leak the daemon `meta.list_abilities` historical `agent_ura`
+parameter as the public owner-filter name.
 Receipt projection may normalize summary DTOs and derive causal refs from
 explicit receipt facts, but summary-only data must remain `verified: false`
 until an Axon-backed verifier proves a full receipt.

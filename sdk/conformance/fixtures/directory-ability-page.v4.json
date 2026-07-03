@@ -1,0 +1,61 @@
+{
+  "profile": "directory_identity",
+  "kind": "ability_page",
+  "item_kind": "ability",
+  "items": [
+    {
+      "profile": "directory_identity",
+      "kind": "ability",
+      "name": "fs.read",
+      "ability_ura": "easynet:///r/example/ability/device.dev-a.fs.read",
+      "owner_ura": "easynet:///r/example/device/dev-a",
+      "descriptor_ref": null,
+      "descriptor_version": "1.0.0",
+      "visibility": "SCOPED",
+      "class": "query",
+      "description": "Read a file.",
+      "source": "kernel:built-in",
+      "schema_summary": {
+        "input": {
+          "type": "object"
+        }
+      },
+      "hints": {
+        "read_only": true
+      },
+      "metadata": {
+        "profile": "directory_identity",
+        "source": "meta.list_abilities",
+        "raw_descriptor": {
+          "name": "fs.read",
+          "ability_ura": "easynet:///r/example/ability/device.dev-a.fs.read",
+          "owner_ura": "easynet:///r/example/device/dev-a",
+          "version": "1.0.0",
+          "visibility": "SCOPED",
+          "class": "query",
+          "description": "Read a file.",
+          "source": "kernel:built-in",
+          "schema_summary": {
+            "input": {
+              "type": "object"
+            }
+          },
+          "hints": {
+            "read_only": true
+          }
+        }
+      }
+    }
+  ],
+  "next_cursor": null,
+  "limit": 2,
+  "source": "read_model",
+  "metadata": {
+    "profile": "directory_identity",
+    "source": "read_model",
+    "source_ability": "meta.list_abilities",
+    "page_size_default": 50,
+    "page_size_max": 500,
+    "total_available": 1
+  }
+}

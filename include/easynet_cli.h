@@ -363,6 +363,42 @@ int32_t easynet_identity_build_descriptor_ref(
     char **out_descriptor_json
 );
 
+int32_t easynet_directory_build_list_devices_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_directory_build_list_agents_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_directory_build_list_abilities_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_directory_project_device_page(
+    EasynetHandle handle,
+    const char *devices_json,
+    char **out_page_json
+);
+
+int32_t easynet_directory_project_agent_page(
+    EasynetHandle handle,
+    const char *agents_json,
+    char **out_page_json
+);
+
+int32_t easynet_directory_project_ability_page(
+    EasynetHandle handle,
+    const char *abilities_json,
+    char **out_page_json
+);
+
 int32_t easynet_receipt_project(
     EasynetHandle handle,
     const char *receipt_json,

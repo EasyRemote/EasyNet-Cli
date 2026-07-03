@@ -8,9 +8,9 @@ ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
-typed error JSON, identity projection, receipt projection, Host Binding
-host-stream codec/hash projection, and Publication carrier projection for
-language bindings. It also adds Mission/EAL carrier and status projection so
+typed error JSON, Directory + Identity read-model projection, receipt
+projection, Host Binding host-stream codec/hash projection, and Publication
+carrier projection for language bindings. It also adds Mission/EAL carrier and status projection so
 language bindings submit daemon-owned orchestration through Runtime Core rather
 than implementing transport facades themselves. Events directory-stream carrier
 and frame projection helpers expose the daemon-owned
@@ -275,7 +275,7 @@ up-direction sends return `ERR_CANCELLED` without removing the session.
 releases the local session handle. `easynet_invocation_bidi_cancel` releases
 the local session without sending EOF.
 
-### 2.8 Directory + Identity Projection
+### 2.8 Directory + Identity Read-Model Projection
 
 ```c
 int32_t easynet_identity_project_ura(
@@ -301,14 +301,64 @@ int32_t easynet_identity_build_descriptor_ref(
     const char* request_json,
     char** out_descriptor_json
 );
+
+int32_t easynet_directory_build_list_devices_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_directory_build_list_agents_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_directory_build_list_abilities_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_directory_project_device_page(
+    EasynetHandle handle,
+    const char* devices_json,
+    char** out_page_json
+);
+
+int32_t easynet_directory_project_agent_page(
+    EasynetHandle handle,
+    const char* agents_json,
+    char** out_page_json
+);
+
+int32_t easynet_directory_project_ability_page(
+    EasynetHandle handle,
+    const char* abilities_json,
+    char** out_page_json
+);
 ```
 
 Identity projection functions are scoped to a live `EasynetHandle`, matching the
 SDK object graph's `IdentityClient`. The functions delegate URA parsing and
 building to Axon-owned URA helpers through `crate::core::ura`; they do not
 define a second URA grammar. DescriptorRef projection/building delegates to
-Axon `canonical_ability_descriptor_ref` and related helper functions. ABI v4
-does not yet expose directory list/subscribe or signing-key lifecycle symbols.
+Axon `canonical_ability_descriptor_ref` and related helper functions.
+
+Directory read-model functions are scoped to the same live `EasynetHandle`,
+matching the SDK object graph's `DirectoryClient`. The carrier builders return
+complete Invocation JSON for existing daemon read-model abilities:
+`node.list`, `agent.list`, and `meta.list_abilities`. The SDK requires explicit
+caller, callee, subject, descriptor version, nonce, causal context, and bounded
+page controls; bindings submit returned carriers through Runtime Core. The
+projection functions normalize daemon rows into `DirectoryPage` DTOs with
+explicit `DefaultPageSize = 50`, `MaxPageSize = 500`, offset cursors, and
+`source = "read_model"`. `list_abilities` maps the public SDK `owner_ura` query
+to the daemon ability's historical `agent_ura` parameter, but it does not fan
+out across every agent by default. ABI v4 Directory support is
+`read_model_projection_partial`: `resolve`, directory subscribe convenience
+wrappers, signing-key lifecycle APIs, backend database projections, and
+language facades remain future work.
 
 ### 2.9 Receipt Projection
 
