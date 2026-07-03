@@ -657,6 +657,311 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+#[ignore = "load probe; set EASYNET_INVOCATION_CONCURRENCY_PROBE to override request count"]
+async fn simple_local_rpc_invocation_concurrency_probe() {
+    use tokio::task::JoinSet;
+
+    fn percentile(sorted: &[u128], pct: usize) -> u128 {
+        if sorted.is_empty() {
+            return 0;
+        }
+        let idx = ((sorted.len() - 1) * pct) / 100;
+        sorted[idx]
+    }
+
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
+    let count = std::env::var("EASYNET_INVOCATION_CONCURRENCY_PROBE")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(10_000);
+    let timeout = std::env::var("EASYNET_INVOCATION_CONCURRENCY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(60));
+
+    let ability = "probe.concurrent_echo";
+    let rt =
+        runtime_with_json_echo(TEST_DAEMON_URI, ability, "handled_by", "concurrency-probe").await;
+    let svc = std::sync::Arc::new(
+        make_service()
+            .with_session_realm("test-realm")
+            .with_local_runtime(rt),
+    );
+    publish_test_route(svc.as_ref(), TEST_DAEMON_URI, ability);
+
+    let mut tasks = JoinSet::new();
+    let started = std::time::Instant::now();
+    for seq in 0..count {
+        let svc = std::sync::Arc::clone(&svc);
+        tasks.spawn(async move {
+            let request_started = std::time::Instant::now();
+            let arguments = format!(r#"{{"seq":{seq}}}"#).into_bytes();
+            let response = svc
+                .invoke(Request::new(InvokeRequest {
+                    envelope: Some(
+                        ProtoEnvelope::targeted(
+                            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+                            TEST_DAEMON_URI,
+                            TEST_DAEMON_URI,
+                        )
+                        .expect("valid concurrency probe envelope")
+                        .into_inner(),
+                    ),
+                    function_name: ability.to_string(),
+                    arguments,
+                    ..InvokeRequest::default()
+                }))
+                .await
+                .map_err(|err| format!("seq={seq}: invoke failed: {err}"))?;
+            let body = response.into_inner();
+            let decoded: serde_json::Value = serde_json::from_slice(&body.result)
+                .map_err(|err| format!("seq={seq}: decode response failed: {err}"))?;
+            if decoded["handled_by"] != "concurrency-probe" {
+                return Err(format!(
+                    "seq={seq}: wrong handler marker in response: {decoded}"
+                ));
+            }
+            if decoded["echoed_args"]["seq"].as_u64() != Some(seq as u64) {
+                return Err(format!(
+                    "seq={seq}: wrong echoed seq in response: {decoded}"
+                ));
+            }
+            Ok::<u128, String>(request_started.elapsed().as_micros())
+        });
+    }
+
+    let mut latencies_us = Vec::with_capacity(count);
+    let mut errors = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    while let Some(joined) = match tokio::time::timeout_at(deadline, tasks.join_next()).await {
+        Ok(joined) => joined,
+        Err(_) => {
+            tasks.abort_all();
+            panic!(
+                "concurrency probe timed out after {:?}: completed={} expected={} first_errors={:?}",
+                timeout,
+                latencies_us.len(),
+                count,
+                errors
+            );
+        }
+    } {
+        match joined {
+            Ok(Ok(latency)) => latencies_us.push(latency),
+            Ok(Err(err)) => {
+                if errors.len() < 8 {
+                    errors.push(err);
+                }
+            }
+            Err(err) => {
+                if errors.len() < 8 {
+                    errors.push(format!("join failed: {err}"));
+                }
+            }
+        }
+    }
+
+    latencies_us.sort_unstable();
+    let elapsed = started.elapsed();
+    let summary = format!(
+        "simple_local_rpc_invocation_concurrency_probe count={} ok={} failed={} elapsed_ms={} throughput_per_s={:.1} p50_us={} p95_us={} p99_us={}",
+        count,
+        latencies_us.len(),
+        count.saturating_sub(latencies_us.len()),
+        elapsed.as_millis(),
+        count as f64 / elapsed.as_secs_f64(),
+        percentile(&latencies_us, 50),
+        percentile(&latencies_us, 95),
+        percentile(&latencies_us, 99),
+    );
+    if let Ok(path) = std::env::var("EASYNET_INVOCATION_CONCURRENCY_SUMMARY_PATH") {
+        std::fs::write(path, format!("{summary}\n")).expect("write concurrency probe summary");
+    }
+    eprintln!("{summary}");
+
+    assert!(errors.is_empty(), "first invocation errors: {errors:?}");
+    assert_eq!(latencies_us.len(), count);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+#[ignore = "load probe; set EASYNET_INVOCATION_TRANSPORT_PROBE to override request count"]
+async fn simple_uds_invocation_concurrency_probe() {
+    use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+    use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+    use tokio::task::JoinSet;
+    use tokio_stream::wrappers::UnixListenerStream;
+    use tonic::transport::{Endpoint, Server, Uri};
+
+    fn percentile(sorted: &[u128], pct: usize) -> u128 {
+        if sorted.is_empty() {
+            return 0;
+        }
+        let idx = ((sorted.len() - 1) * pct) / 100;
+        sorted[idx]
+    }
+
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
+    let count = std::env::var("EASYNET_INVOCATION_TRANSPORT_PROBE")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(10_000);
+    let timeout = std::env::var("EASYNET_INVOCATION_TRANSPORT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(std::time::Duration::from_secs)
+        .unwrap_or_else(|| std::time::Duration::from_secs(120));
+
+    let ability = "probe.uds_concurrent_echo";
+    let rt = runtime_with_json_echo(
+        TEST_DAEMON_URI,
+        ability,
+        "handled_by",
+        "uds-concurrency-probe",
+    )
+    .await;
+    let service = make_service()
+        .with_session_realm("test-realm")
+        .with_local_runtime(rt);
+    publish_test_route(&service, TEST_DAEMON_URI, ability);
+
+    let temp = tempfile::tempdir().expect("temp UDS dir");
+    let socket_path = temp.path().join("invocation-probe.sock");
+    let listener = tokio::net::UnixListener::bind(&socket_path).expect("bind probe UDS");
+    let incoming = UnixListenerStream::new(listener);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let max_streams = u32::try_from(count).unwrap_or(u32::MAX);
+    let server = tokio::spawn(async move {
+        Server::builder()
+            .max_concurrent_streams(Some(max_streams))
+            .concurrency_limit_per_connection(count)
+            .add_service(InvocationServer::new(service))
+            .serve_with_incoming_shutdown(incoming, async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .expect("serve probe UDS")
+    });
+
+    let connector_path = socket_path.clone();
+    let channel = Endpoint::try_from("http://[::]:50051")
+        .expect("dummy endpoint")
+        .connect_with_connector(tower::service_fn(move |_: Uri| {
+            let path = connector_path.clone();
+            async move {
+                let stream = tokio::net::UnixStream::connect(path).await?;
+                Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
+            }
+        }))
+        .await
+        .expect("connect probe UDS");
+    let client = InvocationClient::new(channel);
+
+    let mut tasks = JoinSet::new();
+    let started = std::time::Instant::now();
+    for seq in 0..count {
+        let mut client = client.clone();
+        tasks.spawn(async move {
+            let request_started = std::time::Instant::now();
+            let arguments = format!(r#"{{"seq":{seq}}}"#).into_bytes();
+            let response = client
+                .invoke(Request::new(InvokeRequest {
+                    envelope: Some(
+                        ProtoEnvelope::targeted(
+                            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+                            TEST_DAEMON_URI,
+                            TEST_DAEMON_URI,
+                        )
+                        .expect("valid UDS concurrency probe envelope")
+                        .into_inner(),
+                    ),
+                    function_name: ability.to_string(),
+                    arguments,
+                    ..InvokeRequest::default()
+                }))
+                .await
+                .map_err(|err| format!("seq={seq}: UDS invoke failed: {err}"))?;
+            let body = response.into_inner();
+            let decoded: serde_json::Value = serde_json::from_slice(&body.result)
+                .map_err(|err| format!("seq={seq}: decode response failed: {err}"))?;
+            if decoded["handled_by"] != "uds-concurrency-probe" {
+                return Err(format!(
+                    "seq={seq}: wrong handler marker in response: {decoded}"
+                ));
+            }
+            if decoded["echoed_args"]["seq"].as_u64() != Some(seq as u64) {
+                return Err(format!(
+                    "seq={seq}: wrong echoed seq in response: {decoded}"
+                ));
+            }
+            Ok::<u128, String>(request_started.elapsed().as_micros())
+        });
+    }
+
+    let mut latencies_us = Vec::with_capacity(count);
+    let mut errors = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    while let Some(joined) = match tokio::time::timeout_at(deadline, tasks.join_next()).await {
+        Ok(joined) => joined,
+        Err(_) => {
+            tasks.abort_all();
+            let _ = shutdown_tx.send(());
+            server.abort();
+            panic!(
+                "UDS concurrency probe timed out after {:?}: completed={} expected={} first_errors={:?}",
+                timeout,
+                latencies_us.len(),
+                count,
+                errors
+            );
+        }
+    } {
+        match joined {
+            Ok(Ok(latency)) => latencies_us.push(latency),
+            Ok(Err(err)) => {
+                if errors.len() < 8 {
+                    errors.push(err);
+                }
+            }
+            Err(err) => {
+                if errors.len() < 8 {
+                    errors.push(format!("join failed: {err}"));
+                }
+            }
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+    server.await.expect("probe UDS server task joins");
+
+    latencies_us.sort_unstable();
+    let elapsed = started.elapsed();
+    let summary = format!(
+        "simple_uds_invocation_concurrency_probe count={} ok={} failed={} elapsed_ms={} throughput_per_s={:.1} p50_us={} p95_us={} p99_us={}",
+        count,
+        latencies_us.len(),
+        count.saturating_sub(latencies_us.len()),
+        elapsed.as_millis(),
+        count as f64 / elapsed.as_secs_f64(),
+        percentile(&latencies_us, 50),
+        percentile(&latencies_us, 95),
+        percentile(&latencies_us, 99),
+    );
+    if let Ok(path) = std::env::var("EASYNET_INVOCATION_TRANSPORT_SUMMARY_PATH") {
+        std::fs::write(path, format!("{summary}\n")).expect("write UDS concurrency probe summary");
+    }
+    eprintln!("{summary}");
+
+    assert!(errors.is_empty(), "first UDS invocation errors: {errors:?}");
+    assert_eq!(latencies_us.len(), count);
+}
+
 #[tokio::test]
 async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
     // A device-owned ability is the device's own runtime authority
