@@ -7,6 +7,7 @@ expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 from .client import Client, DiscoveryTransport, FeatureSet, Version
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .health import HealthClient, HealthTransport, RuntimeHealth
+from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
 
 __all__ = [
     "Client",
@@ -15,6 +16,9 @@ __all__ = [
     "FeatureSet",
     "HealthClient",
     "HealthTransport",
+    "InvocationBuilder",
+    "InvocationDraft",
+    "InvocationSignature",
     "RetryHint",
     "RuntimeHealth",
     "RuntimeError",
