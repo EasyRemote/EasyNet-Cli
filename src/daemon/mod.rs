@@ -37,6 +37,7 @@ pub mod boot;
 pub mod control;
 pub mod execution;
 pub mod federation;
+pub mod host_stream_contract;
 pub mod identity;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;

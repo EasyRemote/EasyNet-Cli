@@ -134,6 +134,12 @@ expected_symbols=(
     easynet_receipt_project
     easynet_receipt_verify
     easynet_receipt_causal_ref
+    easynet_host_binding_build
+    easynet_host_binding_decode_request
+    easynet_host_binding_encode_item
+    easynet_host_binding_encode_error
+    easynet_host_binding_encode_terminal
+    easynet_host_binding_fold_output_hash
 )
 
 retired_symbols=(
@@ -304,6 +310,9 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_identity_build_descriptor_ref"
     require_literal "$SPEC" "easynet_receipt_project"
     require_literal "$SPEC" "easynet_receipt_causal_ref"
+    require_literal "$SPEC" "easynet_host_binding_build"
+    require_literal "$SPEC" "easynet_host_binding_decode_request"
+    require_literal "$SPEC" "easynet_host_binding_fold_output_hash"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 

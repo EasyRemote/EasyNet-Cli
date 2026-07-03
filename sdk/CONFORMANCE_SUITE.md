@@ -91,6 +91,7 @@ swift test --package-path sdk/swift
 - identity URA and DescriptorRef projection delegates to Axon helpers
 - receipt fetch/project/verify/causal-ref
 - receipt projection never upgrades summary-only data to verified
+- host binding frame codec and output-hash folding
 - profile ownership exclusivity
 
 The scaffold in `cases/` names the first shared cases. A profile must add its

@@ -8,8 +8,8 @@ ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
-typed error JSON, identity projection, and receipt projection for language
-bindings.
+typed error JSON, identity projection, receipt projection, and Host Binding
+host-stream codec/hash projection for language bindings.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -327,6 +327,65 @@ typed JSON with `verified: false` for summary-only data and does not claim Axon
 cryptographic verification. `causal_ref` builds a scalar causal context only
 when the input contains an explicit non-empty `receipt_ura` and a valid 32-byte
 receipt hash (`self_hash_hex`, `receipt_hash_hex`, or `receipt_hash`).
+
+### 2.10 Host Binding Codec
+
+```c
+int32_t easynet_host_binding_build(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_binding_json
+);
+
+int32_t easynet_host_binding_decode_request(
+    EasynetHandle handle,
+    const char* envelope_json,
+    char** out_request_json
+);
+
+int32_t easynet_host_binding_encode_item(
+    EasynetHandle handle,
+    const char* item_json,
+    char** out_frame_json
+);
+
+int32_t easynet_host_binding_encode_error(
+    EasynetHandle handle,
+    const char* error_json,
+    char** out_frame_json
+);
+
+int32_t easynet_host_binding_encode_terminal(
+    EasynetHandle handle,
+    const char* terminal_json,
+    char** out_frame_json
+);
+
+int32_t easynet_host_binding_fold_output_hash(
+    EasynetHandle handle,
+    const char* fold_json,
+    char** out_state_json
+);
+```
+
+Host Binding codec functions are scoped to a live `EasynetHandle`, matching
+the SDK object graph's `HostBindingClient`. They are pure DTO projections: they
+do not spawn a warm host, inspect Python functions, load decorators, scan
+package directories, or dial the daemon.
+
+`build` validates `HostStreamBindingRequest`, canonicalizes
+`descriptor_ref` through Axon helpers, requires the shared
+`host-stream-frame.schema.json` frame schema, and returns a typed binding DTO
+with endpoint, readiness, cleanup, timeout, lifecycle ownership, and hash
+metadata. The endpoint must satisfy the same local host-stream invariant as the
+daemon executor: absolute Unix socket path, no `..` components.
+
+`decode_request` validates the current daemon host-stream envelope and returns
+`HostStreamRequest` with `function`, `args`, `call_id`, and `caller`.
+`encode_item`, `encode_error`, and `encode_terminal` return shared
+`HostStreamFrame` DTOs. `fold_output_hash` accepts explicit `HostStreamHashState`
+plus `seq` and `value`, then returns the next state using the daemon-owned
+`sha256(prev_hash || seq_be || canonical_json(value))` algorithm.
 
 ## 3. Error Code Table
 

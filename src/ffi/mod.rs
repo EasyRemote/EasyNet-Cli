@@ -47,6 +47,9 @@
 //   server-stream Axon Invocation over daemon.sock.
 // - `easynet_invocation_bidi_open/send/close_send/close/cancel`:
 //   complete InvokeBidi session ABI over daemon.sock.
+// - `easynet_host_binding_build/decode_request/encode_*` and
+//   `easynet_host_binding_fold_output_hash`: schema-backed host-stream
+//   binding/frame/hash DTO projections.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
 //   instead of retained as hard-fail compatibility symbols.
 //
@@ -56,6 +59,7 @@
 pub mod client;
 pub mod daemon;
 pub mod errors;
+pub mod host_binding;
 pub mod identity;
 pub mod invocation;
 pub mod receipt;
@@ -120,7 +124,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "receipt": "projection_partial",
             "directory_identity": "identity_projection_partial",
             "publication": "scaffold",
-            "host_binding": "scaffold",
+            "host_binding": "codec_partial",
             "mission": "scaffold",
             "admin_gateway": "scaffold",
             "events": "scaffold",
@@ -133,6 +137,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "typed_error_json": true,
             "receipt_projection": true,
             "directory_identity_projection": true,
+            "host_binding_codec": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
             "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
@@ -305,11 +310,13 @@ mod tests {
         assert_eq!(json["symbols"]["typed_error_json"], true);
         assert_eq!(json["symbols"]["receipt_projection"], true);
         assert_eq!(json["symbols"]["directory_identity_projection"], true);
+        assert_eq!(json["symbols"]["host_binding_codec"], true);
         assert_eq!(json["profiles"]["receipt"], "projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],
             "identity_projection_partial"
         );
+        assert_eq!(json["profiles"]["host_binding"], "codec_partial");
         assert_eq!(
             json["symbols"]["stream_bidi_lifecycle"],
             serde_json::json!(cfg!(feature = "axon-pb"))

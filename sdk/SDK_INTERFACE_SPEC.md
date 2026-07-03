@@ -75,6 +75,10 @@ remain separate Directory + Identity methods rather than string utilities.
 Receipt projection may normalize summary DTOs and derive causal refs from
 explicit receipt facts, but summary-only data must remain `verified: false`
 until an Axon-backed verifier proves a full receipt.
+Host Binding codec projection may build host-stream binding DTOs, decode
+daemon request envelopes, encode shared item/error/terminal frames, and fold
+output hashes. It must not execute product host code, inspect language
+decorators, load dependencies, or own warm-host process lifecycle.
 
 ## Invocation Tuple
 

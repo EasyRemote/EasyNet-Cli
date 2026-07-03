@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/host-stream-hash-state.schema.json",
+  "title": "HostStreamHashState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["algorithm", "output_hash", "frames", "last_seq"],
+  "properties": {
+    "algorithm": {
+      "type": "string",
+      "const": "sha256(prev_hash || seq_be || canonical_json(value))"
+    },
+    "output_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "frames": {"type": "integer", "minimum": 0},
+    "last_seq": {"type": ["integer", "null"], "minimum": 0},
+    "canonical_json": {"type": "string"}
+  }
+}

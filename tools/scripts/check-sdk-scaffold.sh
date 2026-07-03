@@ -63,8 +63,13 @@ schema_files=(
   directory-page.schema.json
   publication.schema.json
   resource-ref.schema.json
+  host-stream-binding-request.schema.json
   host-stream-binding.schema.json
+  host-stream-envelope.schema.json
+  host-stream-request.schema.json
   host-stream-frame.schema.json
+  host-stream-terminal-summary.schema.json
+  host-stream-hash-state.schema.json
   mission-status.schema.json
   admin.schema.json
   gateway.schema.json
@@ -98,6 +103,12 @@ fixture_files=(
   runtime.error.v4.json
   event.directory.v4.json
   health.ready.v4.json
+  host-stream-binding-request.v4.json
+  host-stream-binding.v4.json
+  host-stream-request.v4.json
+  host-stream-frame.v4.json
+  host-stream-terminal.v4.json
+  host-stream-hash-state.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -121,6 +132,7 @@ case_files=(
   identity-ura-descriptor-projection.yaml
   receipt-projection-causal-ref.yaml
   stream-bidi-lifecycle-state.yaml
+  host-binding-codec-hash.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

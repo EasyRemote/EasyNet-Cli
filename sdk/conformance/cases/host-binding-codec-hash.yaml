@@ -1,0 +1,62 @@
+id: host_binding/codec_hash
+profile: host_binding
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: HostBindingClient builds typed host-stream bindings, decodes daemon envelopes, encodes shared item/error/terminal frames, and folds output hashes with daemon-owned semantics.
+steps:
+  - action: build_host_stream_binding
+    request:
+      binding_id: binding-weather-1
+      descriptor_ref: easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0
+      endpoint: /tmp/easynet-weather.sock
+      frame_schema: host-stream-frame.schema.json
+      cleanup:
+        mode: unlink_socket
+      timeout_ms: 30000
+  - action: decode_request
+    envelope:
+      request:
+        fn: weather.stream
+        args:
+          city: Singapore
+        call_id: call-weather-1
+        caller: easynet:///r/example/user/alice
+  - action: encode_item
+    seq: 0
+    value:
+      token: hello
+  - action: fold_output_hash
+    state:
+      algorithm: sha256(prev_hash || seq_be || canonical_json(value))
+      output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      frames: 0
+      last_seq: null
+    seq: 0
+    value:
+      token: hello
+  - action: encode_terminal
+    summary:
+      output_hash: sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15
+      frames: 1
+expect:
+  result: host_binding_codec_observed
+  binding_schema: host-stream-binding.schema.json
+  request_schema: host-stream-request.schema.json
+  frame_schema: host-stream-frame.schema.json
+  terminal_schema: host-stream-terminal-summary.schema.json
+  hash_state_schema: host-stream-hash-state.schema.json
+  binding_fixture: host-stream-binding.v4.json
+  binding_request_fixture: host-stream-binding-request.v4.json
+  request_fixture: host-stream-request.v4.json
+  frame_fixture: host-stream-frame.v4.json
+  terminal_fixture: host-stream-terminal.v4.json
+  hash_state_fixture: host-stream-hash-state.v4.json
+  folded_hash: sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15
+  canonical_json: '{"token":"hello"}'
+  rejects_relative_endpoint: true
+  rejects_frame_schema_drift: true
+  rejects_hash_gap_or_reorder: true
+  product_host_owns_process_warmth: true

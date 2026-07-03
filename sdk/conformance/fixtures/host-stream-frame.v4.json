@@ -1,0 +1,10 @@
+{
+  "frame_type": "item",
+  "seq": 0,
+  "value": {
+    "token": "hello"
+  },
+  "error": null,
+  "terminal": null,
+  "output_hash": null
+}

@@ -381,6 +381,42 @@ int32_t easynet_receipt_causal_ref(
     char **out_causal_ref_json
 );
 
+int32_t easynet_host_binding_build(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_binding_json
+);
+
+int32_t easynet_host_binding_decode_request(
+    EasynetHandle handle,
+    const char *envelope_json,
+    char **out_request_json
+);
+
+int32_t easynet_host_binding_encode_item(
+    EasynetHandle handle,
+    const char *item_json,
+    char **out_frame_json
+);
+
+int32_t easynet_host_binding_encode_error(
+    EasynetHandle handle,
+    const char *error_json,
+    char **out_frame_json
+);
+
+int32_t easynet_host_binding_encode_terminal(
+    EasynetHandle handle,
+    const char *terminal_json,
+    char **out_frame_json
+);
+
+int32_t easynet_host_binding_fold_output_hash(
+    EasynetHandle handle,
+    const char *fold_json,
+    char **out_state_json
+);
+
 #ifdef __cplusplus
 }
 #endif

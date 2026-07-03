@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/host-stream-binding-request.schema.json",
+  "title": "HostStreamBindingRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding_id", "descriptor_ref", "endpoint", "frame_schema"],
+  "properties": {
+    "binding_id": {"type": "string", "minLength": 1},
+    "descriptor_ref": {"type": "string", "minLength": 1},
+    "endpoint": {"type": "string", "minLength": 1},
+    "frame_schema": {"type": "string", "const": "host-stream-frame.schema.json"},
+    "cleanup": {
+      "oneOf": [
+        {"type": "object"},
+        {"type": "null"}
+      ]
+    },
+    "timeout_ms": {"type": ["integer", "null"], "minimum": 0},
+    "readiness": {
+      "oneOf": [
+        {"type": "object"},
+        {"type": "null"}
+      ]
+    },
+    "metadata": {
+      "oneOf": [
+        {"type": "object"},
+        {"type": "null"}
+      ]
+    }
+  }
+}
