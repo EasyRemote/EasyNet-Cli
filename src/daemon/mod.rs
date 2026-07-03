@@ -51,6 +51,7 @@ pub mod mission_contract;
 pub mod persistence;
 pub mod plugins;
 pub mod publication_contract;
+pub mod receipt_contract;
 pub mod resources;
 pub mod sdk_contract;
 pub mod telemetry;

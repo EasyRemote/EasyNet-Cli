@@ -411,6 +411,12 @@ int32_t easynet_directory_project_resolved_ref(
     char **out_resolved_ref_json
 );
 
+int32_t easynet_receipt_build_fetch_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_receipt_project(
     EasynetHandle handle,
     const char *receipt_json,

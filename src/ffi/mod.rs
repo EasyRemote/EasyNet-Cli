@@ -65,6 +65,10 @@
 //   `easynet_directory_project_*_page`, and
 //   `easynet_directory_project_resolved_ref`: Directory read-model carrier,
 //   resolve carrier, and projection helpers.
+// - `easynet_receipt_build_fetch_invocation`,
+//   `easynet_receipt_project`, `easynet_receipt_verify`, and
+//   `easynet_receipt_causal_ref`: Receipt fetch carrier and conservative
+//   projection helpers.
 // - `easynet_admin_build_*_invocation`,
 //   `easynet_admin_project_gateway_status`,
 //   `easynet_admin_project_agent_records`, and
@@ -151,7 +155,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
         "sdk_version": env!("CARGO_PKG_VERSION"),
         "profiles": {
             "runtime_core": "partial",
-            "receipt": "projection_partial",
+            "receipt": "fetch_projection_partial",
             "directory_identity": "read_model_projection_partial",
             "publication": "carrier_partial",
             "host_binding": "codec_partial",
@@ -165,6 +169,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "daemon_lifecycle": true,
             "invocation_dispatch_v3": true,
             "typed_error_json": true,
+            "receipt_fetch": true,
             "receipt_projection": true,
             "directory_identity_projection": true,
             "directory_read_model": true,
@@ -348,6 +353,7 @@ mod tests {
         unsafe { strings::easynet_string_free(out) };
         assert_eq!(json["abi_version"], EASYNET_ABI_VERSION);
         assert_eq!(json["symbols"]["typed_error_json"], true);
+        assert_eq!(json["symbols"]["receipt_fetch"], true);
         assert_eq!(json["symbols"]["receipt_projection"], true);
         assert_eq!(json["symbols"]["directory_identity_projection"], true);
         assert_eq!(json["symbols"]["directory_read_model"], true);
@@ -361,7 +367,7 @@ mod tests {
         assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
         assert_eq!(json["symbols"]["compatibility_carriers"], true);
         assert_eq!(json["symbols"]["compatibility_projection"], true);
-        assert_eq!(json["profiles"]["receipt"], "projection_partial");
+        assert_eq!(json["profiles"]["receipt"], "fetch_projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],
             "read_model_projection_partial"

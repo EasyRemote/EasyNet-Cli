@@ -1,0 +1,14 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "request_id": "inv-example-1",
+  "metadata": {
+    "request_id": "receipt-fetch-1"
+  }
+}

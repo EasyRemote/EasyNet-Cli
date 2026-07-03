@@ -57,6 +57,7 @@ schema_files=(
   invocation.schema.json
   identity.schema.json
   receipt.schema.json
+  receipt-fetch-request.schema.json
   error.schema.json
   health.schema.json
   events.schema.json
@@ -124,6 +125,8 @@ fixture_files=(
   invocation.complete.v4.json
   prepared.signing-material.v4.json
   identity.descriptor-ref.v4.json
+  receipt-fetch-request.v4.json
+  receipt-fetch-invocation.v4.json
   receipt.summary.v4.json
   runtime.error.v4.json
   event.directory.v4.json
@@ -208,6 +211,7 @@ case_files=(
   invocation-local-daemon-signing-boundary.yaml
   error-typed-json.yaml
   identity-ura-descriptor-projection.yaml
+  receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml
   stream-bidi-lifecycle-state.yaml
   host-binding-codec-hash.yaml

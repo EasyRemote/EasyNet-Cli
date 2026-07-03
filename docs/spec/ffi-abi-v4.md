@@ -8,9 +8,9 @@ ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
-typed error JSON, Directory + Identity read-model projection, receipt
-projection, Host Binding host-stream codec/hash projection, and Publication
-carrier projection for language bindings. It also adds Mission/EAL carrier and status projection so
+typed error JSON, Directory + Identity read-model projection, Receipt
+fetch/projection, Host Binding host-stream codec/hash projection, and
+Publication carrier projection for language bindings. It also adds Mission/EAL carrier and status projection so
 language bindings submit daemon-owned orchestration through Runtime Core rather
 than implementing transport facades themselves. Events directory-stream carrier
 and frame projection helpers expose the daemon-owned
@@ -378,9 +378,15 @@ default. ABI v4 Directory support is `read_model_projection_partial`: directory
 subscribe convenience wrappers, signing-key lifecycle APIs, backend database
 projections, and language facades remain future work.
 
-### 2.9 Receipt Projection
+### 2.9 Receipt Fetch and Projection
 
 ```c
+int32_t easynet_receipt_build_fetch_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
 int32_t easynet_receipt_project(
     EasynetHandle handle,
     const char* receipt_json,
@@ -401,12 +407,17 @@ int32_t easynet_receipt_causal_ref(
 ```
 
 Receipt projection functions are scoped to a live `EasynetHandle`, matching the
-SDK object graph's `ReceiptClient`. `project` normalizes receipt-like JSON into
-the shared `ReceiptSummary` DTO. `verify` is conservative in ABI v4: it returns
-typed JSON with `verified: false` for summary-only data and does not claim Axon
-cryptographic verification. `causal_ref` builds a scalar causal context only
-when the input contains an explicit non-empty `receipt_ura` and a valid 32-byte
-receipt hash (`self_hash_hex`, `receipt_hash_hex`, or `receipt_hash`).
+SDK object graph's `ReceiptClient`. `build_fetch_invocation` returns complete
+Invocation JSON for daemon `invocation.history.get` with exactly one public
+selector: `invocation_ura`, `request_id`, or `trace_id`. Bindings submit the
+returned carrier through Runtime Core; the SDK does not open the daemon ledger
+file, fabricate receipt URAs, or use control frames for receipt reads.
+`project` normalizes receipt-like JSON into the shared `ReceiptSummary` DTO.
+`verify` is conservative in ABI v4: it returns typed JSON with
+`verified: false` for summary-only data and does not claim Axon cryptographic
+verification. `causal_ref` builds a scalar causal context only when the input
+contains an explicit non-empty `receipt_ura` and a valid 32-byte receipt hash
+(`self_hash_hex`, `receipt_hash_hex`, or `receipt_hash`).
 
 ### 2.10 Host Binding Codec
 

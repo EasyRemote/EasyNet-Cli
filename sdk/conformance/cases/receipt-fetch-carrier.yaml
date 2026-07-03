@@ -1,0 +1,18 @@
+id: receipt/fetch_carrier
+profile: receipt
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Receipt fetch builds a complete Invocation carrier over daemon invocation.history.get instead of opening the ledger or fabricating receipt URAs.
+steps:
+  - action: build_receipt_fetch_invocation
+    fixture: receipt-fetch-request.v4.json
+expect:
+  result: receipt_fetch_carrier_observed
+  request_schema: receipt-fetch-request.schema.json
+  invocation_fixture: receipt-fetch-invocation.v4.json
+  daemon_ability: invocation.history.get
+  selector_cardinality: exactly_one
+  direct_ledger_read: false

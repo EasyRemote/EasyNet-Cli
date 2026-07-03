@@ -29,7 +29,7 @@ method spelling.
 | stream | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
 | bidi | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | gap | gap | gap | gap | gap |
-| receipt | projection partial | projection partial | gap | gap | gap | gap | gap |
+| receipt | fetch/projection partial | fetch/projection partial | gap | gap | gap | gap | gap |
 | publication | carrier partial | carrier partial | gap | gap | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | gap | gap | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
@@ -43,11 +43,13 @@ method spelling.
 
 - C ABI now exposes invocation builder handles and submitted InvocationHandle
   await/cancel/events/free handles for unary submit; live event streaming and
-  receipt fetch/verify remain incomplete.
+  Axon-backed receipt verification remain incomplete.
 - C ABI now exposes schema-shaped typed error JSON for ABI return codes; broad
   language facade error classes and per-profile source refs remain incomplete.
-- Receipt projection and causal-ref guardrails exist for Rust/C ABI; daemon
-  fetch, Axon-backed full verification, and language facades remain incomplete.
+- Receipt fetch carrier, projection, and causal-ref guardrails exist for
+  Rust/C ABI over daemon `invocation.history.get`; Axon-backed full
+  verification, fetched-record execution convenience, and language facades
+  remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, and Identity URA/DescriptorRef
   projection guardrails exist for Rust/C ABI; subscribe convenience wrappers,
@@ -75,8 +77,8 @@ method spelling.
   create/get/delete, product API-key policy, quota/rate limits, billing,
   backend HTTP route shaping, SSE/WebSocket fanout, and language facades remain
   incomplete.
-- Directory subscribe convenience methods, receipt fetch/verify, surface, and
-  convenience wrappers are schema/conformance scaffolds only.
+- Directory subscribe convenience methods, Axon-backed receipt verification,
+  surface, and convenience wrappers are schema/conformance scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

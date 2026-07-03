@@ -1,0 +1,22 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "args": {
+    "key": {
+      "request_id": "inv-example-1"
+    }
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "request_id": "receipt-fetch-1",
+    "profile": "receipt",
+    "system_ability": "invocation.history.get",
+    "carrier_owner": "daemon_sdk"
+  }
+}
