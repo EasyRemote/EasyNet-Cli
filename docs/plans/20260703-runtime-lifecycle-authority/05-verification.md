@@ -55,6 +55,20 @@ Planned checks:
     `removed` in 143 ms; the backend read model reported `UNKNOWN` afterward.
   - The flow cleaned up the Docker backend stack and left no matching host
     `easynet-daemon` process.
+- Fresh release-shape Hub startup from `e2e-release-install.sh` - passed with
+  TLS inputs:
+  - `easynet runtime start --as-hub --bind 127.0.0.1:0` without `--cert` and
+    `--key` failed as designed with an explicit TLS-bearing
+    `daemon-config.toml` scaffold message.
+  - `easynet runtime start --as-hub --cert cert.pem --key key.pem` from a fresh
+    sandbox install generated `~/.easynet/daemon-config.toml`, started
+    `easynet-daemon` as Hub on `0.0.0.0:50051`, reported
+    `runtime_status = running`, and `easynet runtime stop` returned status to
+    `stopped`.
+  - A test-only ephemeral bind
+    `easynet runtime start --as-hub --bind 127.0.0.1:0 --cert cert.pem --key key.pem`
+    also started and stopped cleanly; its operator join hint reports port `0`,
+    so it is appropriate for hermetic lifecycle tests, not real Hub onboarding.
 
 External product gates closed:
 
