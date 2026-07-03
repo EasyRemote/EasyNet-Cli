@@ -47,6 +47,8 @@ for path in \
   sdk/CONFORMANCE_SUITE.md \
   sdk/go/go.mod \
   sdk/go/client.go \
+  sdk/go/connection.go \
+  sdk/go/connection_test.go \
   sdk/go/errors.go \
   sdk/go/health.go \
   sdk/go/health_test.go \
@@ -59,12 +61,14 @@ for path in \
   sdk/go/import_boundary_test.go \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
+  sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
   sdk/python/easynet_sdk/invocation.py \
   sdk/python/easynet_sdk/runtime.py \
   sdk/python/easynet_sdk/signing.py \
   sdk/python/tests/test_health.py \
+  sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
   sdk/python/tests/test_signing.py \
@@ -301,6 +305,10 @@ require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
 require_literal sdk/go/client.go "DiscoveryTransport"
+require_literal sdk/go/connection.go "RuntimeConnection"
+require_literal sdk/go/connection.go "ConnectionState"
+require_literal sdk/go/connection.go "RuntimeConnector"
+require_literal sdk/go/connection.go "ConnectOptions"
 require_literal sdk/go/errors.go "DecodeDaemonErrorJSON"
 require_literal sdk/go/errors.go "RuntimeError"
 require_literal sdk/go/health.go "HealthClient"
@@ -320,6 +328,10 @@ require_literal sdk/go/signing.go "SignedInvocation"
 require_literal sdk/go/signing.go "SigningMaterial"
 require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
 require_literal sdk/python/easynet_sdk/client.py "DiscoveryTransport"
+require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
+require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
+require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"
+require_literal sdk/python/easynet_sdk/connection.py "ConnectOptions"
 require_literal sdk/python/easynet_sdk/errors.py "from_json"
 require_literal sdk/python/easynet_sdk/errors.py "RuntimeError"
 require_literal sdk/python/easynet_sdk/health.py "HealthClient"

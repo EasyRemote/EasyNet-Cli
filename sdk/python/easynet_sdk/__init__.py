@@ -5,6 +5,13 @@ expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 """
 
 from .client import Client, DiscoveryTransport, FeatureSet, Version
+from .connection import (
+    ConnectOptions,
+    ConnectionState,
+    RuntimeConnection,
+    RuntimeConnector,
+    RuntimeEndpoint,
+)
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .health import HealthClient, HealthTransport, RuntimeHealth
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
@@ -27,6 +34,8 @@ from .signing import (
 
 __all__ = [
     "Client",
+    "ConnectOptions",
+    "ConnectionState",
     "DiscoveryTransport",
     "ErrorCode",
     "FeatureSet",
@@ -44,6 +53,9 @@ __all__ = [
     "PreparedInvocation",
     "RetryHint",
     "RuntimeClient",
+    "RuntimeConnection",
+    "RuntimeConnector",
+    "RuntimeEndpoint",
     "RuntimeHealth",
     "RuntimeError",
     "RuntimeTransport",

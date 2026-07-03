@@ -1,0 +1,250 @@
+package easynet
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+)
+
+// ConnectionState is the Runtime Core client connection state.
+type ConnectionState string
+
+const (
+	ConnectionIdle         ConnectionState = "Idle"
+	ConnectionResolving    ConnectionState = "Resolving"
+	ConnectionConnecting   ConnectionState = "Connecting"
+	ConnectionReady        ConnectionState = "Ready"
+	ConnectionDegraded     ConnectionState = "Degraded"
+	ConnectionReconnecting ConnectionState = "Reconnecting"
+	ConnectionFailed       ConnectionState = "Failed"
+	ConnectionClosed       ConnectionState = "Closed"
+)
+
+// ConnectOptions are daemon Runtime Core connection knobs.
+type ConnectOptions struct {
+	Endpoint        string `json:"endpoint,omitempty"`
+	ControlPath     string `json:"control_path,omitempty"`
+	DialTimeoutMS   int64  `json:"dial_timeout_ms,omitempty"`
+	InvokeTimeoutMS int64  `json:"invoke_timeout_ms,omitempty"`
+	MaxMessageBytes int    `json:"max_message_bytes,omitempty"`
+	Reconnect       bool   `json:"reconnect,omitempty"`
+}
+
+// RuntimeEndpoint is the resolved daemon invocation endpoint projection.
+type RuntimeEndpoint struct {
+	Endpoint        string `json:"endpoint"`
+	ControlPath     string `json:"control_path,omitempty"`
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	ABIVersion      uint32 `json:"abi_version,omitempty"`
+}
+
+// RuntimeConnector supplies the concrete daemon connection steps for RuntimeConnection.
+type RuntimeConnector interface {
+	Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error)
+	Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error)
+	Close(ctx context.Context) error
+}
+
+// RuntimeConnectorFunc adapts functions into a RuntimeConnector.
+type RuntimeConnectorFunc struct {
+	ResolveFunc   func(ctx context.Context, optionsJSON []byte) ([]byte, error)
+	HandshakeFunc func(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error)
+	CloseFunc     func(ctx context.Context) error
+}
+
+func (f RuntimeConnectorFunc) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
+	if f.ResolveFunc == nil {
+		return nil, invalidRuntimeClient("runtime resolve connector function is required")
+	}
+	return f.ResolveFunc(ctx, optionsJSON)
+}
+
+func (f RuntimeConnectorFunc) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
+	if f.HandshakeFunc == nil {
+		return nil, nil, invalidRuntimeClient("runtime handshake connector function is required")
+	}
+	return f.HandshakeFunc(ctx, endpointJSON)
+}
+
+func (f RuntimeConnectorFunc) Close(ctx context.Context) error {
+	if f.CloseFunc == nil {
+		return nil
+	}
+	return f.CloseFunc(ctx)
+}
+
+// RuntimeConnection owns client connection state and gates RuntimeClient creation.
+type RuntimeConnection struct {
+	connector RuntimeConnector
+	state     ConnectionState
+	endpoint  RuntimeEndpoint
+	transport RuntimeTransport
+	handshake map[string]any
+	lastError error
+}
+
+// NewRuntimeConnection creates an idle Runtime Core connection object.
+func NewRuntimeConnection(connector RuntimeConnector) (*RuntimeConnection, error) {
+	if connector == nil {
+		return nil, invalidRuntimeClient("runtime connector is required")
+	}
+	return &RuntimeConnection{
+		connector: connector,
+		state:     ConnectionIdle,
+		handshake: map[string]any{},
+	}, nil
+}
+
+// Connect resolves and handshakes the daemon invocation transport.
+func (c *RuntimeConnection) Connect(ctx context.Context, opts ConnectOptions) error {
+	if c == nil || c.connector == nil {
+		return invalidRuntimeClient("runtime connection is not initialized")
+	}
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	if c.state == ConnectionClosed {
+		return invalidRuntimeClient("runtime connection is closed")
+	}
+	c.state = ConnectionResolving
+	optionsJSON, err := json.Marshal(opts)
+	if err != nil {
+		c.fail(invalidRuntimePayload(fmt.Sprintf("encode connect options: %v", err), err))
+		return c.lastError
+	}
+	rawEndpoint, err := c.connector.Resolve(ctx, optionsJSON)
+	if err != nil {
+		c.fail(wrapRuntimeConnectError("resolve runtime endpoint failed", err))
+		return c.lastError
+	}
+	endpoint, err := NewRuntimeEndpointFromJSON(rawEndpoint)
+	if err != nil {
+		c.fail(err)
+		return c.lastError
+	}
+	c.endpoint = endpoint
+	c.state = ConnectionConnecting
+	transport, rawHandshake, err := c.connector.Handshake(ctx, rawEndpoint)
+	if err != nil {
+		c.fail(wrapRuntimeConnectError("runtime handshake failed", err))
+		return c.lastError
+	}
+	if transport == nil {
+		c.fail(invalidRuntimeClient("runtime transport is required after handshake"))
+		return c.lastError
+	}
+	handshake, err := decodeHandshakeFacts(rawHandshake)
+	if err != nil {
+		c.fail(err)
+		return c.lastError
+	}
+	c.transport = transport
+	c.handshake = handshake
+	c.lastError = nil
+	c.state = ConnectionReady
+	return nil
+}
+
+// RuntimeClient returns a RuntimeClient only when the connection is ready.
+func (c *RuntimeConnection) RuntimeClient() (*RuntimeClient, error) {
+	if c == nil || c.connector == nil {
+		return nil, invalidRuntimeClient("runtime connection is not initialized")
+	}
+	if c.state != ConnectionReady || c.transport == nil {
+		return nil, invalidRuntimeClient("runtime connection is not ready")
+	}
+	return NewRuntimeClient(c.transport)
+}
+
+// Close closes the connection and moves it to the terminal Closed state.
+func (c *RuntimeConnection) Close(ctx context.Context) error {
+	if c == nil || c.connector == nil {
+		return invalidRuntimeClient("runtime connection is not initialized")
+	}
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	if c.state == ConnectionClosed {
+		return nil
+	}
+	err := c.connector.Close(ctx)
+	c.transport = nil
+	c.state = ConnectionClosed
+	if err != nil {
+		c.lastError = wrapRuntimeConnectError("runtime close failed", err)
+		return c.lastError
+	}
+	c.lastError = nil
+	return nil
+}
+
+func (c *RuntimeConnection) State() ConnectionState {
+	if c == nil {
+		return ConnectionFailed
+	}
+	return c.state
+}
+
+func (c *RuntimeConnection) Endpoint() RuntimeEndpoint {
+	if c == nil {
+		return RuntimeEndpoint{}
+	}
+	return c.endpoint
+}
+
+func (c *RuntimeConnection) HandshakeFacts() map[string]any {
+	if c == nil {
+		return map[string]any{}
+	}
+	return copyMap(c.handshake)
+}
+
+func (c *RuntimeConnection) LastError() error {
+	if c == nil {
+		return nil
+	}
+	return c.lastError
+}
+
+func (c *RuntimeConnection) fail(err error) {
+	c.transport = nil
+	c.lastError = err
+	if c.state != ConnectionClosed {
+		c.state = ConnectionFailed
+	}
+}
+
+// NewRuntimeEndpointFromJSON decodes daemon endpoint discovery JSON.
+func NewRuntimeEndpointFromJSON(raw []byte) (RuntimeEndpoint, error) {
+	var endpoint RuntimeEndpoint
+	if err := json.Unmarshal(raw, &endpoint); err != nil {
+		return RuntimeEndpoint{}, invalidRuntimePayload(fmt.Sprintf("decode runtime endpoint JSON: %v", err), err)
+	}
+	if endpoint.Endpoint == "" {
+		return RuntimeEndpoint{}, invalidRuntimePayload("endpoint is required", nil)
+	}
+	return endpoint, nil
+}
+
+func decodeHandshakeFacts(raw []byte) (map[string]any, error) {
+	if len(raw) == 0 {
+		return map[string]any{}, nil
+	}
+	var facts map[string]any
+	if err := json.Unmarshal(raw, &facts); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode runtime handshake JSON: %v", err), err)
+	}
+	if facts == nil {
+		return map[string]any{}, nil
+	}
+	return facts, nil
+}
+
+func wrapRuntimeConnectError(message string, cause error) error {
+	var sdkErr *SDKError
+	if errors.As(cause, &sdkErr) {
+		return sdkErr
+	}
+	return transportRuntimeError(message, cause)
+}
