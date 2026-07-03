@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, and Surface seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, and Surface seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, and Compatibility seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, and Compatibility seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -37,7 +37,7 @@ method spelling.
 | admin + gateway | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | events | directory stream partial | directory stream partial | directory stream seam partial | directory stream seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
-| compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
+| compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | wrappers | record projection partial | record projection partial | gap | gap | gap | gap | gap |
 | conformance runner | manifest partial | manifest partial | gap | gap | gap | gap | gap |
 
@@ -143,6 +143,11 @@ method spelling.
   projection seams; surface health/status, backend route serving, browser auth,
   CDN/cache policy, content-management UX, and backend page-route cutover remain
   incomplete.
+- Go Compatibility facade exposes `CompatibilityClient` list-models, chat, and
+  stream-chat Invocation carrier builders plus model, chat, stream, file, and
+  file-delete projection seams; product API-key policy, quota/rate limits,
+  billing, backend HTTP route shaping, multipart storage policy, SSE/WebSocket
+  fanout, and backend compatibility-route cutover remain incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime state seams, runtime health readiness
@@ -198,6 +203,11 @@ method spelling.
   projection seams; surface health/status, backend route serving, browser auth,
   CDN/cache policy, content-management UX, and product cutovers remain
   incomplete.
+- Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
+  and stream-chat Invocation carrier builders plus model, chat, stream, file,
+  and file-delete projection seams; product API-key policy, quota/rate limits,
+  billing, backend HTTP route shaping, multipart storage policy, SSE/WebSocket
+  fanout, and EasyRemote/Hub compatibility cutovers remain incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.
