@@ -232,7 +232,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
     };
 
 // The native ScreenCaptureKit + VideoToolbox plugin is compiled in only on
-// macOS (see plugins::remote_desktop::{screencapturekit_capture, videotoolbox_encoder}).
+// macOS (see daemon::resources::remote_desktop::{screencapturekit_capture, videotoolbox_encoder}).
 // On other targets the descriptor stays not_installed so the gate keeps
 // blocking and the diagnostic relay remains the only path.
 #[cfg(target_os = "macos")]
