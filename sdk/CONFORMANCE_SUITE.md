@@ -65,7 +65,7 @@ bash tools/scripts/check-sdk-scaffold.sh
 Future runners should add:
 
 ```text
-go test ./sdk/go/...
+cd sdk/go && go test ./...
 python -m easynet_sdk_conformance
 npm test --workspace sdk/node
 ./gradlew :sdk:java:test

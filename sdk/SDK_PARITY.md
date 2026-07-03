@@ -9,7 +9,7 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | placeholder |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery partial |
 | Python | P0 | EasyRemote | placeholder |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
@@ -19,7 +19,7 @@ method spelling.
 
 | Capability | Rust | C ABI | Go | Python | Node | Java | Swift |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ABI/version discovery | partial | partial | gap | gap | gap | gap | gap |
+| ABI/version discovery | partial | partial | partial | gap | gap | gap | gap |
 | daemon start/attach/discover/stop/detach | partial | partial | gap | gap | gap | gap | gap |
 | runtime health | partial | partial | gap | gap | gap | gap | gap |
 | typed errors | partial | typed JSON partial | gap | gap | gap | gap | gap |
@@ -89,8 +89,11 @@ method spelling.
   terminal, remote desktop, browser, and media session DTOs; execution helpers,
   backend HTTP/WebSocket bridges, storage policy, and language facades remain
   incomplete.
-- Go and Python packages need real Runtime Core facades before backend or
-  EasyRemote cutover.
+- Go package exposes Runtime Core feature/version discovery and typed SDK
+  errors behind a transport seam; daemon Invocation transport, profile clients,
+  stream/bidi adapters, backend import-ban integration, and conformance action
+  execution remain incomplete before backend cutover.
+- Python package needs a real Runtime Core facade before EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.

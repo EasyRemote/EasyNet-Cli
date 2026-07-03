@@ -44,7 +44,11 @@ for path in \
   sdk/README.md \
   sdk/SDK_INTERFACE_SPEC.md \
   sdk/SDK_PARITY.md \
-  sdk/CONFORMANCE_SUITE.md
+  sdk/CONFORMANCE_SUITE.md \
+  sdk/go/go.mod \
+  sdk/go/client.go \
+  sdk/go/errors.go \
+  sdk/go/import_boundary_test.go
 do
   require_file "$path"
 done
@@ -276,6 +280,8 @@ done
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
+require_literal sdk/go/client.go "DiscoveryTransport"
+require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
 require_literal sdk/SDK_INTERFACE_SPEC.md "PreparedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "SignedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "No public object in this graph may expose raw Axon"
