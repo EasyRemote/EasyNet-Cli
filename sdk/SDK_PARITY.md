@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, and Publication seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, and Publication seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, and Host Binding seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, and Host Binding seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -32,7 +32,7 @@ method spelling.
 | directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
 | receipt | fetch/projection partial | fetch/projection partial | projection seam partial | projection seam partial | gap | gap | gap |
 | publication | carrier partial | carrier partial | carrier/read-model seam partial | carrier/read-model seam partial | gap | gap | gap |
-| host binding | codec/hash partial | codec/hash partial | gap | gap | gap | gap | gap |
+| host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | admin + gateway | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
@@ -117,6 +117,11 @@ method spelling.
   carriers, list/show/enable/disable runtime execution, host binding bridge,
   plugin/skill lifecycle policy, and backend publication cutover remain
   incomplete.
+- Go Host Binding facade exposes `HostBindingClient` binding DTO, envelope
+  decode, item/error/terminal frame encoding, and output-hash folding seams over
+  schema-backed transport projections; product host readiness execution,
+  cleanup execution, local canonical JSON/hash implementation, EasyRemote host
+  process integration, and behavior-executing conformance remain incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime state seams, runtime health readiness
@@ -145,6 +150,11 @@ method spelling.
   carriers, list/show/enable/disable runtime execution, host binding bridge,
   EasyRemote decorator/package extraction, and plugin/skill lifecycle policy
   remain incomplete.
+- Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
+  decode, item/error/terminal frame encoding, and output-hash folding seams over
+  schema-backed transport projections; product host readiness execution,
+  cleanup execution, local canonical JSON/hash implementation, EasyRemote warm
+  host integration, and behavior-executing conformance remain incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.
