@@ -2,35 +2,30 @@
 # check-invocation-unity.sh
 # ==========================
 #
-# CI gate for plan v10.3 C* "Invocation = unique unit of execution".
+# CI gate for "Invocation = unique unit of execution".
 # Documented under docs/design/invocation-unity-v1.md.
 #
-# This script enforces two rules today; PR-INVOCATION-EXEC-UNITY
-# strengthens it with three additional grep clauses once the
-# schedule/loop/permission handlers have been collapsed onto
-# Kernel::invoke.
+# The final project-structure-v1 layout routes live execution through
+# daemon::invocation, daemon::boot::kernel, and Axon's LocalRuntime.
+# The old daemon::kernel root must not return.
 #
 # Rule 1 (syntactic unity)
 # ------------------------
-# IPC server / KernelApi trait / GatewayApi trait method signatures
-# must not speak `args: serde_json::Value` / `args_json: ...` /
-# `payload: serde_json::Value` tuples. They must speak domain types
-# (Invocation, SessionId, PermissionRequest, ...) so the system-wide
-# `invocation_id` stays the single key across layers.
+# GatewayApi method signatures must not speak raw invocation payload
+# fragments. Dispatch payloads are owned by daemon::invocation; the
+# gateway trait stays lifecycle/discovery only.
 #
-# Rule 2 (unity entry point)
+# Rule 2 (retired kernel root)
 # --------------------------
-# The ONLY place Kernel::invoke may be called from inside the
-# daemon execution layer is via the Kernel itself. Handlers
-# (PR-ATTACH / PR-PERM / etc.) route execution entries through the
-# Kernel, not by constructing a parallel dispatch.
+# No final daemon code may import the old daemon::kernel namespace.
+# The supported kernel home is daemon::boot::kernel.
 #
-# Rule 3 (reserved for PR-INVOCATION-EXEC-UNITY)
-# ----------------------------------------------
+# Rule 3 (execution cannot bypass daemon invocation)
+# -------------------------------------------------
 # schedule/runner.rs, loop_instance/runner.rs, permission/broker.rs
 # must not call run_mission_inproc / Session::subscribe / dispatch
-# directly — they must construct Invocations and call
-# Kernel::invoke. Left commented below until those runners land.
+# directly. They construct/consume daemon invocation records and route
+# through daemon::invocation / LocalRuntime adapters.
 #
 # Exit codes
 #   0 — clean
@@ -44,12 +39,8 @@ cd "$ROOT"
 echo "== check-invocation-unity.sh =="
 violations=0
 
-# ── Rule 1: forbid raw JSON fragments in syscall / gateway traits ─
-# Only the trait definitions themselves are checked (files that
-# declare the trait). Handler implementations may still operate
-# on raw JSON internally because the `Invocation.args` field is
-# typed `serde_json::Value` in v1.
-for f in src/daemon/kernel/api.rs src/daemon/federation/gateway_api.rs; do
+# -- Rule 1: forbid raw invocation fragments in gateway traits ------
+for f in src/daemon/federation/gateway_api.rs; do
     [ -f "$f" ] || continue
     bad=$(grep -nE 'args_json|payload: *(serde_json::)?Value|args: *(serde_json::)?Value' "$f" || true)
     if [ -n "$bad" ]; then
@@ -60,44 +51,30 @@ for f in src/daemon/kernel/api.rs src/daemon/federation/gateway_api.rs; do
     fi
 done
 
-# ── Rule 2: Kernel::invoke is the unity entry point ────────────────
-# Detect the anti-pattern `Kernel::invoke(` in any sub-service other
-# than the kernel itself. Sub-services must not "self-invoke" by
-# reaching for Kernel; they return values to the Kernel that calls
-# them. Flag if PR-INVOCATION-EXEC-UNITY leaks.
-if [ -d "src/daemon/execution" ]; then
-    # Look for actual call syntax `Kernel::invoke(` — excluding
-    # backtick-wrapped prose in `// doc comments`. A simple rule
-    # that works: reject the file when a non-comment line contains
-    # `Kernel::invoke(`. `grep -v '^\s*//'` strips whole-line doc
-    # comments; any call-site will fail that filter.
-    bad=$(grep -rnE 'Kernel::invoke\(' src/daemon/execution \
-        | grep -vE '^[^:]+:[0-9]+:\s*//' || true)
+# -- Rule 2: retired daemon kernel root must not return --------------
+if [ -d "src/daemon" ]; then
+    bad=$(grep -rnE 'crate::daemon::kernel\b' src/daemon \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
     if [ -n "$bad" ]; then
-        echo "ERROR: Kernel::invoke is called from an Execution sub-service:"
+        echo "ERROR: retired daemon::kernel namespace referenced from active daemon code:"
         echo "$bad"
-        echo "  The Kernel calls sub-services, not the other way around."
+        echo "  Use daemon::boot::kernel or daemon::invocation modules instead."
         violations=$((violations + 1))
     fi
 fi
 
-# ── Rule 3 (active, PR-INVOCATION-EXEC-UNITY) ─────────────────────
-# Sub-services may not bypass `Kernel::invoke` by reaching for
-# the legacy mission/session paths directly:
+# -- Rule 3: sub-services may not bypass daemon invocation ----------
 #
 #   * execution/schedule/    — must not call `run_mission_inproc`
 #                              (the tick runner builds an
-#                              Invocation and routes through
-#                              Kernel::invoke).
+#                              Invocation and routes through daemon
+#                              invocation dispatch).
 #   * execution/loop_instance/ — must not call Session::subscribe
 #                              or dispatch::send_to_agent directly.
 #                              The loop controller emits one
 #                              Invocation per body / verify step.
 #   * execution/permission/  — broker may not be invoked from
-#                              outside Kernel::invoke's admission
-#                              phase. The legacy "broker side-
-#                              channel inside dispatch.rs" pattern
-#                              is forbidden.
+#                              a legacy side-channel inside dispatch.rs.
 #
 # Whole-line `//` comments are excluded; subdir-scoped to keep
 # the check from catching helper modules in other parts of the
@@ -110,9 +87,9 @@ rule3_check() {
     bad=$(grep -rnE "$pat" "$dir" 2>/dev/null \
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
     if [ -n "$bad" ]; then
-        echo "ERROR: sub-service '$dir' bypasses Kernel::invoke:"
+        echo "ERROR: sub-service '$dir' bypasses daemon invocation dispatch:"
         echo "$bad"
-        echo "  Build an Invocation and route through Kernel::invoke;"
+        echo "  Build an Invocation and route through daemon::invocation;"
         echo "  do not reach for run_mission_inproc / Session::subscribe / send_to_agent."
         violations=$((violations + 1))
     fi

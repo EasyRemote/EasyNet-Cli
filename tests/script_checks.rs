@@ -79,6 +79,14 @@ fn daemon_invocation_migration_script_contract_holds() {
 }
 
 #[test]
+fn kernel_boundary_script_contract_holds() {
+    // Pins the final project-structure daemon boundary: retired source
+    // roots/namespaces cannot return, daemon internals do not depend on
+    // CLI/FFI edges, and execution only sees federation through GatewayApi.
+    run_bash_script("tests/scripts/test_check_kernel_boundary.sh");
+}
+
+#[test]
 fn ffi_abi_v3_header_script_contract_holds() {
     // Pins the binding-facing ABI contract: version, error code table,
     // complete Invocation symbols, daemon lifecycle symbols, and

@@ -10,12 +10,13 @@
 #                    at most one Receipt; the Receipt has at most
 #                    one callee_signature.
 #
-# Both are guaranteed by construction in v1 (causal_context cites
-# only prior receipts; Kernel::invoke writes one Receipt per
-# Invocation; v1 callee_signature is always None). This script is
-# a guard rail: it runs the cargo unit-test suite that validates
-# the invariants over a synthesised DAG. A failure means a v2
-# refactor accidentally broke the construction property.
+# Both are guaranteed by construction in v1: causal_context cites only
+# prior receipts, daemon dispatch builds one Axon request/receipt
+# lineage per Invocation, and v1 callee_signature is always None. This
+# script is a guard rail: it runs the cargo unit-test suites that
+# validate the invariants over synthesised invocation records and
+# dispatch envelopes. A failure means a refactor broke the construction
+# property.
 #
 # Why a wrapper script around cargo test
 # --------------------------------------
@@ -35,16 +36,40 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 echo "== check-dag-invariants.sh =="
-echo "Running daemon::invocation::runtime_record::tests + daemon::kernel::tests..."
+echo "Running daemon invocation DAG invariant test filters..."
 
-# `daemon::invocation::runtime_record::tests` exercises the canonical-bytes
-# invariant + invocation_id stability (D1's content-addressing
-# precondition). `daemon::kernel::tests` exercises Kernel::invoke
-# returning a Receipt whose invocation_id matches the input (D2's
-# "one Receipt per Invocation" half).
-cargo test --lib --quiet -- \
-    daemon::invocation::runtime_record \
-    daemon::kernel:: \
-    2>&1 | tail -20
+run_filter() {
+    local filter="$1"
+    local tmp
+    tmp="$(mktemp)"
 
-echo "ok (D1 + D2 invariants hold for v1 construction)"
+    if ! cargo test --lib --quiet -- "$filter" >"$tmp" 2>&1; then
+        echo "FAILED: cargo test filter failed: $filter"
+        tail -40 "$tmp"
+        rm -f "$tmp"
+        exit 1
+    fi
+
+    if ! grep -Eq '^running [1-9][0-9]* tests' "$tmp"; then
+        echo "FAILED: cargo test filter matched zero tests: $filter"
+        cat "$tmp"
+        rm -f "$tmp"
+        exit 1
+    fi
+
+    echo "-- $filter"
+    tail -20 "$tmp"
+    rm -f "$tmp"
+}
+
+# Runtime record tests exercise canonical bytes and invocation_id
+# stability. Dispatch request tests exercise causal context projection
+# on wire requests. Boot-kernel tests exercise the daemon-local
+# one-invocation/one-terminal-receipt path. Axon dispatch-shim tests
+# exercise receipt-bearing local runtime outcomes.
+run_filter "daemon::invocation::receipts::runtime_record"
+run_filter "daemon::invocation::dispatch::request"
+run_filter "daemon::boot::kernel"
+run_filter "daemon::axon_bridge::dispatch_shim"
+
+echo "ok (D1 + D2 invariants hold for final daemon invocation construction)"

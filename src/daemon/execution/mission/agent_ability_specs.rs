@@ -186,45 +186,63 @@ impl AgentAbilitySpec {
     /// Serialise into the per-entry JSON object used inside
     /// `a2a.agents_json[*].skills`.
     ///
-    /// **Why this is a thin discovery payload, not the full schema**
-    /// ---------------------------------------------------------
-    /// The Hub enforces a 4 KiB cap on each `a2a.*` label value
-    /// (gRPC-side: `register_node` rejects with
-    /// `InvalidArgument: invalid labels: label value … exceeds 4096
-    /// bytes`). When chat became a first-class manifest-backed
-    /// ability with extended input/output schemas (skills,
-    /// context_loaders, driver, session_id, stream — see
-    /// `abilities/chat.ability.toml`) the per-skill JSON ballooned past
-    /// ~3 KB, and a node with two agents (claude + codex) blew the
-    /// label past 4 KB and could not register.
+    /// The shape is the v2 wire contract specified by
+    /// `docs/spec/node-roster-label-v2.md`: every skill carries
+    /// `name`, `description`, `input_schema`, `output_schema`, and
+    /// `timeout_seconds`.
     ///
-    /// The fix: discovery labels carry only the *fingerprint* a peer
-    /// needs to know "this skill exists, here's a one-liner." The
-    /// full input_schema lives where it always did:
-    ///   * on disk in `<agent-root>/abilities/<verb>.ability.toml`
-    ///   * surfaced through `system.<feature>.{list,get}` abilities
-    ///   * surfaced through MCP `ListTools` over the local IPC
-    /// A peer that wants the full schema fetches it on demand from
-    /// one of those surfaces — federation-wide discovery does not.
-    ///
-    /// `has_input_schema` is a boolean rather than the schema itself
-    /// so a UI or tooling layer can show "this tool takes parameters
-    /// (click to view)" without paying the bytes cost. Always `true`
-    /// today (every ability declares an input_schema), but typed as
-    /// a bool so a future stub-ability that accepts `()` can opt out.
-    ///
-    /// The shape is a wire contract specified by
-    /// `docs/spec/node-roster-label-v2.md`; the EasyNet backend's
-    /// `ParseAgentsJSON` reader tolerates absent vs. `null` for the
-    /// trimmed fields (`input_schema`, `output_schema`,
-    /// `timeout_seconds`).
+    /// Chat has a deliberately stable public discovery schema
+    /// (`prompt` + optional `context`) rather than the larger internal
+    /// execution manifest schema. The internal schema includes local
+    /// routing controls such as sessions, driver overrides, tool
+    /// exposure, and attachments; those are available through manifest
+    /// and local tool surfaces, but they are not part of the
+    /// cross-stack node roster contract.
     pub fn to_discovery_json(&self) -> Value {
         json!({
+            "description": self.discovery_description(),
+            "input_schema": self.discovery_input_schema(),
             "name": self.name,
-            "description": self.description,
-            "has_input_schema": true,
+            "output_schema": serde_json::Value::Null,
+            "timeout_seconds": serde_json::Value::Null,
         })
     }
+
+    fn discovery_description(&self) -> String {
+        let Some((agent_name, "chat")) = self.name.split_once('.') else {
+            return self.description.clone();
+        };
+        format!(
+            "Send a chat prompt to the locally-installed `{agent_name}` agent. The agent runs \
+             as a subprocess on this node; the response is returned verbatim. Use `context` to \
+             prepend a system-style preamble when the agent supports one."
+        )
+    }
+
+    fn discovery_input_schema(&self) -> Value {
+        if matches!(self.name.split_once('.'), Some((_agent_name, "chat"))) {
+            return chat_discovery_input_schema();
+        }
+        self.parameters.clone()
+    }
+}
+
+fn chat_discovery_input_schema() -> Value {
+    json!({
+        "additionalProperties": false,
+        "properties": {
+            "context": {
+                "description": "Optional system-style preamble prepended before `prompt`.",
+                "type": "string"
+            },
+            "prompt": {
+                "description": "The user prompt sent to the agent.",
+                "type": "string"
+            }
+        },
+        "required": ["prompt"],
+        "type": "object"
+    })
 }
 
 /// Build the ability list for one agent entry.
@@ -650,40 +668,47 @@ mod tests {
         let spec = abilities_for("claude", &entry).into_iter().next().unwrap();
         let json = spec.to_discovery_json();
         let obj = json.as_object().expect("discovery json is an object");
-        // Three keys after the chat-as-ability collapse trimmed
-        // the discovery payload to fit the Hub's 4 KiB label cap:
-        // `name`, `description`, `has_input_schema`. See
-        // `to_discovery_json`'s doc for why the input_schema /
-        // output_schema / timeout_seconds fields moved to MCP
-        // ListTools and the on-disk manifest.
         assert_eq!(
             obj.len(),
-            3,
-            "exactly 3 keys: name, description, has_input_schema — got {obj:?}"
+            5,
+            "exactly 5 keys: description, input_schema, name, output_schema, timeout_seconds — got {obj:?}"
         );
         assert!(obj.contains_key("name"));
         assert!(obj.contains_key("description"));
-        assert!(obj.contains_key("has_input_schema"));
-        assert_eq!(
-            obj["has_input_schema"],
-            serde_json::Value::Bool(true),
-            "every v1 ability declares an input_schema"
+        assert!(obj.contains_key("input_schema"));
+        assert!(obj.contains_key("output_schema"));
+        assert!(obj.contains_key("timeout_seconds"));
+        assert!(obj["output_schema"].is_null());
+        assert!(obj["timeout_seconds"].is_null());
+        assert!(
+            obj.get("has_input_schema").is_none(),
+            "v2 skill entries carry input_schema directly, not has_input_schema"
         );
-        // The bytes-cost fields must NOT be re-introduced — that
-        // would re-trigger the 4 KiB Hub cap regression. Pinned
-        // here so the next person tempted to "just add the schema
-        // back" trips the test before they ship it.
-        for forbidden in [
-            "input_schema",
-            "output_schema",
-            "timeout_seconds",
-            "parameters",
-        ] {
-            assert!(
-                !obj.contains_key(forbidden),
-                "v2 thin payload must not carry `{forbidden}` (would blow the Hub label cap)"
-            );
-        }
+        assert_eq!(
+            obj["description"],
+            "Send a chat prompt to the locally-installed `claude` agent. The agent runs as a subprocess on this node; the response is returned verbatim. Use `context` to prepend a system-style preamble when the agent supports one."
+        );
+        let input = obj["input_schema"]
+            .as_object()
+            .expect("input_schema object");
+        assert_eq!(input.get("type").and_then(Value::as_str), Some("object"));
+        assert_eq!(
+            input
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("required array"),
+            &vec![json!("prompt")]
+        );
+        let props = input
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object");
+        assert!(props.contains_key("prompt"));
+        assert!(props.contains_key("context"));
+        assert!(
+            !props.contains_key("session_id"),
+            "A2A roster uses public prompt/context schema, not the internal execution schema"
+        );
     }
 
     #[test]

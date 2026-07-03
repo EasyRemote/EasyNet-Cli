@@ -10,8 +10,8 @@
 #
 #   - When NO local agent is registered (the typical CI / dev shape):
 #       expected wire: type=error with code mentioning "no local handler"
-#       This proves Kernel::invoke is now routing through the unified
-#       registry — pre-refactor it would have returned an "agent not
+#       This proves daemon Invocation dispatch routes through the unified
+#       registry; pre-refactor it would have returned an "agent not
 #       registered" string from the deleted dispatch_agent_chat path,
 #       which had a different shape.
 #

@@ -6,12 +6,11 @@
 # Documented under docs/design/daemon-layers-v1.md "Execution
 # internal sub-service partition".
 #
-# Execution sub-services under `src/daemon/execution/<name>/` must
-# not import each other directly. All cross-sub-service calls are
-# routed through the Kernel (`src/daemon/kernel/mod.rs`) so that a bug
-# in one sub-service does not corrupt the others' state and so that
-# the future isolation model (scheduler fairness, resource quotas)
-# has a single chokepoint to instrument.
+# Execution sub-services under `src/daemon/execution/<name>/` must not
+# import each other directly. Cross-sub-service orchestration belongs at
+# the daemon invocation/execution boundary, so a bug in one sub-service
+# does not corrupt the others' state and future isolation controls
+# (scheduler fairness, resource quotas) have one place to instrument.
 #
 # Exit codes
 #   0 — all sub-services are import-isolated from their siblings
@@ -30,7 +29,7 @@ if [ ! -d "src/daemon/execution" ]; then
     exit 0
 fi
 
-subs=(session permission discuss schedule loop_instance)
+subs=(pty mcp mission schedule loop_instance permission session)
 violations=0
 
 for self in "${subs[@]}"; do
@@ -45,7 +44,7 @@ for self in "${subs[@]}"; do
         if [ -n "$offending" ]; then
             echo "ERROR: sub-service '$self' imports sibling '$other':"
             echo "$offending"
-            echo "  All cross-sub-service calls go through the Kernel boundary."
+            echo "  All cross-sub-service calls go through daemon orchestration boundaries."
             violations=$((violations + 1))
         fi
     done

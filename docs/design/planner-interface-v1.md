@@ -9,7 +9,7 @@
 The plan promotes the architecture from "left a space" to "can
 grow". Concretely: every feature PR (`PR-ATTACH` / `PR-PERM` / …)
 must declare its KernelApi method using domain-object signatures
-from `src/runtime/domain.rs`. If a later planner wants to ask
+from `src/core/domain/`. If a later planner wants to ask
 "what abilities can I call, what do they cost, when am I allowed",
 it should find the answers on the same surface the Control layer
 already uses — no parallel API surface, no second-pass refactor.
@@ -48,7 +48,7 @@ trait PlannerFacingKernelApi {
 ```
 
 Each method returns a domain object declared in
-`src/runtime/domain.rs`, not a `serde_json::Value` / `args_json`
+`src/core/domain/`, not a `serde_json::Value` / `args_json`
 tuple. That is the load-bearing property: the planner can write
 its strategy layer without inventing a parallel type system.
 
@@ -59,7 +59,7 @@ its strategy layer without inventing a parallel type system.
 - No transaction semantics. The planner is an optimiser, not a
   distributed transaction coordinator.
 - No scheduler-policy surface. That lands inside
-  `Kernel::invoke`'s admission phase as a v2 hook; see
+  `daemon::boot::kernel::Kernel::invoke`'s admission phase as a v2 hook; see
   `docs/design/invocation-unity-v1.md` §6.
 - No capability grant. v1 permission is an approval broker, not
   capability security (see `docs/rfc/permission-broker-v1.md`).
@@ -76,7 +76,8 @@ its strategy layer without inventing a parallel type system.
 ## 5. Binding point for Client
 
 A Client that wants a planner-driven experience calls a
-planner-owned ability (`system.planner.execute_goal`) through the
-normal Control path; the planner consumes the call and produces
-downstream Invocations itself. Client does not speak to the
-planner directly — it speaks to the Kernel, which routes.
+planner-owned canonical ability (for example, a planner agent's
+`execute_goal` ability URA) through the normal daemon Invocation path;
+the planner consumes the call and produces downstream Invocations
+itself. Client does not speak to the planner directly — it speaks to
+the daemon boundary, which routes.

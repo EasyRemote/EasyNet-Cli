@@ -61,10 +61,9 @@ exit_code() {
 # Case 1: clean fixture, no system.* / no MCP / no register-tool.
 # ──────────────────────────────────────────────────────────
 echo "Case 1: clean fixture"
-mkdir -p "$FIXTURE_ROOT/src/runtime"
+mkdir -p "$FIXTURE_ROOT/src/daemon/invocation"
 mkdir -p "$FIXTURE_ROOT/src/daemon/federation"
-mkdir -p "$FIXTURE_ROOT/src/facade"
-cat > "$FIXTURE_ROOT/src/runtime/clean.rs" << 'EOF'
+cat > "$FIXTURE_ROOT/src/daemon/invocation/clean.rs" << 'EOF'
 pub fn clean() {}
 EOF
 
@@ -103,7 +102,7 @@ assert "Case 2 — enforce exit code = 1" "$(exit_code enforce)" "1"
 # ──────────────────────────────────────────────────────────
 echo
 echo "Case 3: inject system.skill.list literal"
-cat > "$FIXTURE_ROOT/src/runtime/skill_list.rs" << 'EOF'
+cat > "$FIXTURE_ROOT/src/daemon/invocation/skill_list.rs" << 'EOF'
 const SKILL_LIST_ABILITY: &str = "system.skill.list";
 EOF
 
@@ -121,7 +120,7 @@ assertions_run=$((assertions_run + 1))
 # ──────────────────────────────────────────────────────────
 echo
 echo "Case 4: MCP outside mcp-profile module is flagged"
-cat > "$FIXTURE_ROOT/src/runtime/mcp_in_kernel.rs" << 'EOF'
+cat > "$FIXTURE_ROOT/src/daemon/invocation/mcp_in_dispatch.rs" << 'EOF'
 // MCP-aware kernel code — should be flagged.
 fn dispatch_mcp() {}
 EOF
@@ -142,7 +141,7 @@ echo
 echo "Case 5: MCP inside src/daemon/ability/catalog/profiles/mcp.rs is allowed"
 mkdir -p "$FIXTURE_ROOT/src/daemon/ability/catalog/profiles"
 # Remove the violating file from Case 4 first.
-rm "$FIXTURE_ROOT/src/runtime/mcp_in_kernel.rs"
+rm "$FIXTURE_ROOT/src/daemon/invocation/mcp_in_dispatch.rs"
 # Add a file under the allowed path.
 cat > "$FIXTURE_ROOT/src/daemon/ability/catalog/profiles/mcp.rs" << 'EOF'
 // mcp-profile Agent implementation — MCP keyword expected here.
@@ -168,30 +167,30 @@ assertions_run=$((assertions_run + 1))
 echo
 echo "Case 6: REMOVED-RFC-001 marker excluded from scan"
 before="$(count_violations "$(run_conformance baseline)")"
-cat > "$FIXTURE_ROOT/src/runtime/REMOVED-RFC-001-archive.rs" << 'EOF'
+cat > "$FIXTURE_ROOT/src/daemon/invocation/REMOVED-RFC-001-archive.rs" << 'EOF'
 // Historical: register_runtime_local_mcp_tool, system.skill.list, MCP, etc.
 EOF
 after="$(count_violations "$(run_conformance baseline)")"
 assert "Case 6 — REMOVED-RFC-001 file excluded" "$after" "$before"
 
 # ──────────────────────────────────────────────────────────
-# Case 7: facade/mcp/ retired directory presence detected.
+# Case 7: final-forbidden source root presence detected.
 # ──────────────────────────────────────────────────────────
 echo
-echo "Case 7: facade/mcp/ retired directory presence"
+echo "Case 7: final-forbidden src/facade/ root presence"
 mkdir -p "$FIXTURE_ROOT/src/facade/mcp"
 output="$(run_conformance baseline)"
-if echo "$output" | grep -qE "WARN.*facade/mcp/ retired directory.*exists"; then
-  printf "  [PASS] %-60s\n" "Case 7 — facade/mcp/ retired path detected"
+if echo "$output" | grep -qE "WARN.*src/facade/ final-forbidden source root.*exists"; then
+  printf "  [PASS] %-60s\n" "Case 7 — final-forbidden src/facade/ detected"
 else
-  printf "  [FAIL] %-60s\n" "Case 7 — facade/mcp/ retired path not detected"
+  printf "  [FAIL] %-60s\n" "Case 7 — final-forbidden src/facade/ not detected"
   assertions_failed=$((assertions_failed + 1))
 fi
 assertions_run=$((assertions_run + 1))
 if [[ "$(exit_code enforce)" == "1" ]]; then
-  printf "  [PASS] %-60s\n" "Case 7 — enforce mode rejects retired path"
+  printf "  [PASS] %-60s\n" "Case 7 — enforce mode rejects final-forbidden root"
 else
-  printf "  [FAIL] %-60s\n" "Case 7 — enforce mode did not reject retired path"
+  printf "  [FAIL] %-60s\n" "Case 7 — enforce mode did not reject final-forbidden root"
   assertions_failed=$((assertions_failed + 1))
 fi
 assertions_run=$((assertions_run + 1))

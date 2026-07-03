@@ -27,19 +27,15 @@
 //     to guard `is_empty()` themselves.
 //
 // Reserved keys (must match the server-side `NodeDescriptor.labels` schema):
-//   a2a.version       = schema version this node's labels conform to
 //   a2a.enabled       = "true"
 //   a2a.name          = <device hostname>
-//   a2a.agents_json   = JSON array, one object per registered agent
+//   a2a.agents_json   = JSON envelope, {"agents": [one object per registered agent]}
 //   a2a.description   = human-readable summary line
 //
 // Forward compatibility:
-//   `a2a.version` is stamped on every registration so the Hub (and
-//   federated peers) can distinguish clients emitting different schema
-//   revisions. Absent-version means "pre-stamp" and should be read as
-//   v1 by tolerant consumers. Bump `A2A_LABEL_SCHEMA_VERSION` whenever
-//   the wire shape of `a2a.agents_json` or the reserved-key set changes
-//   in a way old consumers can't parse.
+//   `a2a_schema_version` is stamped on every agent entry inside
+//   `a2a.agents_json`. Bump `A2A_SCHEMA_VERSION` whenever the wire
+//   shape of that envelope changes in a way old consumers cannot parse.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -407,17 +403,10 @@ mod tests {
 
     #[test]
     fn skills_entry_shape_matches_v2_discovery_contract() {
-        // Pin the v2 thin discovery shape: `{name, description,
-        // has_input_schema}`. Earlier drafts shipped the full
-        // input_schema / output_schema / timeout_seconds inline,
-        // but the chat-as-ability collapse ballooned per-skill JSON
-        // past the Hub's 4 KiB label cap and forced the trim — see
-        // `AgentAbilitySpec::to_discovery_json`'s doc.
-        //
-        // The full input_schema is still available on demand via
-        // MCP `ListTools` over the local IPC and via the on-disk
-        // `<agent-root>/abilities/<verb>.ability.toml`. Discovery
-        // labels carry only the fingerprint.
+        // Pin the v2 discovery shape from
+        // docs/spec/node-roster-label-v2.md: each skill carries an
+        // input_schema directly, with output_schema/timeout_seconds
+        // present as explicit null when unset.
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "claude".into(),
@@ -432,26 +421,16 @@ mod tests {
             skill["description"].is_string(),
             "skill.description must be string"
         );
-        assert_eq!(
-            skill["has_input_schema"],
-            serde_json::Value::Bool(true),
-            "every v1 ability declares an input_schema; flag must be true"
+        assert!(
+            skill["input_schema"].is_object(),
+            "skill.input_schema must be object"
         );
-        // The bytes-cost fields must NOT be re-introduced — that
-        // would re-trigger the 4 KiB Hub cap regression. A future
-        // PR that wants to ship full schemas to peers should add a
-        // separate federation API, not re-inflate the label.
-        for forbidden in [
-            "input_schema",
-            "output_schema",
-            "timeout_seconds",
-            "parameters",
-        ] {
-            assert!(
-                skill.get(forbidden).is_none(),
-                "v2 thin payload must not carry `{forbidden}` (would blow the 4 KiB Hub label cap)"
-            );
-        }
+        assert!(skill["output_schema"].is_null());
+        assert!(skill["timeout_seconds"].is_null());
+        assert!(
+            skill.get("has_input_schema").is_none(),
+            "v2 skill entries carry input_schema directly"
+        );
     }
 
     #[test]
@@ -570,11 +549,9 @@ mod label_size_guard {
     //! bump (one more system ability, a slightly longer description)
     //! doesn't drive us into the actual ceiling.
     //!
-    //! If you legitimately need a label > 3 KiB, the right answer
-    //! is to thin the payload further (drop input_schema, drop
-    //! verbose descriptions) — not to raise this constant. The
-    //! Hub's 4 KiB ceiling is a wire-level invariant that won't
-    //! move just because we want it to.
+    //! The label must still carry the v2 input_schema field; keep
+    //! the public discovery schema compact rather than deleting the
+    //! field or publishing local-only execution controls.
 
     use super::*;
     use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};

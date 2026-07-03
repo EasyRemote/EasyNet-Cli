@@ -8,7 +8,7 @@
 # CLI-specific allowance:
 #   MCP awareness is permitted only inside the MCP profile projection,
 #   MCP integration ability modules, and explicit user-facing CLI edges.
-#   The retired facade/mcp quarantine directory must not return.
+#   Final-forbidden source roots from project-structure-v1 must not return.
 #
 # Phase = P0 (baseline mode).
 
@@ -82,8 +82,31 @@ count_pattern() {
   fi
 }
 
+check_absent_path() {
+  local label="$1"
+  local path="$2"
+
+  if [[ -e "$path" ]]; then
+    printf "  [WARN] %-60s exists\n" "$label"
+    total_violations=$((total_violations + 1))
+  else
+    printf "  [ ok ] %-60s absent\n" "$label"
+  fi
+}
+
 echo "AXON-RFC-001 Conformance — EasyNet-Cli — phase=$PHASE"
 echo "==================================================================="
+echo
+
+# ─────────────────────────────────────────────────────────────────
+# Rule 0: final project-structure source roots.
+# ─────────────────────────────────────────────────────────────────
+echo "Rule 0 — Final project-structure-v1 source roots"
+
+for retired_root in runtime services facade persistence plugins registry; do
+  check_absent_path "src/${retired_root}/ final-forbidden source root" "$SRC/$retired_root"
+done
+
 echo
 
 # ─────────────────────────────────────────────────────────────────
@@ -162,14 +185,9 @@ count_pattern "MCP keyword in CLI src (case-insensitive)" \
   "**/cli/mcp_server.rs" \
   "**/cli/start.rs"
 
-# P4.8d cleanup: facade/mcp is fully retired. Independent dispatch, tool
-# catalog, handlers, and doc-only quarantine anchors are all rejected now.
-if [[ -d "$SRC/facade/mcp" ]]; then
-  printf "  [WARN] %-60s exists\n" "facade/mcp/ retired directory"
-  total_violations=$((total_violations + 1))
-else
-  printf "  [ ok ] %-60s absent\n" "facade/mcp/ retired directory"
-fi
+# P4.8d cleanup: the whole `src/facade/` source root is retired.
+# Rule 0 rejects `src/facade/**`, including the old `facade/mcp`
+# quarantine directory.
 
 echo
 
@@ -182,12 +200,8 @@ count_pattern "system.skill.* / system.session.* / system.permission.* / etc." \
   'system\.(skill|session|permission|discuss|schedule|loop|memory|ping)\b' \
   "$SRC"
 
-if [[ -d "$SRC/runtime/system" ]]; then
-  printf "  [WARN] %-60s exists\n" "src/runtime/system/ directory presence (delete in P4)"
-  total_violations=$((total_violations + 1))
-else
-  printf "  [ ok ] %-60s absent\n" "src/runtime/system/ directory presence (delete in P4)"
-fi
+# Rule 0 rejects `src/runtime/**`, including the old `runtime/system`
+# compatibility tree.
 
 echo
 
