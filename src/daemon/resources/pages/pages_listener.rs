@@ -30,7 +30,10 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::any;
 use axum::Router;
+use bytes::Bytes;
+use std::convert::Infallible;
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 
 use super::pages_serve_ability::{serve_bytes, ServedBytes};
 
@@ -480,6 +483,10 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
         adapter_args["auth_token"] = serde_json::json!(token);
     }
 
+    if stream {
+        return streaming_chat_completions_response(openai_runtime, adapter_args);
+    }
+
     // Run the adapter on the blocking pool (it can take a long
     // time — calls into the agent dispatcher).
     let adapter_result = tokio::task::spawn_blocking(move || match openai_runtime {
@@ -509,52 +516,75 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
         Err(_) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, "panic\n"),
     };
 
-    if !stream {
-        // Unary path. Strip easynet-only metadata and return.
-        let mut response = value;
-        if let serde_json::Value::Object(ref mut m) = response {
-            m.remove("easynet_user_ura");
-        }
-        return json_response_with_cors(StatusCode::OK, response);
+    // Unary path. Strip easynet-only metadata and return.
+    let mut response = value;
+    if let serde_json::Value::Object(ref mut m) = response {
+        m.remove("easynet_user_ura");
     }
-
-    // Streaming path: walk the chunks list and emit SSE.
-    let chunks = value
-        .get("chunks")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let done = value
-        .get("done_sentinel")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("[DONE]")
-        .to_string();
-    sse_response(chunks, done)
+    json_response_with_cors(StatusCode::OK, response)
 }
 
-/// Build a Server-Sent-Events response from a list of OpenAI
-/// chunk objects. Sends each as `data: {json}\n\n`, then a
-/// `data: [DONE]\n\n` sentinel.
-///
-/// Implementation note: axum's `Body::from_stream` would be the
-/// cleanest path, but for simplicity v0.1 buffers everything into
-/// one body. The chunks are tiny (≤ ~256 bytes each); there is no
-/// observable lag for typical reply sizes (< 8 KiB). v0.2 will
-/// switch to a real `Body::from_stream` once the underlying chat
-/// ability becomes a true bidi (so the chunks arrive over time
-/// rather than all at once).
-fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> {
-    let mut buf = String::with_capacity(chunks.len() * 256);
-    for chunk in chunks {
-        let line = serde_json::to_string(&chunk).unwrap_or_else(|_| "{}".to_string());
-        buf.push_str("data: ");
-        buf.push_str(&line);
-        buf.push_str("\n\n");
-    }
-    buf.push_str("data: ");
-    buf.push_str(&done);
-    buf.push_str("\n\n");
+fn streaming_chat_completions_response(
+    openai_runtime: Option<
+        crate::daemon::ability::builtins::integrations::openai_compat::OpenAICompatRuntime,
+    >,
+    adapter_args: serde_json::Value,
+) -> Response<Body> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(16);
+    tokio::spawn(async move {
+        if tx
+            .send(Ok(Bytes::from_static(b": easynet-openai-stream\n\n")))
+            .await
+            .is_err()
+        {
+            return;
+        }
 
+        let adapter_result = tokio::task::spawn_blocking(move || match openai_runtime {
+            Some(runtime) => runtime.handle_chat_completions(adapter_args),
+            None => {
+                crate::daemon::ability::builtins::integrations::openai_compat::handle_chat_completions(
+                    adapter_args,
+                )
+            }
+        })
+        .await;
+
+        match adapter_result {
+            Ok(Ok(value)) => {
+                let chunks = value
+                    .get("chunks")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let done = value
+                    .get("done_sentinel")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("[DONE]")
+                    .to_string();
+                for chunk in chunks {
+                    if send_sse_json(&tx, &chunk).await.is_err() {
+                        return;
+                    }
+                }
+                let _ = send_sse_data(&tx, &done).await;
+            }
+            Ok(Err(err)) => {
+                let _ = send_sse_json(&tx, &openai_stream_error(err.to_string())).await;
+                let _ = send_sse_data(&tx, "[DONE]").await;
+            }
+            Err(err) => {
+                let _ = send_sse_json(
+                    &tx,
+                    &openai_stream_error(format!("chat completion worker join failed: {err}")),
+                )
+                .await;
+                let _ = send_sse_data(&tx, "[DONE]").await;
+            }
+        }
+    });
+
+    let body = Body::from_stream(ReceiverStream::new(rx));
     Response::builder()
         .status(StatusCode::OK)
         .header(
@@ -564,8 +594,32 @@ fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> 
         .header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
         .header("Access-Control-Allow-Origin", HeaderValue::from_static("*"))
         .header("X-Accel-Buffering", HeaderValue::from_static("no"))
-        .body(Body::from(buf))
+        .body(body)
         .expect("sse response build")
+}
+
+async fn send_sse_json(
+    tx: &tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>,
+    value: &serde_json::Value,
+) -> Result<(), tokio::sync::mpsc::error::SendError<Result<Bytes, Infallible>>> {
+    let line = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    send_sse_data(tx, &line).await
+}
+
+async fn send_sse_data(
+    tx: &tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>,
+    data: &str,
+) -> Result<(), tokio::sync::mpsc::error::SendError<Result<Bytes, Infallible>>> {
+    tx.send(Ok(Bytes::from(format!("data: {data}\n\n")))).await
+}
+
+fn openai_stream_error(message: String) -> serde_json::Value {
+    serde_json::json!({
+        "error": {
+            "message": message,
+            "type": "easynet_error",
+        }
+    })
 }
 
 /// JSON response with CORS open. Used by /v1/models and /v1/chat/completions
@@ -770,5 +824,38 @@ mod tests {
             "easynet:///r/easynet.run/ability/alice.codex.chat"
         );
         assert_eq!(payload["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn v1_chat_completions_stream_returns_sse_body() {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "model": "easynet:///r/easynet.run/ability/alice.codex.chat",
+                    "stream": true,
+                    "messages": [
+                        {"role": "user", "content": "reply with: ok"}
+                    ]
+                })
+                .to_string(),
+            ))
+            .expect("request");
+        attach_openai_runtime(&mut req);
+        let resp = handle(req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = to_bytes(resp.into_body(), 4096).await.expect("body bytes");
+        let text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(text.starts_with(": easynet-openai-stream\n\n"));
+        assert!(text.contains("\"object\":\"chat.completion.chunk\""));
+        assert!(text.contains("data: [DONE]\n\n"));
     }
 }
