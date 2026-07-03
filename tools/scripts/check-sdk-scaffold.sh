@@ -115,6 +115,7 @@ case_files=(
   invocation-prepared-not-submittable.yaml
   invocation-presigned-submit.yaml
   invocation-local-daemon-signing-boundary.yaml
+  stream-bidi-lifecycle-state.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

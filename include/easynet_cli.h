@@ -57,9 +57,12 @@ typedef uint64_t EasynetInvocationHandleId;
  * `user_data` is never inspected by Rust. It must remain valid until
  * the callback has returned after one of these terminal actions:
  *   - easynet_invocation_stream_cancel
+ *   - easynet_invocation_stream_close
  *   - easynet_invocation_bidi_close
  *   - easynet_invocation_bidi_cancel
  *   - easynet_shutdown on the owning EasynetHandle
+ * `easynet_invocation_bidi_close_send` is not terminal; it only
+ * half-closes the local send side.
  *
  * A callback must not unwind across the C ABI. Language bindings that
  * can throw exceptions must catch them inside the callback shim.
@@ -296,6 +299,11 @@ int32_t easynet_invocation_stream_cancel(
     EasynetInvocationStreamId stream_id
 );
 
+int32_t easynet_invocation_stream_close(
+    EasynetHandle handle,
+    EasynetInvocationStreamId stream_id
+);
+
 int32_t easynet_invocation_bidi_open(
     EasynetHandle handle,
     const char *invocation_json,
@@ -308,6 +316,11 @@ int32_t easynet_invocation_bidi_send(
     EasynetHandle handle,
     EasynetInvocationBidiId bidi_id,
     const char *frame_json
+);
+
+int32_t easynet_invocation_bidi_close_send(
+    EasynetHandle handle,
+    EasynetInvocationBidiId bidi_id
 );
 
 int32_t easynet_invocation_bidi_close(

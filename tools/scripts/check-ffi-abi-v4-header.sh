@@ -119,8 +119,10 @@ expected_symbols=(
     easynet_signed_invocation_free
     easynet_invocation_stream_open
     easynet_invocation_stream_cancel
+    easynet_invocation_stream_close
     easynet_invocation_bidi_open
     easynet_invocation_bidi_send
+    easynet_invocation_bidi_close_send
     easynet_invocation_bidi_close
     easynet_invocation_bidi_cancel
 )
@@ -284,7 +286,9 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_invocation_handle_await"
     require_literal "$SPEC" "easynet_invocation_prepare"
     require_literal "$SPEC" "easynet_invocation_submit_signed"
+    require_literal "$SPEC" "easynet_invocation_stream_close"
     require_literal "$SPEC" "easynet_invocation_bidi_open"
+    require_literal "$SPEC" "easynet_invocation_bidi_close_send"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 

@@ -83,6 +83,7 @@ swift test --package-path sdk/swift
 - local daemon signing boundary
 - terminal monotonicity
 - authority mutual exclusion
+- stream close and bidi close-send lifecycle ownership
 - stream terminal ordering and backpressure
 - bidi frame0 and close-send behavior
 - directory pagination and no-default-fanout

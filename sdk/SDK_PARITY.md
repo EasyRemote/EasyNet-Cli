@@ -25,8 +25,8 @@ method spelling.
 | complete invocation draft | partial | builder handles partial | gap | gap | gap | gap | gap |
 | prepare/sign/submit | partial | handle observation partial | gap | gap | gap | gap | gap |
 | unary invoke | partial | partial | gap | gap | gap | gap | gap |
-| stream | existing dispatch | existing dispatch | gap | gap | gap | gap | gap |
-| bidi | existing dispatch | existing dispatch | gap | gap | gap | gap | gap |
+| stream | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
+| bidi | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
 | directory + identity | gap | gap | gap | gap | gap | gap | gap |
 | receipt | summary only | summary only | gap | gap | gap | gap | gap |
 | publication | gap | gap | gap | gap | gap | gap | gap |
@@ -48,8 +48,9 @@ method spelling.
   wrappers are schema/conformance scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
-- Stream and bidi terminal events need schema-backed close/cancel/terminal
-  parity before P1 language release.
+- C ABI stream/bidi now exposes local stream close and bidi close-send
+  half-close controls; schema-backed terminal events, bounded backpressure
+  conformance, and P1 language facades remain incomplete.
 
 ## Stability Levels
 

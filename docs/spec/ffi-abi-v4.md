@@ -213,6 +213,7 @@ int32_t easynet_invocation_stream_open(
 );
 
 int32_t easynet_invocation_stream_cancel(EasynetHandle handle, EasynetInvocationStreamId stream_id);
+int32_t easynet_invocation_stream_close(EasynetHandle handle, EasynetInvocationStreamId stream_id);
 
 int32_t easynet_invocation_bidi_open(
     EasynetHandle handle,
@@ -228,6 +229,7 @@ int32_t easynet_invocation_bidi_send(
     const char* frame_json
 );
 
+int32_t easynet_invocation_bidi_close_send(EasynetHandle handle, EasynetInvocationBidiId bidi_id);
 int32_t easynet_invocation_bidi_close(EasynetHandle handle, EasynetInvocationBidiId bidi_id);
 int32_t easynet_invocation_bidi_cancel(EasynetHandle handle, EasynetInvocationBidiId bidi_id);
 ```
@@ -235,6 +237,20 @@ int32_t easynet_invocation_bidi_cancel(EasynetHandle handle, EasynetInvocationBi
 Stream and bidi ids are scoped to the `EasynetHandle` that opened them.
 Callbacks are invoked on library-owned background threads. Callback payload
 strings are borrowed for the duration of the callback only.
+
+`easynet_invocation_stream_close` releases the local stream handle and stops
+the background reader; it is distinct from cancel in the binding-facing object
+model even though server-stream close is still a local resource action.
+Unknown stream ids are treated as already closed. Owner mismatches return
+`ERR_INVALID_HANDLE`.
+
+`easynet_invocation_bidi_close_send` sends one EOF control frame and keeps the
+session registered so bindings can continue to receive down-direction frames.
+The operation is idempotent after the first successful EOF. Subsequent
+up-direction sends return `ERR_CANCELLED` without removing the session.
+`easynet_invocation_bidi_close` sends EOF if it has not already been sent, then
+releases the local session handle. `easynet_invocation_bidi_cancel` releases
+the local session without sending EOF.
 
 ## 3. Error Code Table
 

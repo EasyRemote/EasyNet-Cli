@@ -43,10 +43,10 @@
 // - `easynet_invocation_prepare/sign_prepared/submit_signed`:
 //   additive Draft -> Prepared -> Signed -> Submitted state-machine
 //   projection over opaque handles.
-// - `easynet_invocation_stream_open/cancel`: complete server-stream
-//   Axon Invocation over daemon.sock.
-// - `easynet_invocation_bidi_open/send/close/cancel`: complete
-//   InvokeBidi session ABI over daemon.sock.
+// - `easynet_invocation_stream_open/cancel/close`: complete
+//   server-stream Axon Invocation over daemon.sock.
+// - `easynet_invocation_bidi_open/send/close_send/close/cancel`:
+//   complete InvokeBidi session ABI over daemon.sock.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
 //   instead of retained as hard-fail compatibility symbols.
 //
@@ -130,6 +130,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "invocation_dispatch_v3": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
+            "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
             "runtime_health": cfg!(feature = "axon-pb"),
             "prepare_sign_submit": cfg!(feature = "axon-pb")
         },
@@ -283,6 +284,23 @@ mod tests {
     fn feature_discovery_rejects_null_output_pointer() {
         let code = unsafe { easynet_feature_discovery(std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn feature_discovery_reports_stream_bidi_lifecycle_symbol() {
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { easynet_feature_discovery(&mut out) };
+        assert_eq!(code, EASYNET_OK);
+        assert!(!out.is_null());
+        let json: serde_json::Value = unsafe {
+            serde_json::from_str(std::ffi::CStr::from_ptr(out).to_str().unwrap()).unwrap()
+        };
+        unsafe { strings::easynet_string_free(out) };
+        assert_eq!(json["abi_version"], EASYNET_ABI_VERSION);
+        assert_eq!(
+            json["symbols"]["stream_bidi_lifecycle"],
+            serde_json::json!(cfg!(feature = "axon-pb"))
+        );
     }
 
     #[test]

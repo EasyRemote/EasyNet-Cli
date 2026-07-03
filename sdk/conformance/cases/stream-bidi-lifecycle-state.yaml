@@ -1,0 +1,25 @@
+id: stream_bidi/lifecycle_state
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Stream close and bidi close-send preserve owner scoping, distinguish local release from cancel, and keep bidi receive state alive after local half-close.
+steps:
+  - action: open_stream
+    fixture: invocation.complete.v4.json
+  - action: close_stream
+  - action: open_bidi
+    fixture: invocation.complete.v4.json
+  - action: close_bidi_send
+  - action: send_bidi_after_close_send
+  - action: close_bidi
+expect:
+  result: lifecycle_observed
+  stream_close_unknown_is_idempotent: true
+  stream_cross_owner_close_error: ERR_INVALID_HANDLE
+  bidi_close_send_keeps_session_registered: true
+  bidi_close_send_unknown_error: ERR_INVALID_HANDLE
+  bidi_send_after_close_send_error: ERR_CANCELLED
+  bidi_close_releases_session: true

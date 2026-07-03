@@ -1039,23 +1039,39 @@ pub unsafe extern "C" fn easynet_invocation_stream_cancel(
 
     #[cfg(feature = "axon-pb")]
     {
-        match remove_stream_for_handle(handle, stream_id) {
-            Ok(Some(stream)) => {
-                stream.cancel.cancel();
-                clear_last_error();
-                EASYNET_OK
-            }
-            Ok(None) => {
-                clear_last_error();
-                EASYNET_OK
-            }
-            Err(RegistryOwnerMismatch) => {
-                set_last_error(format!(
-                    "easynet_invocation_stream_cancel: stream {stream_id} does not belong to handle {handle}"
-                ));
-                ERR_INVALID_HANDLE
-            }
-        }
+        release_stream_with_reader_cancel(handle, stream_id, "easynet_invocation_stream_cancel")
+    }
+}
+
+/// Close and release a stream handle.
+///
+/// Unknown ids are treated as already closed and return `EASYNET_OK`.
+/// This is a local resource close; daemon terminal frames are still
+/// delivered through the callback path when available before close.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_stream_close(
+    handle: EasynetHandle,
+    stream_id: InvocationStreamId,
+) -> i32 {
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_stream_close: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = stream_id;
+        set_last_error(
+            "easynet_invocation_stream_close: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        stream_close_with_axon_pb(handle, stream_id)
     }
 }
 
@@ -1189,6 +1205,38 @@ pub unsafe extern "C" fn easynet_invocation_bidi_send(
     #[cfg(feature = "axon-pb")]
     {
         bidi_send_with_axon_pb(handle, bidi_id, raw)
+    }
+}
+
+/// Half-close the local send side of an InvokeBidi session.
+///
+/// The session remains registered so the binding can continue to
+/// receive down-direction frames and then call `easynet_invocation_bidi_close`
+/// or `easynet_invocation_bidi_cancel`.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_bidi_close_send(
+    handle: EasynetHandle,
+    bidi_id: InvocationBidiId,
+) -> i32 {
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_bidi_close_send: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = bidi_id;
+        set_last_error(
+            "easynet_invocation_bidi_close_send: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        bidi_close_send_with_axon_pb(handle, bidi_id)
     }
 }
 
@@ -2034,13 +2082,12 @@ fn bidi_open_with_axon_pb(
 
     let (ability, up_tx, down) = session.into_parts();
     let cancel = tokio_util::sync::CancellationToken::new();
-    let bidi_id = insert_bidi(ActiveInvocationBidi {
-        owner: handle,
+    let bidi_id = insert_bidi(ActiveInvocationBidi::new(
+        handle,
         ability,
         up_tx,
-        cancel: cancel.clone(),
-        next_sequence: AtomicU64::new(1),
-    });
+        cancel.clone(),
+    ));
     rt.spawn(run_bidi_down_reader(bidi_id, down, cancel, callback_tx));
 
     unsafe { *out_bidi_id = bidi_id };
@@ -2079,24 +2126,102 @@ fn bidi_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId, raw:
             return ERR_GENERIC;
         }
     };
-    let send_result = rt.block_on(async {
-        let sequence = session.next_sequence.fetch_add(1, Ordering::Relaxed);
-        session
-            .up_tx
-            .send(easynet_axon::pb::axon::v1::InvokeBidiUp {
-                sequence,
-                mac: frame.mac,
-                payload: Some(frame.payload),
-            })
-            .await
-    });
-    if send_result.is_err() {
-        set_last_error(format!(
-            "easynet_invocation_bidi_send: bidi session {} for {} is closed",
-            bidi_id, session.ability
-        ));
-        let _ = remove_bidi(bidi_id);
-        return ERR_CANCELLED;
+
+    let up_frame = match session.reserve_up_frame(frame) {
+        Ok(up_frame) => up_frame,
+        Err(BidiLocalSendClosed) => {
+            set_last_error(format!(
+                "easynet_invocation_bidi_send: bidi session {} for {} is locally half-closed",
+                bidi_id, session.ability
+            ));
+            return ERR_CANCELLED;
+        }
+    };
+
+    let send_code = send_bidi_up_frame(
+        rt,
+        "easynet_invocation_bidi_send",
+        bidi_id,
+        &session,
+        up_frame,
+    );
+    if send_code != EASYNET_OK {
+        let _ = remove_bidi_for_handle(handle, bidi_id);
+        return send_code;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn stream_close_with_axon_pb(handle: EasynetHandle, stream_id: InvocationStreamId) -> i32 {
+    release_stream_with_reader_cancel(handle, stream_id, "easynet_invocation_stream_close")
+}
+
+#[cfg(feature = "axon-pb")]
+fn release_stream_with_reader_cancel(
+    handle: EasynetHandle,
+    stream_id: InvocationStreamId,
+    function: &str,
+) -> i32 {
+    match remove_stream_for_handle(handle, stream_id) {
+        Ok(Some(stream)) => {
+            stream.cancel.cancel();
+            clear_last_error();
+            EASYNET_OK
+        }
+        Ok(None) => {
+            clear_last_error();
+            EASYNET_OK
+        }
+        Err(RegistryOwnerMismatch) => {
+            set_last_error(format!(
+                "{function}: stream {stream_id} does not belong to handle {handle}"
+            ));
+            ERR_INVALID_HANDLE
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn bidi_close_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> i32 {
+    let session = match get_bidi_for_handle(handle, bidi_id) {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            set_last_error(format!(
+                "easynet_invocation_bidi_close_send: bidi session {bidi_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+        Err(RegistryOwnerMismatch) => {
+            set_last_error(format!(
+                "easynet_invocation_bidi_close_send: bidi session {bidi_id} does not belong to handle {handle}"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let rt = match lib_runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_bidi_close_send: {err}"));
+            return ERR_GENERIC;
+        }
+    };
+
+    let Some(up_frame) = session.reserve_close_send_frame() else {
+        clear_last_error();
+        return EASYNET_OK;
+    };
+    let send_code = send_bidi_up_frame(
+        rt,
+        "easynet_invocation_bidi_close_send",
+        bidi_id,
+        &session,
+        up_frame,
+    );
+    if send_code != EASYNET_OK {
+        let _ = remove_bidi_for_handle(handle, bidi_id);
+        return send_code;
     }
     clear_last_error();
     EASYNET_OK
@@ -2124,28 +2249,41 @@ fn bidi_close_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> 
             return ERR_GENERIC;
         }
     };
-    let sequence = session.next_sequence.fetch_add(1, Ordering::Relaxed);
-    let send_result = rt.block_on(async {
-        use easynet_axon::pb::axon::v1::{bidi_control, invoke_bidi_up, BidiControl, InvokeBidiUp};
-        session
-            .up_tx
-            .send(InvokeBidiUp {
-                sequence,
-                mac: Vec::new(),
-                payload: Some(invoke_bidi_up::Payload::Control(BidiControl {
-                    control: Some(bidi_control::Control::Eof(true)),
-                })),
-            })
-            .await
-    });
+
+    let Some(up_frame) = session.reserve_close_send_frame() else {
+        clear_last_error();
+        return EASYNET_OK;
+    };
+    let send_code = send_bidi_up_frame(
+        rt,
+        "easynet_invocation_bidi_close",
+        bidi_id,
+        &session,
+        up_frame,
+    );
+    if send_code != EASYNET_OK {
+        return send_code;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn send_bidi_up_frame(
+    rt: &'static tokio::runtime::Runtime,
+    function: &str,
+    bidi_id: InvocationBidiId,
+    session: &ActiveInvocationBidi,
+    up_frame: easynet_axon::pb::axon::v1::InvokeBidiUp,
+) -> i32 {
+    let send_result = rt.block_on(async { session.up_tx.send(up_frame).await });
     if send_result.is_err() {
         set_last_error(format!(
-            "easynet_invocation_bidi_close: bidi session {} for {} is already closed",
+            "{function}: bidi session {} for {} is closed",
             bidi_id, session.ability
         ));
         return ERR_CANCELLED;
     }
-    clear_last_error();
     EASYNET_OK
 }
 
@@ -2434,8 +2572,102 @@ struct ActiveInvocationBidi {
     ability: String,
     up_tx: tokio::sync::mpsc::Sender<easynet_axon::pb::axon::v1::InvokeBidiUp>,
     cancel: tokio_util::sync::CancellationToken,
-    next_sequence: AtomicU64,
+    local_send: Mutex<BidiLocalSendState>,
 }
+
+#[cfg(feature = "axon-pb")]
+impl ActiveInvocationBidi {
+    fn new(
+        owner: EasynetHandle,
+        ability: String,
+        up_tx: tokio::sync::mpsc::Sender<easynet_axon::pb::axon::v1::InvokeBidiUp>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self {
+            owner,
+            ability,
+            up_tx,
+            cancel,
+            local_send: Mutex::new(BidiLocalSendState::new()),
+        }
+    }
+
+    fn reserve_up_frame(
+        &self,
+        frame: BidiUpFrame,
+    ) -> Result<easynet_axon::pb::axon::v1::InvokeBidiUp, BidiLocalSendClosed> {
+        let mut state = self
+            .local_send
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.is_half_closed_local() {
+            return Err(BidiLocalSendClosed);
+        }
+
+        let sequence = state.next_sequence();
+        if bidi_up_payload_is_eof(&frame.payload) {
+            state.half_close_local();
+        }
+        Ok(easynet_axon::pb::axon::v1::InvokeBidiUp {
+            sequence,
+            mac: frame.mac,
+            payload: Some(frame.payload),
+        })
+    }
+
+    fn reserve_close_send_frame(&self) -> Option<easynet_axon::pb::axon::v1::InvokeBidiUp> {
+        let mut state = self
+            .local_send
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.is_half_closed_local() {
+            return None;
+        }
+        state.half_close_local();
+        Some(bidi_eof_up_frame(state.next_sequence()))
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct BidiLocalSendState {
+    phase: BidiLocalSendPhase,
+    next_sequence: u64,
+}
+
+#[cfg(feature = "axon-pb")]
+impl BidiLocalSendState {
+    fn new() -> Self {
+        Self {
+            phase: BidiLocalSendPhase::Open,
+            next_sequence: 1,
+        }
+    }
+
+    fn is_half_closed_local(&self) -> bool {
+        self.phase == BidiLocalSendPhase::HalfClosedLocal
+    }
+
+    fn half_close_local(&mut self) {
+        self.phase = BidiLocalSendPhase::HalfClosedLocal;
+    }
+
+    fn next_sequence(&mut self) -> u64 {
+        let sequence = self.next_sequence;
+        self.next_sequence += 1;
+        sequence
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BidiLocalSendPhase {
+    Open,
+    HalfClosedLocal,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BidiLocalSendClosed;
 
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3488,6 +3720,24 @@ impl SignatureMaterialJson {
 struct BidiUpFrame {
     mac: Vec<u8>,
     payload: easynet_axon::pb::axon::v1::invoke_bidi_up::Payload,
+}
+
+#[cfg(feature = "axon-pb")]
+fn bidi_eof_up_frame(sequence: u64) -> easynet_axon::pb::axon::v1::InvokeBidiUp {
+    use easynet_axon::pb::axon::v1::{bidi_control, invoke_bidi_up, BidiControl, InvokeBidiUp};
+    InvokeBidiUp {
+        sequence,
+        mac: Vec::new(),
+        payload: Some(invoke_bidi_up::Payload::Control(BidiControl {
+            control: Some(bidi_control::Control::Eof(true)),
+        })),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn bidi_up_payload_is_eof(payload: &easynet_axon::pb::axon::v1::invoke_bidi_up::Payload) -> bool {
+    use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload;
+    matches!(payload, Payload::Control(control) if bidi_control_is_eof(control))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4685,6 +4935,43 @@ mod tests {
         }
     }
 
+    fn active_bidi_session(
+        owner: EasynetHandle,
+        capacity: usize,
+    ) -> (
+        ActiveInvocationBidi,
+        tokio::sync::mpsc::Receiver<easynet_axon::pb::axon::v1::InvokeBidiUp>,
+        tokio_util::sync::CancellationToken,
+    ) {
+        let (up_tx, up_rx) = tokio::sync::mpsc::channel(capacity);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        (
+            ActiveInvocationBidi::new(
+                owner,
+                "device.pty.attach".to_string(),
+                up_tx,
+                cancel.clone(),
+            ),
+            up_rx,
+            cancel,
+        )
+    }
+
+    fn assert_bidi_eof_frame(frame: easynet_axon::pb::axon::v1::InvokeBidiUp, sequence: u64) {
+        use easynet_axon::pb::axon::v1::{bidi_control, invoke_bidi_up};
+        assert_eq!(frame.sequence, sequence);
+        assert!(frame.mac.is_empty());
+        match frame.payload {
+            Some(invoke_bidi_up::Payload::Control(control)) => {
+                assert!(matches!(
+                    control.control,
+                    Some(bidi_control::Control::Eof(true))
+                ));
+            }
+            other => panic!("expected EOF control frame, got {other:?}"),
+        }
+    }
+
     fn new_builder_handle() -> InvocationBuilderId {
         let mut builder_id: InvocationBuilderId = 0;
         let code = unsafe { easynet_invocation_builder_new(&mut builder_id) };
@@ -5570,6 +5857,7 @@ mod tests {
         let (handle, _) = alloc(test_session());
         let code = unsafe { easynet_invocation_stream_cancel(handle, 9_999_999) };
         assert_eq!(code, EASYNET_OK);
+        crate::ffi::client::handle::release(handle);
     }
 
     #[test]
@@ -5577,6 +5865,144 @@ mod tests {
         let (handle, _) = alloc(test_session());
         let code = unsafe { easynet_invocation_bidi_cancel(handle, 9_999_999) };
         assert_eq!(code, EASYNET_OK);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_stream_close_is_idempotent_for_unknown_stream() {
+        let (handle, _) = alloc(test_session());
+        let code = unsafe { easynet_invocation_stream_close(handle, 9_999_999) };
+        assert_eq!(code, EASYNET_OK);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_stream_close_refuses_cross_handle_access() {
+        let (owner, _) = alloc(test_session());
+        let (other, _) = alloc(test_session());
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let stream_id = insert_stream(ActiveInvocationStream {
+            owner,
+            cancel: cancel.clone(),
+        });
+
+        let code = unsafe { easynet_invocation_stream_close(other, stream_id) };
+
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert!(!cancel.is_cancelled());
+        assert!(remove_stream(stream_id).is_some());
+        crate::ffi::client::handle::release(owner);
+        crate::ffi::client::handle::release(other);
+    }
+
+    #[test]
+    fn invocation_bidi_close_send_rejects_unknown_session() {
+        let (handle, _) = alloc(test_session());
+        let code = unsafe { easynet_invocation_bidi_close_send(handle, 9_999_999) };
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_bidi_close_send_refuses_cross_handle_access() {
+        let (owner, _) = alloc(test_session());
+        let (other, _) = alloc(test_session());
+        let (session, mut up_rx, _cancel) = active_bidi_session(owner, 4);
+        let bidi_id = insert_bidi(session);
+
+        let code = unsafe { easynet_invocation_bidi_close_send(other, bidi_id) };
+
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert!(matches!(
+            up_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_cancel(owner, bidi_id) },
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(owner);
+        crate::ffi::client::handle::release(other);
+    }
+
+    #[test]
+    fn invocation_bidi_close_send_keeps_session_and_blocks_later_send() {
+        let (handle, _) = alloc(test_session());
+        let (session, mut up_rx, _cancel) = active_bidi_session(handle, 4);
+        let bidi_id = insert_bidi(session);
+
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_close_send(handle, bidi_id) },
+            EASYNET_OK
+        );
+        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_some());
+        assert_bidi_eof_frame(up_rx.try_recv().expect("EOF frame must be sent"), 1);
+
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_close_send(handle, bidi_id) },
+            EASYNET_OK
+        );
+        assert!(matches!(
+            up_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+
+        let frame = CString::new(
+            serde_json::json!({
+                "type": "binary_chunk",
+                "stream_id": 1,
+                "data_base64": "aGVsbG8="
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_send(handle, bidi_id, frame.as_ptr()) },
+            ERR_CANCELLED
+        );
+        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_some());
+
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_close(handle, bidi_id) },
+            EASYNET_OK
+        );
+        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_none());
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_bidi_send_eof_also_half_closes_local_send() {
+        let (handle, _) = alloc(test_session());
+        let (session, mut up_rx, _cancel) = active_bidi_session(handle, 4);
+        let bidi_id = insert_bidi(session);
+        let eof =
+            CString::new(serde_json::json!({"type": "control", "eof": true}).to_string()).unwrap();
+        let frame = CString::new(
+            serde_json::json!({
+                "type": "binary_chunk",
+                "stream_id": 1,
+                "data_base64": "aGVsbG8="
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_send(handle, bidi_id, eof.as_ptr()) },
+            EASYNET_OK
+        );
+        assert_bidi_eof_frame(up_rx.try_recv().expect("EOF frame must be sent"), 1);
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_send(handle, bidi_id, frame.as_ptr()) },
+            ERR_CANCELLED
+        );
+        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_some());
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_close(handle, bidi_id) },
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(handle);
     }
 
     #[test]
@@ -5597,15 +6023,8 @@ mod tests {
 
     #[test]
     fn bidi_registry_remove_returns_registered_session() {
-        let (up_tx, _up_rx) = tokio::sync::mpsc::channel(1);
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let bidi_id = insert_bidi(ActiveInvocationBidi {
-            owner: 41,
-            ability: "device.pty.attach".to_string(),
-            up_tx,
-            cancel: cancel.clone(),
-            next_sequence: AtomicU64::new(1),
-        });
+        let (session, _up_rx, cancel) = active_bidi_session(41, 1);
+        let bidi_id = insert_bidi(session);
         let session = remove_bidi(bidi_id).expect("registered bidi session should be removable");
         session.cancel.cancel();
         assert!(cancel.is_cancelled());
@@ -5628,24 +6047,10 @@ mod tests {
             cancel: other_stream_cancel.clone(),
         });
 
-        let (owned_up_tx, _owned_up_rx) = tokio::sync::mpsc::channel(1);
-        let (other_up_tx, _other_up_rx) = tokio::sync::mpsc::channel(1);
-        let owned_bidi_cancel = tokio_util::sync::CancellationToken::new();
-        let other_bidi_cancel = tokio_util::sync::CancellationToken::new();
-        let owned_bidi_id = insert_bidi(ActiveInvocationBidi {
-            owner: 41,
-            ability: "device.pty.attach".to_string(),
-            up_tx: owned_up_tx,
-            cancel: owned_bidi_cancel.clone(),
-            next_sequence: AtomicU64::new(1),
-        });
-        let other_bidi_id = insert_bidi(ActiveInvocationBidi {
-            owner: 42,
-            ability: "device.pty.attach".to_string(),
-            up_tx: other_up_tx,
-            cancel: other_bidi_cancel.clone(),
-            next_sequence: AtomicU64::new(1),
-        });
+        let (owned_bidi, _owned_up_rx, owned_bidi_cancel) = active_bidi_session(41, 1);
+        let (other_bidi, _other_up_rx, other_bidi_cancel) = active_bidi_session(42, 1);
+        let owned_bidi_id = insert_bidi(owned_bidi);
+        let other_bidi_id = insert_bidi(other_bidi);
 
         cancel_invocations_for_handle(41);
 
@@ -5677,14 +6082,8 @@ mod tests {
 
     #[test]
     fn bidi_registry_refuses_cross_handle_access() {
-        let (up_tx, _up_rx) = tokio::sync::mpsc::channel(1);
-        let bidi_id = insert_bidi(ActiveInvocationBidi {
-            owner: 101,
-            ability: "device.pty.attach".to_string(),
-            up_tx,
-            cancel: tokio_util::sync::CancellationToken::new(),
-            next_sequence: AtomicU64::new(1),
-        });
+        let (session, _up_rx, _cancel) = active_bidi_session(101, 1);
+        let bidi_id = insert_bidi(session);
 
         assert!(matches!(
             get_bidi_for_handle(202, bidi_id),
