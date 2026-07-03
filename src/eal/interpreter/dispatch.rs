@@ -53,7 +53,7 @@ fn dispatch_remote_via_forward_invoke(
         // uses. Skip the forward_invoke envelope entirely — the
         // self-target shortcut on the daemon side covers a different
         // case (canonical self URI), not the keyword `local`.
-        let self_node = crate::persistence::config::load_credentials()
+        let self_node = crate::daemon::persistence::config::load_credentials()
             .ok()
             .map(|c| c.node_id);
         let is_local = trimmed.is_empty()
@@ -68,11 +68,11 @@ fn dispatch_remote_via_forward_invoke(
             return dispatch_local_device_ability(ability_name, arguments, timeout);
         }
 
-        let target_ura = if crate::ura::parse_ura(trimmed).is_ok() {
-            crate::services::invocation_transport::federation_invoke::parse_node_ura(trimmed)
+        let target_ura = if crate::core::ura::parse_ura(trimmed).is_ok() {
+            crate::daemon::invocation::routing::federation_invoke::parse_node_ura(trimmed)
                 .map_err(|e| EalError::Validation(format!("parse target URA: {e}")))?
         } else if !tenant.is_empty() {
-            crate::ura::device_ura(tenant, trimmed)
+            crate::core::ura::device_ura(tenant, trimmed)
         } else {
             return Err(EalError::Validation(format!(
                 "cannot resolve EAL device target {trimmed:?}: no tenant in scope; \
@@ -80,16 +80,16 @@ fn dispatch_remote_via_forward_invoke(
             )));
         };
 
-        let caller_ura = crate::persistence::config::load_credentials()
+        let caller_ura = crate::daemon::persistence::config::load_credentials()
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let target_call = crate::services::invocation_transport::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+            .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
+        let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
             &target_ura,
             ability_name,
         )
         .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::services::invocation_transport::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+        crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
             &target_call,
             arguments.clone(),
             caller_ura.as_deref(),
@@ -131,7 +131,7 @@ fn dispatch_local_device_ability(
 ) -> Result<Value, EalError> {
     match local_device_dispatch_mode(ability_name) {
         LocalDeviceDispatchMode::Rpc => {
-            crate::support::local_invoke::invoke_local_ability_with_subject_timeout(
+            crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
                 ability_name,
                 arguments.clone(),
                 None,
@@ -142,7 +142,7 @@ fn dispatch_local_device_ability(
             })
         }
         LocalDeviceDispatchMode::StreamFirstPayload => {
-            crate::support::local_invoke::invoke_local_stream_ability_first_payload(
+            crate::support::platform::local_invoke::invoke_local_stream_ability_first_payload(
                 ability_name,
                 arguments.clone(),
                 None,
@@ -162,7 +162,7 @@ fn dispatch_local_device_ability(
 }
 
 fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
-    crate::runtime::agents::published_abilities()
+    crate::daemon::ability::catalog::published_abilities()
         .into_iter()
         .find(|meta| meta.name == ability_name)
         .map(|meta| dispatch_mode_from_hints(&meta.hints))
@@ -170,7 +170,7 @@ fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
 }
 
 fn dispatch_mode_from_hints(
-    hints: &crate::runtime::ability_descriptor::AbilityHints,
+    hints: &crate::daemon::ability::descriptors::AbilityHints,
 ) -> LocalDeviceDispatchMode {
     if hints.bidi_only {
         LocalDeviceDispatchMode::BidiUnsupported
@@ -192,7 +192,7 @@ fn dispatch_mode_from_hints(
 /// receipt graph. It is not an Invocation axiom field — causal
 /// placement stays in `causal_context`.
 pub struct AgentAwareDispatcher {
-    registry: Arc<crate::registry::agents::AgentRegistry>,
+    registry: Arc<crate::daemon::persistence::agent_registry::AgentRegistry>,
 }
 
 impl AgentAwareDispatcher {
@@ -218,8 +218,8 @@ impl AgentAwareDispatcher {
 /// registry on failure *after* logging. The distinction between
 /// "empty by design" and "empty by failure" is preserved in operator-
 /// visible logs rather than hidden from the caller.
-fn load_registry_or_warn() -> crate::registry::agents::AgentRegistry {
-    match crate::registry::agents::load_agents() {
+fn load_registry_or_warn() -> crate::daemon::persistence::agent_registry::AgentRegistry {
+    match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(r) => r,
         Err(e) => {
             eprintln!(
@@ -227,7 +227,7 @@ fn load_registry_or_warn() -> crate::registry::agents::AgentRegistry {
                  dispatching with an empty registry. Any agent-target call \
                  will fail with `not_found` until the registry is repaired."
             );
-            crate::registry::agents::AgentRegistry::default()
+            crate::daemon::persistence::agent_registry::AgentRegistry::default()
         }
     }
 }
@@ -277,8 +277,8 @@ impl StepDispatcher for AgentAwareDispatcher {
 
 /// Shared agent dispatch logic used by AgentAwareDispatcher.
 pub(super) fn dispatch_to_agent(
-    registry: &crate::registry::agents::AgentRegistry,
-    agent_id: &crate::core::agent_id::AgentId,
+    registry: &crate::daemon::persistence::agent_registry::AgentRegistry,
+    agent_id: &crate::core::agent::id::AgentId,
     ability: &AbilityName,
     arguments: &Value,
     causal_parents: &[Value],
@@ -297,7 +297,7 @@ pub(super) fn dispatch_to_agent(
             // form (`"claude"` instead of `"default/claude"`).
             // Fall back to the bare name when the agent
             // is in the default tenant.
-            if agent_id.tenant == crate::core::agent_id::DEFAULT_TENANT {
+            if agent_id.tenant == crate::core::agent::id::DEFAULT_TENANT {
                 registry.agents.get(&agent_id.name)
             } else {
                 None
@@ -319,9 +319,12 @@ pub(super) fn dispatch_to_agent(
     // weather lookup that should take 200 ms would burn 30 s of LLM
     // tool-search latency.
     let bare_ability = ability.as_str();
-    let manifest_match = crate::runtime::abilities::manifests_for(&agent_id.name, entry)
-        .into_iter()
-        .find(|m| m.name() == bare_ability);
+    let manifest_match = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+        &agent_id.name,
+        entry,
+    )
+    .into_iter()
+    .find(|m| m.name() == bare_ability);
     if let Some(manifest) = manifest_match {
         if let Some(exec) = manifest.exec() {
             // Lower the step onto the daemon's Axon Invocation surface
@@ -352,7 +355,7 @@ pub(super) fn dispatch_to_agent(
                 } else {
                     causal_parents
                 };
-            match crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
+            match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
                 bare_ability,
                 arguments.clone(),
                 None,
@@ -368,7 +371,7 @@ pub(super) fn dispatch_to_agent(
                     });
                 }
                 Err(err) => {
-                    use crate::support::local_invoke::{
+                    use crate::support::platform::local_invoke::{
                         classify_invoke_error, LocalInvokeErrorKind,
                     };
                     match classify_invoke_error(&err) {
@@ -389,24 +392,32 @@ pub(super) fn dispatch_to_agent(
                 }
             }
             return (match exec {
-                crate::core::ability_spec::AbilityExec::Shell(spec) => {
-                    crate::runtime::agents::shell_executor::run_shell_exec(spec, arguments, timeout)
-                        .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
+                crate::core::ability::spec::AbilityExec::Shell(spec) => {
+                    crate::daemon::execution::mission::executors::shell::run_shell_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
                 }
-                crate::core::ability_spec::AbilityExec::Http(spec) => {
-                    crate::runtime::agents::http_executor::run_http_exec(spec, arguments, timeout)
-                        .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
+                crate::core::ability::spec::AbilityExec::Http(spec) => {
+                    crate::daemon::execution::mission::executors::http::run_http_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
                 }
-                crate::core::ability_spec::AbilityExec::Eal(spec) => {
-                    crate::runtime::agents::eal_executor::run_eal_exec(spec, arguments, timeout)
-                        .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
+                crate::core::ability::spec::AbilityExec::Eal(spec) => {
+                    crate::daemon::execution::mission::executors::eal::run_eal_exec(
+                        spec, arguments, timeout,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
                 }
-                crate::core::ability_spec::AbilityExec::Mcp(spec) => {
+                crate::core::ability::spec::AbilityExec::Mcp(spec) => {
                     let _ = timeout;
-                    crate::runtime::agents::mcp_executor::run_mcp_exec(spec, arguments)
-                        .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
+                    crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
+                        spec, arguments,
+                    )
+                    .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
                 }
-                crate::core::ability_spec::AbilityExec::HostStream(_) => {
+                crate::core::ability::spec::AbilityExec::HostStream(_) => {
                     // host_stream is a server-stream executor; an EAL step
                     // is a unary child invocation and cannot carry its
                     // many-frame output. Such an ability registers as
@@ -431,8 +442,8 @@ pub(super) fn dispatch_to_agent(
     // the daemon process and reduce the caller to a final snapshot.
     // Keep chat local by reusing the daemon handler's own parsing /
     // context / resume logic directly in-process.
-    if bare_ability == crate::runtime::agents::chat_ability::ABILITY_VERB {
-        return crate::runtime::agents::chat_ability::invoke_direct_with_progress(
+    if bare_ability == crate::daemon::ability::builtins::agents::chat::ABILITY_VERB {
+        return crate::daemon::ability::builtins::agents::chat::invoke_direct_with_progress(
             &agent_id.name,
             entry,
             &[],
@@ -509,8 +520,8 @@ fn try_dispatch_via_daemon(
     ability_name: &str,
     arguments: &Value,
 ) -> DaemonDispatch {
-    use crate::support::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
-    match crate::support::local_invoke::invoke_local_ability_with_invocation_meta(
+    use crate::support::platform::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
+    match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
         ability_name,
         arguments.clone(),
         None,
@@ -531,7 +542,7 @@ fn try_dispatch_via_daemon(
 #[cfg(test)]
 mod tests {
     use super::{dispatch_mode_from_hints, LocalDeviceDispatchMode};
-    use crate::runtime::ability_descriptor::AbilityHints;
+    use crate::daemon::ability::descriptors::AbilityHints;
 
     #[test]
     fn local_device_dispatch_mode_is_derived_from_descriptor_hints() {

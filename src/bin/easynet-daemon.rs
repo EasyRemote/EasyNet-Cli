@@ -31,35 +31,41 @@ use std::time::Duration;
 
 use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
-use easynet_cli::persistence::config;
-use easynet_cli::persistence::daemon_config::{
-    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
+use easynet_cli::daemon::ability::builtins::agents::{
+    discover as discover_ability, lifecycle as agent_lifecycle_ability,
 };
-use easynet_cli::runtime::ability::conformance::{
+use easynet_cli::daemon::ability::catalog as ability_catalog;
+use easynet_cli::daemon::ability::conformance::{
     BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
 };
 #[cfg(feature = "axon-pb")]
-use easynet_cli::runtime::ability::conformance::{
-    DaemonInvocationSurface, RuntimeAdminConformance,
+use easynet_cli::daemon::ability::conformance::{DaemonInvocationSurface, RuntimeAdminConformance};
+use easynet_cli::daemon::ability::health as ability_health;
+use easynet_cli::daemon::boot::kernel::api::KernelApi;
+use easynet_cli::daemon::boot::kernel::Kernel;
+use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
+use easynet_cli::daemon::control::discovery::DaemonIdentity;
+use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
+use easynet_cli::daemon::control::{discovery, runtime_dispatch, server};
+use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
+use easynet_cli::daemon::execution::schedule::ScheduleService;
+use easynet_cli::daemon::federation::gateway::NoopGateway;
+use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use easynet_cli::daemon::invocation::receipts::runtime_record::{
+    RuntimeCausalContext, RuntimeInvocation,
 };
-use easynet_cli::runtime::agents;
-use easynet_cli::runtime::execution::loop_instance::KernelLoopInvocationDriver;
-use easynet_cli::runtime::execution::schedule::ScheduleService;
-use easynet_cli::runtime::gateway::NoopGateway;
-use easynet_cli::runtime::invocation::{RuntimeCausalContext, RuntimeInvocation};
-use easynet_cli::runtime::invocation_target::{LocalNodeResolver, TargetResolver};
-use easynet_cli::runtime::kernel::Kernel;
-use easynet_cli::runtime::kernel_api::KernelApi;
-use easynet_cli::services::control::boot_events::{BootBus, BootEvent};
-use easynet_cli::services::control::discovery::DaemonIdentity;
-use easynet_cli::services::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
-use easynet_cli::services::control::{discovery, runtime_dispatch, server};
+use easynet_cli::daemon::invocation::routing::target::{LocalNodeResolver, TargetResolver};
+use easynet_cli::daemon::persistence::config;
+use easynet_cli::daemon::persistence::daemon_config::{
+    default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
+};
+use easynet_cli::daemon::resources::context::clipboard_tracker;
 
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
 fn device_ability_replay_fatal_message(
-    report: &easynet_cli::runtime::agents::device_ability_registrar::ReplayReport,
+    report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> Option<String> {
     if report.runtime_not_ready || report.store_unreadable || report.stale > 0 || report.errored > 0
     {
@@ -73,7 +79,7 @@ fn device_ability_replay_fatal_message(
 }
 
 fn report_device_ability_replay(
-    report: &easynet_cli::runtime::agents::device_ability_registrar::ReplayReport,
+    report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> anyhow::Result<()> {
     if let Some(message) = device_ability_replay_fatal_message(report) {
         anyhow::bail!(message);
@@ -99,7 +105,7 @@ fn collect_baseline_failure(failures: &mut Vec<String>, report: BaselineConforma
 
 fn assert_daemon_baseline_conformance(
     mode: DaemonMode,
-    registry: &easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog,
+    registry: &easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog,
 ) -> Result<(), String> {
     let registry_conformance = RegistryConformance::new(registry);
     let mut failures = Vec::new();
@@ -211,8 +217,9 @@ async fn main() -> anyhow::Result<()> {
     if media_resource_bootstrap_enabled() {
         match config::load_credentials() {
             Ok(creds) => {
-                let owner_agent = easynet_cli::ura::device_ura(creds.realm_str(), &creds.node_id);
-                match agents::media::resource_bootstrap::seed_default_device_resources(
+                let owner_agent =
+                    easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+                match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
                     creds.realm_str(),
                     &owner_agent,
                 ) {
@@ -274,11 +281,11 @@ async fn main() -> anyhow::Result<()> {
     // registry build is deterministic and free of global env
     // state.
     boot_bus.emit_started("ability-registry");
-    let pages_identity = agents::PagesIdentity::from_env();
+    let pages_identity =
+        easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
-    let hub_published_abilities =
-        easynet_cli::services::hub_published_ability_store::HubPublishedAbilityStore::new();
+    let hub_published_abilities = HubPublishedAbilityStore::new();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -296,15 +303,15 @@ async fn main() -> anyhow::Result<()> {
     // every subsequent dispatch registers catalogue/control-plane and
     // `LocalRuntime` rows in one transaction, so ledger writes start
     // landing.
-    let hot_agent_registrar_cell: Arc<agents::agent_lifecycle_ability::SharedHotRegistrarCell> =
-        Arc::new(agents::agent_lifecycle_ability::SharedHotRegistrarCell::new());
+    let hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell> =
+        Arc::new(agent_lifecycle_ability::SharedHotRegistrarCell::new());
     let discover_federation_resolver_cell =
-        Arc::new(agents::discover_ability::DeferredDiscoverFederationResolver::new());
-    let discover_federation_resolver: agents::discover_ability::SharedDiscoverFederationResolver =
+        Arc::new(discover_ability::DeferredDiscoverFederationResolver::new());
+    let discover_federation_resolver: discover_ability::SharedDiscoverFederationResolver =
         discover_federation_resolver_cell.clone();
-    let built_registry =
-        agents::build_registry_for_daemon_result(agents::RegistryDaemonBuildConfig {
-            services: agents::RegistryBuildServices::new(
+    let built_registry = ability_catalog::build_registry_for_daemon_result(
+        ability_catalog::RegistryDaemonBuildConfig {
+            services: ability_catalog::RegistryBuildServices::new(
                 kernel.session_service(),
                 kernel.permission_service(),
                 kernel.discuss_service(),
@@ -318,8 +325,11 @@ async fn main() -> anyhow::Result<()> {
             local_runtime: Some(Arc::clone(&local_runtime)),
             authority_context: None,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
-            shared_stores: agents::RegistrySharedStores::new(Arc::clone(&hub_published_abilities)),
-        })?;
+            shared_stores: ability_catalog::RegistrySharedStores::new(Arc::clone(
+                &hub_published_abilities,
+            )),
+        },
+    )?;
     let registry = Arc::clone(&built_registry.catalog);
     kernel.set_local_runtime(Arc::clone(&local_runtime));
     boot_bus.emit_ok("ability-registry");
@@ -384,7 +394,7 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "axon-pb")]
     let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
-        match easynet_cli::services::invocation_transport::start_daemon_invocation_transport(
+        match easynet_cli::daemon::invocation::start_daemon_invocation_transport(
             Arc::clone(&local_runtime),
             invocation_ledger,
             Arc::clone(&hot_agent_registrar_cell),
@@ -413,7 +423,7 @@ async fn main() -> anyhow::Result<()> {
     // on` flips the persisted flag, so an off-by-default user pays one
     // sleeping thread and zero clipboard access.
     boot_bus.emit_started("clipboard-tracker");
-    easynet_cli::services::clipboard_tracker::spawn();
+    clipboard_tracker::spawn();
     boot_bus.emit_ok("clipboard-tracker");
 
     // Ability service-health monitor. Probes manifest abilities that
@@ -423,7 +433,7 @@ async fn main() -> anyhow::Result<()> {
     // a `[health]` section cost nothing — the thread only ticks over
     // declared probes.
     boot_bus.emit_started("ability-health");
-    easynet_cli::services::ability_health::spawn();
+    ability_health::spawn();
     boot_bus.emit_ok("ability-health");
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
@@ -474,33 +484,34 @@ async fn main() -> anyhow::Result<()> {
             return Err(err);
         }
     };
-    let pages_port = match easynet_cli::runtime::hub::pages_listener::spawn_first_available(
-        pages_start_port,
-        easynet_cli::runtime::hub::pages_listener::DEFAULT_PORT_PROBE_SPAN,
-    )
-    .await
-    {
-        Ok((port, handle)) => {
-            tokio::spawn(async move {
-                match handle.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => eprintln!("[pages-listener] exited: {e:#}"),
-                    Err(e) => eprintln!("[pages-listener] task failed: {e:#}"),
-                }
-            });
-            boot_bus.emit(BootEvent::PortChosen {
-                service: "pages".into(),
-                port,
-                start: Some(pages_start_port),
-            });
-            boot_bus.emit_ok("pages-listener");
-            port
-        }
-        Err(err) => {
-            boot_bus.emit_failed("pages-listener", err.to_string());
-            return Err(err);
-        }
-    };
+    let pages_port =
+        match easynet_cli::daemon::resources::pages::pages_listener::spawn_first_available(
+            pages_start_port,
+            easynet_cli::daemon::resources::pages::pages_listener::DEFAULT_PORT_PROBE_SPAN,
+        )
+        .await
+        {
+            Ok((port, handle)) => {
+                tokio::spawn(async move {
+                    match handle.await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => eprintln!("[pages-listener] exited: {e:#}"),
+                        Err(e) => eprintln!("[pages-listener] task failed: {e:#}"),
+                    }
+                });
+                boot_bus.emit(BootEvent::PortChosen {
+                    service: "pages".into(),
+                    port,
+                    start: Some(pages_start_port),
+                });
+                boot_bus.emit_ok("pages-listener");
+                port
+            }
+            Err(err) => {
+                boot_bus.emit_failed("pages-listener", err.to_string());
+                return Err(err);
+            }
+        };
     let runtime_discovery = match ready_runtime_discovery() {
         Ok(snapshot) => snapshot,
         Err(err) => {
@@ -695,7 +706,7 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                 // The template renderer substitutes {{schedule_id}},
                 // {{fire_at_iso}}, {{catch_up}}, {{target_agent}}.
                 let prompt = match &entry.prompt {
-                    Some(template) => easynet_cli::runtime::execution::schedule::render_prompt(
+                    Some(template) => easynet_cli::daemon::execution::schedule::render_prompt(
                         template,
                         fire.schedule_id.as_str(),
                         &fire.fire_at,
@@ -708,8 +719,8 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     ),
                 };
                 let local_device_ura =
-                    easynet_cli::ura::device_ura("default", entry.target_node.as_str());
-                let schedule_subject_ura = easynet_cli::ura::resource_dot_ura(
+                    easynet_cli::core::ura::device_ura("default", entry.target_node.as_str());
+                let schedule_subject_ura = easynet_cli::core::ura::resource_dot_ura(
                     "default",
                     &format!("schedule.{}", fire.schedule_id.as_str()),
                     "",
@@ -755,7 +766,7 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_cli::runtime::agents::device_ability_registrar::ReplayReport;
+    use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport;
 
     #[test]
     fn device_replay_boot_policy_rejects_stale_rows() {

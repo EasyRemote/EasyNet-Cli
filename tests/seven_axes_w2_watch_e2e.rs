@@ -33,11 +33,11 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::invocation_watch::{self, WatchArgs, WatchEvent};
-use easynet_cli::facade::cli::mission_runs::{
+use easynet_cli::cli::invocation_watch::{self, WatchArgs, WatchEvent};
+use easynet_cli::cli::mission_runs::{
     self, MissionRunDir, MissionRunMeta, MissionRunOpts, MissionRunStatus,
 };
-use easynet_cli::facade::cli::receipt_verification::CliReceiptChainVerification;
+use easynet_cli::cli::receipt_verification::CliReceiptChainVerification;
 use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
 
 #[test]
@@ -49,7 +49,7 @@ fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
     let meta = home.invoke_testbot_echo_with_meta("watch me");
     let expected_echo_ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(&home.testbot_ura, "echo")
+        easynet_cli::core::ura::owner_ability_ura(&home.testbot_ura, "echo")
             .expect("mint testbot echo ability URA"),
         TESTBOT_ECHO_DESCRIPTOR_VERSION
     );

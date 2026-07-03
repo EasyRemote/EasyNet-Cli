@@ -32,14 +32,12 @@
 use std::sync::Arc;
 
 use easynet_axon::invocation::LocalRuntime;
-use easynet_cli::runtime::execution::mcp_client::{
-    McpClientService, McpClientsFile, McpServerSpec,
-};
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::runtime::local_runtime_invoker::open_local_stream;
+use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
+use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::open_local_stream;
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
 /// Build the in-process Python echo MCP server fixture used
-/// throughout this round. Same script shape as the `mcp_client`
+/// throughout this round. Same script shape as the `mcp`
 /// unit tests + `reflective_ura_shape` integration test, so the
 /// fixture stays one canonical artefact.
 fn write_echo_mcp_server(dir: &std::path::Path) -> std::path::PathBuf {
@@ -95,10 +93,10 @@ while True:
 }
 
 /// Translate a single-server commands.json into the
-/// mcp_clients.json shape — mirrors the python heredoc in
-/// `scripts/mcp_bench_setup.sh`. Kept simple here because we only
+/// mcps.json shape — mirrors the python heredoc in
+/// `tools/scripts/mcp_bench_setup.sh`. Kept simple here because we only
 /// need to round-trip one server for this smoke.
-fn synthesize_mcp_clients_json(server_name: &str, script_path: &std::path::Path) -> String {
+fn synthesize_mcps_json(server_name: &str, script_path: &std::path::Path) -> String {
     serde_json::json!({
         "servers": [{
             "name": server_name,
@@ -113,7 +111,7 @@ fn synthesize_mcp_clients_json(server_name: &str, script_path: &std::path::Path)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reflective_path_directly_through_mcp_client_service_round_trip() {
+async fn reflective_path_directly_through_mcp_service_round_trip() {
     // This is the slice of "MCP-Bench smoke" that does NOT touch
     // process-wide env state. Verifies the contract:
     //   commands.json shape → McpClientService → reflect_all →
@@ -121,9 +119,9 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let script = write_echo_mcp_server(dir.path());
 
-    let mcp_clients_json = synthesize_mcp_clients_json("echo", &script);
-    let config_path = dir.path().join("mcp_clients.json");
-    std::fs::write(&config_path, &mcp_clients_json).unwrap();
+    let mcps_json = synthesize_mcps_json("echo", &script);
+    let config_path = dir.path().join("mcps.json");
+    std::fs::write(&config_path, &mcps_json).unwrap();
 
     // Replicate what `build_registry_with_services` does internally:
     // load the config + reflect into a fresh registry.
@@ -131,11 +129,11 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     assert_eq!(svc.server_names().await, vec!["echo".to_string()]);
 
     let runtime = LocalRuntime::new();
-    let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime(
+    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime(
         Arc::clone(&runtime),
     );
     let owner_ura = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
-    let result = easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all(
+    let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc, &mut reg, &owner_ura,
     )
     .await;
@@ -187,7 +185,7 @@ async fn reflective_path_directly_through_mcp_client_service_round_trip() {
     // MCP-shape `{content, isError}` response verbatim; any
     // intermediate frames would be `{type: "progress", ...}`
     // (echo upstream doesn't emit any — that's exercised by
-    // mcp_client::tests::rpc_with_progress_routes_interleaved_progress_to_sink).
+    // mcp::tests::rpc_with_progress_routes_interleaved_progress_to_sink).
     let weather_lookup_ura = easynet_axon::ura::owner_ability_ura(&owner_ura, "weather_lookup")
         .expect("owner ability URA");
     let mut rx = open_local_stream(
@@ -283,8 +281,8 @@ async fn mcp_bench_translation_round_trips_into_live_reflection() {
     let parsed: McpClientsFile = serde_json::from_value(translated).unwrap();
     let svc = Arc::new(McpClientService::from_file(parsed));
 
-    let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new();
-    let result = easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all(
+    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new();
+    let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
         "easynet:///r/test/agent/u.mcp",
@@ -330,8 +328,8 @@ async fn broken_upstream_does_not_block_other_servers() {
         ],
     }));
 
-    let mut reg = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new();
-    let result = easynet_cli::runtime::agents::mcp_reflective_registry::reflect_all(
+    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new();
+    let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
         "easynet:///r/test/agent/u.mcp",

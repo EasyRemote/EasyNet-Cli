@@ -63,21 +63,23 @@ use easynet_axon::pb::axon::v1::{
     InvocationTarget, InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeServerStreamRequest,
     StreamDescriptor, SubjectIdentity as PbSubjectIdentity,
 };
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
-use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
+use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::{
     InvokeRemoteUp, SessionContentEnvelope, SessionDispatch, ABILITY_INVOKE_REMOTE,
     INVOKE_REMOTE_STREAM_ID,
 };
-use easynet_cli::services::invocation_transport::local_session_dispatcher::LocalAxonSessionDispatcher;
-use easynet_cli::services::invocation_transport::session_initiator::{
+use easynet_cli::daemon::invocation::bidi::session_initiator::{
     SessionFrameDispatcher, SessionUpSender, ABILITY_SESSION_OPEN, SESSION_STREAM_ID,
 };
-use easynet_cli::services::pending_dispatch::PendingDispatchMap;
-use easynet_cli::services::presence_registry::{OfflineReason, PresenceEvent, PresenceRegistry};
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
+use easynet_cli::daemon::invocation::bidi::state::pending_dispatch::PendingDispatchMap;
+use easynet_cli::daemon::invocation::bidi::state::presence::{
+    OfflineReason, PresenceEvent, PresenceRegistry,
+};
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::invocation::dispatch::local_session_dispatcher::LocalAxonSessionDispatcher;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use ed25519_dalek::SigningKey;
 use futures::StreamExt;
 use serde_json::json;
@@ -166,7 +168,7 @@ fn signed_envelope(
     let subject = AxiomSubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
     let ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+        easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
             .expect("callee-owned descriptor ability"),
         DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
@@ -357,15 +359,15 @@ added_at_unix_ms = 0
     let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URI.to_string()));
     let runtime = LocalRuntime::new();
     let authority_context =
-        easynet_cli::runtime::ability_dispatch::AbilityAuthorityContext::for_device_authority_root(
+        easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
             DEVICE_A_URI,
         )
         .expect("test device URI is a valid device authority root");
-    let mut catalog = easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+    let mut catalog = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
         authority_context,
     );
-    easynet_cli::runtime::agents::file_transfer_ability::register(&mut catalog);
+    easynet_cli::daemon::ability::builtins::device_control::file_transfer::register(&mut catalog);
     let service =
         DaemonInvocationService::new(Arc::clone(&presence), admission).with_local_runtime(runtime);
 
@@ -977,9 +979,9 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
 
         let args = serde_json::to_vec(&json!({
             "mode": "download",
-            "resource_ref": easynet_cli::runtime::agents::fs_ability::resource_ref_for_local_path(
+            "resource_ref": easynet_cli::daemon::ability::builtins::device_control::files::resource_ref_for_local_path(
                 &path,
-                easynet_cli::runtime::agents::fs_ability::FilesystemResourceCapability::Read,
+                easynet_cli::daemon::ability::builtins::device_control::files::FilesystemResourceCapability::Read,
             )
             .expect("local fs ResourceRef"),
         }))
@@ -989,7 +991,7 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
             DEVICE_A_URI,
             DEVICE_A_URI,
             DEVICE_A_URI,
-            easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER,
+            easynet_cli::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
             &args,
         );
         up_tx
@@ -1000,7 +1002,7 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
                     envelope: Some(signed.envelope),
                     target: Some(InvocationTarget {
                         ability_name:
-                            easynet_cli::runtime::agents::file_transfer_ability::ABILITY_FILE_TRANSFER
+                            easynet_cli::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
                                 .to_string(),
                         ..InvocationTarget::default()
                     }),
@@ -1223,7 +1225,7 @@ async fn run_round_trip() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::services::invocation_transport::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 
@@ -1345,7 +1347,7 @@ async fn run_round_trip_via_local_dispatcher() {
         panic!("caller expected BinaryChunk payload");
     };
 
-    use easynet_cli::services::invocation_transport::invoke_remote_initiator::InvokeRemoteDown;
+    use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::InvokeRemoteDown;
     let down: InvokeRemoteDown =
         serde_json::from_slice(&chunk.data).expect("decode InvokeRemoteDown");
 

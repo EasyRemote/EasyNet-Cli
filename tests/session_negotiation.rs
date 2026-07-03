@@ -5,7 +5,7 @@
 // verified through the public face — and stays runnable even when
 // unrelated inline-test modules are mid-refactor.
 
-use easynet_cli::services::presence_registry::{PresenceRegistry, SessionContract};
+use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
 
 fn registry() -> PresenceRegistry {
     PresenceRegistry::new()

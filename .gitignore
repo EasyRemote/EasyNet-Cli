@@ -23,6 +23,7 @@ Cargo.lock
 
 # Local PR-review work notes generated during multi-agent review loops.
 /pr/
+docs/pr/
 
 # Local review transcripts generated during branch audits.
 /*-user-case.txt

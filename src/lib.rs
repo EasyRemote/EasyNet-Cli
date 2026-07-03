@@ -11,9 +11,12 @@
 //   [[bin]]   easynet         — thin CLI wrapper in src/bin/easynet.rs
 //   [[bin]]   easynet-daemon  — long-running daemon in src/bin/easynet-daemon.rs
 //
-// The lib carries all the business modules (core / eal / facade /
-// persistence / registry / runtime / support) plus a forthcoming
-// `ffi` module that exposes a C ABI for non-Rust clients loading
+// The lib carries the final product modules (core / daemon / cli / eal /
+// ffi / support). Daemon-owned persistence, execution, resources, registry
+// projections, and plugin runtime state live under `daemon`; the crate root
+// does not expose historical ownership buckets.
+//
+// The `ffi` module exposes a C ABI for non-Rust clients loading
 // `libeasynet_cli.{so,dylib,dll,a}`.
 //
 // Why a crate-type cdylib when we also have rlib + staticlib
@@ -43,7 +46,7 @@
 // Ratchet (F-005): categories cleared to zero are DENIED so they
 // cannot creep back. `result_large_err` is denied crate-wide; the
 // generated-tonic `Status` boundary owns its narrow module exception
-// in `services::invocation_transport`. `too_many_arguments` remains
+// in `daemon::invocation`. `too_many_arguments` remains
 // tracked under the F-002 transport arg-struct refactor. Lower the
 // warn set, never raise it.
 #![deny(
@@ -55,18 +58,14 @@
     clippy::missing_safety_doc
 )]
 
+pub mod cli;
 pub mod core;
 pub mod daemon;
 pub mod eal;
-pub mod facade;
 pub mod ffi;
-pub mod persistence;
-pub mod plugins;
-pub mod registry;
-pub mod runtime;
-pub mod services;
 pub mod support;
-pub mod ura;
+
+pub use core::ura;
 
 #[cfg(feature = "axon-pb")]
 pub mod pb {

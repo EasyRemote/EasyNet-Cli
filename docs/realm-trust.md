@@ -1,7 +1,7 @@
 # realm-trust.toml
 
 `/etc/easynet/realm-trust.toml` is the daemon-side trust anchor loaded by
-[`src/services/realm_trust_anchor.rs`](/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/services/realm_trust_anchor.rs:1).
+[`src/daemon/trust/anchor.rs`](/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/daemon/trust/anchor.rs:1).
 It is the admission whitelist for caller URAs and their Ed25519 public keys.
 
 ## File format

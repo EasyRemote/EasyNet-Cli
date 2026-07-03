@@ -33,7 +33,7 @@ use easynet_axon::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, AgentIdentity, BinaryChunk, Envelope, InvokeBidiDown,
     InvokeRequest, SubjectIdentity,
 };
-use easynet_cli::services::invocation_transport::invoke_remote_initiator::{
+use easynet_cli::daemon::invocation::bidi::invoke_remote_initiator::{
     SessionContentEnvelope, SessionDispatch, INVOKE_REMOTE_STREAM_ID,
 };
 

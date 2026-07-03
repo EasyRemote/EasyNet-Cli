@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "0.86.20"
+version = "0.91.30"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
@@ -34,7 +34,7 @@ axon-pb = [
 # default so production builds cannot honour `EASYNET_DEMO_PRESENCE_SEED`
 # (or any future demo env var) regardless of operator misconfig.
 # Demo / e2e scripts pass `--features demo-fixture` to opt in. See
-# `services::axon_serve::boot::maybe_seed_demo_presence`.
+# `daemon::invocation::boot::presence_seed::maybe_seed_demo_presence`.
 demo-fixture = []
 
 # Compile the in-tree remote desktop plugin package and its media transport
@@ -99,11 +99,11 @@ path = "src/bin/easynet-daemon.rs"
 name = "easynet-keyring"
 path = "src/bin/easynet-keyring.rs"
 
-# Maintainer tool. Regenerates every abilities/system/<name>.ability.toml
-# descriptor from the live `published_abilities()` metadata. Run after
-# any change to a `description_*` / `input_schema_*` function; the
+# Maintainer tool. Regenerates grouped system AbilityDescriptor TOMLs
+# under ability-descriptors/system/. Run after any change to a
+# `description_*` / `input_schema_*` function; the
 # `every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer`
-# test in src/runtime/agents/mod.rs fails CI if the on-disk TOML
+# test in src/daemon/ability/catalog/assembly_tests.rs fails CI if the on-disk TOML
 # drifts from what this binary would emit.
 #
 #   cargo run --bin gen-ability-tomls
@@ -138,7 +138,7 @@ ctrlc = "3"
 # tuned via `with_shard_amount(num_cpus * 4)`. The full feature
 # justification — bounded backpressure, shard-locked sub-millisecond
 # lookups across thousands of devices — is documented in
-# `services/presence_registry.rs` module docs.
+# `daemon/invocation/state/presence.rs` module docs.
 dashmap = "6"
 # async-trait — required by RFC-003 PR-2's `SessionFrameDispatcher`
 # trait so trait method bodies can be `async fn`. Already pulled in
@@ -170,7 +170,7 @@ rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-# Used by `runtime::publish::derive_owner_public_key_b64` to mirror
+# Used by `daemon::federation::publish::derive_owner_public_key_b64` to mirror
 # the SDK's deterministic key derivation — the daemon must pass the
 # runtime the SAME key the bridge will later sign under, or
 # `verify_easynet_subject_key_binding` rejects every Invoke. Version

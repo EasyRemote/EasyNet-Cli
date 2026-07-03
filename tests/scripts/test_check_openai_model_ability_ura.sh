@@ -1,24 +1,44 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-openai-model-ability-ura.sh.
+# Contract tests for tools/scripts/check-openai-model-ability-ura.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-openai-model-ability-ura.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-openai-model-ability-ura.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+
+descriptor_path() {
+    local root="$1"
+    local ability="$2"
+    local paths count
+    paths="$(find "$root/ability-descriptors/system" -type f -name "${ability}.ability.toml" -print | sort)"
+    count="$(printf '%s\n' "$paths" | sed '/^$/d' | wc -l | tr -d ' ')"
+    [[ "$count" == "1" ]] || fail "expected exactly one descriptor for $ability, found $count"
+    printf '%s\n' "$paths"
+}
+
+copy_descriptor() {
+    local sandbox="$1"
+    local ability="$2"
+    local source rel
+    source="$(descriptor_path "$REPO_ROOT" "$ability")"
+    rel="${source#$REPO_ROOT/}"
+    mkdir -p "$sandbox/$(dirname "$rel")"
+    cp "$source" "$sandbox/$rel"
+}
 
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/facade/cli" "$sandbox/src/runtime/agents" "$sandbox/docs" "$sandbox/abilities/system"
-    cp "$REPO_ROOT/src/facade/cli/llm_api.rs" "$sandbox/src/facade/cli/llm_api.rs"
-    cp "$REPO_ROOT/src/runtime/agents/openai_compat_ability.rs" "$sandbox/src/runtime/agents/openai_compat_ability.rs"
-    cp "$REPO_ROOT/src/runtime/agents/catalog_metadata.rs" "$sandbox/src/runtime/agents/catalog_metadata.rs"
+    mkdir -p "$sandbox/src/cli/commands" "$sandbox/src/daemon/ability/catalog" "$sandbox/src/daemon/ability/builtins/integrations" "$sandbox/docs" "$sandbox/ability-descriptors/system"
+    cp "$REPO_ROOT/src/cli/commands/llm_api.rs" "$sandbox/src/cli/commands/llm_api.rs"
+    cp "$REPO_ROOT/src/daemon/ability/builtins/integrations/openai_compat.rs" "$sandbox/src/daemon/ability/builtins/integrations/openai_compat.rs"
+    cp "$REPO_ROOT/src/daemon/ability/catalog/catalog_metadata.rs" "$sandbox/src/daemon/ability/catalog/catalog_metadata.rs"
     cp "$REPO_ROOT/docs/PAGES_AND_LLM_API.md" "$sandbox/docs/PAGES_AND_LLM_API.md"
-    cp "$REPO_ROOT/abilities/system/openai.chat_completions.ability.toml" "$sandbox/abilities/system/openai.chat_completions.ability.toml"
-    cp "$REPO_ROOT/abilities/system/openai.list_models.ability.toml" "$sandbox/abilities/system/openai.list_models.ability.toml"
+    copy_descriptor "$sandbox" openai.chat_completions
+    copy_descriptor "$sandbox" openai.list_models
     echo "$sandbox"
 }
 
@@ -32,14 +52,14 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: OpenAI model Abi
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/value_name = "ABILITY_URA"/value_name = "MODEL"/' "$SB/src/facade/cli/llm_api.rs"
+perl -0pi -e 's/value_name = "ABILITY_URA"/value_name = "MODEL"/' "$SB/src/cli/commands/llm_api.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired model placeholder should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/crate::runtime::agents::openai_compat_ability::validate_chat_model_id\(&m\)\?;\n        //' "$SB/src/facade/cli/llm_api.rs"
+perl -0pi -e 's/crate::daemon::ability::builtins::integrations::openai_compat::validate_chat_model_id\(&m\)\?;\n        //' "$SB/src/cli/commands/llm_api.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -53,7 +73,8 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired doc model id should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/input_schema\.properties\.request\.properties\.model/input_schema.properties.request.properties.retired_model/' "$SB/abilities/system/openai.chat_completions.ability.toml"
+CHAT_TOML="$(descriptor_path "$SB" openai.chat_completions)"
+perl -0pi -e 's/input_schema\.properties\.request\.properties\.model/input_schema.properties.request.properties.retired_model/' "$CHAT_TOML"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

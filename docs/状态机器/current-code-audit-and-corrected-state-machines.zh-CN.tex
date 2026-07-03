@@ -130,10 +130,10 @@ Reset/self uninstall & CLI + Backend/Hub & 缺失 & reset 不等于 uninstall \\
 
 \begin{itemize}[leftmargin=*]
   \item \textbf{Join snapshot}: \code{EasyNet-Cli/src/runtime/join_connection_state.rs}. 当前已定义 \code{JoinConnectionState}、\code{JoinTransition}、\code{JoinFailureCode}、\code{JoinConnectionSnapshot}; 缺口是多个状态共用同一 code。
-  \item \textbf{Join autostart}: \code{EasyNet-Cli/src/facade/cli/join.rs}. pairing accepted 后默认 start daemon; start 失败显式报错。
-  \item \textbf{Runtime start}: \code{EasyNet-Cli/src/facade/cli/start.rs}. credential verify、Hub endpoint probe、daemon boot failure 都记录 snapshot; 仍需保证 online 只在 session admission evidence 后记录。
-  \item \textbf{Stop}: \code{EasyNet-Cli/src/facade/cli/stop.rs}. 当前有 \code{StopPlan/StopStage}; 缺少持久化 stop state/code。
-  \item \textbf{Reset}: \code{EasyNet-Cli/src/facade/cli/reset.rs}. active runtime 时拒绝 reset; best-effort revoke 后删除本地 credentials; 当前不是 self uninstall。
+  \item \textbf{Join autostart}: \code{EasyNet-Cli/src/cli/join.rs}. pairing accepted 后默认 start daemon; start 失败显式报错。
+  \item \textbf{Runtime start}: \code{EasyNet-Cli/src/cli/start.rs}. credential verify、Hub endpoint probe、daemon boot failure 都记录 snapshot; 仍需保证 online 只在 session admission evidence 后记录。
+  \item \textbf{Stop}: \code{EasyNet-Cli/src/cli/stop.rs}. 当前有 \code{StopPlan/StopStage}; 缺少持久化 stop state/code。
+  \item \textbf{Reset}: \code{EasyNet-Cli/src/cli/reset.rs}. active runtime 时拒绝 reset; best-effort revoke 后删除本地 credentials; 当前不是 self uninstall。
   \item \textbf{Backend route facade}: \code{EasyNet/backend/internal/logic/ability/resolve_invoke_route.go}. 已经调用 daemon resolver; negative 转 typed validation error。
   \item \textbf{Backend prepare/submit}: \code{prepareEnvelopeLogic.go}, \code{submitSignedInvocationLogic.go}. prepare 使用 selected route; submit 校验 prepare-time route binding。
   \item \textbf{Backend pages}: \code{listPagesLogic.go}, \code{helpers.go}. pages unavailable DTO 局部存在; 仍通过错误字符串判断 offline/not advertised。

@@ -294,7 +294,7 @@ arrive, themselves be Transition under RFC-006.
 
 ### §5.3 — Default classification for legacy descriptors
 
-Every existing AbilityDescriptor in `EasyNet-Cli/abilities/system/`
+Every existing AbilityDescriptor in `EasyNet-Cli/ability-descriptors/system/`
 is implicitly `class = "Query"` until it explicitly declares
 otherwise. The descriptor loader MUST treat absent `class` as
 `"Query"` and MUST reject Query descriptors that emit transition

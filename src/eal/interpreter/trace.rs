@@ -194,11 +194,11 @@ pub struct StepTrace {
     /// Ability invoked. Mirrors `IrStep.ability`. See
     /// `docs/AGENT_IDENTITY.md` §10 — this is a method name, not an
     /// identity.
-    pub ability: crate::core::agent_id::AbilityName,
+    pub ability: crate::core::agent::id::AbilityName,
     /// Resolved dispatch target. Mirrors `IrStep.target`. The trace
     /// records the *resolved* target (Agent vs Device) so audit
     /// readers don't have to re-classify.
-    pub target: crate::eal::ir::IrTarget,
+    pub target: crate::eal::runtime::ir::IrTarget,
     pub phase_index: usize,
     pub started_at_unix_ms: u64,
     pub completed_at_unix_ms: u64,

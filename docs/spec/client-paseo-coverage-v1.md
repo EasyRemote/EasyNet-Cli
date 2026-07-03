@@ -72,7 +72,7 @@ with `protoc` in the Client repo's CI.
 Some daemon responsibilities are intentionally invisible to
 Client:
 
-- Pair / heartbeat with the Hub (`facade::cli::run_daemon`).
+- Pair / heartbeat with the Hub (`cli::run_daemon`).
 - Axon node identity + registration label maintenance.
 - Filesystem persistence (`tenants/<id>/{schedules,loops,...}/`).
 

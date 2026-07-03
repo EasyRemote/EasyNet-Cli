@@ -141,7 +141,7 @@ Given that, we do **not** ship tolerant parsers or dual-write fallbacks. We flip
 EasyNet-Cli (PR-5b-relabel):
 - `src/registry/a2a_labels.rs` — rewrite `build()` to emit the envelope shape and per-entry `a2a_schema_version`; remove the label-level `a2a.version` key.
 - `src/runtime/abilities.rs::AgentAbilitySpec::to_discovery_json` — rename `parameters` to `input_schema`; add `output_schema` and `timeout_seconds` fields (both `null` for the seeded chat ability).
-- `src/facade/cli/agent.rs::run_publish` + `summarize_schema` — dry-run table reads the renamed fields; user-facing column unchanged.
+- `src/cli/agent.rs::run_publish` + `summarize_schema` — dry-run table reads the renamed fields; user-facing column unchanged.
 - Existing tests in `registry::a2a_labels` that assert on `a2a.version` label-level / `parameters` key / `type` agent-entry key — all rewritten.
 
 EasyNet backend (companion PR, same release window):

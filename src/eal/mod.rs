@@ -27,11 +27,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub(crate) mod ast;
-pub(crate) mod error;
+pub(crate) mod diagnostics;
 pub(crate) mod interpreter;
-pub(crate) mod ir;
-pub(crate) mod lexer;
 pub(crate) mod parser;
-pub(crate) mod planner;
-pub(crate) mod string_escape;
+pub(crate) mod runtime;

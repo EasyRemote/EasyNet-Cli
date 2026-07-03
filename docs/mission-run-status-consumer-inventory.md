@@ -7,14 +7,14 @@ T5.3 precondition and closure note, refreshed on 2026-06-12.
 Cross-repository consumers of mission run status are effectively absent:
 
 - EasyNet backend, frontend, scripts, and integration tests do not directly parse the CLI mission `meta.json` status vocabulary.
-- CLI owns the mission run directory layout in `src/facade/cli/mission_runs.rs`.
+- CLI owns the mission run directory layout in `src/cli/mission_runs.rs`.
 - Other hits for `status`, `running`, or `mission_id` belong to unrelated surfaces such as device presence, boot status, control-plane diagnostics, and EAL trace metadata.
 
 That collapses the compatibility boundary to one local requirement: historical mission `meta.json` files that store lowercase status strings must continue to deserialize.
 
 ## Implemented Shape
 
-`src/facade/cli/mission_runs.rs` now owns the complete F-022/T5.3 state model:
+`src/cli/mission_runs.rs` now owns the complete F-022/T5.3 state model:
 
 - `MissionRunStatus` is an enum serialized with `#[serde(rename_all = "lowercase")]`.
 - Historical literals `ok`, `error`, `partial`, `running`, and `cancelled` parse into the enum unchanged.
@@ -32,7 +32,7 @@ Liveness no longer uses a pid file:
 
 ## Test Evidence
 
-The implementation is pinned by focused tests in `src/facade/cli/mission_runs.rs`:
+The implementation is pinned by focused tests in `src/cli/mission_runs.rs`:
 
 - `status_serde_matches_historical_literals`
 - `create_starts_heartbeat_and_finish_removes_it`

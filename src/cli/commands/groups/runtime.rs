@@ -1,0 +1,142 @@
+// EasyNet CLI — Runtime Group
+// ===========================
+//
+// File: src/cli/groups/runtime.rs
+// Description: `easynet runtime …` — every operation that affects the
+//              *local* EasyNet product daemon on this host, plus explicit
+//              cleanup for retired bridge projections.
+//
+// Verbs:
+//   start    Spawn (or attach to) a local runtime  (-> cli::start)
+//   stop     Shut down the local runtime           (-> cli::stop)
+//   status   Show local runtime + federation info  (-> cli::status)
+//   connect  Foreground "paired device" mode       (-> cli::connect)
+//   logs     Tail the runtime log file             (NEW)
+//
+// Author: Silan Hu <silan.hu@u.nus.edu>
+// Copyright (c) 2026 EasyNet. All rights reserved.
+
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+use clap::{Args, Subcommand};
+use console::style;
+
+use crate::cli::commands::{connect, start, status, stop};
+use crate::cli::presentation::banner;
+use crate::daemon::persistence::config;
+
+#[derive(Debug, Args)]
+pub struct RuntimeArgs {
+    #[command(subcommand)]
+    pub action: RuntimeAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RuntimeAction {
+    /// Start or attach to the local EasyNet daemon and update the
+    /// `~/.easynet/runtime.json` session projection.
+    Start(start::StartArgs),
+    /// Stop daemon process facts first, then remove the session
+    /// projection when shutdown postconditions hold.
+    Stop(stop::StopArgs),
+    /// Report runtime liveness, transport details, Hub reachability,
+    /// and online/offline node counts.
+    Status(status::StatusArgs),
+    /// Run the paired device in the foreground (no background daemon).
+    /// Blocks until Ctrl-C; useful for `systemd` / container PID 1.
+    Connect(connect::ConnectArgs),
+    /// Tail (and optionally follow) the local runtime log file.
+    Logs(LogsArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LogsArgs {
+    /// Number of trailing lines to print before streaming.
+    #[arg(long, default_value_t = 100)]
+    pub tail: usize,
+    /// Follow the file as new lines are appended.
+    #[arg(long, short = 'f')]
+    pub follow: bool,
+}
+
+pub fn run(args: RuntimeArgs) -> anyhow::Result<()> {
+    match args.action {
+        RuntimeAction::Start(a) => {
+            eprint!("{}", banner::render_logo());
+            start::run(a)
+        }
+        RuntimeAction::Stop(a) => stop::run(a),
+        RuntimeAction::Status(a) => status::run(a),
+        RuntimeAction::Connect(a) => {
+            eprint!("{}", banner::render_logo());
+            connect::run(a)
+        }
+        RuntimeAction::Logs(a) => run_logs(a),
+    }
+}
+
+fn run_logs(args: LogsArgs) -> anyhow::Result<()> {
+    let log_path = resolve_runtime_log_path();
+    if !log_path.exists() {
+        anyhow::bail!(
+            "no runtime log file at {}\n\
+             Start the runtime with `easynet runtime start` first.",
+            log_path.display()
+        );
+    }
+
+    eprintln!(
+        "  {} {}",
+        style("logs").dim(),
+        style(log_path.display().to_string()).cyan()
+    );
+
+    let file = std::fs::File::open(&log_path)?;
+    let mut reader = BufReader::new(file);
+
+    // Print the last `tail` lines.
+    let lines: Vec<String> = BufReader::new(std::fs::File::open(&log_path)?)
+        .lines()
+        .map_while(Result::ok)
+        .collect();
+    let start = lines.len().saturating_sub(args.tail);
+    for line in &lines[start..] {
+        println!("{line}");
+    }
+
+    if !args.follow {
+        return Ok(());
+    }
+
+    // Naive follow loop: re-open + seek to EOF and poll for new lines.
+    reader.seek(SeekFrom::End(0))?;
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        match reader.read_line(&mut buf) {
+            Ok(0) => std::thread::sleep(std::time::Duration::from_millis(250)),
+            Ok(_) => print!("{buf}"),
+            Err(e) => {
+                eprintln!("  {}: {e}", style("log read error").red());
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_runtime_log_path() -> std::path::PathBuf {
+    let daemon_log = config::state_dir().join("logs").join("easynet-daemon.log");
+    let axon_log = config::state_dir().join("axon.log");
+    match config::load().ok().map(|state| state.runtime_kind) {
+        Some(config::RuntimeKind::DaemonOnly) => daemon_log,
+        Some(config::RuntimeKind::AxonBridge) => axon_log,
+        None => {
+            if daemon_log.exists() {
+                daemon_log
+            } else {
+                axon_log
+            }
+        }
+    }
+}

@@ -373,5 +373,5 @@ SDK `src/invocation/route.rs` 定义 proto-free 的 `ResolvedRoute`，用 SDK �
 ### 裁定后状态
 
 - 先决条件关闭，§3 落地序列 Step 1 可开工。
-- **但开工时机受共享检出约束**：本分支 `seven-axes-p0-landing-v1` 当前有并发会话改动 `src/runtime/ability_dispatch.rs`（未提交）且在跑 `cargo test --features axon-pb`。开工前须 (1) 确认无并发 build 占用 `target/`，(2) 优先在 GitHub-兄弟目录的隔离 worktree 实施（`../EasyNet-Axon` 相对依赖要求 worktree 为兄弟位），(3) 每步 `cargo build` + Step 11 末 `clippy -D warnings` 验残渣清零。
+- **但开工时机受共享检出约束**：本分支 `seven-axes-p0-landing-v1` 当前有并发会话改动 `src/daemon/ability/dispatch.rs`（未提交）且在跑 `cargo test --features axon-pb`。开工前须 (1) 确认无并发 build 占用 `target/`，(2) 优先在 GitHub-兄弟目录的隔离 worktree 实施（`../EasyNet-Axon` 相对依赖要求 worktree 为兄弟位），(3) 每步 `cargo build` + Step 11 末 `clippy -D warnings` 验残渣清零。
 - B2 的四个 `reason` 常量、B1 的两个镜像枚举，须在对应 Step 的同一 commit 内落地，不得后补。

@@ -11,16 +11,16 @@ violations="$tmp/violations.txt"
 : >"$violations"
 
 # URA construction and scheme-prefix parsing must stay centralized in
-# src/ura.rs. Other modules should call crate::ura builders/parsers so
+# src/core/ura/mod.rs. Other modules should call crate::core::ura builders/parsers so
 # ontology changes cannot leave stale hand-built route fragments behind.
 rg -n \
   'format!\([^"\n]*"easynet:///r|strip_prefix\("easynet:///r/"\)|starts_with\("easynet:///r/' \
   src \
-  --glob '!src/ura.rs' \
+  --glob '!src/core/ura/mod.rs' \
   >"$violations" || true
 
 if [[ -s "$violations" ]]; then
-  echo "raw URA construction/parsing found outside src/ura.rs:" >&2
+  echo "raw URA construction/parsing found outside src/core/ura/mod.rs:" >&2
   cat "$violations" >&2
   exit 1
 fi

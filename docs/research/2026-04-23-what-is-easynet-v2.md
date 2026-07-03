@@ -399,13 +399,13 @@ file paths relative to the `~/Documents/GitHub/` monorepo parent.
 - 6-language conformance: `EasyNet-Axon/sdk/conformance/CONFORMANCE_SUITE.md`
 - Persistent log P1–P6: `EasyNet-Axon/document/concepts/INVOCATION_LIFECYCLE_ACROSS_PROCESSES.md`
 - URA v2: `EasyNet-Nucleus/README.md`
-- Agent/ability/skill ontology enforcement: `EasyNet-Cli/src/facade/cli/mod.rs:42`
+- Agent/ability/skill ontology enforcement: `EasyNet-Cli/src/cli/mod.rs:42`
 - EAL control-flow RFC: `EasyNet-Cli/docs/rfc/eal-control-flow-v1.md`
 - PR-10 stages 1-2: `EasyNet-Cli/src/eal/ir.rs`, `src/eal/parser.rs`
 - First-class invocation gap: `EasyNet-Cli/docs/open-questions/cli-dispatch-as-first-class-invocation.md`
 - Tonight's skill-marketplace work:
     - backend: `EasyNet/backend/internal/{handler,logic}/skill/`
-    - CLI: `EasyNet-Cli/src/facade/cli/skill.rs`
+    - CLI: `EasyNet-Cli/src/cli/skill.rs`
     - Frontend: `EasyNet/Frontend/src/pages/easynet/{Abilities,Skills}Page.tsx`
 - Gallery sample: `EasyNet-Cli/gallery/case01-aris/`
 - Operator Frontend architecture: `EasyNet/Frontend/src/App.tsx`

@@ -14,7 +14,7 @@ This is a *product* feature — the marketplace layer is above AXIOM's concerns.
 
 Earlier conversation threads settled that:
 
-- **Skill** = an agent's private implementation asset. Cross-agent reuse goes through "agent wraps skill as ability" (see `src/facade/cli/mod.rs:48` and `CLAUDE.md` / `ARCHITECTURE.md`).
+- **Skill** = an agent's private implementation asset. Cross-agent reuse goes through "agent wraps skill as ability" (see `src/cli/mod.rs:48` and `CLAUDE.md` / `ARCHITECTURE.md`).
 - **Ability** = the network-visible contract. Invoked via `<agent>.<ability>`; observable in `a2a.agents_json[*].skills[*]` (despite the field name, those entries are abilities, not skills).
 
 Marketplace integration is about **skills**, not abilities. A marketplace ships skill bundles (code + SKILL.md + dependencies); an agent installs them privately; if the agent wants to expose one of them on the network, it declares an `ability.toml` that wraps the skill. No marketplace publishes abilities directly in this design — ability publishing is the separate (deferred) Axon §6.2 discovery-agent path.
@@ -110,7 +110,7 @@ Until all three exist, marketplace integration stays open. The existing `easynet
 
 ## What does NOT belong here
 
-- **Invoking skills directly from Frontend** — architecturally wrong, violates encapsulation invariant (`facade/cli/mod.rs:48`). Skills are private; ability is the public surface.
+- **Invoking skills directly from Frontend** — architecturally wrong, violates encapsulation invariant (`cli/mod.rs:48`). Skills are private; ability is the public surface.
 - **Publishing skills to a marketplace from Frontend/CLI** — upload path is separate from install path; most operators only consume, not publish. Defer.
 - **Skill dependency resolution across upstream versions** — npm-style conflict resolution is its own engineering project. v1 assumes dependencies pin exact versions (or have none).
 

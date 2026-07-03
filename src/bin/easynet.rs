@@ -21,7 +21,7 @@
 //
 // What this bin contains
 // ----------------------
-// The parsed clap App → `facade::cli::run(...)` and nothing else.
+// The parsed clap App → `cli::run(...)` and nothing else.
 // If a subcommand needs the daemon (PR-ATTACH / PR-PERM / etc.),
 // its handler inside the library takes care of spawning or
 // connecting to `easynet-daemon` via the IPC layer.
@@ -30,7 +30,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{CommandFactory, FromArgMatches};
-use easynet_cli::facade::cli::{presentation::banner, run, App};
+use easynet_cli::cli::{presentation::banner, run, App};
 
 /// Hard wrap point for all `--help` output. Set on the root
 /// `Command` and recursively on every subcommand below — clap's

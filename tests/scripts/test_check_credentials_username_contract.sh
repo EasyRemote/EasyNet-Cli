@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-credentials-username-contract.sh.
+# Contract tests for tools/scripts/check-credentials-username-contract.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-credentials-username-contract.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-credentials-username-contract.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/persistence" "$sandbox/src/facade/cli"
-    cp "$REPO_ROOT/src/persistence/config.rs" "$sandbox/src/persistence/config.rs"
-    cp "$REPO_ROOT/src/facade/cli/join.rs" "$sandbox/src/facade/cli/join.rs"
-    cp "$REPO_ROOT/src/facade/cli/start.rs" "$sandbox/src/facade/cli/start.rs"
+    mkdir -p "$sandbox/src/daemon/persistence" "$sandbox/src/cli/commands"
+    cp "$REPO_ROOT/src/daemon/persistence/config.rs" "$sandbox/src/daemon/persistence/config.rs"
+    cp "$REPO_ROOT/src/cli/commands/join.rs" "$sandbox/src/cli/commands/join.rs"
+    cp "$REPO_ROOT/src/cli/commands/start.rs" "$sandbox/src/cli/commands/start.rs"
     echo "$sandbox"
 }
 
@@ -29,10 +29,10 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: username contrac
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/facade/cli/join.rs" <<'RS'
+cat >>"$SB/src/cli/commands/join.rs" <<'RS'
 
 fn backfill_credentials_username_from_auth_session() {
-    let _ = crate::facade::cli::auth::load_session();
+    let _ = crate::cli::commands::auth::load_session();
 }
 RS
 rc=0
@@ -41,7 +41,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "auth-session username backfill should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-python3 - "$SB/src/facade/cli/join.rs" <<'PY'
+python3 - "$SB/src/cli/commands/join.rs" <<'PY'
 import pathlib
 import sys
 path = pathlib.Path(sys.argv[1])

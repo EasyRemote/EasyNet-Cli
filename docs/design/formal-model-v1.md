@@ -23,7 +23,7 @@ where
 | `E`    | Events       | per-invocation timeline frames with monotonic sequence (AXIOM §6.1 I5)  |
 
 `invocation_id(i) = sha256(canonical_bytes(i))` is the single
-system-wide key shared by the IPC `request_id`, the KernelApi
+system-wide key shared by the IPC `request_id`, the boot KernelApi
 in-flight table, and (when the dispatch is remote) the Axon
 `send_a2a_task` identifier.
 
@@ -62,9 +62,9 @@ v1 is *not*" quickly.
 
 | #   | Invariant                              | v1 status                                           | Enforcement / evidence                                         |
 |-----|----------------------------------------|-----------------------------------------------------|----------------------------------------------------------------|
-| I1  | Admission exactly once                 | ✅                                                  | `Kernel::invoke` nonce-dedup (PR-INVOCATION-EXEC-UNITY)        |
+| I1  | Admission exactly once                 | ✅                                                  | `daemon::boot::kernel::Kernel::invoke` nonce-dedup (PR-INVOCATION-EXEC-UNITY) |
 | I2  | Terminal monotonic                     | ✅                                                  | Receipt written once; no post-terminal event emit              |
-| I3  | Receipt integrity (events hashed)      | ⚠️ partial (hash present; callee_signature empty)   | `runtime::invocation::Receipt` + events field                  |
+| I3  | Receipt integrity (events hashed)      | ⚠️ partial (hash present; callee_signature empty)   | `daemon::invocation::receipts::runtime_record::Receipt` + events field |
 | I4  | Cancellation cooperative               | ✅                                                  | supervisor-coordinated cleanup path                            |
 | I5  | Event total order                      | ✅                                                  | monotonic `sequence` per invocation in `timeline.rs`           |
 | P1  | Append-only log                        | ✅                                                  | PR-7 `PersistentLog`                                           |
@@ -75,7 +75,7 @@ v1 is *not*" quickly.
 | P6  | Crash consistent                       | ✅                                                  | `PersistentLog`                                                |
 | D1  | DAG acyclic                            | ✅                                                  | causal_context wall-clock ordering                             |
 | D2  | Single callee signature per receipt    | ⚠️ partial (signature empty in v1)                  | `Kernel` state machine + Receipt field optionality             |
-| U1  | Invocation unity (one exec entry)      | ✅ (after PR-INVOCATION-EXEC-UNITY)                 | `Kernel::invoke` + `scripts/check-invocation-unity.sh`         |
+| U1  | Invocation unity (one exec entry)      | ✅ (after PR-INVOCATION-EXEC-UNITY)                 | `daemon::boot::kernel::Kernel::invoke` + `tools/scripts/check-invocation-unity.sh` |
 
 ### 3.2 Non-repudiation — v2 target
 

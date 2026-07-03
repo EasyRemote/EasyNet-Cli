@@ -36,10 +36,10 @@ use std::time::Duration;
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::facade::cli::discover::{
+use easynet_cli::cli::discover::{
     self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
 };
-use easynet_cli::persistence::config;
+use easynet_cli::daemon::persistence::config;
 use seven_axes_fixture::SevenAxesHome;
 use tonic::transport::{Channel, Endpoint, Uri};
 
@@ -114,8 +114,8 @@ fn invoke_daemon_ability(
 }
 
 fn advertise_remote_user_tier_ability(socket_path: &Path, host_device_ura: &str) -> String {
-    let owner_ura = easynet_cli::ura::agent_ura("cli", "local", "remote-worker");
-    let ability_ura = easynet_cli::ura::owner_ability_ura(&owner_ura, REMOTE_PUBLIC_NAME)
+    let owner_ura = easynet_cli::core::ura::agent_ura("cli", "local", "remote-worker");
+    let ability_ura = easynet_cli::core::ura::owner_ability_ura(&owner_ura, REMOTE_PUBLIC_NAME)
         .expect("mint remote ability URA");
 
     invoke_daemon_ability(
@@ -218,7 +218,7 @@ fn discover_e2e_local_scope_and_typed_federation_degradation() {
         .find(|c| c.name.ends_with("weather-probe"))
         .unwrap_or_else(|| panic!("seeded ability must rank: {:?}", weather.candidates));
 
-    let selector = easynet_cli::ura::AbilitySelector::parse(&candidate.ura)
+    let selector = easynet_cli::core::ura::AbilitySelector::parse(&candidate.ura)
         .expect("candidate URA must round-trip the Axon parser");
     assert_eq!(candidate.owner_kind, "agent");
     assert_eq!(selector.owner_kind(), "agent");

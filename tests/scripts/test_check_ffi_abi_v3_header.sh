@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-ffi-abi-v3-header.sh.
+# Contract tests for tools/scripts/check-ffi-abi-v3-header.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-ffi-abi-v3-header.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-ffi-abi-v3-header.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -45,7 +45,7 @@ rm -rf "$SB"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's/pub const ERR_INVALID_ARG: i32 = 11;/pub const ERR_INVALID_ARG: i32 = 42;/' \
-    "$SB/src/ffi/errors.rs"
+    "$SB/src/ffi/errors/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -61,7 +61,7 @@ rm -rf "$SB"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's/fn easynet_invocation_bidi_open/fn easynet_invocation_bidi_start/' \
-    "$SB/src/ffi/invocation.rs"
+    "$SB/src/ffi/invocation/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

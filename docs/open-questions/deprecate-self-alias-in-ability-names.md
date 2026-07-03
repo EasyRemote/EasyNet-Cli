@@ -101,7 +101,7 @@ Existing `InvocationReceipt` records on disk contain `function_name = "<agent>.d
 **Ship criteria:**
 1. Daemon Axon catalogue registration APIs (rpc/bidi/stream/envelope variants) accept an `OwnerKind` parameter or pre-resolved `owner_uri`.
 2. `meta_ability::list_abilities_handler` reads owner from the registry, deletes the `name.starts_with("01HUB.")` branch and the `device_owner` fallback for `legacy self alias.*`.
-3. CLI render layer (`facade/cli/abilities.rs`) is unchanged because its input is already correct owner URAs.
+3. CLI render layer (`cli/abilities.rs`) is unchanged because its input is already correct owner URAs.
 4. New regression test: every registered ability name resolves to a parseable v4.1.5 URA via the registry's owner table.
 
 This stage closes the open hole in this PR's design — that owner resolution happens by sniffing — without touching the alias itself. It is the prerequisite for stages 1 and 2.
@@ -177,7 +177,7 @@ Stage 4 makes the conflation impossible: `fleet.list_nodes` becomes `device.flee
 * **EasyNet/backend (Go hub-mode)** — `daemonInternalAbility()` already accepts `device.*` (Step A). The other 23 system namespaces have ~44 affected files; the routing classifier needs to accept the new shape, and any backend handler that addresses a daemon ability by name (terminal handler, openai files handler, fleet operational endpoints) needs to dial the new name.
 * **EasyNet-Axon (Go axon hub)** — wire dispatch table for hub-side verbs (`hub.openai.*`); admission accepts new names alongside legacy.
 * **LLM prompt corpus** — `skills/easynet-collaborate/SKILL.md` and any other agent-facing prompt that hardcodes ability names.
-* **TOML manifests under `abilities/system/`** — `gen-ability-tomls` regenerates against the new names; the old TOML files retire.
+* **TOML manifests under `ability-descriptors/system/`** — `gen-ability-tomls` regenerates against the new names; the old TOML files retire.
 * **Receipt / audit reader** — historical receipts carry the legacy `function_name`; reader displays both forms.
 * **Frontend** — any UI text or skill catalogue rendering that hardcodes a system ability name.
 
@@ -200,7 +200,7 @@ Until Stage 0 lands:
 
 1. **Do not add new `legacy self alias.*` ability names.** New device-bundle abilities are named `device.<verb>` from the start; new per-agent abilities are named `<agent>.<verb>`. The alias is closed for new contributions.
 2. **Do not extend `legacy self alias` semantics across new dispatch paths.** Specifically, do not introduce code that resolves `legacy self alias` against a non-`caller` URA (e.g. against `subject` or against a delegation chain). Keeping the existing two-layer split frozen makes the eventual migration a pure rename.
-3. **Render-layer treatment** (this PR's `facade/cli/abilities.rs`): the (DEVICE / AGENT / USER) projection of the `owner_agent_uri` is correct as-is; do not add `legacy self alias`-aware special-casing. When the registry-side invariant from Stage 0 lands, the rendering already aligns.
+3. **Render-layer treatment** (this PR's `cli/abilities.rs`): the (DEVICE / AGENT / USER) projection of the `owner_agent_uri` is correct as-is; do not add `legacy self alias`-aware special-casing. When the registry-side invariant from Stage 0 lands, the rendering already aligns.
 4. **Owner sniffing in `meta_ability::list_abilities_handler`** stays as currently written — synth uses `01HUB.` prefix sniff for hub URAs and `host_device_agent_uri` for everything else. This is not the terminal state but is the correct behaviour given the current registration API. Stage 0 deletes the sniff.
 5. **`SYSTEM_NAMESPACES` skip list (`session_initiator.rs`) must be kept in sync with new system namespaces.** Adding a new system verb without updating the list re-introduces the 29-fake-agents bug on the Frontend Agents page. Stage 4 deletes the list entirely; until then, a code review checklist item enforces the sync.
 
@@ -262,7 +262,7 @@ The change spans:
 - LLM prompt corpus and skill copy
 - Hub-side wire admission (EasyNet-Axon, two repos coordinated)
 - Persistent receipt / audit reader compatibility (legacy + new names)
-- TOML manifests under `abilities/system/` (regenerated)
+- TOML manifests under `ability-descriptors/system/` (regenerated)
 - Frontend hardcoded ability-name references
 - Cross-repo coordination with at least one release-window double-write
 

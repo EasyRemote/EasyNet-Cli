@@ -231,7 +231,7 @@ Decision criterion: how does an LLM discover MCP tools? Today the discover abili
 
 ### E-2 Apply the choice
 
-Sweep `runtime/agents/mcp_*.rs` and `facade/cli/agent.rs:2061-2092` to emit the canonical shape. Add the post-Stage-4 lint envisioned in `docs/open-questions/deprecate-self-alias-in-ability-names.md` §"Stage 4 ship criterion 6" so any new `register_rpc(name, ...)` whose first segment isn't in `{device, hub, <agent-id>, <user-id>}` fails the build.
+Sweep `runtime/agents/mcp_*.rs` and `cli/agent.rs:2061-2092` to emit the canonical shape. Add the post-Stage-4 lint envisioned in `docs/open-questions/deprecate-self-alias-in-ability-names.md` §"Stage 4 ship criterion 6" so any new `register_rpc(name, ...)` whose first segment isn't in `{device, hub, <agent-id>, <user-id>}` fails the build.
 
 ### E-3 RFC doc sweep
 
@@ -281,7 +281,7 @@ src/runtime/skill_store/
 
 **Motivation.** The current diff lands four families of name drift that no PR-A–PR-F PR will reach individually:
 
-- **`dispatch` is overloaded** across three layers — `runtime/ability_dispatch.rs` (handler registration / conversion), `services/control/runtime_dispatch.rs` (control-plane routing), `services/invocation_transport/daemon_invocation_service.rs` (gRPC fn_name arms). `git grep dispatch` returns three unrelated meanings.
+- **`dispatch` is overloaded** across three layers — `daemon/ability/dispatch.rs` (handler registration / conversion), `services/control/runtime_dispatch.rs` (control-plane routing), `services/invocation_transport/daemon_invocation_service.rs` (gRPC fn_name arms). `git grep dispatch` returns three unrelated meanings.
 - **`local_*` prefix** is split across four different scopes — `runtime/local_runtime_invoker.rs` (CLI JSON adapter), `services/invocation_transport/local_session_dispatcher.rs` (device session dispatcher, 1 512 LoC), `support/local_invoke.rs` (daemon-side fallback invoke), `support/local_daemon_grpc.rs` (socket-path resolver). Four meanings, one prefix.
 - **`refresh` verb**, while now adequately documented in `agent.refresh`'s description (this PR), still has two reading paths an operator may confuse.
 - **MCP namespace shape** open per PR-E (`mcp_<server>_<tool>` vs `<agent>.mcp_<server>_<tool>` vs `device.mcp.<server>.<tool>`); PR-E owns the policy choice, PR-G owns the codebase sweep when PR-E decides.
@@ -290,7 +290,7 @@ src/runtime/skill_store/
 
 ### G-1 `dispatch` family rename
 
-- `runtime/ability_dispatch.rs::rpc_handler_to_ability_fn` and siblings → `into_axon_ability_*` (action-only nouns; the file-level doc names the conversion contract).
+- `daemon/ability/dispatch.rs::rpc_handler_to_ability_fn` and siblings → `into_axon_ability_*` (action-only nouns; the file-level doc names the conversion contract).
 - `services/control/runtime_dispatch.rs` → keeps `dispatch_` (control-plane routing IS dispatch).
 - `services/invocation_transport/daemon_invocation_service.rs` arms → rename `dispatch_*` arms to `route_*` arms (they branch on `function_name`; that's routing, not dispatch).
 - Add a 3-line table in `docs/design/daemon-layers-v1.md` naming the three meanings + the layer that owns each.
@@ -304,7 +304,7 @@ src/runtime/skill_store/
 
 ### G-3 Apply PR-E's MCP namespace decision
 
-Sweep `runtime/agents/mcp_*.rs` and `facade/cli/agent.rs:2061-2092` to emit the canonical shape PR-E chose. Update the post-Stage-4 `OwnerKind`-first-segment lint to require the shape.
+Sweep `runtime/agents/mcp_*.rs` and `cli/agent.rs:2061-2092` to emit the canonical shape PR-E chose. Update the post-Stage-4 `OwnerKind`-first-segment lint to require the shape.
 
 **Scope boundary.**
 - IN: rename + a single round of `git grep` / `cargo check` verification per family.
@@ -376,11 +376,11 @@ These are the items the second-pass review identified that were small enough to 
 - **`device.agent.{start,stop,refresh}` hard-Err on missing tokio runtime** when the hot registrar IS wired. The previous code returned a silent `runtime_not_ready` envelope that operators could mistake for the legitimate boot-window state. Now: registrar empty + no tokio = `runtime_not_ready` envelope + warn-class op_event; registrar wired + no tokio = anyhow::bail with the exact wiring step that's missing.
 - **`block_on_runtime` wrapper deleted** in `runtime/local_runtime_invoker.rs`; three call sites now reach `support::async_bridge::run_blocking(..., NoRuntimeFallback::BuildCurrentThreadTokio)` directly. `block_on_runtime_sync` retained in `ability_dispatch.rs` (7 call sites, all under the same in-memory-only invariant, documented in the helper's docstring).
 - **`stamp_bidi_down_sequence` helper extracted** in `daemon_invocation_service.rs`; the two byte-identical `stamp_sequence` methods on `LocalBidiDownStream` and `SessionDownStream` now both delegate. Future PR-A's per-arm split can move them anywhere without splitting the saturating_add semantic.
-- **`late_bound_rpc_handler` op_event** in `runtime/ability_dispatch.rs::invoke_rpc_json`. The self-heal path (handler in catalogue but missing from LocalRuntime) is no longer silent — operators see when boot's sync_runtime_ability is incomplete.
-- **`invoke_daemon_ability_required` helper** in `facade/cli/agent.rs`. The four `invoke_daemon_agent_*_required` wrappers now delegate to one shared helper that owns the error-format policy. The wrappers stay as 1-line named entry points for `git grep`.
+- **`late_bound_rpc_handler` op_event** in `daemon/ability/dispatch.rs::invoke_rpc_json`. The self-heal path (handler in catalogue but missing from LocalRuntime) is no longer silent — operators see when boot's sync_runtime_ability is incomplete.
+- **`invoke_daemon_ability_required` helper** in `cli/agent.rs`. The four `invoke_daemon_agent_*_required` wrappers now delegate to one shared helper that owns the error-format policy. The wrappers stay as 1-line named entry points for `git grep`.
 - **CLI `agent refresh --agent <name>`** new flag. Previously `easynet agent refresh` always rebuilt every row; now operators can target one row. Wired through the `agent.refresh` `name` field that was already in the input schema.
-- **`runtime/axon_bridge/` moved from `services/`** — its imports went almost entirely to `runtime/*`; the `services/` placement was a false hierarchy. `crate::services::trust_anchor_cell` borrows stay as the one legitimate upward reference and are now bounded by a new boundary rule.
-- **`check-kernel-boundary.sh` extended with rules 4 + 5** — bounds `runtime/agents/` and `runtime/axon_bridge/` upward imports into `services/*` with explicit one-token allowlists (`hub_published_ability_store` for agents; `trust_anchor_cell|realm_trust_anchor` for axon_bridge). Any new upward reference must edit both the allowlist AND the rationale comment in this script.
+- **`daemon/axon_bridge/` moved from `services/`** — its imports went almost entirely to `runtime/*`; the `services/` placement was a false hierarchy. Project-structure v1 later made the daemon ownership explicit by placing the bridge under `src/daemon/axon_bridge/`.
+- **`check-kernel-boundary.sh` extended with retired-tree rules** — current rules reject `runtime/agents/` and `runtime/axon_bridge/` returning after their daemon-domain moves. New daemon Invocation imports still go through the explicit runtime allowlist in the script.
 - **Description improvements at the source** for four abilities (`a2a.client.send_task` args opacity, `agent.refresh` semantics, `invocation.history.path` singular, `terminal.list` namespace alias). Landed through `description_for(name)` so the next `gen-ability-tomls` run keeps them; the output_schema half waits for PR-D's renderer extension.
 
 The follow-up PRs cite this document by file path in their commit message so the lineage is grep-able six months out.

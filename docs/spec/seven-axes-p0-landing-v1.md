@@ -159,7 +159,7 @@
    `.context("query local ability catalogue")`(ability_search.rs:143 风格)。
 7. **文件头 banner 统一**:`// EasyNet CLI — <topic>` + File/Description
    (+组文件的动词表)+ `Author: Silan Hu` + Copyright(全仓一致)。
-8. **实现与注册分离**:实现落 `src/facade/cli/<topic>.rs`,`groups/` 只做 clap
+8. **实现与注册分离**:实现落 `src/cli/<topic>.rs`,`groups/` 只做 clap
    分发;薄壳别名(discover → ability_search)共用同一实现函数,**禁止复制逻辑**
    (W1 验收门的 byte-identical 断言由此保证)。
 9. **JSON 输出形状稳定可断言**:e2e 断言过的字段名即冻结;演进只加字段不改名
@@ -174,20 +174,20 @@
 | # | 项 | 核查结论 | 证据 |
 |---|---|---|---|
 | C1 | discover runtime 半边 | ✅ **已实现**:`<agent>.discover` 四级阶梯(self→device→user→public),Tier3/4 已接 `federation.resolve`,联邦失败返回类型化 `federation_not_joined`/`federation_unavailable` | `src/runtime/agents/discover_ability.rs:1-30,150,267,359` |
-| C2 | discover CLI 半边 | ✅ 已收口:`easynet discover <intent>` 与 `ability search` 共享 `discover.rs` 单实现,走 `<agent>.discover` ladder,本地排序仍为 name×3/desc×1/owner×1+全命中奖励;JSON 携带 invocation envelope 回显 | `src/facade/cli/discover.rs`;`tests/seven_axes_w1_discover_e2e.rs` |
+| C2 | discover CLI 半边 | ✅ 已收口:`easynet discover <intent>` 与 `ability search` 共享 `discover.rs` 单实现,走 `<agent>.discover` ladder,本地排序仍为 name×3/desc×1/owner×1+全命中奖励;JSON 携带 invocation envelope 回显 | `src/cli/discover.rs`;`tests/seven_axes_w1_discover_e2e.rs` |
 | C3 | discover 缺口收口 | ✅ 已收口:cross-owner user-tier 通过 daemon 本地 hub read model 覆盖,测试经公开 `federation.advertise_agent`/`advertise_abilities` 写目录,再由 `<agent>.discover(scope=user)` 读回;顶层动词/envelope 回显已落;v2.0 已删除未消费的 trust 列 | `src/runtime/agents/discover_ability.rs`;`src/services/invocation_transport/daemon_invocation_service.rs`;`tests/seven_axes_w1_discover_e2e.rs` |
-| C4 | `ability invoke` | ✅ 已收口:吃 canonical URA,本地派发 + `--node` 远程,不从裸名 mint URA | `src/facade/cli/invoke.rs:1-20` |
-| C5 | trust level handler(CLI 侧) | 🧹 **已从本仓 P0 移除**:`identity.get_trust/set_trust`、`trust-levels.json` 与 `easynet trust level` 不再存在。保留的是被 admission 消费的 realm trust anchor | `src/facade/cli/groups/trust.rs`;`src/services/invocation_transport/admission_facade.rs` |
+| C4 | `ability invoke` | ✅ 已收口:吃 canonical URA,本地派发 + `--node` 远程,不从裸名 mint URA | `src/cli/invoke.rs:1-20` |
+| C5 | trust level handler(CLI 侧) | 🧹 **已从本仓 P0 移除**:`identity.get_trust/set_trust`、`trust-levels.json` 与 `easynet trust level` 不再存在。保留的是被 admission 消费的 realm trust anchor | `src/cli/groups/trust.rs`;`src/services/invocation_transport/admission_facade.rs` |
 | C6 | trust 执法门(Axon 侧) | ✅ **已归一为规则表**:install 需 `TrustLevel::Privileged`、admin 需 `Elevated`,由 Axon `runtime::policy` 内置规则表求值,`resilience.rs` 只负责 cache/override/metrics;deny reason 保持旧字节 | `EasyNet-Axon/core/runtime-rs/src/runtime/policy.rs`;`EasyNet-Axon/core/runtime-rs/src/runtime/resilience.rs`;`EasyNet-Axon/core/runtime-rs/src/tests/resilience_unit.rs` |
-| C7 | standalone policy 求值器 | 🧹 **已从本仓 P0 移除**:不保留 `policy.evaluate/simulate`、`easynet policy`、`policy-rules.json`、daemon live matcher 或 ledger `policy_*` context。权限产品语义改回统一 ability access/permission control;Axon reference runtime 的 C6 内置 rule table 仍是相邻仓内部 trust gate 实现 | `src/runtime/agents/invoke_ability.rs`;`src/runtime/execution/permission/mod.rs`;`EasyNet-Axon/core/runtime-rs/src/runtime/policy.rs` |
-| C8 | receipt usage/cost | ✅ **已收口**:本仓 terminal receipt 的 usage 逐字进入 ledger row,watch terminal 事件聚合展示,W3 usage e2e 已绿;相邻 Axon 工作树已把 `InvocationUsage` 放入 signed receipt tail,`usage_tail_is_signed_material` 已绿;cost 明确不做(D4) | `src/services/invocation_transport/ledger_projection.rs`;`src/facade/cli/invocation_watch.rs`;`tests/seven_axes_w3_usage_e2e.rs`;`EasyNet-Axon/sdk/rust/src/invocation/axiom.rs` |
-| C9 | teach/learn handler | ✅ 已落地:`meta.teach` / `meta.acquire`(CLI `ability learn`) / `meta.forget` 走 owner 主动授权,learn 后新 URA 独立归属 learner,forget 只删 learned copy | `src/runtime/agents/teach_ability.rs`;`src/facade/cli/teach.rs`;`tests/seven_axes_w3_teach_learn_e2e.rs` |
-| C10 | TUI 数据底座 | ✅ 已落地:`invocation watch` 从 ledger/trace 投影 state + terminal + local liveness;TUI 由同一 snapshot engine 渲染 | `src/facade/cli/invocation_watch.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
-| C11 | mission→invocation 锚点 | ✅ 已落地:`MissionRunMeta.trace_id == run_id`,mission runner 将同一 trace_id 注入每个 daemon-lowered child Invocation;三步 mission watch e2e 验证 ledger trace 可回读 | `src/facade/cli/mission_runs.rs`;`src/eal/interpreter/mod.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
-| C12 | TUI 渲染依赖 | ✅ 已引入:`ratatui` snapshot renderer(无 crossterm 运行时事件循环;一期 one-shot/follow 重绘即可) | `Cargo.toml`;`src/facade/cli/invocation_watch.rs` |
+| C7 | standalone policy 求值器 | 🧹 **已从本仓 P0 移除**:不保留 `policy.evaluate/simulate`、`easynet policy`、`policy-rules.json`、daemon live matcher 或 ledger `policy_*` context。权限产品语义改回统一 ability access/permission control;Axon reference runtime 的 C6 内置 rule table 仍是相邻仓内部 trust gate 实现 | `src/runtime/agents/invoke_ability.rs`;`src/daemon/execution/permission/mod.rs`;`EasyNet-Axon/core/runtime-rs/src/runtime/policy.rs` |
+| C8 | receipt usage/cost | ✅ **已收口**:本仓 terminal receipt 的 usage 逐字进入 ledger row,watch terminal 事件聚合展示,W3 usage e2e 已绿;相邻 Axon 工作树已把 `InvocationUsage` 放入 signed receipt tail,`usage_tail_is_signed_material` 已绿;cost 明确不做(D4) | `src/services/invocation_transport/ledger_projection.rs`;`src/cli/invocation_watch.rs`;`tests/seven_axes_w3_usage_e2e.rs`;`EasyNet-Axon/sdk/rust/src/invocation/axiom.rs` |
+| C9 | teach/learn handler | ✅ 已落地:`meta.teach` / `meta.acquire`(CLI `ability learn`) / `meta.forget` 走 owner 主动授权,learn 后新 URA 独立归属 learner,forget 只删 learned copy | `src/runtime/agents/teach_ability.rs`;`src/cli/teach.rs`;`tests/seven_axes_w3_teach_learn_e2e.rs` |
+| C10 | TUI 数据底座 | ✅ 已落地:`invocation watch` 从 ledger/trace 投影 state + terminal + local liveness;TUI 由同一 snapshot engine 渲染 | `src/cli/invocation_watch.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
+| C11 | mission→invocation 锚点 | ✅ 已落地:`MissionRunMeta.trace_id == run_id`,mission runner 将同一 trace_id 注入每个 daemon-lowered child Invocation;三步 mission watch e2e 验证 ledger trace 可回读 | `src/cli/mission_runs.rs`;`src/eal/interpreter/mod.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
+| C12 | TUI 渲染依赖 | ✅ 已引入:`ratatui` snapshot renderer(无 crossterm 运行时事件循环;一期 one-shot/follow 重绘即可) | `Cargo.toml`;`src/cli/invocation_watch.rs` |
 | C13 | URA builder 真源 | ✅ 齐备:`Ura::ability` :389 / `device_ability` :395 / `hub_ability` :401 + `parse_ura` round-trip;e2e fixture 有真源可依 | `EasyNet-Axon/core/ura-rs/src/lib.rs` |
 | C14 | e2e 基建 | ✅ 成熟:双 daemon 真 TLS、cross-device invoke、cross-realm 目录轮询/流式等模板齐备 | `tests/cross_hub_two_daemon_real_tls_e2e.rs` 等 |
-| C15 | `easynet trust` 命令组 | ✅ **收口为单一 anchor 面**:`groups/trust.rs` 只读展示 realm trust anchor("admission 接受谁的 key、什么角色",commit-plan-2 D3/Gate D)。`trust level show/set` 已删除,避免把未消费目录误写成权限控制 | `src/facade/cli/groups/trust.rs` |
+| C15 | `easynet trust` 命令组 | ✅ **收口为单一 anchor 面**:`groups/trust.rs` 只读展示 realm trust anchor("admission 接受谁的 key、什么角色",commit-plan-2 D3/Gate D)。`trust level show/set` 已删除,避免把未消费目录误写成权限控制 | `src/cli/groups/trust.rs` |
 
 **总判断**:W1/W2/W3 均已按本规格收口;当前表格保留的是实现证据索引,
 不是待施工清单。
@@ -204,14 +204,14 @@
 排序算法不变。调用一律改走 `invoke_local_ability_with_invocation_meta`
 (local_invoke.rs:160),使 envelope caller/subject 可回显、可断言(0.1-7)。
 caller 身份 = CLI 当前操作 agent(沿用 daemon 既有 caller 解析,不在 facade 发明身份)。
-- 改动面:`src/facade/cli/ability_search.rs`、`src/support/local_invoke.rs`(如需)
+- 改动面:`src/cli/ability_search.rs`、`src/support/local_invoke.rs`(如需)
 - 护栏:快照读(0.1-4);排序契约不变(用户可预测每行为何排在那)
 
 **T1.2 顶层动词 `easynet discover "<intent>"`**
 作为 `ability search` 的顶层别名注册(同一实现,双入口)。输出每行带
 `ura / owner_kind / scope(tier) / score / description`。v2.0 已删除未被权限消费的
 `trust_level` 候选列;discover 不承担权限解释。
-- 改动面:`src/facade/cli/mod.rs` + 新 `src/facade/cli/discover.rs`(薄壳)
+- 改动面:`src/cli/mod.rs` + 新 `src/cli/discover.rs`(薄壳)
 - D1 已按 A 方案落地:`discover` 上顶层,并与 `ability search` 共用同一实现。
 
 **T1.3 `--tree` 投影(ORGANIZE 轴顺手分)**
@@ -228,7 +228,7 @@ CLI 发起的 run 没有根 Invocation——运行时身份是 **trace**(每个�
 (在飞 meta 即携带,`#[serde(default)]` 保旧 meta 反序列化)+
 `mission run --format json` 输出 `{run_id, trace_id, status, duration_ms,
 steps_*, run_dir}`(与 `--trace` 互斥,stdout 归属唯一)。
-- 改动面:`src/facade/cli/mission_runs.rs` + `groups/mission.rs` ✅ 已落地
+- 改动面:`src/cli/mission_runs.rs` + `groups/mission.rs` ✅ 已落地
 - 护栏:记录的是已存在的 envelope 事实,**不**给 mission 造任何运行时状态(0.1-1);
   不伪造根 invocation——EalExec 路径下父 invocation 才是天然根
 
@@ -266,7 +266,7 @@ realm trust anchor(`easynet trust show`)。如果未来需要"接受之后能做
 | usage counters / cost | usage counters = **协议签名材料**(Axon receipt signed tail);cost 按 D4 deferred | 渲染 `usage_signed_material=true`;CLI 离线验签标 `usage_verified_by_cli=false` |
 | permission(命中规则) | **无数据**(求值器未建) | 留位显示 `–`,W3 后点亮 |
 
-- 改动面:`src/facade/cli/`(新 `invocation_watch.rs`)、`Cargo.toml`(+ratatui)、
+- 改动面:`src/cli/`(新 `invocation_watch.rs`)、`Cargo.toml`(+ratatui)、
   复用 `mission_runs.rs` heartbeat/状态机;依赖 T2.0
 - 护栏:渲染 **Invocation 因果树**,不是 workflow graph;禁止为 TUI 引入任何
   mission 级运行时状态(0.1-1);`p pause` 一期**不做**(D5)
@@ -301,7 +301,7 @@ Axon reference 半边仍保持 C6/T2.3 当前收口:runtime 内置规则表替�
 trust gate(行为不变,deny reason 逐字节保持),并提供 agent→host-node trust
 projection 原语。该 `runtime::policy` 是 Axon reference runtime 的内部 gate
 实现名,不等同于本仓产品面 `easynet policy`。
-- 改动面:本仓删除 `src/facade/cli/policy_cli.rs` /
+- 改动面:本仓删除 `src/cli/policy_cli.rs` /
   `src/runtime/agents/policy_ability.rs` / `src/runtime/agents/policy_engine.rs` /
   `src/persistence/policy_rules.rs` / `tests/seven_axes_w3_policy_e2e.rs`,并移除
   `AdmissionFacade` 的 live matcher hook。

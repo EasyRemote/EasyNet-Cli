@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-auth-exec-canonical-tools.sh.
+# Contract tests for tools/scripts/check-auth-exec-canonical-tools.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-auth-exec-canonical-tools.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-auth-exec-canonical-tools.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/facade/cli"
-    cp "$REPO_ROOT/src/facade/cli/auth.rs" "$sandbox/src/facade/cli/auth.rs"
+    mkdir -p "$sandbox/src/cli/commands"
+    cp "$REPO_ROOT/src/cli/commands/auth.rs" "$sandbox/src/cli/commands/auth.rs"
     echo "$sandbox"
 }
 
@@ -27,7 +27,7 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: canonical auth e
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/facade/cli/auth.rs" <<'RS'
+cat >>"$SB/src/cli/commands/auth.rs" <<'RS'
 
 // Device owner-prefixed auth exec tools are accepted as legacy aliases.
 RS
@@ -37,7 +37,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "legacy alias language should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/facade/cli/auth.rs" <<'RS'
+cat >>"$SB/src/cli/commands/auth.rs" <<'RS'
 
 fn old_auth_exec_alias(tool: &str) -> &str {
     match tool {

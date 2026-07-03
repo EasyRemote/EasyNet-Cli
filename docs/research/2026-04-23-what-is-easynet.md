@@ -318,7 +318,7 @@ them to verify the reading.
 - PersistentLog Rust impl: `EasyNet-Axon/sdk/rust/src/invocation/persistence.rs`
 - URA grammar: `EasyNet-Nucleus/README.md`
 - Tier 2 discovery agent deferred: `AXIOM.tex:1330` + `EasyNet-Cli/docs/open-questions/retire-a2a-agents-json-label.md`
-- Ability/skill/agent ontology enforced: `EasyNet-Cli/src/facade/cli/mod.rs:48`, `EasyNet-Cli/src/runtime/abilities.rs:1`
+- Ability/skill/agent ontology enforced: `EasyNet-Cli/src/cli/mod.rs:48`, `EasyNet-Cli/src/runtime/abilities.rs:1`
 - EAL control-flow RFC: `EasyNet-Cli/docs/rfc/eal-control-flow-v1.md`
 - CLI first-class invocation gap: `EasyNet-Cli/docs/open-questions/cli-dispatch-as-first-class-invocation.md`
 - Skill marketplace open question: `EasyNet-Cli/docs/open-questions/skill-marketplace-integration.md`

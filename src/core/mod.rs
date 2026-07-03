@@ -3,7 +3,7 @@
 //
 // File: src/core/mod.rs
 // Description: Zero-dependency ontology types shared across every
-//              other subsystem (runtime, eal, registry, mcp, …).
+//              other subsystem (daemon execution, eal, cli, ffi, …).
 //
 // Dependency rule:
 //   Nothing in `core/` may `use` any other crate-internal module.
@@ -13,7 +13,7 @@
 //   without risking a cycle.
 //
 // What lives here:
-//   - `agent_id` — identity types used by every cross-agent call
+//   - `agent::id` — identity types used by every cross-agent call
 //     surface: `AgentId`, `AbilityName`, `NodeId`, plus their typed
 //     error enums (`AgentIdError`, `NodeIdError`) and validators.
 //     This is deliberately a single file — the types are tightly
@@ -22,27 +22,30 @@
 //     across files without eliminating the coupling.
 //
 // What does NOT live here:
-//   - Resolution / lookup (`registry/`).
+//   - Resolution / lookup (`daemon::persistence::agent_registry`).
 //   - Wire envelopes / MCP schemas (`mcp/`).
-//   - Execution state (`runtime/session`).
+//   - Execution state (`daemon::execution`).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod ability_spec;
-pub mod agent_id;
-pub mod agent_spec;
-/// Pure runtime-domain identifier types (TenantId/NodeId/ScheduleId).
-/// Moved from `runtime::domain` (T4.1 pre-move a): they have zero
-/// internal dependencies, and their old home made `persistence`
-/// reach upward into `runtime` — the only production edge keeping
-/// the future `easynet-domain` leaf crate from being a leaf.
+pub mod ability;
+pub mod agent;
+/// Pure domain identifier types (TenantId/NodeId/ScheduleId).
+/// These have zero internal dependencies; keeping them in `core`
+/// prevents persistence and execution modules from depending upward
+/// on a higher-level owner.
 pub mod domain;
+pub mod identity;
+pub mod ura;
 
-// We intentionally do NOT re-export `agent_id::*` at the crate
-// root. Every call site that needs an identity type reaches for it
-// via `crate::core::agent_id::AgentId` (etc.) — the explicit path
-// makes the layering visible at the import line. Re-exporting a
-// large, heterogenous surface (`AgentId` / `AbilityName` / `NodeId`
-// + their error enums + module-level constants) would hide that
-// layering and would fight the `unused_imports` lint.
+pub use ability::spec as ability_spec;
+pub use agent::id as agent_id;
+pub use agent::spec as agent_spec;
+
+// Public module aliases preserve the pre-structure Rust API paths
+// (`core::agent_id`, `core::agent_spec`, `core::ability_spec`) while
+// the source owner remains the semantic directory underneath
+// `core/{agent,ability}`. Do not glob-reexport the contents here:
+// callers should still import concrete types from the semantic owner
+// when writing new code.

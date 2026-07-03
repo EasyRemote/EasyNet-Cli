@@ -187,7 +187,7 @@ End-to-end smoke (extends the existing `end_to_end_invoke_round_trip_returns_res
 
 | File                                          | Δ LOC (incl. tests + comments) |
 |-----------------------------------------------|-------------------------------:|
-| `src/runtime/ability_dispatch.rs`             | +120 |
+| `src/daemon/ability/dispatch.rs`             | +120 |
 | `src/runtime/invocation_target.rs`            |  +10 (CallMode::Bidi) |
 | `src/services/control/frames.rs`              |  +60 |
 | `src/services/control/ability_proxy.rs`       | +180 |

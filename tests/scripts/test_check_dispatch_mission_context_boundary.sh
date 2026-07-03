@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-dispatch-mission-context-boundary.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-dispatch-mission-context-boundary.sh"
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -12,9 +12,9 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/scripts" "$SB/src/runtime"
-cp "$SCRIPT" "$SB/scripts/check-dispatch-mission-context-boundary.sh"
-cat > "$SB/src/runtime/dispatch.rs" <<'RS'
+mkdir -p "$SB/tools/scripts" "$SB/src/daemon/execution/mission"
+cp "$SCRIPT" "$SB/tools/scripts/check-dispatch-mission-context-boundary.sh"
+cat > "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 fn check_mission_context_invariant() -> anyhow::Result<()> {
     anyhow::bail!("dispatch::send_to_agent called without a mission context");
 }
@@ -26,10 +26,10 @@ RS
 
 (
   cd "$SB"
-  bash scripts/check-dispatch-mission-context-boundary.sh
+  bash tools/scripts/check-dispatch-mission-context-boundary.sh
 ) >/dev/null || fail "happy path should pass"
 
-cat >> "$SB/src/runtime/dispatch.rs" <<'RS'
+cat >> "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 fn old_release_branch() -> anyhow::Result<()> {
     crate::op_event!(kind = send_to_agent_missing_mission_context);
     return Ok(());
@@ -38,13 +38,13 @@ RS
 set +e
 (
   cd "$SB"
-  bash scripts/check-dispatch-mission-context-boundary.sh
+  bash tools/scripts/check-dispatch-mission-context-boundary.sh
 ) >/tmp/check-dispatch-mission-context.out 2>&1
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "release compatibility branch should exit 1 (got $rc)"
 
-cat > "$SB/src/runtime/dispatch.rs" <<'RS'
+cat > "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 #[cfg(debug_assertions)]
 fn debug_only() {}
 
@@ -59,7 +59,7 @@ RS
 set +e
 (
   cd "$SB"
-  bash scripts/check-dispatch-mission-context-boundary.sh
+  bash tools/scripts/check-dispatch-mission-context-boundary.sh
 ) >/tmp/check-dispatch-mission-context.out 2>&1
 rc=$?
 set -e

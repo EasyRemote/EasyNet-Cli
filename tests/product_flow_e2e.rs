@@ -18,11 +18,11 @@
 //! (RFC-002 §5.2, RFC-002.2 §2.3) → fake remote daemon handler.
 
 use easynet_axon::invocation::LocalRuntime;
-use easynet_cli::registry::agents::{AgentEntry, AgentRegistry, AgentType};
-use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::agents::invoke_ability;
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::runtime::keyring::forward as fwd;
+use easynet_cli::daemon::ability::builtins::agents::invoke as invoke_ability;
+use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::daemon::keyring::forward as fwd;
+use easynet_cli::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -88,7 +88,7 @@ fn user_join_two_devices_chat_round_trip() {
     // ── Step 1: simulate "create user, get key" (Hub web does
     //    this in production; here we just generate a keypair via
     //    the CLI's keyring crypto primitives — same code path).
-    use easynet_cli::runtime::keyring::crypto::fresh_ed25519_keypair;
+    use easynet_cli::daemon::keyring::crypto::fresh_ed25519_keypair;
     let (_seed, _pk) = fresh_ed25519_keypair().unwrap();
     // The seed/public key are what Hub would issue. They are
     // attached to the per-device credentials below.
@@ -135,7 +135,7 @@ fn user_join_two_devices_chat_round_trip() {
     //
     //    The remote ability handler reads args.message and
     //    reverses it — same shape as the axon-internal chat e2e.
-    let device2_chat_handler: easynet_cli::runtime::ability_dispatch::LocalRpcHandler =
+    let device2_chat_handler: easynet_cli::daemon::ability::dispatch::LocalRpcHandler =
         Arc::new(|args: Value| {
             let msg = args
                 .get("message")
@@ -283,7 +283,7 @@ fn agent1_can_invoke_local_agent_without_federation_path() {
 
     let runtime = LocalRuntime::new();
     let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
-    let summarize: easynet_cli::runtime::ability_dispatch::LocalRpcHandler =
+    let summarize: easynet_cli::daemon::ability::dispatch::LocalRpcHandler =
         Arc::new(|args: Value| {
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
             Ok(json!({"summary": format!("{} chars", text.len())}))

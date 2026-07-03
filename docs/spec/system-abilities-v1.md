@@ -52,10 +52,10 @@ object) and an optional `output_schema`. v1 emits explicit `null`
 for missing optional fields so the discovery JSON is byte-stable
 across rebuilds.
 
-Per-ability TOML manifests live under `abilities/system/`:
+Per-ability TOML manifests live under `ability-descriptors/system/`:
 
 ```
-abilities/system/
+ability-descriptors/system/
 ├── ping.ability.toml
 ├── session.list.ability.toml
 ├── session.attach.ability.toml

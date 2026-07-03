@@ -276,20 +276,20 @@ URA（EasyNet 资源地址）是身份主干。语法规范**只定义一次**�
 
 ### 3.2 CLI 能力控制面 —— 三注册表模型
 
-CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三张表。落在 `src/runtime/ability/`。
+CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三张表。落在 `src/daemon/ability/`。
 
 #### 3.2.1 三张表 + 统一键
 
 | 类型 | 种类 | 角色 | 文件:行 |
 |---|---|---|---|
-| `AbilityDescriptorRecord` | struct | 第一表：版本化受治理接口契约（name / version / call_mode / schema_hash / descriptor_hash） | `src/runtime/ability/descriptor.rs:278-402` |
+| `AbilityDescriptorRecord` | struct | 第一表：版本化受治理接口契约（name / version / call_mode / schema_hash / descriptor_hash） | `src/daemon/ability/descriptor.rs:278-402` |
 | `AbilityDescriptorRegistry` | struct | 第一表存储；`BTreeMap` 确定性迭代 | `descriptor.rs:436-501` |
-| `AuthorityBindingRecord` | struct | 第二表：治理谓词（governs_advertise / governs_invoke）+ policy binding + scope | `src/runtime/ability/authority.rs:484-582` |
+| `AuthorityBindingRecord` | struct | 第二表：治理谓词（governs_advertise / governs_invoke）+ policy binding + scope | `src/daemon/ability/authority.rs:484-582` |
 | `AuthorityBindingRegistry` | struct | 第二表存储 | `authority.rs:597-619` |
-| `AbilityImplBinding` | struct | 第三表：可执行事实（runtime_env / impl_source / impl_hash / content_hash） | `src/runtime/ability/impl_binding.rs:98-219` |
+| `AbilityImplBinding` | struct | 第三表：可执行事实（runtime_env / impl_source / impl_hash / content_hash） | `src/daemon/ability/impl_binding.rs:98-219` |
 | `AbilityImplRegistry` | struct | 第三表存储 | `impl_binding.rs:221-243` |
 | `AbilityControlPlaneKey` | struct（**复合 newtype**） | (authority_root, ability, descriptor_version, call_mode) —— **统一三表的唯一规范键** | `descriptor.rs:130-217` |
-| `AbilityControlPlaneRecord` | struct | (descriptor, authority, impl) 三元原子，dispatch 层作为整体读 | `src/runtime/ability/registry.rs:17-83` |
+| `AbilityControlPlaneRecord` | struct | (descriptor, authority, impl) 三元原子，dispatch 层作为整体读 | `src/daemon/ability/registry.rs:17-83` |
 | `AbilityControlPlaneRegistry` | struct | 聚合 facade，持三表；注册经物化状态机写入，查询统一三行 | `registry.rs:85-629` |
 
 **不变量（已验证磁盘）：** 每个键要么在三表全在，要么全不在（`assert_record_keys_match` 强制）。这是三注册表模型的灵魂。
@@ -304,8 +304,8 @@ CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三�
 | `CallMode` | enum：Rpc / Stream / Bidi；`.axon_call_mode()` 投影到 Axon `AbilityCallMode` | `descriptor.rs:226-250` |
 | `RuntimeEnv` | struct：执行环境不透明标签（如 `easynet-cli/0.23.1;rust-native`），绑入 impl_hash | `impl_binding.rs:19-68` |
 | `AbilityImplSource` | enum：NativeDaemon / BuiltinPlugin / SidecarPlugin / DeclarativePlugin / DeviceDeploy / Eal / Mcp / Test | `impl_binding.rs:70-96` |
-| `OwnerKind` | enum：Device / Hub / Agent(id) / User(id)；**RFC-001 结构性根治**（M0 前 owner 从名字前缀推断，M0 起注册时声明） | `src/runtime/ability_dispatch.rs:974`（已验证磁盘） |
-| `AbilityControlPlaneError` | enum（45+ 变体），所有公共构造器无 panic，边界一律返回 Result | `src/runtime/ability/error.rs:8-100` |
+| `OwnerKind` | enum：Device / Hub / Agent(id) / User(id)；**RFC-001 结构性根治**（M0 前 owner 从名字前缀推断，M0 起注册时声明） | `src/daemon/ability/dispatch.rs:974`（已验证磁盘） |
+| `AbilityControlPlaneError` | enum（45+ 变体），所有公共构造器无 panic，边界一律返回 Result | `src/daemon/ability/error.rs:8-100` |
 
 #### 3.2.3 三阶段提交 typestate（已验证磁盘 `registry.rs:138`）
 
@@ -321,13 +321,13 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 ## 4. 能力层
 
-本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。落在 `src/runtime/agents/` 与 `src/runtime/ability_dispatch.rs`。
+本章描述每个能力实现的共享抽象，以及 chat / teach / think / discover / mcp 等具体能力。当前实现落在 `src/daemon/ability/builtins/`、`src/daemon/ability/catalog/`、`src/runtime/executors/` 与 `src/daemon/ability/dispatch.rs`；旧 `runtime::agents` 兼容 facade 已退休。
 
 ### 4.1 中央派发枢纽
 
 | 类型 | 种类 | 角色 | 文件:行 |
 |---|---|---|---|
-| `AxonAbilityCatalog` | struct | 所有已注册能力的中央注册表 & 派发枢纽；桥接 CLI daemon 与 Axon `LocalRuntime`；六张同构 handler map（RPC/Stream/Bidi × with/without envelope） | `src/runtime/ability_dispatch.rs:1247` |
+| `AxonAbilityCatalog` | struct | 所有已注册能力的中央注册表 & 派发枢纽；桥接 CLI daemon 与 Axon `LocalRuntime`；六张同构 handler map（RPC/Stream/Bidi × with/without envelope） | `src/daemon/ability/dispatch.rs:1247` |
 | `DynamicCatalogue` | struct | post-boot 热重载侧表，与静态 map 分离；`RwLock` 守护；查询先静态后动态 | `ability_dispatch.rs:1337` |
 | `EnvelopeContext` | struct | AXIOM 7 元组到产品 handler 的投影；构造时校验所有字段，**无半初始化态** | `ability_dispatch.rs:91`（亦见 `90-277`） |
 | `AbilityAuthorityContext` | struct | 进程本地权威根：device / hub authority_root + source | `ability_dispatch.rs:1035` |
@@ -358,10 +358,10 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | trait | 角色 | 实现 | 文件:行 |
 |---|---|---|---|
-| `ContextLoader` | 可插拔 chat 上下文贡献者：`name()` + `load(agent, session) -> Option<String>` | UserProfileLoader / ScheduleLoader / MemoryLoader | `src/runtime/agents/chat_ability.rs:132` |
-| `DiscoverFederationResolver` | discover ladder 与 realm directory 之间的依赖边界 | Bridge / Deferred / LocalDirectory 三实现 | `src/runtime/agents/discover_ability.rs:109` |
-| `TeachClock` | teach grant 事务的确定性时间 seam | —— | `src/runtime/agents/teach_ability.rs:54` |
-| `DeviceOpsClock` | device op 事务的 boot-timestamp seam | —— | `device_ops_ability.rs` |
+| `ContextLoader` | 可插拔 chat 上下文贡献者：`name()` + `load(agent, session) -> Option<String>` | UserProfileLoader / ScheduleLoader / MemoryLoader | `src/daemon/ability/builtins/agents/chat.rs:132` |
+| `DiscoverFederationResolver` | discover ladder 与 realm directory 之间的依赖边界 | Bridge / Deferred / LocalDirectory 三实现 | `src/daemon/ability/builtins/agents/discover.rs:110` |
+| `TeachClock` | teach grant 事务的确定性时间 seam | —— | `src/daemon/ability/builtins/governance/teach.rs:59` |
+| `DeviceOpsClock` | device op 事务的 boot-timestamp seam | —— | `src/daemon/ability/builtins/device_control/ability_management/ops.rs:72` |
 | `AcquiringArtifactTxn` | 两阶段 descriptor 暂存 commit/rollback | manifest provisioning | `src/persistence/teach_grants.rs:266` |
 
 **ContextLoader 是正确的扩展点：** 未来 loader（memory、project folders）实现它即可，无需改 `chat_ability.rs`。Registry 把 `Arc<Vec<Arc<dyn ContextLoader>>>` 传进每个 chat handler。
@@ -374,9 +374,9 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/runtime/agents/registry_builder.rs:205` |
-| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `registry_builder.rs:116` |
-| `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/runtime/axon_bridge/hot_agent_registrar.rs:160` |
+| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/daemon/ability/catalog/build.rs:243` |
+| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `src/daemon/ability/catalog/build.rs:155` |
+| `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/daemon/axon_bridge/hot_agent_registrar.rs:160` |
 
 **late-binding 解决 bootstrap 鸡生蛋：** `local_registry_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>`——handler 闭合在 `OnceLock` 而非 `Arc` 本身，使 handler 注册可以先于 catalog 被 `Arc::new` 包裹。`HotAgentRegistrar` 是 phase-5c"内存里注册 agent"与 phase-6"持久化 descriptor 元数据"之间的桥；把它放在 `axon_bridge/` 强调 **LocalRuntime 才是可用性的真理源，AxonAbilityCatalog 是元数据 + 派发**。
 
@@ -386,7 +386,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 > **本章诚实声明：** 传输层是 pre-refactor 状态。生命周期逻辑在三种几何形态（unary / stream / bidi）间**重复**；`InvocationLifecycle` sink 收敛重构**仍在飞行中**。本章描述今日代码，不是终局。这正是第 9 章"坏味道"的最大一条。
 
-落在 `src/services/invocation_transport/`。
+落在 `src/daemon/invocation/`。
 
 ### 5.1 根服务与依赖平面
 
@@ -533,7 +533,7 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `MissionRunStore` | mission-run 持久化 facade，锚定 `~/.easynet/missions/runs/` | `src/facade/cli/mission_runs.rs:51` |
+| `MissionRunStore` | mission-run 持久化 facade，锚定 `~/.easynet/missions/runs/` | `src/cli/mission_runs.rs:51` |
 | `MissionRunDir` | 打开的运行目录句柄；持 `PathBuf` + 可选 `HeartbeatPump`；`Drop` 停心跳 | `mission_runs.rs:142` |
 
 **F-022 liveness：** 用 heartbeat 文件 mtime 新鲜度替代 pid-file 存在性（< 15s = 存活）。`MissionRunStatus`：Running → {Completed | Failed | Aborted}。
@@ -542,7 +542,7 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `App` | 顶层 clap Parser；noun-first 命令组：agent / ability / device / mission / runtime / mcp + 横切 doctor / completion | `src/facade/cli/mod.rs:198` |
+| `App` | 顶层 clap Parser；noun-first 命令组：agent / ability / device / mission / runtime / mcp + 横切 doctor / completion | `src/cli/mod.rs:198` |
 
 facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` → `eal::planner::compile` + `eal::interpreter::execute_*`。
 
@@ -661,7 +661,7 @@ CLI 的 `axon-pb` feature（默认开）门控 `easynet-axon/grpc`。Cargo 注�
 
 ### 8.2 re-export / import 面
 
-CLI 从 `easynet_axon::invocation::{LocalRuntime, CausalContext, ReceiptRef, CallerSignature, CallMode, AgentIdentity, SubjectIdentity, UraProfile, InvocationState, InvocationLedger, AbilityChangeEvent, axiom::{AuthorityBinding, CanonicalAbilityDescriptor, InvocationUsage}, audit::{HostedAgentReceiptHeader, SigningModel}, persistence::PersistentLog}` 以及 crate-root `easynet_axon::{AxonError, AxonResult}` import 一切线缆形类型。~40+ import site 散布于 `runtime/`（ability_dispatch、kernel、dispatch_receipt、axon_bridge/*）、`services/invocation_transport/`、`daemon/`、`ffi/`。
+CLI 从 `easynet_axon::invocation::{LocalRuntime, CausalContext, ReceiptRef, CallerSignature, CallMode, AgentIdentity, SubjectIdentity, UraProfile, InvocationState, InvocationLedger, AbilityChangeEvent, axiom::{AuthorityBinding, CanonicalAbilityDescriptor, InvocationUsage}, audit::{HostedAgentReceiptHeader, SigningModel}, persistence::PersistentLog}` 以及 crate-root `easynet_axon::{AxonError, AxonResult}` import 一切线缆形类型。~40+ import site 散布于 `runtime/`（ability_dispatch、kernel、dispatch_receipt）、`daemon/axon_bridge/`、`daemon/invocation/`、`daemon/`、`ffi/`。
 
 ### 8.3 投影方法（CLI 类型 → Axon 类型，重算规范哈希）
 

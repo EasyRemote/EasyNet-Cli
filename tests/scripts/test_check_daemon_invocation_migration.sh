@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-daemon-invocation-migration.sh.
+# Contract tests for tools/scripts/check-daemon-invocation-migration.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-daemon-invocation-migration.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-daemon-invocation-migration.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -30,7 +30,7 @@ rm -rf "$SB"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's/pub enum IncomingFrame \{/pub enum IncomingFrame {\n    Invoke { request_id: String },/' \
-    "$SB/src/services/control/frames.rs"
+    "$SB/src/daemon/control/frames.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -39,7 +39,7 @@ rm -rf "$SB"
 SB="$(make_sandbox)"
 cat >"$SB/src/__retired_control_probe.rs" <<'RS'
 pub fn probe() {
-    let _ = crate::services::control::frames::IncomingFrame::OpenBidi;
+    let _ = crate::daemon::control::frames::IncomingFrame::OpenBidi;
 }
 RS
 rc=0
@@ -76,14 +76,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "stale README product runtime text should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-printf '\npub fn invocation_id_of() {}\n' >>"$SB/src/runtime/invocation.rs"
+printf '\npub fn invocation_id_of() {}\n' >>"$SB/src/daemon/invocation/receipts/runtime_record.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "runtime invocation semantic fork should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "daemon invocation runtime-record semantic fork should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-cat >>"$SB/src/services/invocation_transport/daemon_invocation_service.rs" <<'RS'
+cat >>"$SB/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'RS'
 
 #[test]
 fn remote_bidi_target_ura_does_not_repair_bare_device_agent_alias() {

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-hosted-receipt-axon-boundary.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-hosted-receipt-axon-boundary.sh"
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -12,15 +12,15 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/scripts" "$SB/src/runtime" "$SB/tests"
-cp "$SCRIPT" "$SB/scripts/check-hosted-receipt-axon-boundary.sh"
+mkdir -p "$SB/tools/scripts" "$SB/src/runtime" "$SB/tests"
+cp "$SCRIPT" "$SB/tools/scripts/check-hosted-receipt-axon-boundary.sh"
 printf 'pub mod dispatch_receipt;\n' > "$SB/src/runtime/mod.rs"
 printf 'use easynet_axon::invocation::audit::HostedAgentReceiptHeader;\n' \
   > "$SB/src/runtime/dispatch_receipt.rs"
 
 (
   cd "$SB"
-  bash scripts/check-hosted-receipt-axon-boundary.sh
+  bash tools/scripts/check-hosted-receipt-axon-boundary.sh
 ) >/dev/null || fail "happy path should pass"
 
 printf 'pub use easynet_axon::invocation::audit::HostedAgentReceiptHeader;\n' \
@@ -28,7 +28,7 @@ printf 'pub use easynet_axon::invocation::audit::HostedAgentReceiptHeader;\n' \
 set +e
 (
   cd "$SB"
-  bash scripts/check-hosted-receipt-axon-boundary.sh
+  bash tools/scripts/check-hosted-receipt-axon-boundary.sh
 ) >/tmp/check-hosted-receipt-boundary.out 2>&1
 rc=$?
 set -e
@@ -39,7 +39,7 @@ printf 'pub mod hosted_receipt;\n' >> "$SB/src/runtime/mod.rs"
 set +e
 (
   cd "$SB"
-  bash scripts/check-hosted-receipt-axon-boundary.sh
+  bash tools/scripts/check-hosted-receipt-axon-boundary.sh
 ) >/tmp/check-hosted-receipt-boundary.out 2>&1
 rc=$?
 set -e
@@ -51,7 +51,7 @@ printf 'use crate::runtime::hosted_receipt::SigningModel;\n' \
 set +e
 (
   cd "$SB"
-  bash scripts/check-hosted-receipt-axon-boundary.sh
+  bash tools/scripts/check-hosted-receipt-axon-boundary.sh
 ) >/tmp/check-hosted-receipt-boundary.out 2>&1
 rc=$?
 set -e

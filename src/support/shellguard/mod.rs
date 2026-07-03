@@ -9,8 +9,8 @@
 //              sed-edit detection, sandbox decision, destructive
 //              command list).
 //
-// Why this lives in `support/`, not `runtime/agents/`
-// ---------------------------------------------------
+// Why this lives in `support/`, not a system ability module
+// ---------------------------------------------------------
 // The bash safety pipeline is shared infrastructure. Three
 // distinct ability handlers consume pieces of it:
 //
@@ -27,8 +27,8 @@
 //                       to opt the spawned shell into platform
 //                       sandbox.
 //
-// Hosting these helpers under `runtime/agents/shell_run_*.rs`
-// would lock the security work into one ability's namespace.
+// Hosting these helpers under one shell/process ability module would
+// lock the security work into one ability's namespace.
 // Lifting them to `support/shellguard/` keeps the security
 // pipeline as one self-describing subsystem; ability handlers
 // stay thin (one file, ~300 lines) and just call the
@@ -45,9 +45,9 @@
 // Architectural Position
 // ----------------------
 // Leaf-level subsystem under `src/support/`. Has no dependency
-// on `runtime/`, `persistence/`, `registry/`, `services/`. The
-// only crate-internal types it needs are in `core/` (typed
-// errors, IDs).
+// on `runtime/`, `persistence/`, `registry/`, or daemon state
+// modules. The only crate-internal types it needs are in `core/`
+// (typed errors, IDs).
 //
 // Implementation reference
 // ------------------------

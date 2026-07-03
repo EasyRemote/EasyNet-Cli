@@ -104,9 +104,9 @@ backend 仅消费）在抽查中**成立**——backend 已无 `NormalizeInvokeT
 ### EasyNet-Cli（4 commit）
 | # | subject | 文件组 |
 |---|---|---|
-| C-1 | `feat(projection): callable summary + revision/digest fence` | `owner_projection.rs`·`ability_catalog_store.rs`·`discover_ability.rs`·`agent_list_ability.rs`·`pages/{mod,publish,list_get_unpublish}.rs`·`facade/cli/pages.rs` |
+| C-1 | `feat(projection): callable summary + revision/digest fence` | `owner_projection.rs`·`ability_catalog_store.rs`·`discover_ability.rs`·`agent_list_ability.rs`·`pages/{mod,publish,list_get_unpublish}.rs`·`cli/pages.rs` |
 | C-2 | `feat(resolve): daemon namespace.resolve/proxy_resolve typed answers` | `daemon_invocation_service.rs`·`federation_wrappers.rs` |
-| C-3 | `feat(boot): fail-closed session admission gate` | `boot.rs`·`session_initiator.rs`·`facade/cli/start.rs`·`facade/cli/join.rs` |
+| C-3 | `feat(boot): fail-closed session admission gate` | `boot.rs`·`session_initiator.rs`·`cli/start.rs`·`cli/join.rs` |
 | C-4 | `refactor(forward): forward_invoke response via Axon SDK shape` | `support/federation_invoke.rs` + docs audit md |
 
 > 注：C-2 与 C-4 都依赖 Axon SDK 已落历史；C-3 是 F07 传输的收尾，独立性强可先提。

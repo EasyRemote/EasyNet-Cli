@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-workspace-agent-directory-boundary.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-workspace-agent-directory-boundary.sh"
 
 fail() {
   printf '%s\n' "$1" >&2
@@ -12,12 +12,12 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/scripts" "$SB/src/runtime" "$SB/src/facade" "$SB/tests"
-cp "$SCRIPT" "$SB/scripts/check-workspace-agent-directory-boundary.sh"
-cat > "$SB/src/runtime/workspace.rs" <<'RS'
+mkdir -p "$SB/tools/scripts" "$SB/src/daemon/execution/mission" "$SB/tests"
+cp "$SCRIPT" "$SB/tools/scripts/check-workspace-agent-directory-boundary.sh"
+cat > "$SB/src/daemon/execution/mission/workspace.rs" <<'RS'
 pub fn ensure_from_directory() {}
 RS
-cat > "$SB/src/runtime/dispatch.rs" <<'RS'
+cat > "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 fn dispatch(root: &std::path::Path) {
     let _directory = AgentDirectory::open(root).unwrap();
     anyhow::anyhow!("agent {agent_name:?} registry row is missing root_path");
@@ -26,26 +26,26 @@ RS
 
 (
   cd "$SB"
-  bash scripts/check-workspace-agent-directory-boundary.sh
+  bash tools/scripts/check-workspace-agent-directory-boundary.sh
 ) >/dev/null || fail "happy path should pass"
 
-cat >> "$SB/src/runtime/workspace.rs" <<'RS'
+cat >> "$SB/src/daemon/execution/mission/workspace.rs" <<'RS'
 fn ensure_workspace() {}
 fn spec_from_entry() {}
 RS
 set +e
 (
   cd "$SB"
-  bash scripts/check-workspace-agent-directory-boundary.sh
+  bash tools/scripts/check-workspace-agent-directory-boundary.sh
 ) >/tmp/check-workspace-boundary.out 2>&1
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "retired workspace shim should exit 1 (got $rc)"
-cat > "$SB/src/runtime/workspace.rs" <<'RS'
+cat > "$SB/src/daemon/execution/mission/workspace.rs" <<'RS'
 pub fn ensure_from_directory() {}
 RS
 
-cat >> "$SB/src/runtime/dispatch.rs" <<'RS'
+cat >> "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 fn fallback() {
     let cwd_for_adapter = cwd.clone().unwrap_or_default();
 }
@@ -53,7 +53,7 @@ RS
 set +e
 (
   cd "$SB"
-  bash scripts/check-workspace-agent-directory-boundary.sh
+  bash tools/scripts/check-workspace-agent-directory-boundary.sh
 ) >/tmp/check-workspace-boundary.out 2>&1
 rc=$?
 set -e

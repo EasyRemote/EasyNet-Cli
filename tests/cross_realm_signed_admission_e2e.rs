@@ -76,13 +76,13 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
     InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
-use easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
-use easynet_cli::services::federated_peers_cell::SharedFederatedPeers;
-use easynet_cli::services::federation_client::{FederationClient, FederationClientError, HubUri};
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+use easynet_cli::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
+use easynet_cli::daemon::federation::peers::SharedFederatedPeers;
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
 const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
@@ -158,12 +158,12 @@ fn signed_request(
     signing_key: &SigningKey,
     nonce: [u8; 16],
 ) -> InvokeRequest {
-    let subject_ura = easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+    let subject_ura = easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
         .expect("callee-owned descriptor ability subject");
     let subject = SubjectIdentity::new(&subject_ura, UraProfile::EasynetStrictV2);
     let ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(callee_ura, ability)
+        easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
             .expect("callee-owned descriptor ability"),
         DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
@@ -222,7 +222,7 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
     const PEER_HUB_URA: &str = "in-process-A";
-    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
+    let daemon_b_ura = easynet_cli::core::ura::hub_ura(REALM_B);
 
     // ── Mint device-A's signing key ─────────────────────────────
     let device_a_key = SigningKey::from_bytes(&[0xA1u8; 32]);
@@ -242,8 +242,10 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
         })
         .expect("append device-A");
     let daemon_a_anchor = Arc::new(daemon_a_anchor_inner);
-    let daemon_a_admission =
-        AdmissionFacade::new(daemon_a_anchor, Some(easynet_cli::ura::hub_ura(REALM_A)));
+    let daemon_a_admission = AdmissionFacade::new(
+        daemon_a_anchor,
+        Some(easynet_cli::core::ura::hub_ura(REALM_A)),
+    );
     let daemon_a = Arc::new(
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
             .with_session_realm(REALM_A),
@@ -256,7 +258,7 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: easynet_cli::ura::hub_ura(REALM_A),
+        peer_loopback_uri: easynet_cli::core::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
@@ -347,7 +349,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // trusted").
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
-    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
+    let daemon_b_ura = easynet_cli::core::ura::hub_ura(REALM_B);
 
     let device_a_key = SigningKey::from_bytes(&[0xB2u8; 32]);
 
@@ -417,7 +419,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
     const PEER_HUB_URA: &str = "in-process-A";
-    let daemon_b_ura = easynet_cli::ura::hub_ura(REALM_B);
+    let daemon_b_ura = easynet_cli::core::ura::hub_ura(REALM_B);
 
     // device-A's REAL keypair — its public half goes into daemon A's
     // trust set so the resolver returns a valid, parseable pubkey.
@@ -447,7 +449,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
             Arc::new(PresenceRegistry::new()),
             AdmissionFacade::new(
                 Arc::new(daemon_a_anchor_inner),
-                Some(easynet_cli::ura::hub_ura(REALM_A)),
+                Some(easynet_cli::core::ura::hub_ura(REALM_A)),
             ),
         )
         .with_session_realm(REALM_A),
@@ -456,7 +458,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
     // ── Daemon B: empty trust + federated_peers → daemon A ──
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: easynet_cli::ura::hub_ura(REALM_A),
+        peer_loopback_uri: easynet_cli::core::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());

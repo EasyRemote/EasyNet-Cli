@@ -66,7 +66,7 @@ use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::services::invocation_transport::federation_wrappers::{
+use easynet_cli::daemon::invocation::dispatch::federation_wrappers::{
     ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
 };
 
@@ -332,8 +332,8 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     let port_b = pick_free_port();
     let realm_a = "realm-a";
     let realm_b = "realm-b";
-    let agent_a_uri = easynet_cli::ura::hub_ura(realm_a);
-    let agent_b_uri = easynet_cli::ura::hub_ura(realm_b);
+    let agent_a_uri = easynet_cli::core::ura::hub_ura(realm_a);
+    let agent_b_uri = easynet_cli::core::ura::hub_ura(realm_b);
     let target_b_uri = format!("easynet:///r/{realm_b}/device/target-device-b");
     let hub_a_uri = format!("https://127.0.0.1:{port_a}");
     let hub_b_uri = format!("https://127.0.0.1:{port_b}");

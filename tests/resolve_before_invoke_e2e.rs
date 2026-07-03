@@ -49,15 +49,15 @@ use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::InvokeRequest;
-use easynet_cli::runtime::ability_dispatch::{
+use easynet_cli::daemon::ability::dispatch::{
     AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
 };
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::invocation_transport::invocation_wire::ProtoEnvelope;
-use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
-use easynet_cli::services::self_identity::{SelfIdentity, SelfIdentityError};
+use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::json;
 use tokio::net::UnixListener;
@@ -235,9 +235,9 @@ fn invoke(
     let signer = device_signer();
     let descriptor_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(callee_ura, function_name)
+        easynet_cli::core::ura::owner_ability_ura(callee_ura, function_name)
             .expect("fixture ability URA"),
-        easynet_cli::runtime::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
     Request::new(
         ProtoEnvelope::targeted(DEVICE_URI, callee_ura, callee_ura)

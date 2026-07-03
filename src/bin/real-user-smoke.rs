@@ -21,7 +21,7 @@
 // Use this binary as a manual reproducer when you want to
 // confirm the end-to-end paths work on a fresh checkout. The
 // assertions also live as unit tests in
-// runtime::agents::real_invoke_tests for the deterministic
+// daemon::ability::builtins::real_invoke_tests for the deterministic
 // CI-runnable subset.
 //
 //   cargo run --bin real-user-smoke
@@ -37,15 +37,17 @@ use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::agents::chat_ability::ContextLoader;
-use easynet_cli::runtime::agents::{
+use easynet_cli::daemon::ability::builtins::agents::chat::ContextLoader;
+use easynet_cli::daemon::ability::catalog::{
     build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
     RegistryDaemonBuildConfig,
 };
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::runtime::local_runtime_invoker::{invoke_local_rpc_sync, open_local_stream};
-use easynet_cli::runtime::resources::filesystem::{
+use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::{
+    invoke_local_rpc_sync, open_local_stream,
+};
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::daemon::resources::files::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
@@ -77,7 +79,8 @@ impl RuntimeSmoke {
         let runtime = LocalRuntime::new();
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
-        config.pages_identity = easynet_cli::runtime::agents::PagesIdentity::from_env();
+        config.pages_identity =
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
         config.local_runtime = Some(Arc::clone(&runtime));
         let catalog = build_registry_for_daemon(config);
         Self { runtime, catalog }
@@ -322,7 +325,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         // 1. Spin up a mission run dir so the dispatch invariant is
         //    satisfied. Mirrors what
-        //    facade::cli::mission_runs::root_dir() returns:
+        //    cli::mission_runs::root_dir() returns:
         //    `$HOME/.easynet/missions/runs/`.
         let mission_id = format!("smoke-{}", std::process::id());
         let home = std::env::var("HOME")
@@ -365,7 +368,7 @@ fn main() -> anyhow::Result<()> {
         let chat_mission_dir = mission_dir.clone();
         let result = rt.block_on(async move {
             tokio::task::spawn_blocking(move || {
-                let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                let _mission_ctx = easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(
                     chat_mission_id,
                     chat_mission_dir,
                 );
@@ -410,11 +413,11 @@ fn main() -> anyhow::Result<()> {
         // attached, instead of an empty Vec like the other
         // smoke probes use.
         let schedule_svc =
-            Arc::new(easynet_cli::runtime::execution::schedule::ScheduleService::new());
+            Arc::new(easynet_cli::daemon::execution::schedule::ScheduleService::new());
         let default_loaders = Arc::new(
-            easynet_cli::runtime::agents::context_loaders::default_loaders(Arc::clone(
-                &schedule_svc,
-            )),
+            easynet_cli::daemon::ability::builtins::resources::context::loaders::default_loaders(
+                Arc::clone(&schedule_svc),
+            ),
         );
         let ctx_runtime = RuntimeSmoke::daemon(Some(default_loaders));
         let canary_for_thread = canary.clone();
@@ -422,7 +425,7 @@ fn main() -> anyhow::Result<()> {
         let ctx_mission_dir = mission_dir.clone();
         let ctx_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
+                let _mission_ctx = easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(
                     ctx_mission_id,
                     ctx_mission_dir,
                 );
@@ -540,10 +543,11 @@ fn main() -> anyhow::Result<()> {
             causal_context: None,
         };
         {
-            let _mission_ctx = easynet_cli::runtime::enter_mission_context_for_current_thread(
-                mission_id.clone(),
-                mission_dir.clone(),
-            );
+            let _mission_ctx =
+                easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(
+                    mission_id.clone(),
+                    mission_dir.clone(),
+                );
             let stream = dispatcher_for_stream
                 .execute_stream(stream_target)
                 .expect("execute_stream");

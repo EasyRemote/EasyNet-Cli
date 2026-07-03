@@ -4,8 +4,10 @@
 // needing a separate CI step.
 //
 // The individual cases live in shell so they can be invoked directly by
-// contributors: `bash tests/scripts/test_trace_parity.sh`. This Rust
-// shim is the automation seam.
+// contributors: `bash tests/scripts/test_trace_parity.sh`. The shell
+// bodies live under `tests/scripts/`; `tests/scripts/`
+// remains the Cargo-friendly wrapper entrypoint. This Rust shim is the
+// automation seam.
 //
 // A shell driver is selected explicitly (`bash`) instead of relying on
 // the user's `$SHELL` because the scripts use `[[ ... ]]` and
@@ -40,6 +42,13 @@ fn run_bash_script(relative_path: &str) {
 }
 
 #[test]
+fn project_structure_v1_script_contract_holds() {
+    // Pins the migration-compatible root layout: production source
+    // roots, retired compatibility paths, and tool-discovery wrappers.
+    run_bash_script("tests/scripts/test_check_project_structure_v1.sh");
+}
+
+#[test]
 fn trace_parity_script_contract_holds() {
     // Covers happy, failure (missing fixture, extra key, removed key)
     // and edge cases (idempotence, path-only payload invariant).
@@ -56,8 +65,8 @@ fn check_upstream_names_script_contract_holds() {
 
 #[test]
 fn no_raw_ura_construction_script_contract_holds() {
-    // Pins the URA builder/parser boundary: only src/ura.rs may hand
-    // construct or scheme-prefix parse easynet URAs.
+    // Pins the URA builder/parser boundary: only src/core/ura/mod.rs may
+    // hand construct or scheme-prefix parse easynet URAs.
     run_bash_script("tests/scripts/test_no_raw_ura_construction.sh");
 }
 
@@ -67,6 +76,14 @@ fn daemon_invocation_migration_script_contract_holds() {
     // DaemonInvocation construction stays tuple-complete, and runtime
     // invocation stays an Axon-canonical adapter.
     run_bash_script("tests/scripts/test_check_daemon_invocation_migration.sh");
+}
+
+#[test]
+fn kernel_boundary_script_contract_holds() {
+    // Pins the final project-structure daemon boundary: retired source
+    // roots/namespaces cannot return, daemon internals do not depend on
+    // CLI/FFI edges, and execution only sees federation through GatewayApi.
+    run_bash_script("tests/scripts/test_check_kernel_boundary.sh");
 }
 
 #[test]

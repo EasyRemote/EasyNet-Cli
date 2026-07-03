@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Integration tests for scripts/check-upstream-names.sh.
+# Integration tests for tools/scripts/check-upstream-names.sh.
 #
 # Covers:
 #   happy:
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-upstream-names.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-upstream-names.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

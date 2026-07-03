@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-canonical-hub-ura-boundary.sh.
+# Contract tests for tools/scripts/check-canonical-hub-ura-boundary.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-canonical-hub-ura-boundary.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-canonical-hub-ura-boundary.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -21,13 +21,21 @@ copy_if_present() {
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/services/invocation_transport" "$sandbox/src/support" "$sandbox/tests" "$sandbox/docs" "$sandbox/scripts" "$sandbox/axon"
-    cp "$REPO_ROOT/src/ura.rs" "$sandbox/src/ura.rs"
-    cp "$REPO_ROOT/src/services/invocation_transport/federation_invoke.rs" "$sandbox/src/services/invocation_transport/federation_invoke.rs"
-    cp "$REPO_ROOT/src/services/invocation_transport/admission_facade.rs" "$sandbox/src/services/invocation_transport/admission_facade.rs"
-    cp "$REPO_ROOT/src/services/invocation_transport/daemon_invocation_service.rs" "$sandbox/src/services/invocation_transport/daemon_invocation_service.rs"
-    cp "$REPO_ROOT/src/services/invocation_transport/daemon_invocation_service_tests.rs" "$sandbox/src/services/invocation_transport/daemon_invocation_service_tests.rs"
-    cp "$REPO_ROOT/src/services/invocation_transport/register_device_pubkey.rs" "$sandbox/src/services/invocation_transport/register_device_pubkey.rs"
+    mkdir -p \
+        "$sandbox/src/core/ura" \
+        "$sandbox/src/daemon/invocation/admission" \
+        "$sandbox/src/daemon/invocation/dispatch" \
+        "$sandbox/src/daemon/invocation/routing" \
+        "$sandbox/tests" \
+        "$sandbox/docs" \
+        "$sandbox/tools/scripts" \
+        "$sandbox/axon"
+    cp "$REPO_ROOT/src/core/ura/mod.rs" "$sandbox/src/core/ura/mod.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/routing/federation_invoke.rs" "$sandbox/src/daemon/invocation/routing/federation_invoke.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/admission/admission_facade.rs" "$sandbox/src/daemon/invocation/admission/admission_facade.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/admission/register_device_pubkey.rs" "$sandbox/src/daemon/invocation/admission/register_device_pubkey.rs"
     copy_if_present "$REPO_ROOT/docs/spec/owner-truth-table/ability-owner-truth-table.tex" "$sandbox/docs/spec/owner-truth-table/ability-owner-truth-table.tex"
     cp "$REPO_ROOT/../EasyNet-Axon/core/ura-rs/src/lib.rs" "$sandbox/axon/lib.rs"
     echo "$sandbox"
@@ -60,14 +68,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "Axon hub-with-tail generation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/services/invocation_transport/federation_invoke.rs"
+perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/daemon/invocation/routing/federation_invoke.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "stale parse_node_ura docs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/hub/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));#' "$SB/src/services/invocation_transport/admission_facade.rs"
+perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/hub/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));#' "$SB/src/daemon/invocation/admission/admission_facade.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

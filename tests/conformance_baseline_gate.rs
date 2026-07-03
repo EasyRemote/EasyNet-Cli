@@ -4,9 +4,9 @@
 //! Spec §9.1 item 7 requires Hub mode and Device mode to *pass baseline
 //! conformance* — a missing baseline ability must be a build/CI failure,
 //! not a silent runtime gap. The typed model lives in
-//! `runtime::ability::conformance`; this integration test is the
+//! `daemon::ability::conformance`; this integration test is the
 //! deterministic gate that exercises it against the **real** daemon
-//! registry built by `runtime::agents::build_registry()`.
+//! registry built by `daemon::ability::catalog::build_registry()`.
 //!
 //! Why an integration test (and not only the in-lib `#[cfg(test)]`
 //! checks): linking the crate's public API from `tests/` proves the
@@ -20,7 +20,7 @@
 //!   * `DaemonInvocation` — checked against the production route tables
 //!     exported beside the tonic `Invoke` / `InvokeStream` match arms.
 
-use easynet_cli::runtime::ability::conformance::{
+use easynet_cli::daemon::ability::conformance::{
     DaemonInvocationSurface, DeviceBaseline, HubBaseline, RegistryConformance,
     RuntimeAdminConformance,
 };
@@ -78,7 +78,7 @@ impl Drop for HomeGuard {
 #[test]
 fn device_mode_registry_satisfies_device_baseline() {
     let _home = HomeGuard::new();
-    let registry = easynet_cli::runtime::agents::build_registry();
+    let registry = easynet_cli::daemon::ability::catalog::build_registry();
     let report =
         RegistryConformance::new(&registry).check("device", &DeviceBaseline::required_abilities());
     assert!(report.is_conformant(), "{}", report.panic_message());
@@ -89,7 +89,7 @@ fn device_mode_registry_satisfies_device_baseline() {
 #[test]
 fn hub_mode_registry_satisfies_hub_local_registry_slice() {
     let _home = HomeGuard::new();
-    let registry = easynet_cli::runtime::agents::build_registry();
+    let registry = easynet_cli::daemon::ability::catalog::build_registry();
     let report =
         RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
     assert!(report.is_conformant(), "{}", report.panic_message());

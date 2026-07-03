@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-cli-flat-command-boundary.sh.
+# Contract tests for tools/scripts/check-cli-flat-command-boundary.sh.
 #
 # F-039 was reversed: `join` / `start` / `stop` are first-class top-level
 # Quickstart commands, NOT retired aliases. The boundary guard therefore now
@@ -12,15 +12,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-cli-flat-command-boundary.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-cli-flat-command-boundary.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/facade" "$sandbox/scripts" "$sandbox/tests"
-    cp -R "$REPO_ROOT/src/facade/cli" "$sandbox/src/facade/"
+    mkdir -p "$sandbox/src" "$sandbox/scripts" "$sandbox/tests"
+    cp -R "$REPO_ROOT/src/cli" "$sandbox/src/"
     cp -R "$REPO_ROOT/scripts" "$sandbox/"
     cp -R "$REPO_ROOT/tests" "$sandbox/"
     echo "$sandbox"
@@ -38,7 +38,7 @@ rm -rf "$SB"
 
 # Removing the Quickstart `start` shortcut must fail (the guard now requires it).
 SB="$(make_sandbox)"
-perl -0pi -e 's#\n[[:space:]]*Start\(start::StartArgs\),##' "$SB/src/facade/cli/mod.rs"
+perl -0pi -e 's#\n[[:space:]]*Start\(start::StartArgs\),##' "$SB/src/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -46,7 +46,7 @@ rm -rf "$SB"
 
 # Removing the Quickstart `join` shortcut must fail.
 SB="$(make_sandbox)"
-perl -0pi -e 's#\n[[:space:]]*Join\(join::JoinArgs\),##' "$SB/src/facade/cli/mod.rs"
+perl -0pi -e 's#\n[[:space:]]*Join\(join::JoinArgs\),##' "$SB/src/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -55,7 +55,7 @@ rm -rf "$SB"
 # Removing the layered `Device` group must fail (no behavioural drift: the
 # layered home must stay so both spellings share the same impl).
 SB="$(make_sandbox)"
-perl -0pi -e 's#\n[[:space:]]*Device\(groups::device::DeviceArgs\),##' "$SB/src/facade/cli/mod.rs"
+perl -0pi -e 's#\n[[:space:]]*Device\(groups::device::DeviceArgs\),##' "$SB/src/cli/mod.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

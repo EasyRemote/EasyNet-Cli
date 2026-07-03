@@ -34,7 +34,7 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::invocation_watch::{self, WatchArgs, WatchEvent};
+use easynet_cli::cli::invocation_watch::{self, WatchArgs, WatchEvent};
 use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
 
 #[test]
@@ -50,7 +50,7 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
     // receipt, rather than a fabricated default stamped at the wire boundary.
     let expected_echo_ability_ref = format!(
         "{}@{}",
-        easynet_cli::ura::owner_ability_ura(&home.testbot_ura, "echo")
+        easynet_cli::core::ura::owner_ability_ura(&home.testbot_ura, "echo")
             .expect("mint testbot echo ability URA"),
         TESTBOT_ECHO_DESCRIPTOR_VERSION
     );

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Integration tests for scripts/trace-parity.sh.
+# Integration tests for tools/scripts/trace-parity.sh.
 #
 # Covers:
 #   happy:
@@ -28,7 +28,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-SCRIPT="$REPO_ROOT/scripts/trace-parity.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/trace-parity.sh"
 FIXTURE_NAME="diamond.keys.txt"
 PRISTINE="$REPO_ROOT/tests/fixtures/trace-parity/$FIXTURE_NAME"
 

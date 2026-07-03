@@ -40,57 +40,46 @@ Inside `easynet-daemon`:
     ↓
 [libc-equivalent]        IPC client (in lib, not shown)
     ↓
-[Control]                src/services/control/            (PR-DAEMON landing)
+[Control]                src/daemon/control/              (local boot/status IPC)
     ↓  (only via KernelApi trait)
-[KernelApi]              src/runtime/kernel_api.rs        ← SYSCALL BOUNDARY
+[KernelApi]              src/daemon/boot/kernel/api.rs    ← SYSCALL BOUNDARY
     ↓  (trait impl on the Kernel)
-[Execution]              src/runtime/execution/
+[Execution]              src/daemon/execution/
     ├── session/         one session per agent run         (PR-ATTACH)
     ├── permission/      broker + pending queue            (PR-PERM)
-    ├── discuss/         multi-agent room store            (PR-DISCUSS)
+    ├── mission/         agent mission drivers/discuss     (PR-DISCUSS)
+    ├── pty/             PTY-backed execution resources
+    ├── mcp/             daemon MCP execution bridge
     ├── schedule/        cron store + tick runner          (PR-SCHED)
     └── loop_instance/   EAL loop wrapper store            (PR-LOOP)
     ↓  (only via GatewayApi trait)
-[GatewayApi]             src/runtime/gateway_api.rs       ← NETWORK BOUNDARY
+[GatewayApi]             src/daemon/federation/gateway_api.rs       ← NETWORK BOUNDARY
     ↓
-[Gateway]                src/runtime/gateway.rs           (holds DendriteBridge)
+[Gateway]                src/daemon/federation/gateway.rs           (holds DendriteBridge)
 ```
 
 ### Two hard trait boundaries
 
 The layering is enforced at CI time:
 
-- `scripts/check-kernel-boundary.sh` — Control layer may only
-  import `kernel_api`, `invocation`, `domain`,
-  `invocation_target` from `crate::runtime`. Anything else is
-  rejected.
-- `scripts/check-kernel-boundary.sh` (rule 2) — Daemon Invocation
-  transport may import the explicitly listed runtime adapters it
-  needs to translate Axon `Invocation` frames into daemon-local
-  execution. `ability_wire` is allowed only as a metadata boundary:
-  the transport reads the local bidi codec profile from
-  `AbilityWireRegistry`, but plugin package ownership and execution
-  policy remain in `runtime/plugin_host` and the Axon
-  `LocalRuntime`. Plugin packages contribute `AbilityImpl` bindings;
-  `DaemonPluginBinder` applies daemon authority policy before writing them
-  into `AxonAbilityCatalog`. Resource, permission, and realtime transport
-  readiness are projected by daemon-owned plugin-host brokers/adapters; plugin
-  packages do not own policy, caller/callee identity, or transport admission.
-  `plugin_host` itself is allowed only for the boot-injected
-  `PluginRuntimeManager` handle used to execute already-loaded plugin-backed
-  abilities; install/load policy stays in `runtime/plugin_host`. See
-  `docs/design/plugin-contribution-boundary.md`.
-- `scripts/check-kernel-boundary.sh` (rule 3) — Execution may
-  only touch the network via `crate::runtime::gateway_api`, not
-  the concrete `runtime::gateway`.
-- `scripts/check-subservice-isolation.sh` — Execution
+- `tools/scripts/check-kernel-boundary.sh` — final-forbidden source roots
+  (`src/runtime`, `src/services`, `src/facade`, `src/persistence`,
+  `src/plugins`, `src/registry`) and their crate-root namespaces must not
+  return. Daemon control/invocation production code must not depend on
+  CLI/FFI edge modules. The retired `src/daemon/kernel` root must not
+  return; the supported kernel home is `src/daemon/boot/kernel`.
+- `tools/scripts/check-kernel-boundary.sh` (rule 3) — Execution may
+  only touch the network via `crate::daemon::federation::gateway_api`, not
+  the concrete `daemon::federation::gateway`.
+- `tools/scripts/check-subservice-isolation.sh` — Execution
   sub-services cannot import each other.
-- `scripts/check-invocation-unity.sh` — IPC/Kernel/Gateway
-  method signatures must not speak `args_json`;
-  `Kernel::invoke` cannot be called from inside an Execution
-  sub-service.
-- `scripts/check-dispatch-boundary.sh` — ability handlers under
-  `runtime/system/` cannot branch on node identity.
+- `tools/scripts/check-invocation-unity.sh` — GatewayApi method
+  signatures must not speak raw invocation payload fragments; the old
+  `crate::daemon::kernel` namespace must not return; execution
+  sub-services cannot bypass daemon invocation dispatch through legacy
+  mission/session paths.
+- `tools/scripts/check-dispatch-boundary.sh` — ability handlers under
+  `src/daemon/ability/builtins/` cannot branch on node identity.
 
 ## 3. Scheme X justification — one daemon, not two
 
@@ -113,7 +102,9 @@ Each sub-service owns one slice of state:
 |-----------------|---------------------------------------------|------------|
 | session/        | live-session index + timeline broadcast     | PR-ATTACH  |
 | permission/     | broker trait + pending queue                | PR-PERM    |
-| discuss/        | room registry + per-room broadcast          | PR-DISCUSS |
+| mission/        | mission drivers + discuss room store        | PR-DISCUSS |
+| pty/            | PTY resources                               |            |
+| mcp/            | MCP execution bridge                        |            |
 | schedule/       | JSON-file-backed cron + tick runner         | PR-SCHED   |
 | loop_instance/  | loop-instance registry + status store       | PR-LOOP    |
 
@@ -151,7 +142,7 @@ mis-attribute a missing feature to an oversight.
   permission is interactive approval, not domain security.
 
 v2 extension points:
-- scheduler layer between `Kernel::invoke` admission and
+- scheduler layer between `daemon::boot::kernel::Kernel::invoke` admission and
   dispatch (see `docs/design/invocation-unity-v1.md` §6)
 - resource accounting as sub-service hooks
 - process-level isolation (cgroup / namespace) only lands in
@@ -163,7 +154,7 @@ A future `easynet-planner` process (or a module in-process) sits
 *on top of* the KernelApi, peer with the Control layer. It
 consumes `AbilityDescriptor`, `Session`, `InvocationRecord`, etc.
 and produces Invocation plans that are then routed back through
-`Kernel::invoke`. The minimum trait the planner needs is frozen
+`daemon::boot::kernel::Kernel::invoke`. The minimum trait the planner needs is frozen
 in `docs/design/planner-interface-v1.md`.
 
 The planner is out of scope for this plan. What this plan delivers

@@ -151,7 +151,7 @@ args
 9. 所有 stream/bidi 路径必须有明确终止状态与错误映射。
 10. 所有 baseline 能力必须有 typed conformance model，不能只存在于注释、Markdown 列表、测试里的散字符串。
 11. 所有路由/dispatch fallback 必须能证明不会隐藏 missing handler、wrong call mode、wrong owner、wrong surface。不能用 fallback 让测试“看起来通过”。
-12. Ability registry 只能有一个权威存储。`src/runtime/ability_dispatch.rs::AxonAbilityCatalog` 当前同时持有九张以 ability name 为键的 legacy `BTreeMap`(`rpc`/`stream`/`bidi` × args-only/`_with_env`，加 `owner`/`authority_scope`/`manifests`，并在 `DynamicCatalogue` 重复一份)，又另持 `control_plane: RwLock<AbilityControlPlaneRegistry>`；其自身注释承认 `owner`/`manifests` 是 "compatibility side tables"。这是三套并行真相，是本项目最大的非收敛债，必须在本次重构中收口为单一存储，详见第 9.1.A 节。新增 ability 不允许再写第二张并行表。
+12. Ability registry 只能有一个权威存储。`src/daemon/ability/dispatch.rs::AxonAbilityCatalog` 当前同时持有九张以 ability name 为键的 legacy `BTreeMap`(`rpc`/`stream`/`bidi` × args-only/`_with_env`，加 `owner`/`authority_scope`/`manifests`，并在 `DynamicCatalogue` 重复一份)，又另持 `control_plane: RwLock<AbilityControlPlaneRegistry>`；其自身注释承认 `owner`/`manifests` 是 "compatibility side tables"。这是三套并行真相，是本项目最大的非收敛债，必须在本次重构中收口为单一存储，详见第 9.1.A 节。新增 ability 不允许再写第二张并行表。
 13. Invocation locality 解析只能有一个 owner。当前具体 owner 是 `src/services/invocation_transport/route_resolver.rs::DaemonRouteResolver`，输出 `SelectedInvokeRoute` / `DelegatedInvokeRoute` typed selection；如果未来抽成 `src/runtime/resolver` 或 closed enum wrapper，必须原子迁移，不能保留两套 resolver。所有 unary/stream/bidi dispatch path 必须消费同一 selected route，新增第 6 种 locality 只能扩展 typed selection model，不能在 dispatcher 里另开 ad hoc 分支。详见第 4.2 与第 7.4 节。
 14. Runtime terminal-state 只能有一个 canonical 词汇表。Axon SDK 的 `InvocationState`(含 `is_terminal()`)是 source of truth；CLI 侧的 `TerminalState`(Succeeded/Failed/Cancelled)必须是它的显式投影，不允许两套终态词汇各自独立演化。详见第 7.4 节。
 15. Runtime trust 是一个聚合，不是三条互不协调的写。`identity.register_pubkey` / `identity.list_user_pubkeys` / `identity.revoke_user_pubkey` 必须是同一 `RuntimeTrust` 聚合的唯一 mutators；revoke 必须使 presence 失效并驱动 `JoinConnectionState::DisconnectedRemoved`。详见第 6.1 与第 7.4 节。
@@ -314,7 +314,7 @@ Browser HTTP/WS
 
 ### 7.2 Device runtime baseline
 
-以下能力组应由 EasyNet-Cli daemon 作为设备侧基础能力承载。本节是产品能力族概览；规范性的 concrete rows 必须落在 `src/runtime/ability/conformance.rs` 的 `DeviceBaseline`，并标注 call mode、surface、domain、feature gate。
+以下能力组应由 EasyNet-Cli daemon 作为设备侧基础能力承载。本节是产品能力族概览；规范性的 concrete rows 必须落在 `src/daemon/ability/conformance.rs` 的 `DeviceBaseline`，并标注 call mode、surface、domain、feature gate。
 
 Health / Admin / Meta:
 
@@ -633,7 +633,7 @@ Daemon 负责:
 
 必须更新:
 
-1. 建立 `runtime::ability::conformance` typed baseline model 与 conformance 检查。
+1. 建立 `daemon::ability::conformance` typed baseline model 与 conformance 检查。
 2. 确保 Hub mode / Both mode 注册第 7.1 节所有 Hub baseline abilities。
 3. 确保 Device mode 注册第 7.2 节所有 Device baseline ability groups。
 4. 补齐 `namespace.resolve`、`namespace.proxy_resolve`、`federation.resolve_key`、`list_user_devices`、`subscribe_directory_v2` 的统一 daemon invocation surface。
@@ -654,7 +654,7 @@ Daemon 负责:
 
 #### 9.1.A Ability registry 收敛规则
 
-当前代码事实: `src/runtime/ability_dispatch.rs::AxonAbilityCatalog` 同时维护 static handler maps、`owner` / `authority_scope` / `manifests` compatibility side tables、`control_plane: RwLock<AbilityControlPlaneRegistry>`，并在 `DynamicCatalogue` 再镜像一套 dynamic maps。这个形态不能继续靠补丁叠加；必须收敛成一个领域对象与一个事务边界。
+当前代码事实: `src/daemon/ability/dispatch.rs::AxonAbilityCatalog` 同时维护 static handler maps、`owner` / `authority_scope` / `manifests` compatibility side tables、`control_plane: RwLock<AbilityControlPlaneRegistry>`，并在 `DynamicCatalogue` 再镜像一套 dynamic maps。这个形态不能继续靠补丁叠加；必须收敛成一个领域对象与一个事务边界。
 
 目标模型:
 
@@ -825,23 +825,23 @@ EasyNet-Cli/
 关键结构规则:
 
 1. `src/daemon` 只负责 daemon 生命周期、mode、control/invocation endpoint、join bootstrap，不放具体业务能力实现。
-2. `src/runtime/hub` 承载 Hub baseline ability 的 daemon-owned 实现，不承载 canonical baseline list。
+2. `src/daemon/hub` 承载 Hub baseline ability 的 daemon-owned 实现，不承载 canonical baseline list。
 3. `src/runtime/ability` 承载 descriptor、registry、catalog projection、baseline conformance。
 4. `src/services/invocation_transport/route_resolver.rs` 是当前 namespace/proxy route owner；若迁移到 `src/runtime/resolver`，必须删除旧 owner 并更新所有 call sites，EasyNet backend 不再有 authoritative resolver。
 5. `src/services/invocation_transport` 承载 unary/stream/bidi 的 daemon transport 与 wrapper，不承载产品 API。
-6. `src/facade/cli` 提供 CLI 命令，包括 `easynet join <token>`、hub/device status、ability catalog 查询。
+6. `src/cli` 提供 CLI 命令，包括 `easynet join <token>`、hub/device status、ability catalog 查询。
 7. `src/ffi` / `libeasynet_cli` 只暴露 daemon lifecycle 与 generic Invocation，不新增 one-method-per-ability ABI。
 8. `tests/conformance` 固化 Hub baseline、Device baseline 与 stream/bidi terminal closure。
 
 现有目录与目标结构的对应关系:
 
-1. `src/runtime/hub` 继续作为 Hub runtime 收口点，但需要补全 baseline ability。
+1. `src/daemon/hub` 继续作为 Hub runtime 收口点，但需要补全 baseline ability。
 2. `src/services/invocation_transport` 继续作为 daemon invocation transport 收口点，但需要确保完整 Invocation 七元组。
 3. `src/services/invocation_transport/route_resolver.rs` 继续作为当前 concrete route resolver；不得为了目标目录图再创建第二个 `src/runtime/resolver`。
 4. `src/runtime/agents/profiles` 继续承载 device/profile projection，但不应变成 backend profile source。
-5. `src/facade/cli/groups` 可以保留现有命令组织，新 join/hub/device 命令可按现有风格接入。
+5. `src/cli/groups` 可以保留现有命令组织，新 join/hub/device 命令可按现有风格接入。
 6. `abilities/system` 与 `plugins/builtin` 作为 ability implementation/resource plane，不能替代 `AbilityDescriptor` registry。
-7. `src/runtime/ability/conformance.rs` 是 baseline contract 的 canonical source；Hub、Device、transport、registry 测试只能消费它，不能复制列表。
+7. `src/daemon/ability/conformance.rs` 是 baseline contract 的 canonical source；Hub、Device、transport、registry 测试只能消费它，不能复制列表。
 
 #### 9.4.2 EasyNet 目标结构
 
@@ -1298,7 +1298,7 @@ Register user
 ### 13.8 Project Structure Checklist
 
 - [ ] EasyNet-Cli `src/daemon` only owns daemon lifecycle/mode/endpoints/bootstrap。
-- [ ] EasyNet-Cli `src/runtime/hub` owns Hub baseline ability implementations。
+- [ ] EasyNet-Cli `src/daemon/hub` owns Hub baseline ability implementations。
 - [ ] EasyNet-Cli `src/runtime/ability` owns descriptor registry, catalog projection, and baseline conformance。
 - [ ] EasyNet-Cli has exactly one namespace/proxy route owner: current `src/services/invocation_transport/route_resolver.rs` or an atomic replacement, never both。
 - [ ] EasyNet-Cli `src/services/invocation_transport` owns unary/stream/bidi transport with full Invocation。
@@ -1321,7 +1321,7 @@ Register user
 
 1. `aggregate.list_abilities_catalog` 不进入 canonical daemon baseline。默认迁移到 `meta.list_abilities` + daemon catalog projection。
 2. `federation.status` 成为 daemon read-only ability，读取 `FederationStatusProbe` / `FederationInitOutcome` 投影。
-3. Baseline contract canonical source 放在 EasyNet-Cli `src/runtime/ability/conformance.rs`，不是 `src/runtime/hub` 或 transport wrapper。
+3. Baseline contract canonical source 放在 EasyNet-Cli `src/daemon/ability/conformance.rs`，不是 `src/daemon/hub` 或 transport wrapper。
 4. 通配 ability group 必须在实现前展开成 typed rows。
 5. EasyNet backend 当前 `daemon_grpc` 是 daemon client 边界的具体实现；迁移不得并行制造第二套 runtime client。
 6. EasyNet backend `runtime` 可以作为产品会话 kernel / driver adapter 保留，但不能成为 ability runtime。
@@ -1329,7 +1329,7 @@ Register user
 8. `federation.advertise_agent` 与 `federation.advertise_abilities` 是 projection/read-model 发布，不是 ability implementation registry。
 9. EasyNet-Cli 当前 route owner 是 `DaemonRouteResolver`；任何目录迁移必须替换它，不能复制它。
 10. EasyNet backend `aggregator.Register` / `MaintainRegistration` 的 backend-profile self-advertise loop 默认删除；若临时保留，必须作为有 owner/expiry/telemetry/deletion criteria 的 transitional alias。
-11. EasyNet 对外应称为 Product API wrapping CLI daemon；不得用 “Hub API” 表达 backend 自己拥有 runtime/hub ability。
+11. EasyNet 对外应称为 Product API wrapping CLI daemon；不得用 “Hub API” 表达 backend 自己拥有 daemon/hub ability。
 12. 前端 legacy endpoint 路径默认不保留；若产品发布需要短期兼容，必须按第 11 节 compatibility wrapper 规则显式写 owner、expiry、telemetry 与删除条件。
 
 ### 14.2 需要 review 的开放问题
@@ -1365,5 +1365,5 @@ Register user
 以下三处不是 review 引用，而是本重构必须修掉的具体缺陷，已逐一在代码中核实(2026-06-28):
 
 1. `src/services/invocation_transport/federation_invoke.rs:319` — `causal_context_bytes: Vec::new()`：`federation.forward_invoke` 外层跳没有透传 causal context,违反第 5 节不变量 1(七元组完整)。必须把 inbound invocation 的 causal context 接到 forward hop。
-2. `src/runtime/owner_projection.rs:74` — `AbilityProjectionSummary` 手写第 11 个字段 `callable_summary`,携带 proto(`namespace.proto`)不承认的 impl-private 数据。这是当前唯一真实的 Axon wire 手写镜像 fork;必须 reconcile 进 Axon descriptor projection contract,或证明它纯属 daemon-local 不跨边界。
+2. `src/daemon/federation/read_model/owner_projection.rs:74` — `AbilityProjectionSummary` 手写第 11 个字段 `callable_summary`,携带 proto(`namespace.proto`)不承认的 impl-private 数据。这是当前唯一真实的 Axon wire 手写镜像 fork;必须 reconcile 进 Axon descriptor projection contract,或证明它纯属 daemon-local 不跨边界。
 3. `backend/internal/axon/urns.go` 文档说 `UserURA` 参数是 `users.id`(UUID),但 `prepareEnvelopeLogic.go` 传 `username`(见第 6.1 节规则 4)。必须钉死 canonical subject 锚点并统一两条路径。

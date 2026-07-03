@@ -48,17 +48,17 @@ use futures::StreamExt;
 
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
-use easynet_cli::services::federation_client::{
+use easynet_cli::daemon::federation::client::{
     DirectoryEventStream, FederationClient, FederationClientError, HubUri,
 };
-use easynet_cli::services::federation_directory::{
+use easynet_cli::daemon::federation::directory::{
     run_per_peer_supervisor, DirectoryEvent, SharedFederatedDirectoryView,
 };
-use easynet_cli::services::invocation_transport::admission_facade::AdmissionFacade;
-use easynet_cli::services::invocation_transport::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::services::invocation_transport::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
-use easynet_cli::services::presence_registry::PresenceRegistry;
-use easynet_cli::services::realm_trust_anchor::RealmTrustAnchor;
+use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
+use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 
 /// In-process forwarder. `subscribe_directory_v2` opens an
 /// `invoke_stream` call against the target daemon, then JSON-
@@ -124,7 +124,7 @@ impl FederationClient for InProcessStreamingForwarder {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // ── Daemon A: realm-a, hosts the upstream PresenceRegistry ──
-    let daemon_a_loopback = easynet_cli::ura::hub_ura("realm-a");
+    let daemon_a_loopback = easynet_cli::core::ura::hub_ura("realm-a");
     let daemon_a_presence = Arc::new(PresenceRegistry::new());
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
@@ -148,7 +148,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
-            easynet_cli::ura::hub_ura("realm-b"),
+            easynet_cli::core::ura::hub_ura("realm-b"),
             federation_client,
             cell_for_task,
             cancel_rx,
@@ -168,7 +168,10 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     // cell publishes.
     let target_ura = "easynet:///r/realm-a/device/device-X";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
-        Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<
+            easynet_cli::daemon::invocation::bidi::state::presence::DispatchFrame,
+            tonic::Status,
+        >,
     >(8);
     daemon_a_presence.insert(target_ura.to_string(), tx);
 
@@ -208,7 +211,7 @@ async fn streaming_chain_propagates_presence_remove() {
     // Same harness; this time after the Online propagates, we
     // remove the entry on daemon A and assert the Remove frame
     // flows through to daemon B's cell.
-    let daemon_a_loopback = easynet_cli::ura::hub_ura("realm-a");
+    let daemon_a_loopback = easynet_cli::core::ura::hub_ura("realm-a");
     let daemon_a_presence = Arc::new(PresenceRegistry::new());
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
@@ -231,7 +234,7 @@ async fn streaming_chain_propagates_presence_remove() {
         run_per_peer_supervisor(
             "realm-a".to_string(),
             "https://hub-a.example:50443".to_string(),
-            easynet_cli::ura::hub_ura("realm-b"),
+            easynet_cli::core::ura::hub_ura("realm-b"),
             federation_client,
             cell_for_task,
             cancel_rx,
@@ -242,7 +245,10 @@ async fn streaming_chain_propagates_presence_remove() {
     // Insert a device on A; wait for B's cell to reflect.
     let target_ura = "easynet:///r/realm-a/device/disappearing";
     let (tx, _rx) = tokio::sync::mpsc::channel::<
-        Result<easynet_cli::services::presence_registry::DispatchFrame, tonic::Status>,
+        Result<
+            easynet_cli::daemon::invocation::bidi::state::presence::DispatchFrame,
+            tonic::Status,
+        >,
     >(8);
     daemon_a_presence.insert(target_ura.to_string(), tx);
     for _ in 0..40 {
@@ -261,7 +267,7 @@ async fn streaming_chain_propagates_presence_remove() {
     // disappears from B's view.
     daemon_a_presence.remove(
         target_ura,
-        easynet_cli::services::presence_registry::OfflineReason::AdminRevoked,
+        easynet_cli::daemon::invocation::bidi::state::presence::OfflineReason::AdminRevoked,
     );
     let mut removed = false;
     for _ in 0..40 {

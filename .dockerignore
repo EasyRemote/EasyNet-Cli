@@ -25,7 +25,7 @@ node_modules
 __pycache__
 *.pyc
 # Test fixtures + tarballs accumulating.
-docker/e2e/pages/easynet-pages-e2e-*.tar
+engineering/docker/e2e/pages/easynet-pages-e2e-*.tar
 # Existing generated PDFs (we have .tex sources).
 docs/rfc/*.pdf
 docs/rfc/*.aux

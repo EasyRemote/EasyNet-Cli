@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# Contract tests for scripts/check-pages-cli-ability-boundary.sh.
+# Contract tests for tools/scripts/check-pages-cli-ability-boundary.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/scripts/check-pages-cli-ability-boundary.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-pages-cli-ability-boundary.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/facade/cli"
-    cp "$REPO_ROOT/src/facade/cli/pages.rs" "$sandbox/src/facade/cli/pages.rs"
+    mkdir -p "$sandbox/src/cli/commands"
+    cp "$REPO_ROOT/src/cli/commands/pages.rs" "$sandbox/src/cli/commands/pages.rs"
     echo "$sandbox"
 }
 
@@ -27,21 +27,21 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: Pages CLI abilit
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/enum PagesAbilityVerb/enum PageVerb/' "$SB/src/facade/cli/pages.rs"
+perl -0pi -e 's/enum PagesAbilityVerb/enum PageVerb/' "$SB/src/cli/commands/pages.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing PagesAbilityVerb should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/let ability = PagesAbility::for_user\(&user, PagesAbilityVerb::Publish\)\?;/let ability = format!("{user}.pages.publish");/' "$SB/src/facade/cli/pages.rs"
+perl -0pi -e 's/let ability = PagesAbility::for_user\(&user, PagesAbilityVerb::Publish\)\?;/let ability = format!("{user}.pages.publish");/' "$SB/src/cli/commands/pages.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "scattered format construction should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/&target,\n        args,/&ability.local_registry_ability(),\n        args,/' "$SB/src/facade/cli/pages.rs"
+perl -0pi -e 's/&target,\n        args,/&ability.local_registry_ability(),\n        args,/' "$SB/src/cli/commands/pages.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

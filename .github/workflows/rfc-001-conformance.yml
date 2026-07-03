@@ -28,26 +28,31 @@ jobs:
 
       - name: Self-test (verifies the conformance script catches violations)
         run: |
-          ./scripts/check-rfc-001-conformance-self-test.sh
+          ./tools/scripts/check-rfc-001-conformance-self-test.sh
 
       - name: Baseline scan (informational; never fails CI)
         run: |
-          ./scripts/check-rfc-001-conformance.sh
+          ./tools/scripts/check-rfc-001-conformance.sh
 
       - name: Baseline regression lock (fails if violations increased)
         run: |
-          ./scripts/check-rfc-001-baseline-lock.sh
+          ./tools/scripts/check-rfc-001-baseline-lock.sh
+
+      - name: Project Structure v1 boundary
+        run: |
+          ./tools/scripts/check-project-structure-v1.sh
+          ./tests/scripts/test_check_project_structure_v1.sh
 
       - name: URA construction valve (F-055 — facade builders only)
         run: |
-          ./scripts/check-ura-construction.sh
+          ./tools/scripts/check-ura-construction.sh
 
       - name: URA surface pins (self-contained set)
         # check-canonical-hub-ura-boundary.sh stays manual-only: it
         # cross-references the sibling EasyNet-Axon checkout.
         run: |
-          ./scripts/check-cli-ability-invoke-ura.sh
-          ./scripts/check-federation-forward-ability-ura.sh
-          ./scripts/check-invoke-ability-ura-input.sh
-          ./scripts/check-openai-model-ability-ura.sh
-          ./scripts/check-pages-api-ability-ura.sh
+          ./tools/scripts/check-cli-ability-invoke-ura.sh
+          ./tools/scripts/check-federation-forward-ability-ura.sh
+          ./tools/scripts/check-invoke-ability-ura-input.sh
+          ./tools/scripts/check-openai-model-ability-ura.sh
+          ./tools/scripts/check-pages-api-ability-ura.sh

@@ -29,10 +29,10 @@
 
 mod seven_axes_fixture;
 
-use easynet_cli::facade::cli::discover::{
+use easynet_cli::cli::discover::{
     self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
 };
-use easynet_cli::facade::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
+use easynet_cli::cli::teach::{self, ForgetArgs, LearnArgs, TeachArgs};
 use seven_axes_fixture::SevenAxesHome;
 
 const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_system.local";
@@ -86,7 +86,7 @@ fn descriptor_import_e2e_owner_initiative_and_independent_ownership() {
     let new_descriptor_ura = resp["new_descriptor_ura"]
         .as_str()
         .expect("new_descriptor_ura present");
-    let selector = easynet_cli::ura::AbilitySelector::parse(new_descriptor_ura)
+    let selector = easynet_cli::core::ura::AbilitySelector::parse(new_descriptor_ura)
         .expect("learner's URA round-trips the Axon parser");
     assert_eq!(selector.owner_kind(), "agent");
     assert_eq!(

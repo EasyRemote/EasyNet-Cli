@@ -63,10 +63,10 @@ pub use trace::{
 fn millis_u64(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
-use super::ir::{IrCall, IrEmit, IrEmitValue, MissionIr};
-use crate::core::agent_id::AbilityName;
-use crate::eal::error::EalError;
-use crate::eal::ir::IrTarget;
+use crate::core::agent::id::AbilityName;
+use crate::eal::diagnostics::EalError;
+use crate::eal::runtime::ir::IrTarget;
+use crate::eal::runtime::ir::{IrCall, IrEmit, IrEmitValue, MissionIr};
 
 /// Interpreter-local alias. The per-step execution machinery —
 /// retries, dispatch, resolve_arguments, process_step_result — works
@@ -156,7 +156,7 @@ impl From<Value> for StepDispatchOutcome {
 // ── Agent-Aware Dispatcher ──
 //
 // Matches on `IrTarget` to choose between agent CLI dispatch (via
-// `runtime::dispatch::send_to_agent`) and bridge dispatch. There is no
+// `daemon::execution::mission::dispatch::send_to_agent`) and bridge dispatch. There is no
 // `is_agent` string check anywhere — the surface form already chose
 // the variant at parse time, and the planner baked it into the IR.
 // See `docs/AGENT_IDENTITY.md` invariants 1 and 2.
@@ -175,7 +175,7 @@ pub fn execute_with_endpoint_for_trace(
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher = AgentAwareDispatcher::new(
         endpoint,
-        crate::support::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
+        crate::support::platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
     );
     execute_with_dispatcher_for_trace(&dispatcher, tenant, ir, trace_id)
 }

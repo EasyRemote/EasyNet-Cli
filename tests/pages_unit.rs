@@ -33,16 +33,16 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use easynet_axon::invocation::LocalRuntime;
 use serde_json::{json, Value};
 
-use easynet_cli::runtime::ability_dispatch::AxonAbilityCatalog;
-use easynet_cli::runtime::agents::pages::fetch::handle_fetch;
-use easynet_cli::runtime::agents::pages::list_get_unpublish::{
+use easynet_cli::core::ura;
+use easynet_cli::daemon::ability::builtins::resources::pages::fetch::handle_fetch;
+use easynet_cli::daemon::ability::builtins::resources::pages::list_get_unpublish::{
     handle_get, handle_list, handle_unpublish, handle_unpublish_with_registry,
 };
-use easynet_cli::runtime::agents::pages::publish::handle_publish;
-use easynet_cli::runtime::agents::pages::state::PUBLISHED_PROJECTS;
-use easynet_cli::runtime::agents::pages::{self, PagesConfig};
-use easynet_cli::runtime::invocation_target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::ura;
+use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_publish;
+use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
+use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
+use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
@@ -483,7 +483,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     assert_eq!(ability, "pages.list");
     assert!(reg.has_rpc(&ability));
     let facts = reg
-        .runtime_binding_facts_for_mode(&ability, easynet_cli::runtime::ability::CallMode::Rpc)
+        .runtime_binding_facts_for_mode(&ability, easynet_cli::daemon::ability::CallMode::Rpc)
         .expect("runtime facts lookup")
         .expect("pages.list runtime facts");
     assert_eq!(facts.authority_owner_projection, "agent:pages");

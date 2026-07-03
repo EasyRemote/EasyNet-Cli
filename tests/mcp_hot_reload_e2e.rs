@@ -17,13 +17,11 @@
 
 use std::sync::Arc;
 
-use easynet_cli::runtime::ability_dispatch::{AxonAbilityCatalog, OwnerKind};
-use easynet_cli::runtime::agents::mcp_reflective_registry::{
+use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::{
     refresh_server_dynamic, RegistryRefreshSink,
 };
-use easynet_cli::runtime::execution::mcp_client::{
-    McpClientService, McpClientsFile, McpServerSpec,
-};
+use easynet_cli::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
 
 /// Build a Python stdio MCP server whose tools/list answer toggles
 /// between two single-tool catalogues and pushes a list_changed
