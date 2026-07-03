@@ -4,6 +4,7 @@ import unittest
 from easynet_sdk import (
     ErrorCode,
     InvocationBuilder,
+    InvocationResult,
     InvocationSignature,
     PrepareOptions,
     PreparedInvocation,
@@ -26,6 +27,26 @@ class MemoryRuntimeTransport:
             b'"events":[{"sequence":1,"kind":"submitted",'
             b'"state":"Submitted","terminal":false}],"result":null}'
         )
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_draft,
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
+                "output_json": {"ready": True},
+                "selected_node_id": "node-a",
+                "scheduling_reason": "direct",
+                "elapsed_ms": 12,
+                "receipt": {"receipt_id": "receipt-1"},
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         if self.prepare_error is not None:
@@ -68,6 +89,25 @@ def signed_fixture():
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_invoke_returns_typed_result(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        result = client.invoke(complete_draft())
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.terminal_state, "Completed")
+        self.assertEqual(
+            result.tuple.caller_ura,
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(result.output_json, {"ready": True})
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+
     def test_prepare_delegates_to_transport(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
@@ -119,6 +159,24 @@ class RuntimeTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as caught:
             client.submit_signed(signed_fixture())
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_result_rejects_inconsistent_failure(self) -> None:
+        result = {
+            "ok": False,
+            "tuple": complete_draft().to_json_dict(),
+            "terminal_state": "Failed",
+            "output_content_type": "application/json",
+            "output_base64": "",
+            "output_json": None,
+            "elapsed_ms": 3,
+            "receipt": None,
+            "error": None,
+        }
+
+        with self.assertRaises(SDKError) as caught:
+            InvocationResult.from_json(json.dumps(result))
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 

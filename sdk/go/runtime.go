@@ -9,14 +9,23 @@ import (
 
 // RuntimeTransport is the narrow Runtime Core invocation transport seam.
 type RuntimeTransport interface {
+	Invoke(ctx context.Context, draftJSON []byte) ([]byte, error)
 	Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error)
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
 type RuntimeTransportFunc struct {
+	InvokeFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
 	PrepareFunc      func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSignedFunc func(ctx context.Context, signedJSON []byte) ([]byte, error)
+}
+
+func (f RuntimeTransportFunc) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
+	if f.InvokeFunc == nil {
+		return nil, invalidRuntimeClient("runtime invoke transport function is required")
+	}
+	return f.InvokeFunc(ctx, draftJSON)
 }
 
 func (f RuntimeTransportFunc) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
@@ -58,6 +67,29 @@ type PrepareOptions struct {
 	FillNonce         bool  `json:"fill_nonce,omitempty"`
 	RequireUserSig    bool  `json:"require_user_sig,omitempty"`
 	ExpiresInMS       int64 `json:"expires_in_ms,omitempty"`
+}
+
+// Invoke submits a complete Invocation tuple and decodes the daemon result projection.
+func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (InvocationResult, error) {
+	if c == nil || c.transport == nil {
+		return InvocationResult{}, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return InvocationResult{}, invalidRuntimeClient("context is required")
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return InvocationResult{}, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
+	}
+	raw, err := c.transport.Invoke(ctx, draftJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return InvocationResult{}, sdkErr
+		}
+		return InvocationResult{}, transportRuntimeError("invoke transport failed", err)
+	}
+	return NewInvocationResultFromJSON(raw)
 }
 
 // Prepare delegates canonical material generation to the daemon transport.
@@ -115,6 +147,176 @@ func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocatio
 		return InvocationHandle{}, transportRuntimeError("submit signed transport failed", err)
 	}
 	return NewInvocationHandleFromJSON(raw)
+}
+
+// InvocationResult is the unary invocation terminal result projection.
+type InvocationResult struct {
+	ok                bool
+	tuple             InvocationDraft
+	terminalState     string
+	outputContentType string
+	outputBase64      string
+	outputJSON        json.RawMessage
+	selectedNodeID    string
+	schedulingReason  string
+	elapsedMS         int64
+	receipt           json.RawMessage
+	failure           *InvocationFailure
+}
+
+// InvocationFailure is the runtime error embedded in a terminal invocation result.
+type InvocationFailure struct {
+	code      string
+	stage     string
+	message   string
+	retryable bool
+}
+
+func (r InvocationResult) OK() bool {
+	return r.ok
+}
+
+func (r InvocationResult) Tuple() InvocationDraft {
+	return r.tuple
+}
+
+func (r InvocationResult) TerminalState() string {
+	return r.terminalState
+}
+
+func (r InvocationResult) OutputContentType() string {
+	return r.outputContentType
+}
+
+func (r InvocationResult) OutputBase64() string {
+	return r.outputBase64
+}
+
+func (r InvocationResult) OutputJSON() json.RawMessage {
+	return append(json.RawMessage(nil), r.outputJSON...)
+}
+
+func (r InvocationResult) SelectedNodeID() string {
+	return r.selectedNodeID
+}
+
+func (r InvocationResult) SchedulingReason() string {
+	return r.schedulingReason
+}
+
+func (r InvocationResult) ElapsedMS() int64 {
+	return r.elapsedMS
+}
+
+func (r InvocationResult) Receipt() json.RawMessage {
+	return append(json.RawMessage(nil), r.receipt...)
+}
+
+func (r InvocationResult) Failure() *InvocationFailure {
+	if r.failure == nil {
+		return nil
+	}
+	value := *r.failure
+	return &value
+}
+
+func (f InvocationFailure) Code() string {
+	return f.code
+}
+
+func (f InvocationFailure) Stage() string {
+	return f.stage
+}
+
+func (f InvocationFailure) Message() string {
+	return f.message
+}
+
+func (f InvocationFailure) Retryable() bool {
+	return f.retryable
+}
+
+// NewInvocationResultFromJSON decodes the daemon unary result projection.
+func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
+	var dto struct {
+		OK                *bool           `json:"ok"`
+		Tuple             json.RawMessage `json:"tuple"`
+		TerminalState     string          `json:"terminal_state"`
+		OutputContentType string          `json:"output_content_type"`
+		OutputBase64      string          `json:"output_base64"`
+		OutputJSON        json.RawMessage `json:"output_json"`
+		SelectedNodeID    string          `json:"selected_node_id"`
+		SchedulingReason  string          `json:"scheduling_reason"`
+		ElapsedMS         int64           `json:"elapsed_ms"`
+		Receipt           json.RawMessage `json:"receipt"`
+		Error             json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return InvocationResult{}, invalidRuntimePayload(fmt.Sprintf("decode invocation result JSON: %v", err), err)
+	}
+	if dto.OK == nil {
+		return InvocationResult{}, invalidRuntimePayload("ok is required", nil)
+	}
+	if len(dto.Tuple) == 0 || string(dto.Tuple) == "null" {
+		return InvocationResult{}, invalidRuntimePayload("tuple is required", nil)
+	}
+	tuple, err := NewInvocationDraftFromJSON(dto.Tuple)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if dto.TerminalState == "" {
+		return InvocationResult{}, invalidRuntimePayload("terminal_state is required", nil)
+	}
+	if dto.ElapsedMS < 0 {
+		return InvocationResult{}, invalidRuntimePayload("elapsed_ms must be non-negative", nil)
+	}
+	failure, err := decodeInvocationFailure(dto.Error)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	if *dto.OK && failure != nil {
+		return InvocationResult{}, invalidRuntimePayload("ok result must not include error", nil)
+	}
+	if !*dto.OK && failure == nil {
+		return InvocationResult{}, invalidRuntimePayload("failed result must include error", nil)
+	}
+	return InvocationResult{
+		ok:                *dto.OK,
+		tuple:             tuple,
+		terminalState:     dto.TerminalState,
+		outputContentType: dto.OutputContentType,
+		outputBase64:      dto.OutputBase64,
+		outputJSON:        append(json.RawMessage(nil), dto.OutputJSON...),
+		selectedNodeID:    dto.SelectedNodeID,
+		schedulingReason:  dto.SchedulingReason,
+		elapsedMS:         dto.ElapsedMS,
+		receipt:           append(json.RawMessage(nil), dto.Receipt...),
+		failure:           failure,
+	}, nil
+}
+
+func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var dto struct {
+		Code      string `json:"code"`
+		Stage     string `json:"stage"`
+		Message   string `json:"message"`
+		Retryable bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode invocation error JSON: %v", err), err)
+	}
+	if dto.Code == "" || dto.Stage == "" {
+		return nil, invalidRuntimePayload("error code and stage are required", nil)
+	}
+	return &InvocationFailure{
+		code:      dto.Code,
+		stage:     dto.Stage,
+		message:   dto.Message,
+		retryable: dto.Retryable,
+	}, nil
 }
 
 // InvocationHandle is the submitted invocation observation handle projection.

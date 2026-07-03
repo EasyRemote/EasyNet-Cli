@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -45,6 +46,10 @@ func signedForRuntimeTest(t *testing.T) SignedInvocation {
 func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	var seenDraft map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			t.Fatalf("Invoke should not be called")
+			return nil, nil
+		},
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
 				t.Fatalf("draft JSON: %v", err)
@@ -78,6 +83,10 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	var seenSigned map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			t.Fatalf("Invoke should not be called")
+			return nil, nil
+		},
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			t.Fatalf("Prepare should not be called")
 			return nil, nil
@@ -112,6 +121,9 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 func TestRuntimeClientPrepareWrapsTransportFailure(t *testing.T) {
 	down := errors.New("daemon unavailable")
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			return nil, nil
+		},
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			return nil, down
 		},
@@ -137,6 +149,9 @@ func TestRuntimeClientPrepareWrapsTransportFailure(t *testing.T) {
 
 func TestRuntimeClientSubmitRejectsMalformedHandle(t *testing.T) {
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			return nil, nil
+		},
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			return nil, nil
 		},
@@ -151,6 +166,83 @@ func TestRuntimeClientSubmitRejectsMalformedHandle(t *testing.T) {
 	_, err = client.SubmitSigned(context.Background(), signedForRuntimeTest(t))
 	if err == nil {
 		t.Fatalf("SubmitSigned succeeded, want invalid argument")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
+	var seenDraft map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("draft JSON: %v", err)
+			}
+			return []byte(fmt.Sprintf(`{
+				"ok": true,
+				"tuple": %s,
+				"terminal_state": "Completed",
+				"output_content_type": "application/json",
+				"output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
+				"output_json": {"ready": true},
+				"selected_node_id": "node-a",
+				"scheduling_reason": "direct",
+				"elapsed_ms": 12,
+				"receipt": {"receipt_id": "receipt-1"},
+				"error": null
+			}`, draftJSON)), nil
+		},
+		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+			t.Fatalf("Prepare should not be called")
+			return nil, nil
+		},
+		SubmitSignedFunc: func(ctx context.Context, signedJSON []byte) ([]byte, error) {
+			t.Fatalf("SubmitSigned should not be called")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	result, err := client.Invoke(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if !result.OK() || result.TerminalState() != "Completed" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Tuple().CallerURA() != "easynet:///r/example/agent/alice.sdk" {
+		t.Fatalf("tuple not decoded: %#v", result.Tuple())
+	}
+	if seenDraft["descriptor_ref"] == "" {
+		t.Fatalf("draft not sent to transport: %#v", seenDraft)
+	}
+	if string(result.OutputJSON()) != `{"ready": true}` {
+		t.Fatalf("output JSON not preserved: %s", result.OutputJSON())
+	}
+}
+
+func TestInvocationResultRejectsInconsistentFailure(t *testing.T) {
+	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("Marshal draft: %v", err)
+	}
+
+	_, err = NewInvocationResultFromJSON([]byte(fmt.Sprintf(`{
+		"ok": false,
+		"tuple": %s,
+		"terminal_state": "Failed",
+		"output_content_type": "application/json",
+		"output_base64": "",
+		"output_json": null,
+		"elapsed_ms": 3,
+		"receipt": null,
+		"error": null
+	}`, draftJSON)))
+	if err == nil {
+		t.Fatalf("NewInvocationResultFromJSON succeeded, want invalid result")
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)

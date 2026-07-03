@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
@@ -14,6 +14,9 @@ from .signing import PreparedInvocation, SignedInvocation, SigningMaterial
 @runtime_checkable
 class RuntimeTransport(Protocol):
     """Narrow transport seam owned by the application integration layer."""
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        ...
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         ...
@@ -98,6 +101,76 @@ class InvocationHandle:
         )
 
 
+@dataclass(frozen=True)
+class InvocationFailure:
+    """Runtime failure embedded in a terminal invocation result."""
+
+    code: str
+    stage: str
+    message: str = ""
+    retryable: bool = False
+
+
+@dataclass(frozen=True)
+class InvocationResult:
+    """Unary invocation terminal result projection."""
+
+    ok: bool
+    tuple: InvocationDraft
+    terminal_state: str
+    output_content_type: str = ""
+    output_base64: str = ""
+    output_json: Any = None
+    selected_node_id: str = ""
+    scheduling_reason: str = ""
+    elapsed_ms: int = 0
+    receipt: Optional[Mapping[str, object]] = None
+    error: Optional[InvocationFailure] = None
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "InvocationResult":
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            decoded = json.loads(text)
+        except Exception as exc:
+            raise _invalid_runtime(f"decode invocation result JSON: {exc}", exc) from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_runtime("invocation result JSON must be an object")
+        ok = _required_bool(decoded, "ok")
+        tuple_value = _required_mapping(decoded, "tuple")
+        draft = InvocationDraft.from_json(json.dumps(tuple_value))
+        terminal_state = _required_string(decoded, "terminal_state")
+        elapsed_ms = _optional_non_negative_int(decoded.get("elapsed_ms"), "elapsed_ms")
+        failure = _failure(decoded.get("error"))
+        if ok and failure is not None:
+            raise _invalid_runtime("ok result must not include error")
+        if not ok and failure is None:
+            raise _invalid_runtime("failed result must include error")
+        return cls(
+            ok=ok,
+            tuple=draft,
+            terminal_state=terminal_state,
+            output_content_type=_optional_string(
+                decoded.get("output_content_type"), "output_content_type"
+            )
+            or "",
+            output_base64=_optional_string(decoded.get("output_base64"), "output_base64")
+            or "",
+            output_json=decoded.get("output_json"),
+            selected_node_id=_optional_string(
+                decoded.get("selected_node_id"), "selected_node_id"
+            )
+            or "",
+            scheduling_reason=_optional_string(
+                decoded.get("scheduling_reason"), "scheduling_reason"
+            )
+            or "",
+            elapsed_ms=elapsed_ms,
+            receipt=_optional_mapping(decoded.get("receipt"), "receipt"),
+            error=failure,
+        )
+
+
 class RuntimeClient:
     """Runtime Core invocation facade over an application transport."""
 
@@ -105,6 +178,15 @@ class RuntimeClient:
         if transport is None:
             raise _invalid_runtime_client("runtime transport is required")
         self._transport = transport
+
+    def invoke(self, draft: InvocationDraft) -> InvocationResult:
+        try:
+            raw = self._transport.invoke(draft.to_json().encode("utf-8"))
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("invoke transport failed", exc) from exc
+        return InvocationResult.from_json(raw)
 
     def prepare(
         self,
@@ -147,10 +229,40 @@ def _handle_event(value: object) -> InvocationHandleEvent:
     )
 
 
+def _failure(value: object) -> Optional[InvocationFailure]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise _invalid_runtime("error must be an object or null")
+    return InvocationFailure(
+        code=_required_string(value, "code"),
+        stage=_required_string(value, "stage"),
+        message=_optional_string(value.get("message"), "message") or "",
+        retryable=_optional_bool(value.get("retryable"), "retryable") or False,
+    )
+
+
+def _required_mapping(
+    decoded: Mapping[str, object], field_name: str
+) -> Mapping[str, object]:
+    value = decoded.get(field_name)
+    if not isinstance(value, dict):
+        raise _invalid_runtime(f"{field_name} must be an object")
+    return value
+
+
 def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:
     value = decoded.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise _invalid_runtime(f"{field_name} is required")
+    return value
+
+
+def _optional_non_negative_int(value: object, field_name: str) -> int:
+    if value is None:
+        return 0
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_runtime(f"{field_name} must be a non-negative integer")
     return value
 
 
@@ -165,6 +277,14 @@ def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:
     value = decoded.get(field_name)
     if not isinstance(value, bool):
         raise _invalid_runtime(f"{field_name} must be a boolean")
+    return value
+
+
+def _optional_bool(value: object, field_name: str) -> Optional[bool]:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise _invalid_runtime(f"{field_name} must be a boolean or null")
     return value
 
 
