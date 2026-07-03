@@ -109,6 +109,9 @@ schema_files=(
   compatibility-list-models-request.schema.json
   compatibility-chat-completion-request.schema.json
   compatibility-stream-chat-completion-request.schema.json
+  compatibility-file-upload-request.schema.json
+  compatibility-file-request.schema.json
+  compatibility-file-delete-request.schema.json
   file.schema.json
   terminal.schema.json
   remote-desktop.schema.json
@@ -210,6 +213,11 @@ fixture_files=(
   compatibility-model-page.v4.json
   compatibility-chat-completion.v4.json
   compatibility-chat-stream.v4.json
+  compatibility-file-upload-request.v4.json
+  compatibility-file-request.v4.json
+  compatibility-file.v4.json
+  compatibility-file-delete-request.v4.json
+  compatibility-file-delete-result.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do

@@ -1,0 +1,11 @@
+{
+  "id": "file-easynet-docs-1",
+  "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl",
+  "owner_ura": "easynet:///r/example/agent/alice.sdk",
+  "filename": "prompt.jsonl",
+  "purpose": "batch",
+  "content_type": "application/jsonl",
+  "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "size_bytes": 19,
+  "created_at": 1783094400
+}

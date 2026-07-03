@@ -119,10 +119,12 @@ DTOs. It must not own backend account state, pairing-token HTTP, certificate
 policy, browser session UX, or fabricate hosted-agent URAs.
 Compatibility carrier/projection may build complete Invocation carriers for
 daemon `openai.list_models` and `openai.chat_completions`; require canonical
-agent-owned chat Ability URA model ids; and project daemon OpenAI-compatible
-model, unary chat, and stream chunk envelopes into SDK DTOs. It must not own
-product API-key policy, quota/rate limits, billing, HTTP route shaping, SSE
-fanout, or treat OpenAI schemas as daemon protocol.
+agent-owned chat Ability URA model ids; project daemon OpenAI-compatible
+model, unary chat, and stream chunk envelopes into SDK DTOs; and adapt SDK
+file/resource facts into Compatibility file DTOs. It must not invent daemon
+`openai.files.*` abilities, own multipart upload or storage policy, own product
+API-key policy, quota/rate limits, billing, HTTP route shaping, SSE fanout, or
+treat OpenAI schemas as daemon protocol.
 
 ## Invocation Tuple
 

@@ -1,0 +1,11 @@
+{
+  "profile": "compatibility",
+  "kind": "file_delete_result",
+  "id": "file-easynet-docs-1",
+  "object": "file",
+  "deleted": true,
+  "metadata": {
+    "profile": "compatibility",
+    "source": "compatibility.file_delete"
+  }
+}

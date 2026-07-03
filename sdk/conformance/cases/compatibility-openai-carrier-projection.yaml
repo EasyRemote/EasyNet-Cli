@@ -19,6 +19,12 @@ steps:
     fixture: compatibility-chat-completion.v4.json
   - action: project_chat_stream
     fixture: compatibility-chat-stream.v4.json
+  - action: project_file_upload
+    fixture: compatibility-file-upload-request.v4.json
+  - action: project_file
+    fixture: compatibility-file-request.v4.json
+  - action: project_file_delete_result
+    fixture: compatibility-file-delete-request.v4.json
 expect:
   result: compatibility_openai_carrier_projection_observed
   request_schema: compatibility-chat-completion-request.schema.json
@@ -31,7 +37,10 @@ expect:
   model_page_fixture: compatibility-model-page.v4.json
   chat_completion_fixture: compatibility-chat-completion.v4.json
   chat_stream_fixture: compatibility-chat-stream.v4.json
+  file_fixture: compatibility-file.v4.json
+  file_delete_result_fixture: compatibility-file-delete-result.v4.json
   rejects_provider_nickname_models: true
   rejects_unary_stream_true: true
-  files_api: scaffold_only
+  files_api: file_wrapper_projection
+  openai_files_daemon_ability_required: false
   product_http_auth_and_sse_fanout: product_owned

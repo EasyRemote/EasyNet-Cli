@@ -77,9 +77,10 @@ method spelling.
   CDN/cache policy, full surface status, content-management UX, and language
   facades remain incomplete.
 - Compatibility carrier/projection guardrails exist for Rust/C ABI over daemon
-  `openai.list_models` and `openai.chat_completions`; compatibility file
-  create/get/delete, product API-key policy, quota/rate limits, billing,
-  backend HTTP route shaping, SSE/WebSocket fanout, and language facades remain
+  `openai.list_models` and `openai.chat_completions` plus file adapter
+  projections over SDK file/resource facts; product API-key policy,
+  quota/rate limits, billing, backend HTTP route shaping, multipart
+  upload/storage policy, SSE/WebSocket fanout, and language facades remain
   incomplete.
 - Directory subscribe convenience methods, Axon-backed receipt verification,
   full surface status, and convenience wrappers are schema/conformance

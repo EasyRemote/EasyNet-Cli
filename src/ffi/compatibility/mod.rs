@@ -3,13 +3,14 @@
 //
 // File: src/ffi/compatibility/mod.rs
 // Description: C ABI CompatibilityClient projection helpers for daemon SDK
-//              OpenAI-compatible carriers and result DTOs.
+//              OpenAI-compatible carriers and result/file DTOs.
 //
 // Protocol Responsibility
 // -----------------------
 // Expose Compatibility DTO construction without letting language facades own
-// OpenAI-to-daemon Invocation carrier shapes or chat completion projections.
-// This module does not own product HTTP auth, quotas, billing, or SSE fanout.
+// OpenAI-to-daemon Invocation carrier shapes, chat completion projections, or
+// file adapter DTOs. This module does not own product HTTP auth, quotas,
+// billing, file storage, or SSE fanout.
 //
 // Implementation Approach
 // -----------------------
@@ -33,7 +34,8 @@ use std::os::raw::c_char;
 use crate::daemon::compatibility_contract::{
     build_chat_completion_invocation, build_list_models_invocation,
     build_stream_chat_completion_invocation, project_chat_completion, project_chat_stream,
-    project_model_page, CompatibilityError,
+    project_file, project_file_delete_result, project_file_upload, project_model_page,
+    CompatibilityError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -174,6 +176,72 @@ pub unsafe extern "C" fn easynet_compatibility_project_chat_stream(
         "out_stream_json",
         "stream_json",
         project_chat_stream,
+    )
+}
+
+/// Project a local file/upload request into a Compatibility file DTO.
+///
+/// # Safety
+/// `file_json` must be a valid UTF-8 C string and `out_file_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_compatibility_project_file_upload(
+    handle: EasynetHandle,
+    file_json: *const c_char,
+    out_file_json: *mut *mut c_char,
+) -> i32 {
+    project_compatibility_json(
+        handle,
+        file_json,
+        out_file_json,
+        "easynet_compatibility_project_file_upload",
+        "out_file_json",
+        "file_json",
+        project_file_upload,
+    )
+}
+
+/// Project SDK file/resource facts into a Compatibility file DTO.
+///
+/// # Safety
+/// `file_json` must be a valid UTF-8 C string and `out_file_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_compatibility_project_file(
+    handle: EasynetHandle,
+    file_json: *const c_char,
+    out_file_json: *mut *mut c_char,
+) -> i32 {
+    project_compatibility_json(
+        handle,
+        file_json,
+        out_file_json,
+        "easynet_compatibility_project_file",
+        "out_file_json",
+        "file_json",
+        project_file,
+    )
+}
+
+/// Project explicit file delete facts into a Compatibility delete result DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_compatibility_project_file_delete_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_compatibility_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_compatibility_project_file_delete_result",
+        "out_result_json",
+        "result_json",
+        project_file_delete_result,
     )
 }
 
@@ -357,5 +425,73 @@ mod tests {
 
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert!(out.is_null());
+    }
+
+    #[test]
+    fn compatibility_project_file_upload_reads_local_file() {
+        let handle = handle();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prompt.jsonl");
+        std::fs::write(&path, b"{\"prompt\":\"hello\"}\n").unwrap();
+        let raw = CString::new(
+            serde_json::json!({
+                "path": path.display().to_string(),
+                "purpose": "batch",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_compatibility_project_file_upload(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "file");
+        assert_eq!(value["filename"], "prompt.jsonl");
+        assert!(value["id"].as_str().unwrap().starts_with("file-"));
+        release(handle);
+    }
+
+    #[test]
+    fn compatibility_project_file_projects_record() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "filename": "prompt.jsonl",
+                "purpose": "assistants",
+                "size_bytes": 19
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe { easynet_compatibility_project_file(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "file");
+        assert_eq!(value["bytes"], 19);
+        release(handle);
+    }
+
+    #[test]
+    fn compatibility_project_file_delete_requires_deleted_after_zeroing_output() {
+        let handle = handle();
+        let raw = CString::new(serde_json::json!({"id": "file-123"}).to_string()).unwrap();
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+
+        let code = unsafe {
+            easynet_compatibility_project_file_delete_result(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert!(out.is_null());
+        release(handle);
     }
 }

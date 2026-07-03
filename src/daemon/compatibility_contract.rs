@@ -3,21 +3,23 @@
 //
 // File: src/daemon/compatibility_contract.rs
 // Description: Shared daemon SDK contract for OpenAI-compatible carrier
-//              construction and result projection.
+//              construction and result/file DTO projection.
 //
 // Protocol Responsibility
 // -----------------------
 // Own the EasyNet-Cli SDK Compatibility DTO projection that lowers
-// OpenAI-shaped model/chat requests to governed daemon abilities. This module
-// does not own HTTP auth, billing, rate limits, SSE fanout, model execution, or
+// OpenAI-shaped model/chat requests to governed daemon abilities and projects
+// file-wrapper facts into compatibility DTOs. This module does not own HTTP
+// auth, billing, rate limits, SSE fanout, model execution, file storage, or
 // OpenAI as daemon protocol.
 //
 // Implementation Approach
 // -----------------------
 // Reuse the shared daemon SDK carrier builder for complete Invocation tuples
 // and delegate chat-model identity validation to the daemon OpenAI adapter.
-// Projection validates daemon-returned OpenAI-compatible envelopes into stable
-// SDK DTOs without fabricating model ids, chunks, completion ids, or usage.
+// Projection validates daemon-returned OpenAI-compatible envelopes and
+// SDK file/resource facts into stable DTOs without fabricating model ids,
+// chunks, completion ids, file ids, or usage.
 //
 // Usage Contract
 // --------------
@@ -31,12 +33,16 @@
 // submit/open path for returned Invocation carriers; backend/product HTTP
 // compatibility routes remain above this SDK profile.
 
+use std::path::Path;
+use std::time::UNIX_EPOCH;
+
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::builtins::integrations::openai_compat;
 use crate::daemon::sdk_contract::{
     build_system_invocation, object, optional_bool_field, optional_string_field, required_string,
-    SdkContractError,
+    validate_ura, SdkContractError,
 };
 
 const COMPATIBILITY_PROFILE: &str = "compatibility";
@@ -170,6 +176,48 @@ pub(crate) fn project_chat_stream(input: &Value) -> Result<Value, CompatibilityE
     }))
 }
 
+pub(crate) fn project_file_upload(input: &Value) -> Result<Value, CompatibilityError> {
+    let obj = object(input, "CompatibilityFileUploadRequest")?;
+    let purpose = required_string(obj, "purpose")?;
+    let facts = if let Some(path) = optional_string_field(obj, "path")? {
+        CompatibilityFileFacts::from_local_path(obj, &path, purpose)?
+    } else {
+        CompatibilityFileFacts::from_file_facts(obj, Some(purpose))?
+    };
+    facts.file_json("upload")
+}
+
+pub(crate) fn project_file(input: &Value) -> Result<Value, CompatibilityError> {
+    let obj = object(input, "CompatibilityFileInput")?;
+    CompatibilityFileFacts::from_file_facts(obj, None)?.file_json("file")
+}
+
+pub(crate) fn project_file_delete_result(input: &Value) -> Result<Value, CompatibilityError> {
+    let obj = object(input, "CompatibilityFileDeleteInput")?;
+    let id = compatibility_file_id(obj)?;
+    let deleted = obj
+        .get("deleted")
+        .and_then(Value::as_bool)
+        .ok_or(CompatibilityError::MissingField("deleted"))?;
+    let mut metadata = typed_metadata(obj)?;
+    metadata.insert(
+        "profile".to_string(),
+        Value::String(COMPATIBILITY_PROFILE.to_string()),
+    );
+    metadata.insert(
+        "source".to_string(),
+        Value::String("compatibility.file_delete".to_string()),
+    );
+    Ok(json!({
+        "profile": COMPATIBILITY_PROFILE,
+        "kind": "file_delete_result",
+        "id": id,
+        "object": "file",
+        "deleted": deleted,
+        "metadata": metadata,
+    }))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChatCarrierMode {
     Unary,
@@ -282,6 +330,236 @@ fn project_stream_chunk(input: &Value) -> Result<Value, CompatibilityError> {
             "source": "openai.chat_completions",
         },
     }))
+}
+
+#[derive(Debug, Clone)]
+struct CompatibilityFileFacts {
+    id: String,
+    filename: String,
+    purpose: String,
+    bytes: u64,
+    created_at: u64,
+    status: String,
+    content_hash: Option<String>,
+    file_ref: Option<String>,
+    owner_ura: Option<String>,
+    content_type: Option<String>,
+    metadata: Map<String, Value>,
+}
+
+impl CompatibilityFileFacts {
+    fn from_local_path(
+        obj: &Map<String, Value>,
+        path: &str,
+        purpose: &str,
+    ) -> Result<Self, CompatibilityError> {
+        let path = validate_local_file_path(path)?;
+        let bytes = std::fs::read(path).map_err(|err| {
+            CompatibilityError::Contract(format!(
+                "read local upload file {}: {err}",
+                path.display()
+            ))
+        })?;
+        let content_hash = sha256_content_hash(&bytes);
+        let metadata = std::fs::metadata(path).map_err(|err| {
+            CompatibilityError::Contract(format!(
+                "stat local upload file {}: {err}",
+                path.display()
+            ))
+        })?;
+        let filename = optional_string_field(obj, "filename")?.unwrap_or_else(|| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("upload.bin")
+                .to_string()
+        });
+        let owner_ura = optional_string_field(obj, "owner_ura")?;
+        if let Some(owner_ura) = owner_ura.as_deref() {
+            validate_ura(owner_ura, "owner_ura")?;
+        }
+        let created_at = optional_u64_field(obj, "created_at")?.unwrap_or_else(|| {
+            metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0)
+        });
+        let mut dto_metadata = typed_metadata(obj)?;
+        dto_metadata.insert(
+            "local_path".to_string(),
+            Value::String(path.display().to_string()),
+        );
+        dto_metadata.insert(
+            "content_hash".to_string(),
+            Value::String(content_hash.clone()),
+        );
+        Ok(Self {
+            id: optional_string_field(obj, "id")?
+                .or_else(|| optional_string_field(obj, "file_id").ok().flatten())
+                .unwrap_or_else(|| file_id_from_stable_ref(&content_hash)),
+            filename,
+            purpose: purpose.to_string(),
+            bytes: metadata.len(),
+            created_at,
+            status: optional_string_field(obj, "status")?
+                .unwrap_or_else(|| "processed".to_string()),
+            content_hash: Some(content_hash),
+            file_ref: optional_string_field(obj, "file_ref")?
+                .or_else(|| optional_string_field(obj, "resource_ref").ok().flatten()),
+            owner_ura,
+            content_type: optional_string_field(obj, "content_type")?,
+            metadata: dto_metadata,
+        })
+    }
+
+    fn from_file_facts(
+        obj: &Map<String, Value>,
+        purpose_override: Option<&str>,
+    ) -> Result<Self, CompatibilityError> {
+        let id = compatibility_file_id(obj)?;
+        let filename = optional_string_field(obj, "filename")?.unwrap_or_else(|| id.clone());
+        let purpose = purpose_override
+            .map(str::to_string)
+            .or_else(|| optional_string_field(obj, "purpose").ok().flatten())
+            .unwrap_or_else(|| "assistants".to_string());
+        let bytes = optional_u64_field(obj, "bytes")?
+            .or_else(|| optional_u64_field(obj, "size_bytes").ok().flatten())
+            .unwrap_or(0);
+        let created_at = optional_u64_field(obj, "created_at")?
+            .or_else(|| optional_u64_field(obj, "created").ok().flatten())
+            .unwrap_or(0);
+        let owner_ura = optional_string_field(obj, "owner_ura")?;
+        if let Some(owner_ura) = owner_ura.as_deref() {
+            validate_ura(owner_ura, "owner_ura")?;
+        }
+        let content_hash = optional_string_field(obj, "content_hash")?;
+        let file_ref = optional_string_field(obj, "file_ref")?
+            .or_else(|| optional_string_field(obj, "resource_ref").ok().flatten())
+            .or_else(|| optional_string_field(obj, "resource_ura").ok().flatten());
+        let mut metadata = typed_metadata(obj)?;
+        if let Some(hash) = content_hash.as_deref() {
+            metadata.insert("content_hash".to_string(), Value::String(hash.to_string()));
+        }
+        if let Some(file_ref) = file_ref.as_deref() {
+            metadata.insert("file_ref".to_string(), Value::String(file_ref.to_string()));
+        }
+        Ok(Self {
+            id,
+            filename,
+            purpose,
+            bytes,
+            created_at,
+            status: optional_string_field(obj, "status")?
+                .unwrap_or_else(|| "processed".to_string()),
+            content_hash,
+            file_ref,
+            owner_ura,
+            content_type: optional_string_field(obj, "content_type")?,
+            metadata,
+        })
+    }
+
+    fn file_json(mut self, source: &'static str) -> Result<Value, CompatibilityError> {
+        if self.id.trim().is_empty() {
+            return Err(CompatibilityError::MissingField("id"));
+        }
+        self.metadata.insert(
+            "profile".to_string(),
+            Value::String(COMPATIBILITY_PROFILE.to_string()),
+        );
+        self.metadata.insert(
+            "source".to_string(),
+            Value::String(format!("compatibility.{source}")),
+        );
+        if let Some(owner_ura) = self.owner_ura.as_deref() {
+            self.metadata.insert(
+                "owner_ura".to_string(),
+                Value::String(owner_ura.to_string()),
+            );
+        }
+        if let Some(content_type) = self.content_type.as_deref() {
+            self.metadata.insert(
+                "content_type".to_string(),
+                Value::String(content_type.to_string()),
+            );
+        }
+        if let Some(content_hash) = self.content_hash.as_deref() {
+            self.metadata.insert(
+                "content_hash".to_string(),
+                Value::String(content_hash.to_string()),
+            );
+        }
+        if let Some(file_ref) = self.file_ref.as_deref() {
+            self.metadata
+                .insert("file_ref".to_string(), Value::String(file_ref.to_string()));
+        }
+        Ok(json!({
+            "profile": COMPATIBILITY_PROFILE,
+            "kind": "file",
+            "id": self.id,
+            "object": "file",
+            "bytes": self.bytes,
+            "created_at": self.created_at,
+            "filename": self.filename,
+            "purpose": self.purpose,
+            "status": self.status,
+            "metadata": self.metadata,
+        }))
+    }
+}
+
+fn validate_local_file_path(raw: &str) -> Result<&Path, CompatibilityError> {
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return Err(CompatibilityError::InvalidField(
+            "path",
+            "must be an absolute path".to_string(),
+        ));
+    }
+    if !path.is_file() {
+        return Err(CompatibilityError::InvalidField(
+            "path",
+            "must be an existing file".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn sha256_content_hash(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{}", hex::encode(digest))
+}
+
+fn file_id_from_stable_ref(raw: &str) -> String {
+    let digest = Sha256::digest(raw.as_bytes());
+    let hex = hex::encode(digest);
+    format!("file-{}", &hex[..24])
+}
+
+fn compatibility_file_id(obj: &Map<String, Value>) -> Result<String, CompatibilityError> {
+    if let Some(id) = optional_string_field(obj, "id")?
+        .or_else(|| optional_string_field(obj, "file_id").ok().flatten())
+    {
+        return Ok(id);
+    }
+    let stable_ref = optional_string_field(obj, "file_ref")?
+        .or_else(|| optional_string_field(obj, "resource_ref").ok().flatten())
+        .or_else(|| optional_string_field(obj, "resource_ura").ok().flatten())
+        .or_else(|| optional_string_field(obj, "content_hash").ok().flatten())
+        .ok_or(CompatibilityError::MissingField("id"))?;
+    Ok(file_id_from_stable_ref(&stable_ref))
+}
+
+fn typed_metadata(obj: &Map<String, Value>) -> Result<Map<String, Value>, CompatibilityError> {
+    match obj.get("metadata") {
+        None | Some(Value::Null) => Ok(Map::new()),
+        Some(Value::Object(metadata)) => Ok(metadata.clone()),
+        Some(_) => Err(CompatibilityError::InvalidField(
+            "metadata",
+            "must be an object".to_string(),
+        )),
+    }
 }
 
 fn validate_chat_model(raw: &str, field: &'static str) -> Result<(), CompatibilityError> {
@@ -524,5 +802,84 @@ mod tests {
         assert_eq!(stream["kind"], "chat_completion_stream");
         assert_eq!(stream["items"][0]["kind"], "chat_completion_chunk");
         assert_eq!(stream["done_sentinel"], "[DONE]");
+    }
+
+    #[test]
+    fn project_file_upload_reads_local_file_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prompt.jsonl");
+        std::fs::write(&path, b"{\"prompt\":\"hello\"}\n").unwrap();
+
+        let file = project_file_upload(&json!({
+            "path": path.display().to_string(),
+            "purpose": "batch",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "content_type": "application/jsonl"
+        }))
+        .unwrap();
+
+        assert_eq!(file["kind"], "file");
+        assert_eq!(file["object"], "file");
+        assert_eq!(file["bytes"], 19);
+        assert_eq!(file["filename"], "prompt.jsonl");
+        assert_eq!(file["purpose"], "batch");
+        assert!(file["id"].as_str().unwrap().starts_with("file-"));
+        assert!(file["metadata"]["content_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+    }
+
+    #[test]
+    fn project_file_upload_rejects_relative_path() {
+        let err = project_file_upload(&json!({
+            "path": "prompt.jsonl",
+            "purpose": "batch"
+        }))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("absolute path"));
+    }
+
+    #[test]
+    fn project_file_projects_explicit_file_record() {
+        let file = project_file(&json!({
+            "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "filename": "prompt.jsonl",
+            "purpose": "assistants",
+            "size_bytes": 19,
+            "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "content_type": "application/jsonl"
+        }))
+        .unwrap();
+
+        assert_eq!(file["kind"], "file");
+        assert!(file["id"].as_str().unwrap().starts_with("file-"));
+        assert_eq!(file["bytes"], 19);
+        assert_eq!(
+            file["metadata"]["file_ref"],
+            "easynet:///r/example/resource/alice.files/prompt.jsonl"
+        );
+    }
+
+    #[test]
+    fn project_file_delete_result_requires_explicit_deleted_flag() {
+        let err = project_file_delete_result(&json!({"id": "file-123"})).unwrap_err();
+
+        assert!(err.to_string().contains("deleted"));
+    }
+
+    #[test]
+    fn project_file_delete_result_projects_ack() {
+        let result = project_file_delete_result(&json!({
+            "id": "file-123",
+            "deleted": true
+        }))
+        .unwrap();
+
+        assert_eq!(result["kind"], "file_delete_result");
+        assert_eq!(result["object"], "file");
+        assert_eq!(result["deleted"], true);
     }
 }

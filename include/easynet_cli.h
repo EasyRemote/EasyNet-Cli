@@ -687,6 +687,24 @@ int32_t easynet_compatibility_project_chat_stream(
     char **out_stream_json
 );
 
+int32_t easynet_compatibility_project_file_upload(
+    EasynetHandle handle,
+    const char *file_json,
+    char **out_file_json
+);
+
+int32_t easynet_compatibility_project_file(
+    EasynetHandle handle,
+    const char *file_json,
+    char **out_file_json
+);
+
+int32_t easynet_compatibility_project_file_delete_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
 #ifdef __cplusplus
 }
 #endif

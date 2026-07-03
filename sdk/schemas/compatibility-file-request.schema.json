@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/compatibility-file-request.schema.json",
+  "title": "CompatibilityFileRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    {"required": ["id"]},
+    {"required": ["file_id"]},
+    {"required": ["file_ref"]},
+    {"required": ["resource_ref"]},
+    {"required": ["resource_ura"]},
+    {"required": ["content_hash"]}
+  ],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "file_id": {"type": "string", "minLength": 1},
+    "file_ref": {"type": "string", "minLength": 1},
+    "resource_ref": {"type": "string", "minLength": 1},
+    "resource_ura": {"type": "string", "minLength": 1},
+    "filename": {"type": "string", "minLength": 1},
+    "purpose": {"type": "string", "minLength": 1},
+    "owner_ura": {"type": "string", "minLength": 1},
+    "content_type": {"type": "string", "minLength": 1},
+    "content_hash": {"type": "string", "minLength": 1},
+    "bytes": {"type": "integer", "minimum": 0},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "created_at": {"type": "integer", "minimum": 0},
+    "created": {"type": "integer", "minimum": 0},
+    "status": {"type": "string", "minLength": 1},
+    "metadata": {"type": "object"}
+  }
+}

@@ -13,7 +13,9 @@
         "model",
         "chat_completion",
         "chat_completion_stream",
-        "chat_completion_chunk"
+        "chat_completion_chunk",
+        "file",
+        "file_delete_result"
       ]
     },
     "object": {"type": ["string", "null"]},
@@ -27,6 +29,12 @@
     "usage": {"type": ["object", "null"]},
     "stream": {"type": "boolean"},
     "done_sentinel": {"type": "string"},
+    "bytes": {"type": ["integer", "null"], "minimum": 0},
+    "created_at": {"type": ["integer", "null"], "minimum": 0},
+    "filename": {"type": ["string", "null"]},
+    "purpose": {"type": ["string", "null"]},
+    "status": {"type": ["string", "null"]},
+    "deleted": {"type": "boolean"},
     "next_cursor": true,
     "metadata": {"type": "object"}
   }

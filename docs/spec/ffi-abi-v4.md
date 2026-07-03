@@ -821,6 +821,24 @@ int32_t easynet_compatibility_project_chat_stream(
     const char* stream_json,
     char** out_stream_json
 );
+
+int32_t easynet_compatibility_project_file_upload(
+    EasynetHandle handle,
+    const char* file_json,
+    char** out_file_json
+);
+
+int32_t easynet_compatibility_project_file(
+    EasynetHandle handle,
+    const char* file_json,
+    char** out_file_json
+);
+
+int32_t easynet_compatibility_project_file_delete_result(
+    EasynetHandle handle,
+    const char* result_json,
+    char** out_result_json
+);
 ```
 
 Compatibility functions are scoped to a live `EasynetHandle`, matching the SDK
@@ -842,11 +860,17 @@ nicknames such as `gpt-5` are not accepted at this daemon SDK layer.
 `easynet_compatibility_project_chat_completion`, and
 `easynet_compatibility_project_chat_stream` validate daemon-returned
 OpenAI-compatible envelopes and project them into SDK DTOs with
-`profile = "compatibility"`. ABI v4 Compatibility support is
-`carrier_projection_partial`: OpenAI-compatible file create/get/delete,
+`profile = "compatibility"`.
+
+`easynet_compatibility_project_file_upload`,
+`easynet_compatibility_project_file`, and
+`easynet_compatibility_project_file_delete_result` adapt SDK file/resource
+facts into OpenAI-compatible file DTOs. They do not invent `openai.files.*`
+daemon abilities, delete files, parse multipart requests, or own product file
+storage policy. ABI v4 Compatibility support is `carrier_projection_partial`:
 product API-key policy, quota/rate-limit policy, billing, HTTP route shaping,
-and SSE/WebSocket fanout remain future daemon abilities or product-profile
-work.
+multipart upload handling, and SSE/WebSocket fanout remain product-profile or
+wrapper-profile work.
 
 ## 3. Error Code Table
 

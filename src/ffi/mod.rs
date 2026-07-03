@@ -76,7 +76,7 @@
 //   and daemon lifecycle projection helpers.
 // - `easynet_compatibility_build_*_invocation` and
 //   `easynet_compatibility_project_*`: Compatibility carrier and OpenAI-shape
-//   model/chat projection helpers.
+//   model/chat/file projection helpers.
 // - `easynet_surface_build_*_invocation` and
 //   `easynet_surface_project_*`: Surface page carrier and projection helpers.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
@@ -188,6 +188,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "surface_projection": true,
             "compatibility_carriers": true,
             "compatibility_projection": true,
+            "compatibility_file_adapters": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
             "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
@@ -374,6 +375,7 @@ mod tests {
         assert_eq!(json["symbols"]["surface_projection"], true);
         assert_eq!(json["symbols"]["compatibility_carriers"], true);
         assert_eq!(json["symbols"]["compatibility_projection"], true);
+        assert_eq!(json["symbols"]["compatibility_file_adapters"], true);
         assert_eq!(json["profiles"]["receipt"], "fetch_projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],

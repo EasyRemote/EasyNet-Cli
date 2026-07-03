@@ -185,6 +185,9 @@ expected_symbols=(
     easynet_compatibility_project_model_page
     easynet_compatibility_project_chat_completion
     easynet_compatibility_project_chat_stream
+    easynet_compatibility_project_file_upload
+    easynet_compatibility_project_file
+    easynet_compatibility_project_file_delete_result
 )
 
 retired_symbols=(
@@ -379,6 +382,7 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_compatibility_build_chat_completion_invocation"
     require_literal "$SPEC" "easynet_compatibility_project_model_page"
     require_literal "$SPEC" "easynet_compatibility_project_chat_stream"
+    require_literal "$SPEC" "easynet_compatibility_project_file_upload"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 
