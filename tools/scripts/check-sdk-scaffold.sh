@@ -52,6 +52,8 @@ for path in \
   sdk/go/health_test.go \
   sdk/go/invocation.go \
   sdk/go/invocation_test.go \
+  sdk/go/runtime.go \
+  sdk/go/runtime_test.go \
   sdk/go/signing.go \
   sdk/go/signing_test.go \
   sdk/go/import_boundary_test.go \
@@ -60,9 +62,11 @@ for path in \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
   sdk/python/easynet_sdk/invocation.py \
+  sdk/python/easynet_sdk/runtime.py \
   sdk/python/easynet_sdk/signing.py \
   sdk/python/tests/test_health.py \
   sdk/python/tests/test_invocation.py \
+  sdk/python/tests/test_runtime.py \
   sdk/python/tests/test_signing.py \
   sdk/python/tests/test_import_boundary.py
 do
@@ -303,6 +307,9 @@ require_literal sdk/go/health.go "HealthClient"
 require_literal sdk/go/health.go "RuntimeHealth"
 require_literal sdk/go/invocation.go "InvocationBuilder"
 require_literal sdk/go/invocation.go "InvocationDraft"
+require_literal sdk/go/runtime.go "RuntimeClient"
+require_literal sdk/go/runtime.go "RuntimeTransport"
+require_literal sdk/go/runtime.go "SubmitSigned"
 require_literal sdk/go/signing.go "PreparedInvocation"
 require_literal sdk/go/signing.go "SignedInvocation"
 require_literal sdk/go/signing.go "SigningMaterial"
@@ -314,6 +321,9 @@ require_literal sdk/python/easynet_sdk/health.py "HealthClient"
 require_literal sdk/python/easynet_sdk/health.py "RuntimeHealth"
 require_literal sdk/python/easynet_sdk/invocation.py "InvocationBuilder"
 require_literal sdk/python/easynet_sdk/invocation.py "InvocationDraft"
+require_literal sdk/python/easynet_sdk/runtime.py "RuntimeClient"
+require_literal sdk/python/easynet_sdk/runtime.py "RuntimeTransport"
+require_literal sdk/python/easynet_sdk/runtime.py "submit_signed"
 require_literal sdk/python/easynet_sdk/signing.py "PreparedInvocation"
 require_literal sdk/python/easynet_sdk/signing.py "SignedInvocation"
 require_literal sdk/python/easynet_sdk/signing.py "SigningMaterial"

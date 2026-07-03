@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/health/errors/invocation-draft/signing-boundary partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/health/errors/invocation-draft/signing-boundary partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/health/errors/invocation-draft/prepare-submit seam partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/health/errors/invocation-draft/prepare-submit seam partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -24,7 +24,7 @@ method spelling.
 | runtime health | partial | partial | partial | partial | gap | gap | gap |
 | typed errors | partial | typed JSON partial | partial | partial | gap | gap | gap |
 | complete invocation draft | partial | builder handles partial | partial | partial | gap | gap | gap |
-| prepare/sign/submit | partial | handle observation partial | DTO partial | DTO partial | gap | gap | gap |
+| prepare/sign/submit | partial | handle observation partial | transport seam partial | transport seam partial | gap | gap | gap |
 | unary invoke | partial | partial | gap | gap | gap | gap | gap |
 | stream | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
 | bidi | existing dispatch | lifecycle partial | gap | gap | gap | gap | gap |
@@ -90,17 +90,19 @@ method spelling.
   backend HTTP/WebSocket bridges, storage policy, and language facades remain
   incomplete.
 - Go package exposes Runtime Core feature/version discovery, runtime health
-  readiness facts, schema-backed typed SDK error projection, and complete
-  Invocation draft construction plus prepared/signed Invocation DTOs behind
-  transport seams; prepare transport, submit transport, daemon Invocation
-  transport, profile clients, stream/bidi adapters, backend import-ban
-  integration, per-profile error source refs, and conformance action execution
-  remain incomplete before backend cutover.
+  readiness facts, schema-backed typed SDK error projection, complete
+  Invocation draft construction, prepared/signed Invocation DTOs, and
+  RuntimeClient prepare/submit-signed methods behind narrow JSON transport
+  seams; concrete daemon transport, await/cancel/events convenience methods,
+  profile clients, stream/bidi adapters, backend import-ban integration,
+  per-profile error source refs, and conformance action execution remain
+  incomplete before backend cutover.
 - Python package exposes Runtime Core feature/version discovery, runtime health
-  readiness facts, schema-backed typed SDK error projection, and complete
-  Invocation draft construction plus prepared/signed Invocation DTOs behind
-  transport protocols; prepare transport, submit transport, daemon Invocation
-  transport, profile clients, stream/bidi adapters, host binding bridge,
+  readiness facts, schema-backed typed SDK error projection, complete
+  Invocation draft construction, prepared/signed Invocation DTOs, and
+  RuntimeClient prepare/submit-signed methods behind narrow transport
+  protocols; concrete daemon transport, await/cancel/events convenience
+  methods, profile clients, stream/bidi adapters, host binding bridge,
   EasyRemote extraction tests, per-profile error source refs, and conformance
   action execution remain incomplete before EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

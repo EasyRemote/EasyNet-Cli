@@ -5,10 +5,11 @@ lifecycle, Runtime Core, Directory + Identity, Receipt, Events, Admin +
 Gateway, Surface, Compatibility, and selected wrapper profiles without
 importing Axon packages or generated Axon protobufs in public APIs.
 
-Current status: Runtime Core discovery/health/errors/invocation-draft/signing
-boundary partial. The package exposes typed feature/version discovery, runtime
-health readiness facts, schema-backed SDK error projection, complete Invocation
-draft construction, and prepared/signed Invocation DTOs behind narrow transport
-interfaces. Prepare transport, submit transport, profile clients, streams,
-bidi, and backend cutover gates remain incomplete. See `../SDK_PARITY.md`
-before claiming package stability.
+Current status: Runtime Core discovery/health/errors/invocation-draft/prepare-
+submit seam partial. The package exposes typed feature/version discovery,
+runtime health readiness facts, schema-backed SDK error projection, complete
+Invocation draft construction, prepared/signed Invocation DTOs, and
+RuntimeClient prepare/submit-signed methods behind narrow JSON transport seams.
+Concrete daemon transport, await/cancel/events convenience methods, profile
+clients, streams, bidi, and backend cutover gates remain incomplete. See
+`../SDK_PARITY.md` before claiming package stability.

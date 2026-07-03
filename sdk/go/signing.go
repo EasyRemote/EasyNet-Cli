@@ -238,7 +238,39 @@ func (s SignedInvocation) Policy() *SignerPolicy {
 }
 
 func (s SignedInvocation) SubmitReady() bool {
-	return true
+	return strings.TrimSpace(s.signerID) != "" &&
+		strings.TrimSpace(s.signature.Algorithm) != "" &&
+		strings.TrimSpace(s.signature.SignatureBase64) != "" &&
+		strings.TrimSpace(s.prepared.DescriptorRef()) != "" &&
+		strings.TrimSpace(s.prepared.SigningMaterial().CanonicalBytesBase64()) != ""
+}
+
+// MarshalJSON emits the daemon signed-invocation envelope shape.
+func (s SignedInvocation) MarshalJSON() ([]byte, error) {
+	if !s.SubmitReady() {
+		return nil, invalidInvocation("signed invocation is not submit-ready", nil)
+	}
+	obj := map[string]any{
+		"signer_id": s.signerID,
+		"prepared": map[string]any{
+			"prepared_id":            s.prepared.PreparedID(),
+			"request_id":             s.prepared.RequestID(),
+			"descriptor_ref":         s.prepared.DescriptorRef(),
+			"canonical_hash_hex":     s.prepared.CanonicalHashHex(),
+			"expires_at_unix_ms":     s.prepared.ExpiresAtUnixMS(),
+			"canonical_bytes_base64": s.prepared.SigningMaterial().CanonicalBytesBase64(),
+		},
+		"signature": s.signature,
+	}
+	if s.policy != nil {
+		obj["policy"] = map[string]any{
+			"mode":               s.policy.Mode(),
+			"signer_id":          s.policy.SignerID(),
+			"policy_ref":         s.policy.PolicyRef(),
+			"expires_at_unix_ms": s.policy.ExpiresAtUnixMS(),
+		}
+	}
+	return json.Marshal(obj)
 }
 
 func requiredDraft(fields map[string]json.RawMessage, name string) (InvocationDraft, error) {

@@ -124,7 +124,42 @@ class SignedInvocation:
     policy: Optional[SignerPolicy] = None
 
     def submit_ready(self) -> bool:
-        return True
+        return (
+            self.signer_id.strip() != ""
+            and self.signature.algorithm.strip() != ""
+            and self.signature.signature_base64.strip() != ""
+            and self.prepared.descriptor_ref.strip() != ""
+            and self.prepared.signing_material.canonical_bytes_base64.strip() != ""
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        if not self.submit_ready():
+            raise _invalid_prepared("signed invocation is not submit-ready")
+        value: dict[str, object] = {
+            "signer_id": self.signer_id,
+            "prepared": {
+                "prepared_id": self.prepared.prepared_id,
+                "request_id": self.prepared.request_id,
+                "descriptor_ref": self.prepared.descriptor_ref,
+                "canonical_hash_hex": self.prepared.canonical_hash_hex,
+                "expires_at_unix_ms": self.prepared.expires_at_unix_ms,
+                "canonical_bytes_base64": (
+                    self.prepared.signing_material.canonical_bytes_base64
+                ),
+            },
+            "signature": self.signature.to_json_dict(),
+        }
+        if self.policy is not None:
+            value["policy"] = {
+                "mode": self.policy.mode,
+                "signer_id": self.policy.signer_id,
+                "policy_ref": self.policy.policy_ref,
+                "expires_at_unix_ms": self.policy.expires_at_unix_ms,
+            }
+        return value
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_json_dict(), separators=(",", ":"), sort_keys=True)
 
 
 def _signing_material(
