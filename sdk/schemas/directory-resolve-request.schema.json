@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/directory-resolve-request.schema.json",
+  "title": "DirectoryResolveRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["caller_ura", "callee_ura", "subject_ura", "descriptor_version", "nonce_base64", "causal_context"],
+  "anyOf": [
+    {"required": ["query_name"]},
+    {"required": ["realm_hint"]}
+  ],
+  "properties": {
+    "caller_ura": {"type": "string", "minLength": 1},
+    "callee_ura": {"type": "string", "minLength": 1},
+    "subject_ura": {"type": "string", "minLength": 1},
+    "descriptor_version": {"type": "string", "minLength": 1},
+    "nonce_base64": {"type": "string", "minLength": 1},
+    "causal_context": {"type": "object"},
+    "query_name": {"type": "string", "minLength": 1},
+    "ability_name": {"type": "string", "minLength": 1, "pattern": "^[^\\\\/\\s]+$"},
+    "qtype": {
+      "type": "string",
+      "enum": [
+        "canonical_identity",
+        "owner",
+        "ability",
+        "route",
+        "key",
+        "service",
+        "directory_listing",
+        "RESOLVE_TYPE_CANONICAL_IDENTITY",
+        "RESOLVE_TYPE_OWNER",
+        "RESOLVE_TYPE_ABILITY",
+        "RESOLVE_TYPE_ROUTE",
+        "RESOLVE_TYPE_KEY",
+        "RESOLVE_TYPE_SERVICE",
+        "RESOLVE_TYPE_DIRECTORY_LISTING"
+      ]
+    },
+    "realm_hint": {"type": "string", "minLength": 1, "pattern": "^[^\\\\/\\s]+$"},
+    "metadata": {"type": "object"}
+  }
+}

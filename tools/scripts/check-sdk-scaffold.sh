@@ -64,7 +64,9 @@ schema_files=(
   directory-list-devices-request.schema.json
   directory-list-agents-request.schema.json
   directory-list-abilities-request.schema.json
+  directory-resolve-request.schema.json
   directory-page.schema.json
+  directory-resolved-ref.schema.json
   local-resource-ref-request.schema.json
   publication.schema.json
   ability-package-manifest.schema.json
@@ -135,9 +137,12 @@ fixture_files=(
   directory-list-devices-invocation.v4.json
   directory-list-agents-invocation.v4.json
   directory-list-abilities-invocation.v4.json
+  directory-resolve-request.v4.json
+  directory-resolve-invocation.v4.json
   directory-device-page.v4.json
   directory-agent-page.v4.json
   directory-ability-page.v4.json
+  directory-resolved-ref.v4.json
   health.ready.v4.json
   host-stream-binding-request.v4.json
   host-stream-binding.v4.json
@@ -214,6 +219,7 @@ case_files=(
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml
+  directory-resolve.yaml
   memc-profile-exclusivity.yaml
 )
 

@@ -2,16 +2,16 @@
 // ========================================
 //
 // File: src/daemon/directory_contract.rs
-// Description: Shared daemon SDK contract for Directory read-model carriers
-//              and paginated device/agent/ability page projections.
+// Description: Shared daemon SDK contract for Directory resolve/read-model
+//              carriers and paginated device/agent/ability page projections.
 //
 // Protocol Responsibility
 // -----------------------
 // Own the EasyNet-Cli SDK Directory DTO projection for daemon read models.
 // This module builds complete Invocation carriers for existing daemon
-// read-model abilities and projects their outputs into stable paginated DTOs.
-// It does not implement a second directory database, perform live distributed
-// fan-out, own event subscriptions, or execute abilities.
+// read-model abilities and projects their outputs into stable DTOs. It does
+// not implement a second directory database, perform live distributed fan-out,
+// own event subscriptions, select routes, or execute abilities.
 //
 // Implementation Approach
 // -----------------------
@@ -43,6 +43,8 @@ use crate::daemon::sdk_contract::{
 
 const DIRECTORY_PROFILE: &str = "directory_identity";
 const DIRECTORY_SOURCE: &str = "read_model";
+const ABILITY_NAMESPACE_RESOLVE: &str =
+    crate::daemon::ability::conformance::ABILITY_NAMESPACE_RESOLVE;
 const ABILITY_NODE_LIST: &str = crate::daemon::ability::names::device_control::NODE_LIST;
 const ABILITY_AGENT_LIST: &str = crate::daemon::ability::names::agents::AGENT_LIST;
 const ABILITY_META_LIST_ABILITIES: &str =
@@ -52,6 +54,13 @@ pub(crate) const DIRECTORY_DEFAULT_PAGE_SIZE: usize = 50;
 pub(crate) const DIRECTORY_MAX_PAGE_SIZE: usize = 500;
 
 pub(crate) type DirectoryError = SdkContractError;
+
+pub(crate) fn build_resolve_invocation(request: &Value) -> Result<Value, DirectoryError> {
+    let obj = object(request, "DirectoryResolveRequest")?;
+    reject_unsupported_fields(obj, DIRECTORY_RESOLVE_REQUEST_FIELDS)?;
+    let args = resolve_args(obj)?;
+    build_system_invocation(obj, DIRECTORY_PROFILE, ABILITY_NAMESPACE_RESOLVE, args)
+}
 
 pub(crate) fn build_list_devices_invocation(request: &Value) -> Result<Value, DirectoryError> {
     let obj = object(request, "DirectoryListDevicesRequest")?;
@@ -73,6 +82,69 @@ pub(crate) fn build_list_abilities_invocation(request: &Value) -> Result<Value, 
     let _ = PageControls::from_request(obj)?;
     let args = list_abilities_args(obj)?;
     build_system_invocation(obj, DIRECTORY_PROFILE, ABILITY_META_LIST_ABILITIES, args)
+}
+
+pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryError> {
+    let answer = input
+        .as_object()
+        .and_then(|obj| obj.get("answer").filter(|value| !value.is_null()))
+        .unwrap_or(input);
+    let obj = object(answer, "ResolveAnswer")?;
+    let answer_kind = required_string(obj, "answerKind")
+        .or_else(|_| required_string(obj, "answer_kind"))?
+        .to_string();
+    let canonical_name = first_optional_string(obj, "canonicalName", "canonical_name")?;
+    let negative = obj.get("negative").cloned().unwrap_or(Value::Null);
+    if !negative.is_null() && !negative.is_object() {
+        return Err(DirectoryError::InvalidField(
+            "negative",
+            "must be an object or null".to_string(),
+        ));
+    }
+    let records = obj
+        .get("records")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    if !records.is_array() {
+        return Err(DirectoryError::InvalidField(
+            "records",
+            "must be an array".to_string(),
+        ));
+    }
+    let owner_ura = first_optional_string(obj, "ownerUra", "owner_ura")?;
+    if let Some(owner_ura) = owner_ura.as_deref() {
+        validate_owner_ura(owner_ura, "owner_ura")?;
+    }
+    let ability_ura = first_optional_string(obj, "abilityUra", "ability_ura")?;
+    if let Some(ability_ura) = ability_ura.as_deref() {
+        validate_ability_ura(ability_ura, "ability_ura")?;
+    }
+    let query_name = resolve_query_name(obj, canonical_name.as_deref(), &negative);
+
+    Ok(json!({
+        "profile": DIRECTORY_PROFILE,
+        "kind": "resolved_ref",
+        "answer_kind": answer_kind,
+        "query_name": query_name,
+        "canonical_name": canonical_name,
+        "owner_ura": owner_ura,
+        "ability_ura": ability_ura,
+        "route_ura": first_optional_string(obj, "routeUra", "route_ura")?,
+        "next_hop": obj.get("nextHop").or_else(|| obj.get("next_hop")).cloned().unwrap_or(Value::Null),
+        "selected_route": obj.get("selectedRoute").or_else(|| obj.get("selected_route")).cloned().unwrap_or(Value::Null),
+        "route_candidates": obj.get("routeCandidates").or_else(|| obj.get("route_candidates")).cloned().unwrap_or_else(|| json!([])),
+        "records": records,
+        "negative": negative,
+        "release_profile": first_optional_string(obj, "releaseProfile", "release_profile")?,
+        "authority": obj.get("authority").cloned().unwrap_or(Value::Null),
+        "cache_policy": obj.get("cachePolicy").or_else(|| obj.get("cache_policy")).cloned().unwrap_or(Value::Null),
+        "metadata": {
+            "profile": DIRECTORY_PROFILE,
+            "source": ABILITY_NAMESPACE_RESOLVE,
+            "raw_answer": answer,
+        },
+    }))
 }
 
 pub(crate) fn project_device_page(input: &Value) -> Result<Value, DirectoryError> {
@@ -144,6 +216,19 @@ const COMMON_REQUEST_FIELDS: &[&str] = &[
     "cursor",
 ];
 const DIRECTORY_PAGE_REQUEST_FIELDS: &[&str] = COMMON_REQUEST_FIELDS;
+const DIRECTORY_RESOLVE_REQUEST_FIELDS: &[&str] = &[
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+    "query_name",
+    "ability_name",
+    "qtype",
+    "realm_hint",
+];
 const DIRECTORY_ABILITY_REQUEST_FIELDS: &[&str] = &[
     "caller_ura",
     "callee_ura",
@@ -174,6 +259,34 @@ fn reject_unsupported_fields(
     Ok(())
 }
 
+fn resolve_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError> {
+    let query_name = optional_string_field(obj, "query_name")?;
+    let realm_hint = optional_string_field(obj, "realm_hint")?;
+    if query_name.is_none() && realm_hint.is_none() {
+        return Err(DirectoryError::MissingField("query_name"));
+    }
+
+    let mut args = Map::new();
+    if let Some(query_name) = query_name {
+        args.insert("queryName".to_string(), Value::String(query_name));
+    }
+    if let Some(ability_name) = optional_string_field(obj, "ability_name")? {
+        validate_ability_name(&ability_name)?;
+        args.insert("abilityName".to_string(), Value::String(ability_name));
+    }
+    if let Some(qtype) = optional_string_field(obj, "qtype")? {
+        args.insert(
+            "qtype".to_string(),
+            Value::String(ResolveType::parse(&qtype)?.as_wire().to_string()),
+        );
+    }
+    if let Some(realm_hint) = realm_hint {
+        validate_realm_hint(&realm_hint)?;
+        args.insert("realmHint".to_string(), Value::String(realm_hint));
+    }
+    Ok(Value::Object(args))
+}
+
 fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError> {
     let mut args = Map::new();
     if let Some(scope) = optional_string_field(obj, "scope")? {
@@ -198,6 +311,57 @@ fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError
         args.insert("subject_ura".to_string(), Value::String(ability_ura));
     }
     Ok(Value::Object(args))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolveType {
+    CanonicalIdentity,
+    Owner,
+    Ability,
+    Route,
+    Key,
+    Service,
+    DirectoryListing,
+}
+
+impl ResolveType {
+    fn parse(raw: &str) -> Result<Self, DirectoryError> {
+        let normalized = raw
+            .trim()
+            .strip_prefix("RESOLVE_TYPE_")
+            .unwrap_or(raw.trim())
+            .to_ascii_uppercase()
+            .replace('-', "_");
+        match normalized.as_str() {
+            "CANONICAL_IDENTITY" => Ok(Self::CanonicalIdentity),
+            "OWNER" => Ok(Self::Owner),
+            "ABILITY" => Ok(Self::Ability),
+            "ROUTE" => Ok(Self::Route),
+            "KEY" => Ok(Self::Key),
+            "SERVICE" => Ok(Self::Service),
+            "DIRECTORY_LISTING" => Ok(Self::DirectoryListing),
+            "UNSPECIFIED" => Err(DirectoryError::InvalidField(
+                "qtype",
+                "must not be unspecified".to_string(),
+            )),
+            _ => Err(DirectoryError::InvalidField(
+                "qtype",
+                "must be a supported Axon ResolveType".to_string(),
+            )),
+        }
+    }
+
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::CanonicalIdentity => "RESOLVE_TYPE_CANONICAL_IDENTITY",
+            Self::Owner => "RESOLVE_TYPE_OWNER",
+            Self::Ability => "RESOLVE_TYPE_ABILITY",
+            Self::Route => "RESOLVE_TYPE_ROUTE",
+            Self::Key => "RESOLVE_TYPE_KEY",
+            Self::Service => "RESOLVE_TYPE_SERVICE",
+            Self::DirectoryListing => "RESOLVE_TYPE_DIRECTORY_LISTING",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -335,6 +499,35 @@ fn optional_cursor_offset(
     }
 }
 
+fn first_optional_string(
+    obj: &Map<String, Value>,
+    camel: &'static str,
+    snake: &'static str,
+) -> Result<Option<String>, DirectoryError> {
+    optional_string_field(obj, camel)?.map_or_else(
+        || optional_string_field(obj, snake),
+        |value| Ok(Some(value)),
+    )
+}
+
+fn resolve_query_name(
+    obj: &Map<String, Value>,
+    canonical_name: Option<&str>,
+    negative: &Value,
+) -> Option<String> {
+    first_optional_string(obj, "queryName", "query_name")
+        .ok()
+        .flatten()
+        .or_else(|| canonical_name.map(str::to_string))
+        .or_else(|| {
+            negative.as_object().and_then(|negative| {
+                first_optional_string(negative, "queryName", "query_name")
+                    .ok()
+                    .flatten()
+            })
+        })
+}
+
 fn rows_from_value<'a>(
     value: &'a Value,
     primary: &'static str,
@@ -467,6 +660,36 @@ fn validate_ability_ura(raw: &str, field: &'static str) -> Result<(), DirectoryE
     ))
 }
 
+fn validate_ability_name(raw: &str) -> Result<(), DirectoryError> {
+    if raw.trim().is_empty() {
+        return Err(DirectoryError::InvalidField(
+            "ability_name",
+            "must not be empty".to_string(),
+        ));
+    }
+    if raw.contains('/') || raw.contains('\\') || raw.chars().any(char::is_whitespace) {
+        return Err(DirectoryError::InvalidField(
+            "ability_name",
+            "must be an owner-local ability name".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_realm_hint(raw: &str) -> Result<(), DirectoryError> {
+    if raw.trim().is_empty()
+        || raw.contains('/')
+        || raw.contains('\\')
+        || raw.chars().any(char::is_whitespace)
+    {
+        return Err(DirectoryError::InvalidField(
+            "realm_hint",
+            "must be a non-empty realm token".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn optional_u64(obj: &Map<String, Value>, field: &'static str) -> Option<u64> {
     match obj.get(field) {
         Some(Value::Number(number)) => number.as_u64(),
@@ -532,6 +755,44 @@ mod tests {
             invocation["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.node.list@1.0.0"
         );
+    }
+
+    #[test]
+    fn build_resolve_invocation_targets_namespace_resolve() {
+        let request = base_request(json!({
+            "query_name": "easynet:///r/example/device/dev-a",
+            "ability_name": "agent.list",
+            "qtype": "route"
+        }));
+
+        let invocation = build_resolve_invocation(&request).unwrap();
+
+        assert_eq!(
+            invocation["metadata"]["system_ability"],
+            ABILITY_NAMESPACE_RESOLVE
+        );
+        assert_eq!(
+            invocation["args"]["queryName"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(invocation["args"]["abilityName"], "agent.list");
+        assert_eq!(invocation["args"]["qtype"], "RESOLVE_TYPE_ROUTE");
+        assert_eq!(
+            invocation["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.namespace.resolve@1.0.0"
+        );
+    }
+
+    #[test]
+    fn build_resolve_invocation_rejects_unknown_qtype() {
+        let request = base_request(json!({
+            "query_name": "easynet:///r/example/device/dev-a",
+            "qtype": "scan_everything"
+        }));
+
+        let err = build_resolve_invocation(&request).unwrap_err();
+
+        assert!(err.to_string().contains("qtype"));
     }
 
     #[test]
@@ -610,6 +871,69 @@ mod tests {
             "easynet:///r/example/user/alice"
         );
         assert_eq!(page["kind"], "agent_page");
+    }
+
+    #[test]
+    fn project_resolved_ref_preserves_final_route_answer() {
+        let answer = json!({
+            "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+            "canonicalName": "easynet:///r/example/device/dev-a",
+            "ownerUra": "easynet:///r/example/device/dev-a",
+            "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+            "routeUra": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
+            "nextHop": {
+                "localDeviceAbility": {
+                    "deviceUra": "easynet:///r/example/device/dev-a",
+                    "dispatchName": "agent.list"
+                }
+            },
+            "selectedRoute": {
+                "reason": "ROUTE_REASON_LOCAL_DEVICE"
+            },
+            "routeCandidates": [],
+            "records": [],
+            "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+            "authority": {"authorityUra": "easynet:///r/example/hub"},
+            "cachePolicy": {"ttlMs": 0}
+        });
+
+        let resolved = project_resolved_ref(&answer).unwrap();
+
+        assert_eq!(resolved["kind"], "resolved_ref");
+        assert_eq!(resolved["answer_kind"], "RESOLVE_ANSWER_KIND_FINAL_ROUTE");
+        assert_eq!(resolved["owner_ura"], "easynet:///r/example/device/dev-a");
+        assert_eq!(
+            resolved["ability_ura"],
+            "easynet:///r/example/ability/device.dev-a.agent.list"
+        );
+        assert_eq!(
+            resolved["metadata"]["raw_answer"]["nextHop"]["localDeviceAbility"]["dispatchName"],
+            "agent.list"
+        );
+    }
+
+    #[test]
+    fn project_resolved_ref_preserves_negative_answer() {
+        let answer = json!({
+            "answerKind": "RESOLVE_ANSWER_KIND_NEGATIVE",
+            "nextHop": {"noRoute": {}},
+            "records": [],
+            "negative": {
+                "reason": "NEGATIVE_REASON_NXDOMAIN",
+                "queryName": "easynet:///r/example/device/missing",
+                "detail": "owner is not online"
+            },
+            "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL"
+        });
+
+        let resolved = project_resolved_ref(&answer).unwrap();
+
+        assert_eq!(resolved["answer_kind"], "RESOLVE_ANSWER_KIND_NEGATIVE");
+        assert_eq!(
+            resolved["query_name"],
+            "easynet:///r/example/device/missing"
+        );
+        assert_eq!(resolved["negative"]["reason"], "NEGATIVE_REASON_NXDOMAIN");
     }
 
     #[test]

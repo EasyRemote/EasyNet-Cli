@@ -320,6 +320,12 @@ int32_t easynet_directory_build_list_abilities_invocation(
     char** out_invocation_json
 );
 
+int32_t easynet_directory_build_resolve_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
 int32_t easynet_directory_project_device_page(
     EasynetHandle handle,
     const char* devices_json,
@@ -337,6 +343,12 @@ int32_t easynet_directory_project_ability_page(
     const char* abilities_json,
     char** out_page_json
 );
+
+int32_t easynet_directory_project_resolved_ref(
+    EasynetHandle handle,
+    const char* answer_json,
+    char** out_resolved_ref_json
+);
 ```
 
 Identity projection functions are scoped to a live `EasynetHandle`, matching the
@@ -348,17 +360,23 @@ Axon `canonical_ability_descriptor_ref` and related helper functions.
 Directory read-model functions are scoped to the same live `EasynetHandle`,
 matching the SDK object graph's `DirectoryClient`. The carrier builders return
 complete Invocation JSON for existing daemon read-model abilities:
-`node.list`, `agent.list`, and `meta.list_abilities`. The SDK requires explicit
-caller, callee, subject, descriptor version, nonce, causal context, and bounded
-page controls; bindings submit returned carriers through Runtime Core. The
-projection functions normalize daemon rows into `DirectoryPage` DTOs with
-explicit `DefaultPageSize = 50`, `MaxPageSize = 500`, offset cursors, and
-`source = "read_model"`. `list_abilities` maps the public SDK `owner_ura` query
-to the daemon ability's historical `agent_ura` parameter, but it does not fan
-out across every agent by default. ABI v4 Directory support is
-`read_model_projection_partial`: `resolve`, directory subscribe convenience
-wrappers, signing-key lifecycle APIs, backend database projections, and
-language facades remain future work.
+`node.list`, `agent.list`, `meta.list_abilities`, and `namespace.resolve`. The
+SDK requires explicit caller, callee, subject, descriptor version, nonce, causal
+context, and bounded page controls where pagination applies; bindings submit
+returned carriers through Runtime Core. The projection functions normalize
+daemon rows into `DirectoryPage` DTOs with explicit `DefaultPageSize = 50`,
+`MaxPageSize = 500`, offset cursors, and `source = "read_model"`.
+`easynet_directory_project_resolved_ref` normalizes daemon `ResolveAnswer`
+proto-JSON into a stable `ResolvedRef` DTO while preserving resolver facts such
+as `answer_kind`, owner/ability/route URAs, next-hop evidence, negative answers,
+authority, cache policy, and the raw answer in metadata. `resolve` does not
+execute abilities, pick routes in the SDK, or fan out through
+`federation.resolve`; daemon resolver state remains authoritative.
+`list_abilities` maps the public SDK `owner_ura` query to the daemon ability's
+historical `agent_ura` parameter, but it does not fan out across every agent by
+default. ABI v4 Directory support is `read_model_projection_partial`: directory
+subscribe convenience wrappers, signing-key lifecycle APIs, backend database
+projections, and language facades remain future work.
 
 ### 2.9 Receipt Projection
 

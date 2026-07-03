@@ -87,8 +87,8 @@ swift test --package-path sdk/swift
 - stream close and bidi close-send lifecycle ownership
 - stream terminal ordering and backpressure
 - bidi frame0 and close-send behavior
-- directory read-model carriers, page projection, pagination, and
-  no-default-fanout
+- directory read-model carriers, resolve carrier/projection, page projection,
+  pagination, and no-default-fanout
 - identity URA and DescriptorRef projection delegates to Axon helpers
 - receipt fetch/project/verify/causal-ref
 - receipt projection never upgrades summary-only data to verified

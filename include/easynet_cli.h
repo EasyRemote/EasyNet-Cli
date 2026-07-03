@@ -381,6 +381,12 @@ int32_t easynet_directory_build_list_abilities_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_directory_build_resolve_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_directory_project_device_page(
     EasynetHandle handle,
     const char *devices_json,
@@ -397,6 +403,12 @@ int32_t easynet_directory_project_ability_page(
     EasynetHandle handle,
     const char *abilities_json,
     char **out_page_json
+);
+
+int32_t easynet_directory_project_resolved_ref(
+    EasynetHandle handle,
+    const char *answer_json,
+    char **out_resolved_ref_json
 );
 
 int32_t easynet_receipt_project(

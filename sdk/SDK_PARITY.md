@@ -48,9 +48,10 @@ method spelling.
   language facade error classes and per-profile source refs remain incomplete.
 - Receipt projection and causal-ref guardrails exist for Rust/C ABI; daemon
   fetch, Axon-backed full verification, and language facades remain incomplete.
-- Directory read-model carrier/page guardrails and Identity URA/DescriptorRef
-  projection guardrails exist for Rust/C ABI; resolve, subscribe convenience
-  wrappers, signer lifecycle, and language facades remain incomplete.
+- Directory read-model carrier/page guardrails, `namespace.resolve`
+  carrier/resolved-ref projection guardrails, and Identity URA/DescriptorRef
+  projection guardrails exist for Rust/C ABI; subscribe convenience wrappers,
+  signer lifecycle, and language facades remain incomplete.
 - Publication ResourceRef/package validation/deploy-unpublish carrier guardrails
   exist for Rust/C ABI; daemon list/show/enable/disable read models, execution
   wrappers, and language facades remain incomplete.
@@ -74,8 +75,8 @@ method spelling.
   create/get/delete, product API-key policy, quota/rate limits, billing,
   backend HTTP route shaping, SSE/WebSocket fanout, and language facades remain
   incomplete.
-- Directory resolve/subscribe convenience methods, receipt fetch/verify,
-  surface, and convenience wrappers are schema/conformance scaffolds only.
+- Directory subscribe convenience methods, receipt fetch/verify, surface, and
+  convenience wrappers are schema/conformance scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

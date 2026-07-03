@@ -3,7 +3,7 @@
 //
 // File: src/ffi/directory/mod.rs
 // Description: C ABI DirectoryClient projection helpers for daemon SDK
-//              read-model carriers and paginated result DTOs.
+//              resolve/read-model carriers and result DTOs.
 //
 // Protocol Responsibility
 // -----------------------
@@ -31,7 +31,8 @@ use std::os::raw::c_char;
 
 use crate::daemon::directory_contract::{
     build_list_abilities_invocation, build_list_agents_invocation, build_list_devices_invocation,
-    project_ability_page, project_agent_page, project_device_page, DirectoryError,
+    build_resolve_invocation, project_ability_page, project_agent_page, project_device_page,
+    project_resolved_ref, DirectoryError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -102,6 +103,28 @@ pub unsafe extern "C" fn easynet_directory_build_list_abilities_invocation(
     )
 }
 
+/// Build a complete Invocation JSON carrier for daemon `namespace.resolve`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_directory_build_resolve_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_directory_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_directory_build_resolve_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_resolve_invocation,
+    )
+}
+
 /// Project daemon `node.list` output into a Directory device page.
 ///
 /// # Safety
@@ -165,6 +188,28 @@ pub unsafe extern "C" fn easynet_directory_project_ability_page(
         "out_page_json",
         "abilities_json",
         project_ability_page,
+    )
+}
+
+/// Project daemon `namespace.resolve` output into a stable resolved-ref DTO.
+///
+/// # Safety
+/// `answer_json` must be a valid UTF-8 C string and `out_resolved_ref_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_directory_project_resolved_ref(
+    handle: EasynetHandle,
+    answer_json: *const c_char,
+    out_resolved_ref_json: *mut *mut c_char,
+) -> i32 {
+    project_directory_json(
+        handle,
+        answer_json,
+        out_resolved_ref_json,
+        "easynet_directory_project_resolved_ref",
+        "out_resolved_ref_json",
+        "answer_json",
+        project_resolved_ref,
     )
 }
 
@@ -277,6 +322,35 @@ mod tests {
     }
 
     #[test]
+    fn directory_build_resolve_projects_namespace_resolve_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "query_name": "easynet:///r/example/device/dev-a",
+            "ability_name": "agent.list",
+            "qtype": "route"
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_directory_build_resolve_invocation(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "namespace.resolve");
+        assert_eq!(
+            value["args"]["queryName"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(value["args"]["abilityName"], "agent.list");
+        assert_eq!(value["args"]["qtype"], "RESOLVE_TYPE_ROUTE");
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.namespace.resolve@1.0.0"
+        );
+        release(handle);
+    }
+
+    #[test]
     fn directory_project_device_page_projects_page() {
         let handle = handle();
         let raw = CString::new(
@@ -305,6 +379,44 @@ mod tests {
         assert_eq!(value["profile"], "directory_identity");
         assert_eq!(value["kind"], "device_page");
         assert_eq!(value["items"][0]["node_id"], "dev-a");
+        release(handle);
+    }
+
+    #[test]
+    fn directory_project_resolved_ref_projects_final_route_answer() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+                "canonicalName": "easynet:///r/example/device/dev-a",
+                "ownerUra": "easynet:///r/example/device/dev-a",
+                "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "routeUra": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
+                "nextHop": {
+                    "localDeviceAbility": {
+                        "deviceUra": "easynet:///r/example/device/dev-a",
+                        "dispatchName": "agent.list"
+                    }
+                },
+                "selectedRoute": {"reason": "ROUTE_REASON_LOCAL_DEVICE"},
+                "routeCandidates": [],
+                "records": [],
+                "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_directory_project_resolved_ref(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "directory_identity");
+        assert_eq!(value["kind"], "resolved_ref");
+        assert_eq!(value["answer_kind"], "RESOLVE_ANSWER_KIND_FINAL_ROUTE");
+        assert_eq!(value["metadata"]["source"], "namespace.resolve");
         release(handle);
     }
 

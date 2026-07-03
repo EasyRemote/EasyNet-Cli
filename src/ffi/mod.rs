@@ -60,9 +60,11 @@
 //   `easynet_events_project_terminal`, and
 //   `easynet_events_project_drop_report`: Events directory stream carrier and
 //   typed frame projection helpers.
-// - `easynet_directory_build_list_*_invocation` and
-//   `easynet_directory_project_*_page`: Directory read-model carrier and
-//   paginated page projection helpers.
+// - `easynet_directory_build_list_*_invocation`,
+//   `easynet_directory_build_resolve_invocation`,
+//   `easynet_directory_project_*_page`, and
+//   `easynet_directory_project_resolved_ref`: Directory read-model carrier,
+//   resolve carrier, and projection helpers.
 // - `easynet_admin_build_*_invocation`,
 //   `easynet_admin_project_gateway_status`,
 //   `easynet_admin_project_agent_records`, and
@@ -166,6 +168,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "receipt_projection": true,
             "directory_identity_projection": true,
             "directory_read_model": true,
+            "directory_resolve": true,
             "host_binding_codec": true,
             "publication_carriers": true,
             "mission_carriers": true,
@@ -348,6 +351,7 @@ mod tests {
         assert_eq!(json["symbols"]["receipt_projection"], true);
         assert_eq!(json["symbols"]["directory_identity_projection"], true);
         assert_eq!(json["symbols"]["directory_read_model"], true);
+        assert_eq!(json["symbols"]["directory_resolve"], true);
         assert_eq!(json["symbols"]["host_binding_codec"], true);
         assert_eq!(json["symbols"]["publication_carriers"], true);
         assert_eq!(json["symbols"]["mission_carriers"], true);
