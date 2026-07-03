@@ -100,12 +100,18 @@ int32_t easynet_invocation_stream_cancel(EasynetHandle handle, uint64_t stream_i
 
 `invocation_json` carries the complete Axon Invocation tuple:
 
+ABI v3 keeps the legacy unversioned `ability` field for compatibility. New SDK
+schema work MUST canonicalize this shape into the descriptor-ref v4 projection
+through Axon helpers before daemon submission. Even in v3 examples, URA fields
+MUST pass Axon `parse_ura`; do not use flat `agent/<id>` or nested
+`device/<id>/ability/<name>` shapes.
+
 ```json
 {
-  "caller_ura": "easynet:///r/example/agent/alice",
-  "callee_ura": "easynet:///r/example/agent/device",
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
   "ability": "observe.health",
-  "subject_ura": "easynet:///r/example/resource/device",
+  "subject_ura": "easynet:///r/example/device/dev-a",
   "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "causal_context": {"form": "none"},
   "args": {}
