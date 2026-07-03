@@ -1,0 +1,31 @@
+id: identity/ura_descriptor_projection
+profile: directory_identity
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: IdentityClient URA and AbilityDescriptorRef projection delegates to Axon helpers and rejects facade-owned grammar drift.
+steps:
+  - action: project_ura
+    input: easynet:///r/example/ability/device.dev-a.observe.health
+  - action: build_ura
+    request:
+      kind: ability
+      owner_ura: easynet:///r/example/device/dev-a
+      ability_name: observe.health
+  - action: project_descriptor_ref
+    input: easynet:///r/example/ability/device.dev-a.observe.health@1.0.0
+  - action: build_descriptor_ref
+    request:
+      owner_ura: easynet:///r/example/device/dev-a
+      ability_name: observe.health
+      descriptor_version: 1.0.0
+expect:
+  result: identity_projection_observed
+  schema: identity.schema.json
+  fixture: identity.descriptor-ref.v4.json
+  grammar_owner: axon
+  rejects_malformed_descriptor_ref: true
+  rejects_hand_built_invalid_ura: true
+  directory_list_runtime: scaffold_only

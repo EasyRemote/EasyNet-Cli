@@ -339,6 +339,30 @@ int32_t easynet_invocation_bidi_cancel(
     EasynetInvocationBidiId bidi_id
 );
 
+int32_t easynet_identity_project_ura(
+    EasynetHandle handle,
+    const char *ura,
+    char **out_identity_json
+);
+
+int32_t easynet_identity_build_ura(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_identity_json
+);
+
+int32_t easynet_identity_project_descriptor_ref(
+    EasynetHandle handle,
+    const char *descriptor_ref,
+    char **out_descriptor_json
+);
+
+int32_t easynet_identity_build_descriptor_ref(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_descriptor_json
+);
+
 int32_t easynet_receipt_project(
     EasynetHandle handle,
     const char *receipt_json,

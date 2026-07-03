@@ -55,6 +55,7 @@ require_dir sdk/conformance/runner
 
 schema_files=(
   invocation.schema.json
+  identity.schema.json
   receipt.schema.json
   error.schema.json
   health.schema.json
@@ -92,6 +93,7 @@ done
 fixture_files=(
   invocation.complete.v4.json
   prepared.signing-material.v4.json
+  identity.descriptor-ref.v4.json
   receipt.summary.v4.json
   runtime.error.v4.json
   event.directory.v4.json
@@ -116,6 +118,7 @@ case_files=(
   invocation-presigned-submit.yaml
   invocation-local-daemon-signing-boundary.yaml
   error-typed-json.yaml
+  identity-ura-descriptor-projection.yaml
   receipt-projection-causal-ref.yaml
   stream-bidi-lifecycle-state.yaml
   health-api-vs-runtime.yaml

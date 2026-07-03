@@ -127,6 +127,10 @@ expected_symbols=(
     easynet_invocation_bidi_close_send
     easynet_invocation_bidi_close
     easynet_invocation_bidi_cancel
+    easynet_identity_project_ura
+    easynet_identity_build_ura
+    easynet_identity_project_descriptor_ref
+    easynet_identity_build_descriptor_ref
     easynet_receipt_project
     easynet_receipt_verify
     easynet_receipt_causal_ref
@@ -296,6 +300,8 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_invocation_stream_close"
     require_literal "$SPEC" "easynet_invocation_bidi_open"
     require_literal "$SPEC" "easynet_invocation_bidi_close_send"
+    require_literal "$SPEC" "easynet_identity_project_ura"
+    require_literal "$SPEC" "easynet_identity_build_descriptor_ref"
     require_literal "$SPEC" "easynet_receipt_project"
     require_literal "$SPEC" "easynet_receipt_causal_ref"
     require_literal "$SPEC" "ability+args symbols are not exported"

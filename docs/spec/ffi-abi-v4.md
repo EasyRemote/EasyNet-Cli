@@ -8,7 +8,8 @@ ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
-typed error JSON and receipt projection for language bindings.
+typed error JSON, identity projection, and receipt projection for language
+bindings.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -262,7 +263,42 @@ up-direction sends return `ERR_CANCELLED` without removing the session.
 releases the local session handle. `easynet_invocation_bidi_cancel` releases
 the local session without sending EOF.
 
-### 2.8 Receipt Projection
+### 2.8 Directory + Identity Projection
+
+```c
+int32_t easynet_identity_project_ura(
+    EasynetHandle handle,
+    const char* ura,
+    char** out_identity_json
+);
+
+int32_t easynet_identity_build_ura(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_identity_json
+);
+
+int32_t easynet_identity_project_descriptor_ref(
+    EasynetHandle handle,
+    const char* descriptor_ref,
+    char** out_descriptor_json
+);
+
+int32_t easynet_identity_build_descriptor_ref(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_descriptor_json
+);
+```
+
+Identity projection functions are scoped to a live `EasynetHandle`, matching the
+SDK object graph's `IdentityClient`. The functions delegate URA parsing and
+building to Axon-owned URA helpers through `crate::core::ura`; they do not
+define a second URA grammar. DescriptorRef projection/building delegates to
+Axon `canonical_ability_descriptor_ref` and related helper functions. ABI v4
+does not yet expose directory list/subscribe or signing-key lifecycle symbols.
+
+### 2.9 Receipt Projection
 
 ```c
 int32_t easynet_receipt_project(

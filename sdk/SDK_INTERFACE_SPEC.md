@@ -69,6 +69,9 @@ submit-ready pre-runtime object.
 | Health | `HealthClient` | readiness and diagnostics |
 
 Profile clients must not become one-method-per-ability protocol forks.
+Identity projection may validate/build URAs and AbilityDescriptorRefs through
+Axon-delegated helpers, but directory list/subscribe and signing-key lifecycle
+remain separate Directory + Identity methods rather than string utilities.
 Receipt projection may normalize summary DTOs and derive causal refs from
 explicit receipt facts, but summary-only data must remain `verified: false`
 until an Axon-backed verifier proves a full receipt.

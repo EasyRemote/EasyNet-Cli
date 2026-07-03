@@ -88,6 +88,7 @@ swift test --package-path sdk/swift
 - stream terminal ordering and backpressure
 - bidi frame0 and close-send behavior
 - directory pagination and no-default-fanout
+- identity URA and DescriptorRef projection delegates to Axon helpers
 - receipt fetch/project/verify/causal-ref
 - receipt projection never upgrades summary-only data to verified
 - profile ownership exclusivity
