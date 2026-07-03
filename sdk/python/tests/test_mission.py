@@ -1,0 +1,217 @@
+import json
+import unittest
+
+from easynet_sdk import SDKError
+from easynet_sdk.mission import (
+    MissionCancelRequest,
+    MissionCarrierBase,
+    MissionClient,
+    MissionRunFileRequest,
+    MissionRunRequest,
+    MissionTrackRequest,
+)
+
+
+MISSION_RUN_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"source": "mission weather\\nlet r = local.observe_health()", "label": "weather"},
+  "content_type": "application/json",
+  "metadata": {
+    "request_id": "mission-run-1",
+    "profile": "mission",
+    "system_ability": "mission.run",
+    "carrier_owner": "daemon_sdk"
+  }
+}"""
+
+MISSION_TRACK_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"run_id": "2026-07-04_010203_weather"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "mission-track-1", "profile": "mission", "system_ability": "mission.track", "carrier_owner": "daemon_sdk"}
+}"""
+
+MISSION_CANCEL_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"run_id": "2026-07-04_010203_weather"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "mission-cancel-1", "profile": "mission", "system_ability": "mission.cancel", "carrier_owner": "daemon_sdk"}
+}"""
+
+MISSION_STATUS_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_status",
+  "mission_id": "2026-07-04_010203_weather",
+  "state": "partial",
+  "terminal": true,
+  "partial_failures": 1,
+  "cancelled": false,
+  "parent_invocation_id": null,
+  "parent_receipt_ura": "easynet:///r/example/receipt/parent",
+  "parent_invocation": {"caller": "easynet:///r/example/agent/alice.sdk"},
+  "child_invocations": [
+    {
+      "step_id": "s1",
+      "request_id": "req-1",
+      "trace_id": "2026-07-04_010203_weather",
+      "ability": "observe.health",
+      "invocation_ura": "easynet:///r/example/invocation/req-1",
+      "caller_ura": "easynet:///r/example/device/dev-a",
+      "callee_ura": "easynet:///r/example/device/dev-a",
+      "subject_ura": "easynet:///r/example/device/dev-a",
+      "metadata_state": "receipt_backed",
+      "ledger_state": "completed",
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb", "head_receipt_hash": "bbbb"}
+    }
+  ],
+  "child_receipts": [{"step_id": "s1", "invocation_ura": "easynet:///r/example/invocation/req-1", "receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb"}],
+  "output_refs": [{"kind": "run_dir", "path": "/tmp/easynet/missions/runs/2026-07-04_010203_weather"}],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
+
+class MemoryMissionTransport:
+    def __init__(self) -> None:
+        self.run_invocation_json = MISSION_RUN_INVOCATION_JSON
+        self.run_file_invocation_json = MISSION_RUN_INVOCATION_JSON
+        self.track_invocation_json = MISSION_TRACK_INVOCATION_JSON
+        self.cancel_invocation_json = MISSION_CANCEL_INVOCATION_JSON
+        self.status_json = MISSION_STATUS_JSON
+        self.seen_request: dict[str, object] | None = None
+
+    def _remember(self, request_json: bytes) -> None:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+
+    def build_run_eal_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.run_invocation_json
+
+    def build_run_file_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.run_file_invocation_json
+
+    def build_track_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.track_invocation_json
+
+    def build_cancel_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.cancel_invocation_json
+
+    def run_eal(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.status_json
+
+    def run_file(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.status_json
+
+    def track(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.status_json
+
+    def cancel(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.status_json
+
+
+def base() -> MissionCarrierBase:
+    return MissionCarrierBase(
+        caller_ura="easynet:///r/example/agent/alice.sdk",
+        callee_ura="easynet:///r/example/device/dev-a",
+        subject_ura="easynet:///r/example/device/dev-a",
+        descriptor_version="1.0.0",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        metadata={"request_id": "mission-run-1"},
+    )
+
+
+class MissionTests(unittest.TestCase):
+    def test_builds_run_track_cancel_invocations(self) -> None:
+        client = MissionClient(MemoryMissionTransport())
+
+        run = client.build_run_eal_invocation(
+            MissionRunRequest(
+                base=base(),
+                source="mission weather\nlet r = local.observe_health()",
+                label="weather",
+            )
+        )
+        self.assertEqual(
+            run.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0",
+        )
+
+        track = client.build_track_invocation(
+            MissionTrackRequest(base=base(), mission_id="2026-07-04_010203_weather")
+        )
+        self.assertEqual(
+            track.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0",
+        )
+
+        cancel = client.build_cancel_invocation(
+            MissionCancelRequest(base=base(), mission_id="2026-07-04_010203_weather")
+        )
+        self.assertEqual(
+            cancel.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0",
+        )
+
+    def test_run_file_and_status_projection(self) -> None:
+        transport = MemoryMissionTransport()
+        client = MissionClient(transport)
+
+        client.build_run_file_invocation(
+            MissionRunFileRequest(
+                base=base(),
+                path="/tmp/easynet-sdk-demo.eal",
+                label="file-weather",
+            )
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["path"], "/tmp/easynet-sdk-demo.eal")
+
+        status = client.track(
+            MissionTrackRequest(base=base(), mission_id="2026-07-04_010203_weather")
+        )
+        self.assertTrue(status.terminal)
+        self.assertEqual(status.state, "partial")
+        self.assertEqual(status.child_receipts[0].receipt_ura, "easynet:///r/example/receipt/child")
+        self.assertEqual(status.output_refs[0].kind, "run_dir")
+
+    def test_rejects_incomplete_carrier_and_path_like_mission_id(self) -> None:
+        client = MissionClient(MemoryMissionTransport())
+        bad_base = MissionCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+        with self.assertRaises(SDKError):
+            client.build_run_eal_invocation(MissionRunRequest(base=bad_base, source="mission x"))
+
+        with self.assertRaises(SDKError):
+            client.build_track_invocation(MissionTrackRequest(base=base(), mission_id="/tmp/run"))
+
+
+if __name__ == "__main__":
+    unittest.main()

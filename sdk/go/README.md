@@ -5,9 +5,10 @@ lifecycle, Runtime Core, Directory + Identity, Receipt, Events, Admin +
 Gateway, Surface, Compatibility, and selected wrapper profiles without
 importing Axon packages or generated Axon protobufs in public APIs.
 
-Current status: Runtime Core discovery/daemon-lifecycle/connection/health/errors/
-invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory +
-Identity, Receipt, Publication, and Host Binding seam partial. The package exposes typed
+Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
+errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
+Directory + Identity, Receipt, Publication, Host Binding, and Mission seam
+partial. The package exposes typed
 feature/version discovery, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
 detach/open-runtime state seams, schema-backed SDK error projection, complete
@@ -23,9 +24,11 @@ over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, and published-ability read-model seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
-output-hash folding seams. Concrete daemon process spawn/local transport,
-directory subscriptions, signer key lifecycle, Axon-backed receipt verification,
-concrete publication and host-binding carriers, Mission, Admin + Gateway,
-Events, Surface, Compatibility, wrappers, concrete bidi adapters, and backend
-cutover gates remain incomplete. See
+output-hash folding seams. MissionClient exposes run/run-file/track/cancel
+Invocation carrier builders and MissionStatus projection seams. Concrete daemon
+process spawn/local transport, directory subscriptions, signer key lifecycle,
+Axon-backed receipt verification, concrete publication/host-binding/mission
+carriers, mission event streams, Admin + Gateway, Events, Surface,
+Compatibility, wrappers, concrete bidi adapters, and backend cutover gates
+remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.
