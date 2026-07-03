@@ -52,14 +52,18 @@ for path in \
   sdk/go/health_test.go \
   sdk/go/invocation.go \
   sdk/go/invocation_test.go \
+  sdk/go/signing.go \
+  sdk/go/signing_test.go \
   sdk/go/import_boundary_test.go \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
   sdk/python/easynet_sdk/invocation.py \
+  sdk/python/easynet_sdk/signing.py \
   sdk/python/tests/test_health.py \
   sdk/python/tests/test_invocation.py \
+  sdk/python/tests/test_signing.py \
   sdk/python/tests/test_import_boundary.py
 do
   require_file "$path"
@@ -299,6 +303,9 @@ require_literal sdk/go/health.go "HealthClient"
 require_literal sdk/go/health.go "RuntimeHealth"
 require_literal sdk/go/invocation.go "InvocationBuilder"
 require_literal sdk/go/invocation.go "InvocationDraft"
+require_literal sdk/go/signing.go "PreparedInvocation"
+require_literal sdk/go/signing.go "SignedInvocation"
+require_literal sdk/go/signing.go "SigningMaterial"
 require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
 require_literal sdk/python/easynet_sdk/client.py "DiscoveryTransport"
 require_literal sdk/python/easynet_sdk/errors.py "from_json"
@@ -307,6 +314,9 @@ require_literal sdk/python/easynet_sdk/health.py "HealthClient"
 require_literal sdk/python/easynet_sdk/health.py "RuntimeHealth"
 require_literal sdk/python/easynet_sdk/invocation.py "InvocationBuilder"
 require_literal sdk/python/easynet_sdk/invocation.py "InvocationDraft"
+require_literal sdk/python/easynet_sdk/signing.py "PreparedInvocation"
+require_literal sdk/python/easynet_sdk/signing.py "SignedInvocation"
+require_literal sdk/python/easynet_sdk/signing.py "SigningMaterial"
 require_literal sdk/python/tests/test_import_boundary.py "test_public_python_sdk_does_not_import_forbidden_runtime_boundaries"
 require_literal sdk/SDK_INTERFACE_SPEC.md "PreparedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "SignedInvocation"

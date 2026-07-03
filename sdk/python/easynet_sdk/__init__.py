@@ -8,6 +8,12 @@ from .client import Client, DiscoveryTransport, FeatureSet, Version
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .health import HealthClient, HealthTransport, RuntimeHealth
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
+from .signing import (
+    PreparedInvocation,
+    SignedInvocation,
+    SignerPolicy,
+    SigningMaterial,
+)
 
 __all__ = [
     "Client",
@@ -19,10 +25,14 @@ __all__ = [
     "InvocationBuilder",
     "InvocationDraft",
     "InvocationSignature",
+    "PreparedInvocation",
     "RetryHint",
     "RuntimeHealth",
     "RuntimeError",
     "SDKError",
+    "SignedInvocation",
+    "SignerPolicy",
+    "SigningMaterial",
     "Version",
     "is_code",
 ]
