@@ -1,0 +1,390 @@
+package easynet
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+)
+
+const MaxStreamBufferedEvents = 1024
+
+// StreamState is the Runtime Core server-stream state.
+type StreamState string
+
+const (
+	StreamOpening           StreamState = "Opening"
+	StreamOpen              StreamState = "Open"
+	StreamTerminalFrameSeen StreamState = "TerminalFrameSeen"
+	StreamDraining          StreamState = "Draining"
+	StreamClosed            StreamState = "Closed"
+	StreamCancelled         StreamState = "Cancelled"
+	StreamFailed            StreamState = "Failed"
+)
+
+// StreamTransport supplies stream event frames behind the SDK facade.
+type StreamTransport interface {
+	Recv(ctx context.Context) ([]byte, error)
+	Cancel(ctx context.Context, reason string) ([]byte, error)
+	Close(ctx context.Context) error
+}
+
+// StreamTransportFunc adapts functions into a StreamTransport.
+type StreamTransportFunc struct {
+	RecvFunc   func(ctx context.Context) ([]byte, error)
+	CancelFunc func(ctx context.Context, reason string) ([]byte, error)
+	CloseFunc  func(ctx context.Context) error
+}
+
+func (f StreamTransportFunc) Recv(ctx context.Context) ([]byte, error) {
+	if f.RecvFunc == nil {
+		return nil, invalidRuntimeClient("stream recv transport function is required")
+	}
+	return f.RecvFunc(ctx)
+}
+
+func (f StreamTransportFunc) Cancel(ctx context.Context, reason string) ([]byte, error) {
+	if f.CancelFunc == nil {
+		return nil, invalidRuntimeClient("stream cancel transport function is required")
+	}
+	return f.CancelFunc(ctx, reason)
+}
+
+func (f StreamTransportFunc) Close(ctx context.Context) error {
+	if f.CloseFunc == nil {
+		return nil
+	}
+	return f.CloseFunc(ctx)
+}
+
+// StreamHandle is the public ordered stream event state object.
+type StreamHandle struct {
+	streamID     string
+	transport    StreamTransport
+	state        StreamState
+	events       []StreamEvent
+	lastSequence uint64
+	terminalSeen bool
+	maxBuffered  int
+}
+
+// StreamEvent is an SDK stream event projection.
+type StreamEvent struct {
+	sequence           uint64
+	kind               string
+	state              string
+	terminal           bool
+	payloadContentType string
+	payloadBase64      string
+	payloadJSON        json.RawMessage
+	errorJSON          json.RawMessage
+}
+
+// StreamCancel is the stream cancellation outcome projection.
+type StreamCancel struct {
+	streamID  string
+	cancelled bool
+	state     StreamState
+	terminal  bool
+}
+
+// NewStreamHandleFromJSON decodes stream-open metadata and creates an Opening handle.
+func NewStreamHandleFromJSON(transport StreamTransport, raw []byte) (*StreamHandle, error) {
+	if transport == nil {
+		return nil, invalidRuntimeClient("stream transport is required")
+	}
+	var dto struct {
+		StreamID    string `json:"stream_id"`
+		State       string `json:"state"`
+		MaxBuffered int    `json:"max_buffered_events"`
+	}
+	if len(raw) != 0 {
+		if err := json.Unmarshal(raw, &dto); err != nil {
+			return nil, invalidRuntimePayload(fmt.Sprintf("decode stream open JSON: %v", err), err)
+		}
+	}
+	if dto.StreamID == "" {
+		return nil, invalidRuntimePayload("stream_id is required", nil)
+	}
+	maxBuffered := dto.MaxBuffered
+	if maxBuffered == 0 {
+		maxBuffered = MaxStreamBufferedEvents
+	}
+	if maxBuffered < 0 {
+		return nil, invalidRuntimePayload("max_buffered_events must be non-negative", nil)
+	}
+	state := StreamOpening
+	if dto.State != "" {
+		state = StreamState(dto.State)
+	}
+	if state != StreamOpening && state != StreamOpen {
+		return nil, invalidRuntimePayload("stream open state must be Opening or Open", nil)
+	}
+	return &StreamHandle{
+		streamID:    dto.StreamID,
+		transport:   transport,
+		state:       state,
+		events:      []StreamEvent{},
+		maxBuffered: maxBuffered,
+	}, nil
+}
+
+func (s *StreamHandle) StreamID() string {
+	if s == nil {
+		return ""
+	}
+	return s.streamID
+}
+
+func (s *StreamHandle) State() StreamState {
+	if s == nil {
+		return StreamFailed
+	}
+	return s.state
+}
+
+func (s *StreamHandle) Events() []StreamEvent {
+	if s == nil {
+		return nil
+	}
+	return append([]StreamEvent(nil), s.events...)
+}
+
+func (s *StreamHandle) MaxBufferedEvents() int {
+	if s == nil {
+		return 0
+	}
+	return s.maxBuffered
+}
+
+func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
+	if s == nil || s.transport == nil {
+		return StreamEvent{}, invalidRuntimeClient("stream handle is not initialized")
+	}
+	if ctx == nil {
+		return StreamEvent{}, invalidRuntimeClient("context is required")
+	}
+	if s.isTerminal() {
+		return StreamEvent{}, invalidRuntimePayload("stream is terminal", nil)
+	}
+	if s.state == StreamTerminalFrameSeen || s.state == StreamDraining {
+		return StreamEvent{}, invalidRuntimePayload("stream terminal event already seen", nil)
+	}
+	raw, err := s.transport.Recv(ctx)
+	if err != nil {
+		s.state = StreamFailed
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return StreamEvent{}, sdkErr
+		}
+		return StreamEvent{}, transportRuntimeError("stream recv transport failed", err)
+	}
+	event, err := NewStreamEventFromJSON(raw)
+	if err != nil {
+		s.state = StreamFailed
+		return StreamEvent{}, err
+	}
+	if err := s.applyEvent(event); err != nil {
+		return StreamEvent{}, err
+	}
+	return event, nil
+}
+
+func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
+	if s == nil || s.transport == nil {
+		return StreamCancel{}, invalidRuntimeClient("stream handle is not initialized")
+	}
+	if ctx == nil {
+		return StreamCancel{}, invalidRuntimeClient("context is required")
+	}
+	if s.isTerminal() {
+		return StreamCancel{}, invalidRuntimePayload("stream is terminal", nil)
+	}
+	raw, err := s.transport.Cancel(ctx, reason)
+	if err != nil {
+		s.state = StreamFailed
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return StreamCancel{}, sdkErr
+		}
+		return StreamCancel{}, transportRuntimeError("stream cancel transport failed", err)
+	}
+	cancel, err := NewStreamCancelFromJSON(raw)
+	if err != nil {
+		s.state = StreamFailed
+		return StreamCancel{}, err
+	}
+	s.state = cancel.state
+	return cancel, nil
+}
+
+func (s *StreamHandle) Close(ctx context.Context) error {
+	if s == nil || s.transport == nil {
+		return invalidRuntimeClient("stream handle is not initialized")
+	}
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	if s.state == StreamClosed {
+		return nil
+	}
+	if s.state == StreamTerminalFrameSeen {
+		s.state = StreamDraining
+	}
+	if err := s.transport.Close(ctx); err != nil {
+		s.state = StreamFailed
+		return transportRuntimeError("stream close transport failed", err)
+	}
+	s.state = StreamClosed
+	return nil
+}
+
+func (s *StreamHandle) applyEvent(event StreamEvent) error {
+	if event.sequence == 0 {
+		s.state = StreamFailed
+		return invalidRuntimePayload("stream event sequence is required", nil)
+	}
+	if event.sequence <= s.lastSequence {
+		s.state = StreamFailed
+		return invalidRuntimePayload("stream events must be strictly ordered", nil)
+	}
+	if s.terminalSeen {
+		s.state = StreamFailed
+		return invalidRuntimePayload("stream terminal event already seen", nil)
+	}
+	if s.maxBuffered > 0 && len(s.events) >= s.maxBuffered {
+		s.state = StreamFailed
+		return invalidRuntimePayload("stream event buffer limit exceeded", nil)
+	}
+	if s.state == StreamOpening {
+		s.state = StreamOpen
+	}
+	s.lastSequence = event.sequence
+	s.events = append(s.events, event)
+	if event.terminal {
+		s.terminalSeen = true
+		s.state = StreamTerminalFrameSeen
+	}
+	return nil
+}
+
+func (s *StreamHandle) isTerminal() bool {
+	return s.state == StreamClosed || s.state == StreamCancelled || s.state == StreamFailed
+}
+
+func (e StreamEvent) Sequence() uint64 {
+	return e.sequence
+}
+
+func (e StreamEvent) Kind() string {
+	return e.kind
+}
+
+func (e StreamEvent) State() string {
+	return e.state
+}
+
+func (e StreamEvent) Terminal() bool {
+	return e.terminal
+}
+
+func (e StreamEvent) PayloadContentType() string {
+	return e.payloadContentType
+}
+
+func (e StreamEvent) PayloadBase64() string {
+	return e.payloadBase64
+}
+
+func (e StreamEvent) PayloadJSON() json.RawMessage {
+	return append(json.RawMessage(nil), e.payloadJSON...)
+}
+
+func (e StreamEvent) ErrorJSON() json.RawMessage {
+	return append(json.RawMessage(nil), e.errorJSON...)
+}
+
+func (c StreamCancel) StreamID() string {
+	return c.streamID
+}
+
+func (c StreamCancel) Cancelled() bool {
+	return c.cancelled
+}
+
+func (c StreamCancel) State() StreamState {
+	return c.state
+}
+
+func (c StreamCancel) Terminal() bool {
+	return c.terminal
+}
+
+// NewStreamEventFromJSON decodes one daemon stream event projection.
+func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
+	var dto struct {
+		Sequence           uint64          `json:"sequence"`
+		Kind               string          `json:"kind"`
+		Event              string          `json:"event"`
+		State              string          `json:"state"`
+		Terminal           bool            `json:"terminal"`
+		PayloadContentType string          `json:"payload_content_type"`
+		ContentType        string          `json:"content_type"`
+		PayloadBase64      string          `json:"payload_base64"`
+		PayloadJSON        json.RawMessage `json:"payload_json"`
+		Error              json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("decode stream event JSON: %v", err), err)
+	}
+	kind := dto.Kind
+	if kind == "" {
+		kind = dto.Event
+	}
+	if kind == "" {
+		return StreamEvent{}, invalidRuntimePayload("stream event kind is required", nil)
+	}
+	contentType := dto.PayloadContentType
+	if contentType == "" {
+		contentType = dto.ContentType
+	}
+	return StreamEvent{
+		sequence:           dto.Sequence,
+		kind:               kind,
+		state:              dto.State,
+		terminal:           dto.Terminal,
+		payloadContentType: contentType,
+		payloadBase64:      dto.PayloadBase64,
+		payloadJSON:        append(json.RawMessage(nil), dto.PayloadJSON...),
+		errorJSON:          append(json.RawMessage(nil), dto.Error...),
+	}, nil
+}
+
+// NewStreamCancelFromJSON decodes stream cancellation outcome JSON.
+func NewStreamCancelFromJSON(raw []byte) (StreamCancel, error) {
+	var dto struct {
+		StreamID  string `json:"stream_id"`
+		Cancelled bool   `json:"cancelled"`
+		State     string `json:"state"`
+		Terminal  bool   `json:"terminal"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return StreamCancel{}, invalidRuntimePayload(fmt.Sprintf("decode stream cancel JSON: %v", err), err)
+	}
+	if dto.StreamID == "" {
+		return StreamCancel{}, invalidRuntimePayload("stream_id is required", nil)
+	}
+	if dto.State == "" {
+		return StreamCancel{}, invalidRuntimePayload("state is required", nil)
+	}
+	state := StreamState(dto.State)
+	if state != StreamCancelled && state != StreamClosed && state != StreamFailed {
+		return StreamCancel{}, invalidRuntimePayload("stream cancel state must be Cancelled, Closed, or Failed", nil)
+	}
+	return StreamCancel{
+		streamID:  dto.StreamID,
+		cancelled: dto.Cancelled,
+		state:     state,
+		terminal:  dto.Terminal,
+	}, nil
+}

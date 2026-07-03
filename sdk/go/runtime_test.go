@@ -233,6 +233,38 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientInvokeStreamOpensStreamHandle(t *testing.T) {
+	var seenDraft map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			t.Fatalf("Invoke should not be called")
+			return nil, nil
+		},
+		OpenStreamFunc: func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
+				t.Fatalf("draft JSON: %v", err)
+			}
+			return &memoryStreamTransport{events: []string{
+				`{"sequence":1,"event":"terminal","state":"Completed","terminal":true}`,
+			}}, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	if stream.StreamID() != "stream-1" || stream.State() != StreamOpening {
+		t.Fatalf("unexpected stream: id=%q state=%s", stream.StreamID(), stream.State())
+	}
+	if seenDraft["caller_ura"] != "easynet:///r/example/agent/alice.sdk" {
+		t.Fatalf("draft not forwarded: %#v", seenDraft)
+	}
+}
+
 func TestInvocationResultRejectsInconsistentFailure(t *testing.T) {
 	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
 	if err != nil {

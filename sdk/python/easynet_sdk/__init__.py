@@ -31,6 +31,14 @@ from .signing import (
     SignerPolicy,
     SigningMaterial,
 )
+from .stream import (
+    MAX_STREAM_BUFFERED_EVENTS,
+    StreamCancel,
+    StreamEvent,
+    StreamHandle,
+    StreamState,
+    StreamTransport,
+)
 
 __all__ = [
     "Client",
@@ -49,6 +57,7 @@ __all__ = [
     "InvocationFailure",
     "InvocationResult",
     "InvocationSignature",
+    "MAX_STREAM_BUFFERED_EVENTS",
     "PrepareOptions",
     "PreparedInvocation",
     "RetryHint",
@@ -63,6 +72,11 @@ __all__ = [
     "SignedInvocation",
     "SignerPolicy",
     "SigningMaterial",
+    "StreamCancel",
+    "StreamEvent",
+    "StreamHandle",
+    "StreamState",
+    "StreamTransport",
     "Version",
     "is_code",
 ]

@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
+from .stream import StreamHandle, StreamTransport
 from .signing import PreparedInvocation, SignedInvocation, SigningMaterial
 
 
@@ -16,6 +17,9 @@ class RuntimeTransport(Protocol):
     """Narrow transport seam owned by the application integration layer."""
 
     def invoke(self, draft_json: bytes) -> bytes:
+        ...
+
+    def open_stream(self, draft_json: bytes) -> tuple[StreamTransport, bytes]:
         ...
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
@@ -222,6 +226,17 @@ class RuntimeClient:
         except Exception as exc:
             raise _transport_error("invoke transport failed", exc) from exc
         return InvocationResult.from_json(raw)
+
+    def invoke_stream(self, draft: InvocationDraft) -> StreamHandle:
+        try:
+            stream_transport, open_json = self._transport.open_stream(
+                draft.to_json().encode("utf-8")
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("open stream transport failed", exc) from exc
+        return StreamHandle.from_json(stream_transport, open_json)
 
     def prepare(
         self,

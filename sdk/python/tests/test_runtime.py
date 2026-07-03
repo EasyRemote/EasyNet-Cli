@@ -50,6 +50,17 @@ class MemoryRuntimeTransport:
             sort_keys=True,
         ).encode("utf-8")
 
+    def open_stream(self, draft_json: bytes):
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        from test_stream import MemoryStreamTransport
+
+        return (
+            MemoryStreamTransport(
+                [b'{"sequence":1,"event":"terminal","state":"Completed","terminal":true}']
+            ),
+            b'{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}',
+        )
+
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         if self.prepare_error is not None:
             raise self.prepare_error
@@ -143,6 +154,19 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(
             transport.seen_draft["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+
+    def test_invoke_stream_opens_stream_handle(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        stream = client.invoke_stream(complete_draft())
+
+        self.assertEqual(stream.stream_id, "stream-1")
+        assert transport.seen_draft is not None
+        self.assertEqual(
+            transport.seen_draft["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
         )
 
     def test_prepare_delegates_to_transport(self) -> None:

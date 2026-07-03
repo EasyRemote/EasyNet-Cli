@@ -10,6 +10,7 @@ import (
 // RuntimeTransport is the narrow Runtime Core invocation transport seam.
 type RuntimeTransport interface {
 	Invoke(ctx context.Context, draftJSON []byte) ([]byte, error)
+	OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error)
 	Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error)
 	AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error)
@@ -20,6 +21,7 @@ type RuntimeTransport interface {
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
 type RuntimeTransportFunc struct {
 	InvokeFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
+	OpenStreamFunc   func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error)
 	PrepareFunc      func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSignedFunc func(ctx context.Context, signedJSON []byte) ([]byte, error)
 	AwaitHandleFunc  func(ctx context.Context, handleID uint64) ([]byte, error)
@@ -32,6 +34,13 @@ func (f RuntimeTransportFunc) Invoke(ctx context.Context, draftJSON []byte) ([]b
 		return nil, invalidRuntimeClient("runtime invoke transport function is required")
 	}
 	return f.InvokeFunc(ctx, draftJSON)
+}
+
+func (f RuntimeTransportFunc) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+	if f.OpenStreamFunc == nil {
+		return nil, nil, invalidRuntimeClient("runtime open-stream transport function is required")
+	}
+	return f.OpenStreamFunc(ctx, draftJSON)
 }
 
 func (f RuntimeTransportFunc) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
@@ -117,6 +126,29 @@ func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (Invo
 		return InvocationResult{}, transportRuntimeError("invoke transport failed", err)
 	}
 	return NewInvocationResultFromJSON(raw)
+}
+
+// InvokeStream opens a server stream over a complete Invocation tuple.
+func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft) (*StreamHandle, error) {
+	if c == nil || c.transport == nil {
+		return nil, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return nil, invalidRuntimeClient("context is required")
+	}
+	draftJSON, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
+	}
+	streamTransport, rawOpen, err := c.transport.OpenStream(ctx, draftJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return nil, sdkErr
+		}
+		return nil, transportRuntimeError("open stream transport failed", err)
+	}
+	return NewStreamHandleFromJSON(streamTransport, rawOpen)
 }
 
 // Prepare delegates canonical material generation to the daemon transport.
