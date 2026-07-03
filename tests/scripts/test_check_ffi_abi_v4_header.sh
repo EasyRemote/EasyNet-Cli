@@ -76,6 +76,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "renamed builder prepare symbol should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/int32_t easynet_invocation_handle_await/int32_t easynet_invocation_handle_wait_missing/' \
+    "$SB/include/easynet_cli.h"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "renamed invocation handle await symbol should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's/fn easynet_invocation_bidi_open/fn easynet_invocation_bidi_start/' \
     "$SB/src/ffi/invocation/mod.rs"
 rc=0

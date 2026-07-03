@@ -23,7 +23,7 @@ method spelling.
 | daemon start/attach/discover/stop/detach | partial | partial | gap | gap | gap | gap | gap |
 | runtime health | partial | partial | gap | gap | gap | gap | gap |
 | complete invocation draft | partial | builder handles partial | gap | gap | gap | gap | gap |
-| prepare/sign/submit | partial | partial | gap | gap | gap | gap | gap |
+| prepare/sign/submit | partial | handle observation partial | gap | gap | gap | gap | gap |
 | unary invoke | partial | partial | gap | gap | gap | gap | gap |
 | stream | existing dispatch | existing dispatch | gap | gap | gap | gap | gap |
 | bidi | existing dispatch | existing dispatch | gap | gap | gap | gap | gap |
@@ -40,8 +40,9 @@ method spelling.
 
 ## Known Gaps
 
-- C ABI now exposes invocation builder handles for draft inspect/build/prepare,
-  but it still lacks InvocationHandle event/await/cancel handles.
+- C ABI now exposes invocation builder handles and submitted InvocationHandle
+  await/cancel/events/free handles for unary submit; live event streaming and
+  receipt fetch/verify remain incomplete.
 - Directory, identity, receipt fetch/verify, publication, host binding,
   mission, admin/gateway, events, surface, compatibility, and convenience
   wrappers are schema/conformance scaffolds only.

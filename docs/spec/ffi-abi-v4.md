@@ -149,6 +149,37 @@ int32_t easynet_invocation_submit_signed(
     char** out_result_json
 );
 
+int32_t easynet_invocation_submit_signed_handle(
+    EasynetHandle handle,
+    EasynetSignedInvocationId signed_id,
+    EasynetInvocationHandleId* out_invocation_handle_id,
+    char** out_submitted_json
+);
+
+int32_t easynet_invocation_handle_await(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id,
+    char** out_result_json
+);
+
+int32_t easynet_invocation_handle_cancel(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id,
+    const char* reason_json,
+    char** out_cancel_json
+);
+
+int32_t easynet_invocation_handle_events(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id,
+    char** out_events_json
+);
+
+int32_t easynet_invocation_handle_free(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id
+);
+
 int32_t easynet_prepared_invocation_free(EasynetPreparedInvocationId prepared_id);
 int32_t easynet_signed_invocation_free(EasynetSignedInvocationId signed_id);
 ```
@@ -161,6 +192,14 @@ fields after prepare.
 The direct JSON `easynet_invocation_prepare` entry point remains available for
 bindings that already own an Invocation JSON DTO. New language facades should
 prefer builder handles so the public object graph is observable before prepare.
+
+`easynet_invocation_submit_signed_handle` is the object-model submit operation:
+it consumes the signed handle and returns an `EasynetInvocationHandleId`.
+Bindings observe terminal state through `handle_await`, `handle_events`, and
+`handle_cancel`. Terminal state is monotonic; cancellation after a terminal
+result reports `cancelled: false` and does not rewrite the result. The legacy
+sync `easynet_invocation_submit_signed` remains as a convenience wrapper over
+submit-handle plus await for bindings that still need a blocking call.
 
 ### 2.7 Stream And Bidi Dispatch
 

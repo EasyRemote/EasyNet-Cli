@@ -110,6 +110,11 @@ expected_symbols=(
     easynet_invocation_prepare
     easynet_invocation_sign_prepared
     easynet_invocation_submit_signed
+    easynet_invocation_submit_signed_handle
+    easynet_invocation_handle_await
+    easynet_invocation_handle_cancel
+    easynet_invocation_handle_events
+    easynet_invocation_handle_free
     easynet_prepared_invocation_free
     easynet_signed_invocation_free
     easynet_invocation_stream_open
@@ -225,6 +230,7 @@ if require_file "$HEADER"; then
         "typedef uint64_t EasynetInvocationBuilderId;" \
         "typedef uint64_t EasynetPreparedInvocationId;" \
         "typedef uint64_t EasynetSignedInvocationId;" \
+        "typedef uint64_t EasynetInvocationHandleId;" \
         "typedef void (*EasynetInvocationStreamCallback)(" \
         "typedef void (*EasynetInvocationBidiCallback)("
     do
@@ -275,6 +281,7 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_feature_discovery"
     require_literal "$SPEC" "easynet_invocation_builder_new"
     require_literal "$SPEC" "easynet_invocation_builder_prepare"
+    require_literal "$SPEC" "easynet_invocation_handle_await"
     require_literal "$SPEC" "easynet_invocation_prepare"
     require_literal "$SPEC" "easynet_invocation_submit_signed"
     require_literal "$SPEC" "easynet_invocation_bidi_open"

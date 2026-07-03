@@ -28,7 +28,7 @@ use std::path::PathBuf;
 #[cfg(feature = "axon-pb")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "axon-pb")]
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 #[cfg(feature = "axon-pb")]
 use crate::ffi::client::handle::lib_runtime;
@@ -69,6 +69,9 @@ pub type PreparedInvocationId = u64;
 
 /// Opaque id for a submit-ready signed Invocation object.
 pub type SignedInvocationId = u64;
+
+/// Opaque id for a submitted Invocation observer.
+pub type InvocationHandleId = u64;
 
 /// Callback invoked once per decoded `InvokeStreamChunk` summary, then
 /// ONCE MORE with a null `chunk_json` to mark end-of-stream.
@@ -665,7 +668,230 @@ pub unsafe extern "C" fn easynet_invocation_submit_signed(
 
     #[cfg(feature = "axon-pb")]
     {
-        submit_signed_with_axon_pb(session, signed_id, out_result_json)
+        submit_signed_sync_with_axon_pb(handle, session, signed_id, out_result_json)
+    }
+}
+
+/// Submit a signed Invocation and return an observer handle.
+///
+/// # Safety
+/// Output pointers must be non-null caller-owned pointers.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_submit_signed_handle(
+    handle: EasynetHandle,
+    signed_id: SignedInvocationId,
+    out_invocation_handle_id: *mut InvocationHandleId,
+    out_submitted_json: *mut *mut c_char,
+) -> i32 {
+    if out_invocation_handle_id.is_null() {
+        set_last_error(
+            "easynet_invocation_submit_signed_handle: out_invocation_handle_id pointer is null",
+        );
+        return ERR_NULL_POINTER;
+    }
+    if out_submitted_json.is_null() {
+        set_last_error(
+            "easynet_invocation_submit_signed_handle: out_submitted_json pointer is null",
+        );
+        return ERR_NULL_POINTER;
+    }
+    unsafe {
+        *out_invocation_handle_id = 0;
+        *out_submitted_json = std::ptr::null_mut();
+    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            set_last_error(format!(
+                "easynet_invocation_submit_signed_handle: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (session, signed_id);
+        set_last_error(
+            "easynet_invocation_submit_signed_handle: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        submit_signed_handle_with_axon_pb(
+            handle,
+            session,
+            signed_id,
+            out_invocation_handle_id,
+            out_submitted_json,
+        )
+    }
+}
+
+/// Await a submitted Invocation handle until it reaches a terminal state.
+///
+/// # Safety
+/// `out_result_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_handle_await(
+    handle: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    if out_result_json.is_null() {
+        set_last_error("easynet_invocation_handle_await: out_result_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_result_json = std::ptr::null_mut() };
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_handle_await: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = invocation_handle_id;
+        set_last_error(
+            "easynet_invocation_handle_await: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        invocation_handle_await_with_axon_pb(handle, invocation_handle_id, out_result_json)
+    }
+}
+
+/// Cancel a submitted Invocation handle if it has not already reached terminal.
+///
+/// # Safety
+/// `reason_json` may be null; `out_cancel_json` must be a non-null caller-owned
+/// pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_handle_cancel(
+    handle: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+    reason_json: *const c_char,
+    out_cancel_json: *mut *mut c_char,
+) -> i32 {
+    if out_cancel_json.is_null() {
+        set_last_error("easynet_invocation_handle_cancel: out_cancel_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_cancel_json = std::ptr::null_mut() };
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_handle_cancel: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+    let reason_raw = match read_optional_cstr(reason_json) {
+        Ok(value) => value,
+        Err(StringError::NotUtf8) => {
+            set_last_error("easynet_invocation_handle_cancel: reason_json is not valid UTF-8");
+            return ERR_INVALID_UTF8;
+        }
+        Err(StringError::Null) => None,
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (invocation_handle_id, reason_raw);
+        set_last_error(
+            "easynet_invocation_handle_cancel: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        invocation_handle_cancel_with_axon_pb(
+            handle,
+            invocation_handle_id,
+            reason_raw,
+            out_cancel_json,
+        )
+    }
+}
+
+/// Return an ordered event snapshot for a submitted Invocation handle.
+///
+/// # Safety
+/// `out_events_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_handle_events(
+    handle: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+    out_events_json: *mut *mut c_char,
+) -> i32 {
+    if out_events_json.is_null() {
+        set_last_error("easynet_invocation_handle_events: out_events_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_events_json = std::ptr::null_mut() };
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_handle_events: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = invocation_handle_id;
+        set_last_error(
+            "easynet_invocation_handle_events: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        invocation_handle_events_with_axon_pb(handle, invocation_handle_id, out_events_json)
+    }
+}
+
+/// Free a submitted Invocation handle.
+#[no_mangle]
+pub extern "C" fn easynet_invocation_handle_free(
+    handle: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+) -> i32 {
+    if get(handle).is_none() {
+        set_last_error(format!(
+            "easynet_invocation_handle_free: handle {handle} is not registered"
+        ));
+        return ERR_INVALID_HANDLE;
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = invocation_handle_id;
+        set_last_error(
+            "easynet_invocation_handle_free: axon-pb feature is not enabled in this build",
+        );
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        match remove_invocation_handle_for_owner(handle, invocation_handle_id) {
+            Ok(_) => {
+                clear_last_error();
+                EASYNET_OK
+            }
+            Err(RegistryOwnerMismatch) => {
+                set_last_error(format!(
+                    "easynet_invocation_handle_free: invocation handle {invocation_handle_id} does not belong to handle {handle}"
+                ));
+                ERR_INVALID_HANDLE
+            }
+        }
     }
 }
 
@@ -1439,39 +1665,47 @@ fn sign_prepared_with_axon_pb(
 }
 
 #[cfg(feature = "axon-pb")]
-fn submit_signed_with_axon_pb(
+fn submit_signed_sync_with_axon_pb(
+    owner: EasynetHandle,
     session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
     signed_id: SignedInvocationId,
     out_result_json: *mut *mut c_char,
 ) -> i32 {
-    let signed = match remove_signed(signed_id) {
-        Some(signed) => signed,
-        None => {
-            set_last_error(format!(
-                "easynet_invocation_submit_signed: signed handle {signed_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
-        }
-    };
-    let endpoint = match invocation_endpoint_for_session(session.as_ref()) {
-        Ok(endpoint) => endpoint,
-        Err(err) => return ffi_daemon_error("easynet_invocation_submit_signed", err),
-    };
-    let rt = match lib_runtime() {
-        Ok(rt) => rt,
-        Err(err) => {
-            set_last_error(format!("easynet_invocation_submit_signed: {err}"));
+    let mut invocation_handle_id: InvocationHandleId = 0;
+    let mut submitted_json_ptr: *mut c_char = std::ptr::null_mut();
+    let submit_code = submit_signed_handle_with_axon_pb(
+        owner,
+        session,
+        signed_id,
+        &mut invocation_handle_id,
+        &mut submitted_json_ptr,
+    );
+    if submit_code != EASYNET_OK {
+        return submit_code;
+    }
+    unsafe { crate::ffi::strings::easynet_string_free(submitted_json_ptr) };
+
+    let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
+        Ok(Some(handle)) => handle,
+        Ok(None) | Err(_) => {
+            set_last_error(
+                "easynet_invocation_submit_signed: submitted invocation handle disappeared",
+            );
             return ERR_GENERIC;
         }
     };
-    let handle = match rt.block_on(async {
-        let client = crate::daemon::RuntimeClient::connect(endpoint)?;
-        client.submit_signed(signed).await
-    }) {
-        Ok(handle) => handle,
-        Err(err) => return ffi_daemon_error("easynet_invocation_submit_signed", err),
-    };
-    let json = invocation_result_json(handle.await_result()).to_string();
+    let result = handle.await_result();
+    let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
+    if let Some(code) = sync_submit_error_code_for_result(&result) {
+        let message = result
+            .error
+            .as_ref()
+            .map(|err| err.message.as_str())
+            .unwrap_or("submitted invocation failed before terminal result");
+        set_last_error(format!("easynet_invocation_submit_signed: {message}"));
+        return code;
+    }
+    let json = invocation_result_json(result).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
         set_last_error("easynet_invocation_submit_signed: out-of-memory allocating result JSON");
@@ -1480,6 +1714,194 @@ fn submit_signed_with_axon_pb(
     unsafe { *out_result_json = ptr };
     clear_last_error();
     EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn submit_signed_handle_with_axon_pb(
+    owner: EasynetHandle,
+    session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
+    signed_id: SignedInvocationId,
+    out_invocation_handle_id: *mut InvocationHandleId,
+    out_submitted_json: *mut *mut c_char,
+) -> i32 {
+    let signed = match remove_signed(signed_id) {
+        Some(signed) => signed,
+        None => {
+            set_last_error(format!(
+                "easynet_invocation_submit_signed_handle: signed handle {signed_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let endpoint = match invocation_endpoint_for_session(session.as_ref()) {
+        Ok(endpoint) => endpoint,
+        Err(err) => return ffi_daemon_error("easynet_invocation_submit_signed_handle", err),
+    };
+    let rt = match lib_runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            set_last_error(format!("easynet_invocation_submit_signed_handle: {err}"));
+            return ERR_GENERIC;
+        }
+    };
+
+    let tuple = signed.prepared().tuple();
+    let active = ActiveInvocationHandle::new(owner, tuple.clone());
+    let cancel = active.cancel.clone();
+    let shared = active.shared.clone();
+    let invocation_handle_id = insert_invocation_handle(active);
+    let submitted = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
+        Ok(Some(handle)) => handle.submitted_json(invocation_handle_id).to_string(),
+        Ok(None) | Err(_) => {
+            set_last_error(
+                "easynet_invocation_submit_signed_handle: inserted invocation handle disappeared",
+            );
+            return ERR_GENERIC;
+        }
+    };
+    let ptr = alloc_output_cstring(submitted);
+    if ptr.is_null() {
+        let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
+        set_last_error(
+            "easynet_invocation_submit_signed_handle: out-of-memory allocating submitted JSON",
+        );
+        return ERR_GENERIC;
+    }
+
+    rt.spawn(run_invocation_handle_task(
+        endpoint, signed, tuple, shared, cancel,
+    ));
+    unsafe {
+        *out_invocation_handle_id = invocation_handle_id;
+        *out_submitted_json = ptr;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_handle_await_with_axon_pb(
+    owner: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            set_last_error(format!(
+                "easynet_invocation_handle_await: invocation handle {invocation_handle_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+        Err(RegistryOwnerMismatch) => {
+            set_last_error(format!(
+                "easynet_invocation_handle_await: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let json = invocation_result_json(handle.await_result()).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_invocation_handle_await: out-of-memory allocating result JSON");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_result_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_handle_cancel_with_axon_pb(
+    owner: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+    reason_raw: Option<String>,
+    out_cancel_json: *mut *mut c_char,
+) -> i32 {
+    let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            set_last_error(format!(
+                "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+        Err(RegistryOwnerMismatch) => {
+            set_last_error(format!(
+                "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let outcome = handle.cancel(reason_raw);
+    let json = serde_json::json!({
+        "handle_id": invocation_handle_id,
+        "cancelled": outcome.cancelled,
+        "state": outcome.state.as_str(),
+        "terminal": outcome.terminal,
+    })
+    .to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_invocation_handle_cancel: out-of-memory allocating cancel JSON");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_cancel_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_handle_events_with_axon_pb(
+    owner: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+    out_events_json: *mut *mut c_char,
+) -> i32 {
+    let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
+        Ok(Some(handle)) => handle,
+        Ok(None) => {
+            set_last_error(format!(
+                "easynet_invocation_handle_events: invocation handle {invocation_handle_id} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+        Err(RegistryOwnerMismatch) => {
+            set_last_error(format!(
+                "easynet_invocation_handle_events: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let json = handle.events_json(invocation_handle_id).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        set_last_error("easynet_invocation_handle_events: out-of-memory allocating events JSON");
+        return ERR_GENERIC;
+    }
+    unsafe { *out_events_json = ptr };
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+async fn run_invocation_handle_task(
+    endpoint: PathBuf,
+    signed: crate::daemon::SignedInvocation,
+    tuple: crate::daemon::InvocationTuple,
+    shared: Arc<InvocationHandleShared>,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    let result = tokio::select! {
+        _ = cancel.cancelled() => invocation_cancelled_result(&tuple, Some("cancelled before runtime terminal")),
+        outcome = async {
+            let client = crate::daemon::RuntimeClient::connect(endpoint)?;
+            client.submit_signed(signed).await.map(|handle| handle.await_result())
+        } => match outcome {
+            Ok(result) => result,
+            Err(err) => invocation_failed_result(&tuple, err),
+        },
+    };
+    let _ = shared.mark_terminal(result);
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1748,6 +2170,265 @@ struct ActiveInvocationStream {
 }
 
 #[cfg(feature = "axon-pb")]
+struct ActiveInvocationHandle {
+    owner: EasynetHandle,
+    cancel: tokio_util::sync::CancellationToken,
+    shared: Arc<InvocationHandleShared>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl ActiveInvocationHandle {
+    fn new(owner: EasynetHandle, tuple: crate::daemon::InvocationTuple) -> Self {
+        Self {
+            owner,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            shared: Arc::new(InvocationHandleShared::new(tuple)),
+        }
+    }
+
+    fn submitted_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+        self.shared.snapshot_json(invocation_handle_id)
+    }
+
+    fn await_result(&self) -> crate::daemon::InvocationResult {
+        self.shared.await_result()
+    }
+
+    fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
+        self.cancel.cancel();
+        self.shared.cancel(reason)
+    }
+
+    fn events_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+        self.shared.snapshot_json(invocation_handle_id)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct InvocationHandleShared {
+    inner: Mutex<InvocationHandleState>,
+    terminal: Condvar,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationHandleShared {
+    fn new(tuple: crate::daemon::InvocationTuple) -> Self {
+        Self {
+            inner: Mutex::new(InvocationHandleState::submitted(tuple)),
+            terminal: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, InvocationHandleState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn await_result(&self) -> crate::daemon::InvocationResult {
+        let mut state = self.lock();
+        while state.terminal_result.is_none() {
+            state = self
+                .terminal
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        state
+            .terminal_result
+            .clone()
+            .expect("terminal result is present after wait")
+    }
+
+    fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
+        let mut state = self.lock();
+        if state.phase.is_terminal() {
+            return InvocationHandleCancelOutcome {
+                cancelled: false,
+                state: state.phase,
+                terminal: true,
+            };
+        }
+        let result = invocation_cancelled_result(&state.tuple, reason.as_deref());
+        state.push_terminal(
+            InvocationHandlePhase::Cancelled,
+            "cancelled",
+            reason,
+            result,
+        );
+        self.terminal.notify_all();
+        InvocationHandleCancelOutcome {
+            cancelled: true,
+            state: InvocationHandlePhase::Cancelled,
+            terminal: true,
+        }
+    }
+
+    fn mark_terminal(&self, result: crate::daemon::InvocationResult) -> bool {
+        let mut state = self.lock();
+        if state.phase.is_terminal() {
+            return false;
+        }
+        let phase = terminal_phase_for_result(&result);
+        state.push_terminal(phase, phase.event_kind(), None, result);
+        self.terminal.notify_all();
+        true
+    }
+
+    fn snapshot_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+        let state = self.lock();
+        state.snapshot_json(invocation_handle_id)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct InvocationHandleState {
+    tuple: crate::daemon::InvocationTuple,
+    phase: InvocationHandlePhase,
+    next_sequence: u64,
+    events: Vec<InvocationHandleEvent>,
+    terminal_result: Option<crate::daemon::InvocationResult>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationHandleState {
+    fn submitted(tuple: crate::daemon::InvocationTuple) -> Self {
+        Self {
+            tuple,
+            phase: InvocationHandlePhase::Submitted,
+            next_sequence: 2,
+            events: vec![InvocationHandleEvent {
+                sequence: 1,
+                state: InvocationHandlePhase::Submitted,
+                kind: "submitted".to_string(),
+                terminal: false,
+                reason: None,
+                result: None,
+            }],
+            terminal_result: None,
+        }
+    }
+
+    fn push_terminal(
+        &mut self,
+        phase: InvocationHandlePhase,
+        kind: &'static str,
+        reason: Option<String>,
+        result: crate::daemon::InvocationResult,
+    ) {
+        self.phase = phase;
+        self.events.push(InvocationHandleEvent {
+            sequence: self.next_sequence,
+            state: phase,
+            kind: kind.to_string(),
+            terminal: true,
+            reason,
+            result: Some(result.clone()),
+        });
+        self.next_sequence += 1;
+        self.terminal_result = Some(result);
+    }
+
+    fn snapshot_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+        serde_json::json!({
+            "handle_id": invocation_handle_id,
+            "state": self.phase.as_str(),
+            "terminal": self.phase.is_terminal(),
+            "events": self.events.iter().map(InvocationHandleEvent::to_json).collect::<Vec<_>>(),
+            "result": self.terminal_result.clone().map(invocation_result_json),
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+struct InvocationHandleEvent {
+    sequence: u64,
+    state: InvocationHandlePhase,
+    kind: String,
+    terminal: bool,
+    reason: Option<String>,
+    result: Option<crate::daemon::InvocationResult>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationHandleEvent {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "sequence": self.sequence,
+            "kind": self.kind,
+            "state": self.state.as_str(),
+            "terminal": self.terminal,
+            "reason": self.reason,
+            "result": self.result.clone().map(invocation_result_json),
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InvocationHandlePhase {
+    Submitted,
+    Completed,
+    Failed,
+    TimedOut,
+    Cancelled,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InvocationHandlePhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Submitted => "Submitted",
+            Self::Completed => "Completed",
+            Self::Failed => "Failed",
+            Self::TimedOut => "TimedOut",
+            Self::Cancelled => "Cancelled",
+        }
+    }
+
+    fn event_kind(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::TimedOut => "timed_out",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn is_terminal(self) -> bool {
+        !matches!(self, Self::Submitted)
+    }
+
+    fn to_axon_wire_state_string(self) -> String {
+        match self {
+            Self::Submitted => {
+                axon_state_wire_string(easynet_axon::invocation::InvocationState::Running)
+            }
+            Self::Completed => {
+                axon_state_wire_string(easynet_axon::invocation::InvocationState::Completed)
+            }
+            Self::Failed => {
+                axon_state_wire_string(easynet_axon::invocation::InvocationState::Failed)
+            }
+            Self::TimedOut => {
+                axon_state_wire_string(easynet_axon::invocation::InvocationState::TimedOut)
+            }
+            Self::Cancelled => {
+                axon_state_wire_string(easynet_axon::invocation::InvocationState::Cancelled)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct InvocationHandleCancelOutcome {
+    cancelled: bool,
+    state: InvocationHandlePhase,
+    terminal: bool,
+}
+
+#[cfg(feature = "axon-pb")]
 struct ActiveInvocationBidi {
     owner: EasynetHandle,
     ability: String,
@@ -1776,6 +2457,12 @@ struct BidiRegistry {
 struct BuilderRegistry {
     next: AtomicU64,
     entries: Mutex<std::collections::HashMap<InvocationBuilderId, InvocationBuilderState>>,
+}
+
+#[cfg(feature = "axon-pb")]
+struct InvocationHandleRegistry {
+    next: AtomicU64,
+    entries: Mutex<std::collections::HashMap<InvocationHandleId, Arc<ActiveInvocationHandle>>>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1813,6 +2500,15 @@ fn bidi_registry() -> &'static BidiRegistry {
 fn builder_registry() -> &'static BuilderRegistry {
     static REGISTRY: OnceLock<BuilderRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| BuilderRegistry {
+        next: AtomicU64::new(1),
+        entries: Mutex::new(std::collections::HashMap::new()),
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_handle_registry() -> &'static InvocationHandleRegistry {
+    static REGISTRY: OnceLock<InvocationHandleRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| InvocationHandleRegistry {
         next: AtomicU64::new(1),
         entries: Mutex::new(std::collections::HashMap::new()),
     })
@@ -1860,6 +2556,16 @@ fn lock_bidi_entries(
 fn lock_builder_entries(
     registry: &BuilderRegistry,
 ) -> MutexGuard<'_, std::collections::HashMap<InvocationBuilderId, InvocationBuilderState>> {
+    registry
+        .entries
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(feature = "axon-pb")]
+fn lock_invocation_handle_entries(
+    registry: &InvocationHandleRegistry,
+) -> MutexGuard<'_, std::collections::HashMap<InvocationHandleId, Arc<ActiveInvocationHandle>>> {
     registry
         .entries
         .lock()
@@ -1915,6 +2621,14 @@ fn insert_builder(builder: InvocationBuilderState) -> InvocationBuilderId {
 }
 
 #[cfg(feature = "axon-pb")]
+fn insert_invocation_handle(handle: ActiveInvocationHandle) -> InvocationHandleId {
+    let registry = invocation_handle_registry();
+    let invocation_handle_id = registry.next.fetch_add(1, Ordering::Relaxed);
+    lock_invocation_handle_entries(registry).insert(invocation_handle_id, Arc::new(handle));
+    invocation_handle_id
+}
+
+#[cfg(feature = "axon-pb")]
 fn insert_prepared(prepared: crate::daemon::PreparedInvocation) -> PreparedInvocationId {
     let registry = prepared_registry();
     let prepared_id = registry.next.fetch_add(1, Ordering::Relaxed);
@@ -1938,6 +2652,26 @@ fn get_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderState
     lock_builder_entries(builder_registry())
         .get(&builder_id)
         .cloned()
+}
+
+#[cfg(feature = "axon-pb")]
+fn get_invocation_handle_for_owner(
+    owner: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+) -> Result<Option<Arc<ActiveInvocationHandle>>, RegistryOwnerMismatch> {
+    if invocation_handle_id == 0 {
+        return Ok(None);
+    }
+    let handle = lock_invocation_handle_entries(invocation_handle_registry())
+        .get(&invocation_handle_id)
+        .cloned();
+    let Some(handle) = handle else {
+        return Ok(None);
+    };
+    if handle.owner != owner {
+        return Err(RegistryOwnerMismatch);
+    }
+    Ok(Some(handle))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2001,6 +2735,25 @@ fn remove_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderSt
 }
 
 #[cfg(feature = "axon-pb")]
+fn remove_invocation_handle_for_owner(
+    owner: EasynetHandle,
+    invocation_handle_id: InvocationHandleId,
+) -> Result<Option<Arc<ActiveInvocationHandle>>, RegistryOwnerMismatch> {
+    if invocation_handle_id == 0 {
+        return Ok(None);
+    }
+    let registry = invocation_handle_registry();
+    let mut entries = lock_invocation_handle_entries(registry);
+    let Some(handle) = entries.get(&invocation_handle_id) else {
+        return Ok(None);
+    };
+    if handle.owner != owner {
+        return Err(RegistryOwnerMismatch);
+    }
+    Ok(entries.remove(&invocation_handle_id))
+}
+
+#[cfg(feature = "axon-pb")]
 fn remove_stream(stream_id: InvocationStreamId) -> Option<ActiveInvocationStream> {
     if stream_id == 0 {
         return None;
@@ -2031,6 +2784,22 @@ fn remove_stream_for_handle(
 pub(crate) fn cancel_invocations_for_handle(owner: EasynetHandle) {
     if owner == 0 {
         return;
+    }
+
+    let handles = {
+        let registry = invocation_handle_registry();
+        let mut entries = lock_invocation_handle_entries(registry);
+        let owned_ids = entries
+            .iter()
+            .filter_map(|(id, handle)| (handle.owner == owner).then_some(*id))
+            .collect::<Vec<_>>();
+        owned_ids
+            .into_iter()
+            .filter_map(|id| entries.remove(&id))
+            .collect::<Vec<_>>()
+    };
+    for handle in handles {
+        let _ = handle.cancel(Some("owning EasynetHandle shutdown".to_string()));
     }
 
     let streams = {
@@ -3365,6 +4134,179 @@ fn invocation_result_json(result: crate::daemon::InvocationResult) -> serde_json
 }
 
 #[cfg(feature = "axon-pb")]
+fn invocation_cancelled_result(
+    tuple: &crate::daemon::InvocationTuple,
+    reason: Option<&str>,
+) -> crate::daemon::InvocationResult {
+    crate::daemon::InvocationResult {
+        tuple: tuple.clone(),
+        terminal_state: axon_state_wire_string(
+            easynet_axon::invocation::InvocationState::Cancelled,
+        ),
+        output_content_type: "application/json".to_string(),
+        output: b"{}".to_vec(),
+        selected_node_id: String::new(),
+        scheduling_reason: "ffi_invocation_handle_cancel".to_string(),
+        elapsed_ms: 0,
+        receipt: None,
+        error: Some(crate::daemon::RuntimeErrorSummary {
+            code: "CANCELLED".to_string(),
+            stage: "client".to_string(),
+            message: reason.unwrap_or("invocation handle cancelled").to_string(),
+            retryable: false,
+        }),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_failed_result(
+    tuple: &crate::daemon::InvocationTuple,
+    err: crate::daemon::DaemonError,
+) -> crate::daemon::InvocationResult {
+    let phase = daemon_error_terminal_phase(&err);
+    crate::daemon::InvocationResult {
+        tuple: tuple.clone(),
+        terminal_state: phase.to_axon_wire_state_string(),
+        output_content_type: "application/json".to_string(),
+        output: b"{}".to_vec(),
+        selected_node_id: String::new(),
+        scheduling_reason: "ffi_invocation_handle_terminal_error".to_string(),
+        elapsed_ms: 0,
+        receipt: None,
+        error: Some(runtime_error_summary_for_daemon_error(&err)),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_error_summary_for_daemon_error(
+    err: &crate::daemon::DaemonError,
+) -> crate::daemon::RuntimeErrorSummary {
+    let (code, stage, retryable) = match err {
+        crate::daemon::DaemonError::InvocationEndpointDown { .. }
+        | crate::daemon::DaemonError::InvocationEndpointMissing { .. }
+        | crate::daemon::DaemonError::Connect { .. } => ("DAEMON_DOWN", "transport", true),
+        crate::daemon::DaemonError::InvokeStatus { code, .. }
+        | crate::daemon::DaemonError::InvokeStreamStatus { code, .. }
+        | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => (
+            tonic_code_name(*code),
+            "runtime",
+            tonic_code_retryable(*code),
+        ),
+        crate::daemon::DaemonError::InvalidInvocation(_) => ("INVALID_INVOCATION", "sdk", false),
+        crate::daemon::DaemonError::InvokeBidiClosed { .. } => ("CANCELLED", "runtime", false),
+        _ => ("RUNTIME_ERROR", "runtime", false),
+    };
+    crate::daemon::RuntimeErrorSummary {
+        code: code.to_string(),
+        stage: stage.to_string(),
+        message: err.to_string(),
+        retryable,
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn sync_submit_error_code_for_result(result: &crate::daemon::InvocationResult) -> Option<i32> {
+    let error = result.error.as_ref()?;
+    match error.code.as_str() {
+        "DAEMON_DOWN" => Some(ERR_DAEMON_DOWN),
+        "CANCELLED" => Some(ERR_CANCELLED),
+        "DEADLINE_EXCEEDED" => Some(ERR_TIMEOUT),
+        "INVALID_INVOCATION" => Some(ERR_INVALID_ARG),
+        "PERMISSION_DENIED" | "UNAUTHENTICATED" => Some(ERR_PERMISSION_DENIED),
+        "NOT_FOUND" => Some(ERR_NOT_FOUND),
+        "UNIMPLEMENTED" => Some(ERR_NOT_IMPLEMENTED),
+        "UNKNOWN" | "INTERNAL" | "DATA_LOSS" => Some(ERR_PROTOCOL),
+        _ if error.stage == "transport" => Some(ERR_DAEMON_DOWN),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn daemon_error_terminal_phase(err: &crate::daemon::DaemonError) -> InvocationHandlePhase {
+    match err {
+        crate::daemon::DaemonError::InvokeStatus { code, .. }
+        | crate::daemon::DaemonError::InvokeStreamStatus { code, .. }
+        | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => match code {
+            tonic::Code::DeadlineExceeded => InvocationHandlePhase::TimedOut,
+            tonic::Code::Cancelled => InvocationHandlePhase::Cancelled,
+            _ => InvocationHandlePhase::Failed,
+        },
+        crate::daemon::DaemonError::InvokeBidiClosed { .. } => InvocationHandlePhase::Cancelled,
+        _ => InvocationHandlePhase::Failed,
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn terminal_phase_for_result(result: &crate::daemon::InvocationResult) -> InvocationHandlePhase {
+    if result.terminal_state
+        == axon_state_wire_string(easynet_axon::invocation::InvocationState::TimedOut)
+        || result.terminal_state.eq_ignore_ascii_case("TimedOut")
+        || result.terminal_state.eq_ignore_ascii_case("TIMED_OUT")
+    {
+        return InvocationHandlePhase::TimedOut;
+    }
+    if result.terminal_state
+        == axon_state_wire_string(easynet_axon::invocation::InvocationState::Cancelled)
+        || result.terminal_state.eq_ignore_ascii_case("Cancelled")
+        || result.terminal_state.eq_ignore_ascii_case("CANCELLED")
+    {
+        return InvocationHandlePhase::Cancelled;
+    }
+    if result.error.is_none()
+        && (result.terminal_state
+            == axon_state_wire_string(easynet_axon::invocation::InvocationState::Completed)
+            || result.terminal_state.eq_ignore_ascii_case("Completed")
+            || result.terminal_state.eq_ignore_ascii_case("COMPLETED"))
+    {
+        return InvocationHandlePhase::Completed;
+    }
+    if result.error.is_none() {
+        InvocationHandlePhase::Completed
+    } else {
+        InvocationHandlePhase::Failed
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn axon_state_wire_string(state: easynet_axon::invocation::InvocationState) -> String {
+    state.to_wire_i32().to_string()
+}
+
+#[cfg(feature = "axon-pb")]
+fn tonic_code_name(code: tonic::Code) -> &'static str {
+    match code {
+        tonic::Code::Ok => "OK",
+        tonic::Code::Cancelled => "CANCELLED",
+        tonic::Code::Unknown => "UNKNOWN",
+        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        tonic::Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
+        tonic::Code::NotFound => "NOT_FOUND",
+        tonic::Code::AlreadyExists => "ALREADY_EXISTS",
+        tonic::Code::PermissionDenied => "PERMISSION_DENIED",
+        tonic::Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
+        tonic::Code::FailedPrecondition => "FAILED_PRECONDITION",
+        tonic::Code::Aborted => "ABORTED",
+        tonic::Code::OutOfRange => "OUT_OF_RANGE",
+        tonic::Code::Unimplemented => "UNIMPLEMENTED",
+        tonic::Code::Internal => "INTERNAL",
+        tonic::Code::Unavailable => "UNAVAILABLE",
+        tonic::Code::DataLoss => "DATA_LOSS",
+        tonic::Code::Unauthenticated => "UNAUTHENTICATED",
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn tonic_code_retryable(code: tonic::Code) -> bool {
+    matches!(
+        code,
+        tonic::Code::Cancelled
+            | tonic::Code::DeadlineExceeded
+            | tonic::Code::ResourceExhausted
+            | tonic::Code::Unavailable
+    )
+}
+
+#[cfg(feature = "axon-pb")]
 fn receipt_summary_dto_json(receipt: crate::daemon::ReceiptSummary) -> serde_json::Value {
     serde_json::json!({
         "index": receipt.index,
@@ -3667,6 +4609,80 @@ mod tests {
             }
         }
         obj.to_string()
+    }
+
+    fn signature_json() -> CString {
+        CString::new(
+            serde_json::json!({
+                "algorithm": "ed25519",
+                "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
+                "key_id_hint": "caller-key"
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    fn new_signed_invocation_id() -> SignedInvocationId {
+        let raw = CString::new(canonical_invocation_json(serde_json::json!({
+            "args": {"probe": true}
+        })))
+        .unwrap();
+        let (prepare_handle, _) = alloc(test_session());
+        let mut prepared_id: PreparedInvocationId = 0;
+        let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+        let prepare_code = unsafe {
+            easynet_invocation_prepare(
+                prepare_handle,
+                raw.as_ptr(),
+                std::ptr::null(),
+                &mut prepared_id,
+                &mut prepared_json_ptr,
+            )
+        };
+        assert_eq!(prepare_code, EASYNET_OK);
+        unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+
+        let signature = signature_json();
+        let mut signed_id: SignedInvocationId = 0;
+        let mut signed_json_ptr: *mut c_char = std::ptr::null_mut();
+        let sign_code = unsafe {
+            easynet_invocation_sign_prepared(
+                prepared_id,
+                signature.as_ptr(),
+                &mut signed_id,
+                &mut signed_json_ptr,
+            )
+        };
+        assert_eq!(sign_code, EASYNET_OK);
+        unsafe { crate::ffi::strings::easynet_string_free(signed_json_ptr) };
+        crate::ffi::client::handle::release(prepare_handle);
+        signed_id
+    }
+
+    fn signed_fixture_tuple() -> crate::daemon::InvocationTuple {
+        let signed_id = new_signed_invocation_id();
+        let tuple = get_signed(signed_id).unwrap().prepared().tuple();
+        assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
+        tuple
+    }
+
+    fn completed_result_for_tuple(
+        tuple: crate::daemon::InvocationTuple,
+    ) -> crate::daemon::InvocationResult {
+        crate::daemon::InvocationResult {
+            tuple,
+            terminal_state: axon_state_wire_string(
+                easynet_axon::invocation::InvocationState::Completed,
+            ),
+            output_content_type: "application/json".to_string(),
+            output: br#"{"ok":true}"#.to_vec(),
+            selected_node_id: "local".to_string(),
+            scheduling_reason: "test".to_string(),
+            elapsed_ms: 1,
+            receipt: None,
+            error: None,
+        }
     }
 
     fn new_builder_handle() -> InvocationBuilderId {
@@ -4099,6 +5115,235 @@ mod tests {
         assert!(second_out.is_null());
         crate::ffi::client::handle::release(prepare_handle);
         crate::ffi::client::handle::release(client_handle);
+    }
+
+    #[test]
+    fn invocation_handle_submit_rejects_invalid_client_before_consuming_signed() {
+        let signed_id = new_signed_invocation_id();
+        let mut invocation_handle_id: InvocationHandleId = 999;
+        let mut submitted_ptr: *mut c_char = std::ptr::dangling_mut();
+
+        let code = unsafe {
+            easynet_invocation_submit_signed_handle(
+                9_999_999,
+                signed_id,
+                &mut invocation_handle_id,
+                &mut submitted_ptr,
+            )
+        };
+
+        assert_eq!(code, ERR_INVALID_HANDLE);
+        assert_eq!(invocation_handle_id, 0);
+        assert!(submitted_ptr.is_null());
+        assert!(get_signed(signed_id).is_some());
+        assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
+    }
+
+    #[test]
+    fn invocation_handle_await_observes_transport_failure_terminal() {
+        let signed_id = new_signed_invocation_id();
+        let (client_handle, _) = alloc(
+            crate::ffi::client::handle::ClientSession::with_control_path_only(
+                "/tmp/easynet-control.json".to_string(),
+                Some("/tmp/easynet-missing-daemon.sock".to_string()),
+            ),
+        );
+        let mut invocation_handle_id: InvocationHandleId = 0;
+        let mut submitted_ptr: *mut c_char = std::ptr::null_mut();
+        let submit_code = unsafe {
+            easynet_invocation_submit_signed_handle(
+                client_handle,
+                signed_id,
+                &mut invocation_handle_id,
+                &mut submitted_ptr,
+            )
+        };
+        assert_eq!(submit_code, EASYNET_OK);
+        assert_ne!(invocation_handle_id, 0);
+        assert!(get_signed(signed_id).is_none());
+        let submitted_json: serde_json::Value = unsafe {
+            serde_json::from_str(CStr::from_ptr(submitted_ptr).to_str().unwrap()).unwrap()
+        };
+        unsafe { crate::ffi::strings::easynet_string_free(submitted_ptr) };
+        assert_eq!(submitted_json["state"], "Submitted");
+        assert_eq!(submitted_json["terminal"], false);
+
+        let mut result_ptr: *mut c_char = std::ptr::null_mut();
+        let await_code = unsafe {
+            easynet_invocation_handle_await(client_handle, invocation_handle_id, &mut result_ptr)
+        };
+        assert_eq!(await_code, EASYNET_OK);
+        let result_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(result_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(result_ptr) };
+        assert_eq!(result_json["ok"], false);
+        assert_eq!(result_json["error"]["code"], "DAEMON_DOWN");
+
+        let mut events_ptr: *mut c_char = std::ptr::null_mut();
+        let events_code = unsafe {
+            easynet_invocation_handle_events(client_handle, invocation_handle_id, &mut events_ptr)
+        };
+        assert_eq!(events_code, EASYNET_OK);
+        let events_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(events_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(events_ptr) };
+        assert_eq!(events_json["terminal"], true);
+        assert_eq!(events_json["events"][0]["state"], "Submitted");
+        assert_eq!(events_json["events"][1]["state"], "Failed");
+        assert_eq!(
+            easynet_invocation_handle_free(client_handle, invocation_handle_id),
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(client_handle);
+    }
+
+    #[test]
+    fn invocation_handle_cancel_after_terminal_does_not_rewrite_state() {
+        let signed_id = new_signed_invocation_id();
+        let (client_handle, _) = alloc(
+            crate::ffi::client::handle::ClientSession::with_control_path_only(
+                "/tmp/easynet-control.json".to_string(),
+                Some("/tmp/easynet-missing-daemon.sock".to_string()),
+            ),
+        );
+        let mut invocation_handle_id: InvocationHandleId = 0;
+        let mut submitted_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_submit_signed_handle(
+                    client_handle,
+                    signed_id,
+                    &mut invocation_handle_id,
+                    &mut submitted_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        unsafe { crate::ffi::strings::easynet_string_free(submitted_ptr) };
+
+        let mut result_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_await(
+                    client_handle,
+                    invocation_handle_id,
+                    &mut result_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        unsafe { crate::ffi::strings::easynet_string_free(result_ptr) };
+
+        let reason = CString::new(serde_json::json!({"reason": "too-late"}).to_string()).unwrap();
+        let mut cancel_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_cancel(
+                    client_handle,
+                    invocation_handle_id,
+                    reason.as_ptr(),
+                    &mut cancel_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        let cancel_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(cancel_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(cancel_ptr) };
+        assert_eq!(cancel_json["cancelled"], false);
+        assert_eq!(cancel_json["state"], "Failed");
+
+        let mut events_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_events(
+                    client_handle,
+                    invocation_handle_id,
+                    &mut events_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        let events_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(events_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(events_ptr) };
+        assert_eq!(events_json["events"].as_array().unwrap().len(), 2);
+        assert_eq!(events_json["events"][1]["state"], "Failed");
+        assert_eq!(
+            easynet_invocation_handle_free(client_handle, invocation_handle_id),
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(client_handle);
+    }
+
+    #[test]
+    fn invocation_handle_rejects_cross_owner_access() {
+        let signed_id = new_signed_invocation_id();
+        let (owner_handle, _) = alloc(
+            crate::ffi::client::handle::ClientSession::with_control_path_only(
+                "/tmp/easynet-control.json".to_string(),
+                Some("/tmp/easynet-missing-daemon.sock".to_string()),
+            ),
+        );
+        let (other_handle, _) = alloc(test_session());
+        let mut invocation_handle_id: InvocationHandleId = 0;
+        let mut submitted_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_submit_signed_handle(
+                    owner_handle,
+                    signed_id,
+                    &mut invocation_handle_id,
+                    &mut submitted_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        unsafe { crate::ffi::strings::easynet_string_free(submitted_ptr) };
+
+        let mut events_ptr: *mut c_char = std::ptr::dangling_mut();
+        let events_code = unsafe {
+            easynet_invocation_handle_events(other_handle, invocation_handle_id, &mut events_ptr)
+        };
+        assert_eq!(events_code, ERR_INVALID_HANDLE);
+        assert!(events_ptr.is_null());
+        assert_eq!(
+            easynet_invocation_handle_free(owner_handle, invocation_handle_id),
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(owner_handle);
+        crate::ffi::client::handle::release(other_handle);
+    }
+
+    #[test]
+    fn invocation_handle_cancel_before_completion_is_terminal_monotonic() {
+        let (owner_handle, _) = alloc(test_session());
+        let tuple = signed_fixture_tuple();
+        let active = ActiveInvocationHandle::new(owner_handle, tuple.clone());
+        let shared = active.shared.clone();
+        let invocation_handle_id = insert_invocation_handle(active);
+        let handle = get_invocation_handle_for_owner(owner_handle, invocation_handle_id)
+            .unwrap()
+            .unwrap();
+
+        let outcome = handle.cancel(Some("client stop".to_string()));
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.state, InvocationHandlePhase::Cancelled);
+        assert!(!shared.mark_terminal(completed_result_for_tuple(tuple)));
+        let result = handle.await_result();
+        assert_eq!(
+            terminal_phase_for_result(&result),
+            InvocationHandlePhase::Cancelled
+        );
+
+        let events_json = handle.events_json(invocation_handle_id);
+        assert_eq!(events_json["events"].as_array().unwrap().len(), 2);
+        assert_eq!(events_json["events"][1]["state"], "Cancelled");
+        assert_eq!(
+            easynet_invocation_handle_free(owner_handle, invocation_handle_id),
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(owner_handle);
     }
 
     #[test]

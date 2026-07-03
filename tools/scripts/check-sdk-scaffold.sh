@@ -110,6 +110,7 @@ case_files=(
   daemon-control-only.yaml
   invocation-complete-tuple.yaml
   invocation-builder-handle-state.yaml
+  invocation-handle-terminal-monotonicity.yaml
   invocation-canonical-material.yaml
   invocation-prepared-not-submittable.yaml
   invocation-presigned-submit.yaml

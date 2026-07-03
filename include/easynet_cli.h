@@ -42,6 +42,7 @@ typedef uint64_t EasynetInvocationBidiId;
 typedef uint64_t EasynetInvocationBuilderId;
 typedef uint64_t EasynetPreparedInvocationId;
 typedef uint64_t EasynetSignedInvocationId;
+typedef uint64_t EasynetInvocationHandleId;
 
 /*
  * Stream and bidi callbacks are invoked on libeasynet_cli-owned
@@ -241,6 +242,37 @@ int32_t easynet_invocation_submit_signed(
     EasynetHandle handle,
     EasynetSignedInvocationId signed_id,
     char **out_result_json
+);
+
+int32_t easynet_invocation_submit_signed_handle(
+    EasynetHandle handle,
+    EasynetSignedInvocationId signed_id,
+    EasynetInvocationHandleId *out_invocation_handle_id,
+    char **out_submitted_json
+);
+
+int32_t easynet_invocation_handle_await(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id,
+    char **out_result_json
+);
+
+int32_t easynet_invocation_handle_cancel(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id,
+    const char *reason_json,
+    char **out_cancel_json
+);
+
+int32_t easynet_invocation_handle_events(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id,
+    char **out_events_json
+);
+
+int32_t easynet_invocation_handle_free(
+    EasynetHandle handle,
+    EasynetInvocationHandleId invocation_handle_id
 );
 
 int32_t easynet_prepared_invocation_free(
