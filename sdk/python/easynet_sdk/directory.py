@@ -1,0 +1,379 @@
+"""Directory + Identity read-model facade."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field, replace
+from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+
+from .errors import ErrorCode, RetryHint, SDKError
+
+
+DEFAULT_DIRECTORY_PAGE_SIZE = 50
+MAX_DIRECTORY_PAGE_SIZE = 500
+_PROFILE = "directory_identity"
+_READ_MODEL = "read_model"
+
+
+@dataclass(frozen=True)
+class DirectoryQueryBase:
+    """Complete carrier context for directory read-model requests."""
+
+    caller_ura: str
+    callee_ura: str
+    subject_ura: str
+    descriptor_version: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    limit: int = 0
+    cursor: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def with_default_limit(self) -> "DirectoryQueryBase":
+        if self.limit == 0:
+            return replace(self, limit=DEFAULT_DIRECTORY_PAGE_SIZE)
+        return self
+
+    def to_json_dict(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "caller_ura": self.caller_ura,
+            "callee_ura": self.callee_ura,
+            "subject_ura": self.subject_ura,
+            "descriptor_version": self.descriptor_version,
+            "nonce_base64": self.nonce_base64,
+            "causal_context": dict(self.causal_context),
+        }
+        if self.limit:
+            value["limit"] = self.limit
+        if self.cursor:
+            value["cursor"] = self.cursor
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return value
+
+
+@dataclass(frozen=True)
+class ResolveQuery:
+    """Directory resolve query projection."""
+
+    base: DirectoryQueryBase
+    query_name: str = ""
+    ability_name: str = ""
+    qtype: str = ""
+    realm_hint: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        _validate_base(self.base, require_limit=False)
+        if not self.query_name and not self.realm_hint:
+            raise _invalid_directory("query_name or realm_hint is required")
+        value = self.base.to_json_dict()
+        if self.query_name:
+            value["query_name"] = self.query_name
+        if self.ability_name:
+            value["ability_name"] = self.ability_name
+        if self.qtype:
+            value["qtype"] = self.qtype
+        if self.realm_hint:
+            value["realm_hint"] = self.realm_hint
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class DeviceQuery:
+    base: DirectoryQueryBase
+
+
+@dataclass(frozen=True)
+class AgentQuery:
+    base: DirectoryQueryBase
+
+
+@dataclass(frozen=True)
+class AbilityQuery:
+    base: DirectoryQueryBase
+    scope: str = ""
+    owner_ura: str = ""
+    ability_ura: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        base = self.base.with_default_limit()
+        _validate_base(base, require_limit=True)
+        value = base.to_json_dict()
+        if self.scope:
+            value["scope"] = self.scope
+        if self.owner_ura:
+            value["owner_ura"] = self.owner_ura
+        if self.ability_ura:
+            value["ability_ura"] = self.ability_ura
+        return _json_bytes(value)
+
+
+@runtime_checkable
+class DirectoryTransport(Protocol):
+    """Concrete directory operations supplied by the integration layer."""
+
+    def resolve(self, request_json: bytes) -> bytes:
+        ...
+
+    def list_devices(self, request_json: bytes) -> bytes:
+        ...
+
+    def list_agents(self, request_json: bytes) -> bytes:
+        ...
+
+    def list_abilities(self, request_json: bytes) -> bytes:
+        ...
+
+
+@dataclass(frozen=True)
+class ResolvedRef:
+    profile: str
+    kind: str
+    answer_kind: str
+    query_name: Optional[str]
+    canonical_name: Optional[str]
+    owner_ura: Optional[str]
+    ability_ura: Optional[str]
+    route_ura: Optional[str]
+    next_hop: Optional[Mapping[str, object]]
+    selected_route: Optional[Mapping[str, object]]
+    route_candidates: tuple[Mapping[str, object], ...]
+    records: tuple[Mapping[str, object], ...]
+    negative: Optional[Mapping[str, object]]
+    release_profile: Optional[str]
+    authority: Optional[Mapping[str, object]]
+    cache_policy: Optional[Mapping[str, object]]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "ResolvedRef":
+        decoded = _json_object(raw, "resolved ref")
+        if (
+            decoded.get("profile") != _PROFILE
+            or decoded.get("kind") != "resolved_ref"
+            or not isinstance(decoded.get("answer_kind"), str)
+        ):
+            raise _invalid_directory("invalid directory resolved_ref projection")
+        return cls(
+            profile=decoded["profile"],
+            kind=decoded["kind"],
+            answer_kind=decoded["answer_kind"],
+            query_name=_optional_string(decoded.get("query_name"), "query_name"),
+            canonical_name=_optional_string(
+                decoded.get("canonical_name"), "canonical_name"
+            ),
+            owner_ura=_optional_string(decoded.get("owner_ura"), "owner_ura"),
+            ability_ura=_optional_string(decoded.get("ability_ura"), "ability_ura"),
+            route_ura=_optional_string(decoded.get("route_ura"), "route_ura"),
+            next_hop=_optional_mapping(decoded.get("next_hop"), "next_hop"),
+            selected_route=_optional_mapping(
+                decoded.get("selected_route"), "selected_route"
+            ),
+            route_candidates=_mapping_tuple(
+                decoded.get("route_candidates", []), "route_candidates"
+            ),
+            records=_mapping_tuple(decoded.get("records", []), "records"),
+            negative=_optional_mapping(decoded.get("negative"), "negative"),
+            release_profile=_optional_string(
+                decoded.get("release_profile"), "release_profile"
+            ),
+            authority=_optional_mapping(decoded.get("authority"), "authority"),
+            cache_policy=_optional_mapping(decoded.get("cache_policy"), "cache_policy"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+@dataclass(frozen=True)
+class DirectoryPage:
+    """Typed page over a daemon directory read model."""
+
+    profile: str
+    kind: str
+    item_kind: str
+    items: tuple[Mapping[str, object], ...]
+    next_cursor: Optional[str]
+    limit: int
+    source: str
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str, *, kind: str, item_kind: str) -> "DirectoryPage":
+        decoded = _json_object(raw, "directory page")
+        if (
+            decoded.get("profile") != _PROFILE
+            or decoded.get("kind") != kind
+            or decoded.get("item_kind") != item_kind
+            or decoded.get("source") != _READ_MODEL
+        ):
+            raise _invalid_directory("invalid directory page projection")
+        limit = _required_positive_int(decoded, "limit")
+        if limit > MAX_DIRECTORY_PAGE_SIZE:
+            raise _invalid_directory("directory page limit exceeds bounds")
+        return cls(
+            profile=decoded["profile"],
+            kind=decoded["kind"],
+            item_kind=decoded["item_kind"],
+            items=_mapping_tuple(decoded.get("items", []), "items"),
+            next_cursor=_optional_string(decoded.get("next_cursor"), "next_cursor"),
+            limit=limit,
+            source=decoded["source"],
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+@dataclass(frozen=True)
+class DirectoryClient:
+    """Directory + Identity read-model facade."""
+
+    transport: DirectoryTransport
+
+    def __post_init__(self) -> None:
+        if self.transport is None:
+            raise _invalid_directory("directory transport is required")
+
+    def resolve(self, query: ResolveQuery) -> ResolvedRef:
+        try:
+            raw = self.transport.resolve(query.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("directory resolve failed", exc) from exc
+        return ResolvedRef.from_json(raw)
+
+    def list_devices(self, query: DeviceQuery) -> DirectoryPage:
+        return self._list_page(
+            query.base,
+            self.transport.list_devices,
+            kind="device_page",
+            item_kind="device",
+            label="directory list devices failed",
+        )
+
+    def list_agents(self, query: AgentQuery) -> DirectoryPage:
+        return self._list_page(
+            query.base,
+            self.transport.list_agents,
+            kind="agent_page",
+            item_kind="agent",
+            label="directory list agents failed",
+        )
+
+    def list_abilities(self, query: AbilityQuery) -> DirectoryPage:
+        try:
+            raw = self.transport.list_abilities(query.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("directory list abilities failed", exc) from exc
+        return DirectoryPage.from_json(raw, kind="ability_page", item_kind="ability")
+
+    def _list_page(
+        self,
+        base: DirectoryQueryBase,
+        fn,
+        *,
+        kind: str,
+        item_kind: str,
+        label: str,
+    ) -> DirectoryPage:
+        base = base.with_default_limit()
+        _validate_base(base, require_limit=True)
+        try:
+            raw = fn(_json_bytes(base.to_json_dict()))
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
+        return DirectoryPage.from_json(raw, kind=kind, item_kind=item_kind)
+
+
+def _validate_base(base: DirectoryQueryBase, *, require_limit: bool) -> None:
+    if (
+        not base.caller_ura
+        or not base.callee_ura
+        or not base.subject_ura
+        or not base.descriptor_version
+        or not base.nonce_base64
+    ):
+        raise _invalid_directory(
+            "caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required"
+        )
+    if base.causal_context is None:
+        raise _invalid_directory("causal_context is required")
+    if require_limit and (base.limit < 1 or base.limit > MAX_DIRECTORY_PAGE_SIZE):
+        raise _invalid_directory("directory page limit exceeds bounds")
+
+
+def _json_bytes(value: Mapping[str, object]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _json_object(raw: bytes | str, label: str) -> dict[str, object]:
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        decoded = json.loads(text)
+    except Exception as exc:
+        raise _invalid_directory(f"decode {label} JSON: {exc}", exc) from exc
+    if not isinstance(decoded, dict):
+        raise _invalid_directory(f"{label} JSON must be an object")
+    return decoded
+
+
+def _required_mapping(decoded: Mapping[str, object], field_name: str) -> Mapping[str, object]:
+    value = decoded.get(field_name)
+    if not isinstance(value, dict):
+        raise _invalid_directory(f"{field_name} must be an object")
+    return dict(value)
+
+
+def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise _invalid_directory(f"{field_name} must be an object or null")
+    return dict(value)
+
+
+def _mapping_tuple(value: object, field_name: str) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise _invalid_directory(f"{field_name} must be an array of objects")
+    return tuple(dict(item) for item in value)
+
+
+def _optional_string(value: object, field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _invalid_directory(f"{field_name} must be a string or null")
+    return value
+
+
+def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _invalid_directory(f"{field_name} is required")
+    return value
+
+
+def _invalid_directory(
+    message: str, cause: BaseException | None = None
+) -> SDKError:
+    return SDKError(
+        code=ErrorCode.INVALID_ARGUMENT,
+        stage="directory_identity",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
+        cause=cause,
+    )
+
+
+def _transport_error(message: str, cause: BaseException) -> SDKError:
+    return SDKError(
+        code=ErrorCode.TRANSPORT,
+        stage="transport",
+        retry=RetryHint.SAFE,
+        retryable=True,
+        message=message,
+        cause=cause,
+    )

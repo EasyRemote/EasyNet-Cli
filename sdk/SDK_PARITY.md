@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit seam partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity read-model seam partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity read-model seam partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -29,7 +29,7 @@ method spelling.
 | unary invoke | partial | partial | transport seam partial | transport seam partial | gap | gap | gap |
 | stream | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
 | bidi | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
-| directory + identity | read-model/projection partial | read-model/projection partial | gap | gap | gap | gap | gap |
+| directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
 | receipt | fetch/projection partial | fetch/projection partial | gap | gap | gap | gap | gap |
 | publication | carrier partial | carrier partial | gap | gap | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | gap | gap | gap | gap | gap |
@@ -102,6 +102,11 @@ method spelling.
   transport seams; concrete daemon process spawn/local transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
+- Go Directory + Identity facade exposes `DirectoryClient` resolve/list
+  read-model pages with bounded pagination plus `IdentityClient` descriptor,
+  identity, and ResourceRef projection seams; directory subscriptions, signer
+  key lifecycle, local signer implementations, concrete daemon carriers, and
+  backend route cutover remain incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime state seams, runtime health readiness
@@ -115,6 +120,11 @@ method spelling.
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
   error source refs, and conformance action execution remain incomplete before
   EasyRemote cutover.
+- Python Directory + Identity facade exposes `DirectoryClient` resolve/list
+  read-model pages with bounded pagination plus `IdentityClient` descriptor,
+  identity, and ResourceRef projection seams; directory subscriptions, signer
+  key lifecycle, local signer implementations, concrete daemon carriers, and
+  EasyRemote extraction remain incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.

@@ -49,6 +49,10 @@ for path in \
   sdk/go/client.go \
   sdk/go/daemon.go \
   sdk/go/daemon_test.go \
+  sdk/go/directory.go \
+  sdk/go/directory_test.go \
+  sdk/go/identity.go \
+  sdk/go/identity_test.go \
   sdk/go/connection.go \
   sdk/go/connection_test.go \
   sdk/go/errors.go \
@@ -68,6 +72,8 @@ for path in \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/daemon.py \
+  sdk/python/easynet_sdk/directory.py \
+  sdk/python/easynet_sdk/identity.py \
   sdk/python/easynet_sdk/connection.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
@@ -78,6 +84,8 @@ for path in \
   sdk/python/easynet_sdk/stream.py \
   sdk/python/tests/test_health.py \
   sdk/python/tests/test_daemon.py \
+  sdk/python/tests/test_directory.py \
+  sdk/python/tests/test_identity.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_runtime.py \
@@ -322,6 +330,15 @@ require_literal sdk/go/daemon.go "DaemonLifecycleState"
 require_literal sdk/go/daemon.go "DaemonTransport"
 require_literal sdk/go/daemon.go "StartConfig"
 require_literal sdk/go/daemon.go "OpenRuntime"
+require_literal sdk/go/directory.go "DirectoryClient"
+require_literal sdk/go/directory.go "DirectoryTransport"
+require_literal sdk/go/directory.go "DefaultDirectoryPageSize"
+require_literal sdk/go/directory.go "MaxDirectoryPageSize"
+require_literal sdk/go/directory.go "ResolvedRef"
+require_literal sdk/go/identity.go "IdentityClient"
+require_literal sdk/go/identity.go "IdentityTransport"
+require_literal sdk/go/identity.go "IdentityProjection"
+require_literal sdk/go/identity.go "ResourceRef"
 require_literal sdk/go/connection.go "RuntimeConnection"
 require_literal sdk/go/connection.go "ConnectionState"
 require_literal sdk/go/connection.go "RuntimeConnector"
@@ -360,6 +377,15 @@ require_literal sdk/python/easynet_sdk/daemon.py "DaemonLifecycleState"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonTransport"
 require_literal sdk/python/easynet_sdk/daemon.py "StartConfig"
 require_literal sdk/python/easynet_sdk/daemon.py "open_runtime"
+require_literal sdk/python/easynet_sdk/directory.py "DirectoryClient"
+require_literal sdk/python/easynet_sdk/directory.py "DirectoryTransport"
+require_literal sdk/python/easynet_sdk/directory.py "DEFAULT_DIRECTORY_PAGE_SIZE"
+require_literal sdk/python/easynet_sdk/directory.py "MAX_DIRECTORY_PAGE_SIZE"
+require_literal sdk/python/easynet_sdk/directory.py "ResolvedRef"
+require_literal sdk/python/easynet_sdk/identity.py "IdentityClient"
+require_literal sdk/python/easynet_sdk/identity.py "IdentityTransport"
+require_literal sdk/python/easynet_sdk/identity.py "IdentityProjection"
+require_literal sdk/python/easynet_sdk/identity.py "ResourceRef"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnection"
 require_literal sdk/python/easynet_sdk/connection.py "ConnectionState"
 require_literal sdk/python/easynet_sdk/connection.py "RuntimeConnector"
