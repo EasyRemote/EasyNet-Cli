@@ -26,15 +26,12 @@
 // owns a process-wide `tokio::runtime::Runtime` and routes every
 // async call through `Runtime::block_on`.
 //
-// Why `current_thread` and not `multi_thread`
-// -------------------------------------------
-// Plan v10.5 R1 §"lib 内部 tokio runtime — 决策项" pins a single
-// dedicated I/O thread by default to avoid Go cgo / Python GIL /
-// Swift main-thread conflicts. `current_thread` runtime + a
-// dedicated OS thread that calls `Runtime::block_on` per FFI call
-// is the simplest expression of that decision. v1 ships this; if a
-// platform smoke test breaks, the fallback is a fully-sync
-// `std::os::unix::net::UnixStream` path with no tokio inside the lib.
+// Runtime shape
+// -------------
+// The FFI layer uses a small multi-thread runtime. Long-running
+// Invocation observers, stream readers, and short health/status calls
+// can then make progress independently even when the embedding app
+// still calls a legacy blocking ABI function on one thread.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -45,6 +42,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tokio::runtime::Runtime;
 
 use crate::ffi::client::IpcClient;
+
+const FALLBACK_FFI_WORKER_THREADS: usize = 4;
 
 /// Opaque handle exposed to the C ABI. A value of 0 is reserved as
 /// "null handle" / "not yet allocated".
@@ -174,11 +173,25 @@ pub(crate) fn lib_runtime() -> anyhow::Result<&'static Runtime> {
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(2)
+        .worker_threads(ffi_worker_threads())
         .thread_name("easynet-ffi-io")
         .build()
         .map_err(|e| anyhow::anyhow!("FFI: tokio runtime build failed: {e}"))?;
     Ok(RT.get_or_init(|| rt))
+}
+
+fn ffi_worker_threads() -> usize {
+    std::env::var("EASYNET_FFI_WORKER_THREADS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
+        .unwrap_or_else(device_default_ffi_worker_threads)
+}
+
+fn device_default_ffi_worker_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_mul(2).max(FALLBACK_FFI_WORKER_THREADS))
+        .unwrap_or(FALLBACK_FFI_WORKER_THREADS)
 }
 
 /// Allocate a new handle for the given `ClientSession` and return
