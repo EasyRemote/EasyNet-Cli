@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -16,6 +17,7 @@ type memoryDaemonTransport struct {
 	stopCalls    int
 	detachCalls  int
 	openCalls    int
+	openErr      error
 	seenStart    map[string]any
 	seenOptions  map[string]any
 }
@@ -50,6 +52,9 @@ func (m *memoryDaemonTransport) OpenRuntime(ctx context.Context, handleID string
 	m.openCalls++
 	if err := json.Unmarshal(optionsJSON, &m.seenOptions); err != nil {
 		return nil, nil, err
+	}
+	if m.openErr != nil {
+		return nil, nil, m.openErr
 	}
 	return RuntimeTransportFunc{
 		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -162,6 +167,83 @@ func TestDaemonHandleOpenRuntimeRequiresReadyState(t *testing.T) {
 	handle.status.State = DaemonControlReady
 	if _, err := handle.OpenRuntime(context.Background(), ConnectOptions{}); err == nil {
 		t.Fatalf("OpenRuntime succeeded from ControlReady")
+	}
+}
+
+func TestConnectLocalDiscoversAttachesOpensAndDetaches(t *testing.T) {
+	transport := &memoryDaemonTransport{
+		discoverJSON: `{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/discovered-daemon.sock"}`,
+		attachJSON:   readyDaemonStatus(),
+	}
+
+	client, err := ConnectLocal(context.Background(), transport, ConnectOptions{ControlPath: "/tmp/control.sock", MaxMessageBytes: 4096})
+	if err != nil {
+		t.Fatalf("ConnectLocal: %v", err)
+	}
+	if client == nil {
+		t.Fatal("runtime client is nil")
+	}
+	if transport.openCalls != 1 || transport.detachCalls != 1 {
+		t.Fatalf("open/detach calls = %d/%d", transport.openCalls, transport.detachCalls)
+	}
+	if transport.seenOptions["endpoint"] != "unix:///tmp/discovered-daemon.sock" {
+		t.Fatalf("open runtime did not use discovered endpoint: %#v", transport.seenOptions)
+	}
+	if transport.seenOptions["max_message_bytes"] != float64(4096) {
+		t.Fatalf("connect options not preserved: %#v", transport.seenOptions)
+	}
+}
+
+func TestConnectLocalRejectsControlOnlyAttach(t *testing.T) {
+	transport := &memoryDaemonTransport{
+		discoverJSON: `{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock"}`,
+		attachJSON:   `{"handle_id":"daemon-1","state":"ControlOnly","endpoints":{"control_endpoint":"unix:///tmp/control.sock"}}`,
+	}
+
+	_, err := ConnectLocal(context.Background(), transport, ConnectOptions{})
+	if err == nil {
+		t.Fatal("expected control-only rejection")
+	}
+	if !IsCode(err, ErrControlOnly) {
+		t.Fatalf("err = %v, want ErrControlOnly", err)
+	}
+	if transport.openCalls != 0 || transport.detachCalls != 0 {
+		t.Fatalf("unexpected open/detach calls = %d/%d", transport.openCalls, transport.detachCalls)
+	}
+}
+
+func TestConnectLocalDetachesAfterOpenRuntimeFailure(t *testing.T) {
+	openErr := errors.New("open failed")
+	transport := &memoryDaemonTransport{
+		discoverJSON: `{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock"}`,
+		attachJSON:   readyDaemonStatus(),
+		openErr:      openErr,
+	}
+
+	_, err := ConnectLocal(context.Background(), transport, ConnectOptions{})
+	if err == nil {
+		t.Fatal("expected open runtime failure")
+	}
+	if !errors.Is(err, openErr) {
+		t.Fatalf("err = %v, want wrapped openErr", err)
+	}
+	if transport.openCalls != 1 || transport.detachCalls != 1 {
+		t.Fatalf("open/detach calls = %d/%d", transport.openCalls, transport.detachCalls)
+	}
+}
+
+func TestConnectLocalAllowsExplicitEndpointOverride(t *testing.T) {
+	transport := &memoryDaemonTransport{
+		discoverJSON: `{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/discovered-daemon.sock"}`,
+		attachJSON:   readyDaemonStatus(),
+	}
+
+	_, err := ConnectLocal(context.Background(), transport, ConnectOptions{Endpoint: "unix:///tmp/explicit-daemon.sock"})
+	if err != nil {
+		t.Fatalf("ConnectLocal: %v", err)
+	}
+	if transport.seenOptions["endpoint"] != "unix:///tmp/explicit-daemon.sock" {
+		t.Fatalf("explicit endpoint not forwarded: %#v", transport.seenOptions)
 	}
 }
 

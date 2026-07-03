@@ -288,6 +288,34 @@ class DaemonControl:
         _require_runtime_ready(status)
         return DaemonHandle(self.transport, status)
 
+    def connect_local(self, options: ConnectOptions = ConnectOptions()) -> RuntimeClient:
+        endpoints = self.discover(DiscoverOptions(control_path=options.control_path))
+        runtime_endpoint = options.endpoint or endpoints.invocation_endpoint
+        if not runtime_endpoint:
+            raise _invalid_daemon("invocation_endpoint is required")
+        handle = self.attach(
+            AttachOptions(
+                control_endpoint=endpoints.control_endpoint,
+                invocation_endpoint=runtime_endpoint,
+                control_path=options.control_path,
+            )
+        )
+        open_options = ConnectOptions(
+            endpoint=runtime_endpoint,
+            control_path=options.control_path,
+            dial_timeout_ms=options.dial_timeout_ms,
+            invoke_timeout_ms=options.invoke_timeout_ms,
+            max_message_bytes=options.max_message_bytes,
+            reconnect=options.reconnect,
+        )
+        try:
+            client = handle.open_runtime(open_options)
+        except Exception:
+            handle.detach()
+            raise
+        handle.detach()
+        return client
+
 
 @dataclass
 class DaemonHandle:
@@ -400,6 +428,14 @@ def discover_daemon(
     """Return daemon-advertised endpoints through an explicit transport seam."""
 
     return DaemonControl(transport).discover(options)
+
+
+def connect_local(
+    transport: DaemonTransport, options: ConnectOptions = ConnectOptions()
+) -> RuntimeClient:
+    """Discover, attach, open, and detach a local daemon runtime."""
+
+    return DaemonControl(transport).connect_local(options)
 
 
 def _validate_start_config(config: StartConfig) -> None:

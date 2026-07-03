@@ -71,6 +71,7 @@ from .daemon import (
     StartConfig,
     StopOptions,
     attach_daemon,
+    connect_local,
     discover_daemon,
     start_daemon,
 )
@@ -430,6 +431,7 @@ __all__ = [
     "WrapperTerminalSessionRecord",
     "WrapperTerminalSessionRequest",
     "attach_daemon",
+    "connect_local",
     "discover_daemon",
     "is_code",
     "start_daemon",

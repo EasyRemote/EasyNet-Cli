@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, Compatibility seams, and Wrapper record seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, Compatibility seams, and Wrapper record seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, Compatibility seams, and Wrapper record seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, Compatibility seams, and Wrapper record seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -20,7 +20,7 @@ method spelling.
 | Capability | Rust | C ABI | Go | Python | Node | Java | Swift |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ABI/version discovery | partial | partial | partial | partial | gap | gap | gap |
-| daemon start/attach/discover/stop/detach | partial | partial | state seam partial | state seam partial | gap | gap | gap |
+| daemon start/attach/discover/stop/detach | partial | partial | state/connect-local seam partial | state/connect-local seam partial | gap | gap | gap |
 | runtime connection state | partial | partial | transport seam partial | transport seam partial | gap | gap | gap |
 | runtime health | partial | partial | partial | partial | gap | gap | gap |
 | typed errors | partial | typed JSON partial | partial | partial | gap | gap | gap |
@@ -92,14 +92,14 @@ method spelling.
   incomplete.
 - Go package exposes Runtime Core feature/version discovery, runtime connection
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
-  detach/open-runtime state seams, runtime health readiness facts,
+  detach/open-runtime/connect-local state seams, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
   construction, prepared/signed Invocation DTOs, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow JSON
-  transport seams; concrete daemon process spawn/local transport, concrete bidi adapters, profile
+  transport seams; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
@@ -154,14 +154,14 @@ method spelling.
   remain incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
-  discover/stop/detach/open-runtime state seams, runtime health readiness
+  discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
   construction, prepared/signed Invocation DTOs, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow
-  transport protocols; concrete daemon process spawn/local transport, concrete bidi adapters,
+  transport protocols; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
   error source refs, and conformance action execution remain incomplete before
   EasyRemote cutover.

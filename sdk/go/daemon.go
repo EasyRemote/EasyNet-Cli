@@ -252,6 +252,47 @@ func (c *DaemonControl) Attach(ctx context.Context, opts AttachOptions) (*Daemon
 	return newDaemonHandle(c.transport, status)
 }
 
+// ConnectLocal discovers a runtime-ready daemon, opens its Invocation runtime,
+// and detaches the lifecycle handle without stopping the daemon.
+func (c *DaemonControl) ConnectLocal(ctx context.Context, opts ConnectOptions) (*RuntimeClient, error) {
+	if c == nil || c.transport == nil {
+		return nil, invalidRuntimeClient("daemon control is not initialized")
+	}
+	if ctx == nil {
+		return nil, invalidRuntimeClient("context is required")
+	}
+	endpoints, err := c.Discover(ctx, DiscoverOptions{ControlPath: opts.ControlPath})
+	if err != nil {
+		return nil, err
+	}
+	runtimeEndpoint := endpoints.InvocationEndpoint
+	if opts.Endpoint != "" {
+		runtimeEndpoint = opts.Endpoint
+	}
+	if runtimeEndpoint == "" {
+		return nil, invalidRuntimePayload("invocation_endpoint is required", nil)
+	}
+	handle, err := c.Attach(ctx, AttachOptions{
+		ControlEndpoint:    endpoints.ControlEndpoint,
+		InvocationEndpoint: runtimeEndpoint,
+		ControlPath:        opts.ControlPath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	openOptions := opts
+	openOptions.Endpoint = runtimeEndpoint
+	client, err := handle.OpenRuntime(ctx, openOptions)
+	detachErr := handle.Detach(ctx)
+	if err != nil {
+		return nil, errors.Join(err, detachErr)
+	}
+	if detachErr != nil {
+		return nil, detachErr
+	}
+	return client, nil
+}
+
 // DaemonHandle owns local daemon lifecycle handle state.
 type DaemonHandle struct {
 	transport DaemonTransport
@@ -419,6 +460,15 @@ func Discover(ctx context.Context, transport DaemonTransport, opts DiscoverOptio
 		return Endpoints{}, err
 	}
 	return control.Discover(ctx, opts)
+}
+
+// ConnectLocal discovers, attaches, opens, and detaches a local daemon runtime.
+func ConnectLocal(ctx context.Context, transport DaemonTransport, opts ConnectOptions) (*RuntimeClient, error) {
+	control, err := NewDaemonControl(transport)
+	if err != nil {
+		return nil, err
+	}
+	return control.ConnectLocal(ctx, opts)
 }
 
 func validateStartConfig(cfg StartConfig) error {

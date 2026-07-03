@@ -5,14 +5,14 @@ ABI internally, but EasyRemote product code must not own ctypes loaders, raw
 handles, Invocation JSON codecs, or host-stream wire/hash semantics.
 
 Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
-errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
+errors/connect-local lifecycle composition/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
 Directory + Identity, Receipt, Publication, Host Binding, Mission,
 Admin + Gateway, Events directory-stream, Surface page seam, and Compatibility
 OpenAI adapter seam, and Convenience Wrapper record seam
 partial. The package exposes typed
 feature/version discovery, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
-detach/open-runtime state seams, schema-backed SDK error projection, complete
+detach/open-runtime/connect-local state seams, schema-backed SDK error projection, complete
 Invocation draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, InvocationHandle
@@ -38,7 +38,7 @@ OpenAI-compatible list-models/chat/stream-chat Invocation carriers plus model,
 chat, stream, file, and file-delete projection seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session record projection
 seams. Concrete daemon
-process spawn/local transport, directory subscriptions, signer key lifecycle,
+process spawn/default C ABI or UDS transport, directory subscriptions, signer key lifecycle,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, pairing/credential/device-session Admin
 flows, device/session/invocation Events streams, surface health/status,

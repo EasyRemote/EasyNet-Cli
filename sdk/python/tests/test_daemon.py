@@ -12,6 +12,7 @@ from easynet_sdk import (
     StartConfig,
     StopOptions,
     attach_daemon,
+    connect_local,
     discover_daemon,
     is_code,
     start_daemon,
@@ -37,6 +38,7 @@ class MemoryDaemonTransport:
         self.stop_calls = 0
         self.detach_calls = 0
         self.open_calls = 0
+        self.open_error: Exception | None = None
         self.seen_start: dict[str, object] | None = None
         self.seen_options: dict[str, object] | None = None
 
@@ -59,6 +61,8 @@ class MemoryDaemonTransport:
     def open_runtime(self, handle_id: str, options_json: bytes):
         self.open_calls += 1
         self.seen_options = json.loads(options_json.decode("utf-8"))
+        if self.open_error is not None:
+            raise self.open_error
         return MemoryRuntimeTransport(), b'{"ready":true}'
 
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
@@ -161,6 +165,69 @@ class DaemonTests(unittest.TestCase):
         )
         with self.assertRaises(SDKError):
             handle.open_runtime()
+
+    def test_connect_local_discovers_attaches_opens_and_detaches(self) -> None:
+        transport = MemoryDaemonTransport()
+        transport.discover_json = (
+            b'{"control_endpoint":"unix:///tmp/control.sock",'
+            b'"invocation_endpoint":"unix:///tmp/discovered-daemon.sock"}'
+        )
+
+        client = connect_local(
+            transport,
+            ConnectOptions(control_path="/tmp/control.sock", max_message_bytes=4096),
+        )
+
+        self.assertIsNotNone(client)
+        self.assertEqual(transport.open_calls, 1)
+        self.assertEqual(transport.detach_calls, 1)
+        assert transport.seen_options is not None
+        self.assertEqual(
+            transport.seen_options["endpoint"], "unix:///tmp/discovered-daemon.sock"
+        )
+        self.assertEqual(transport.seen_options["max_message_bytes"], 4096)
+
+    def test_connect_local_rejects_control_only_attach(self) -> None:
+        transport = MemoryDaemonTransport()
+        transport.attach_json = (
+            b'{"handle_id":"daemon-1","state":"ControlOnly",'
+            b'"endpoints":{"control_endpoint":"unix:///tmp/control.sock"}}'
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            connect_local(transport, ConnectOptions())
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.CONTROL_ONLY))
+        self.assertEqual(transport.open_calls, 0)
+        self.assertEqual(transport.detach_calls, 0)
+
+    def test_connect_local_detaches_after_open_runtime_failure(self) -> None:
+        transport = MemoryDaemonTransport()
+        transport.open_error = RuntimeError("open failed")
+
+        with self.assertRaises(SDKError) as caught:
+            connect_local(transport, ConnectOptions())
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertEqual(transport.open_calls, 1)
+        self.assertEqual(transport.detach_calls, 1)
+
+    def test_connect_local_allows_explicit_endpoint_override(self) -> None:
+        transport = MemoryDaemonTransport()
+        transport.discover_json = (
+            b'{"control_endpoint":"unix:///tmp/control.sock",'
+            b'"invocation_endpoint":"unix:///tmp/discovered-daemon.sock"}'
+        )
+
+        connect_local(
+            transport,
+            ConnectOptions(endpoint="unix:///tmp/explicit-daemon.sock"),
+        )
+
+        assert transport.seen_options is not None
+        self.assertEqual(
+            transport.seen_options["endpoint"], "unix:///tmp/explicit-daemon.sock"
+        )
 
     def test_stop_is_idempotent_and_detach_does_not_stop(self) -> None:
         transport = MemoryDaemonTransport()
