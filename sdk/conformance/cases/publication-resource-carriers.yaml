@@ -1,0 +1,33 @@
+id: publication/resource_carriers
+profile: publication
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: PublicationClient builds daemon-authored ResourceRefs, validates ability package manifests, and returns complete Invocation carriers for daemon publication system abilities without product-facade carrier forks.
+steps:
+  - action: build_resource_ref
+    fixture: local-resource-ref-request.v4.json
+  - action: validate_package
+    fixture: ability-package-manifest.v4.json
+  - action: build_deploy_invocation
+    fixture: ability-deploy-request.v4.json
+  - action: build_unpublish_invocation
+    ability_ura: easynet:///r/example/ability/device.dev-a.er.weather
+expect:
+  result: publication_carriers_observed
+  resource_ref_schema: resource-ref.schema.json
+  package_validation_schema: package-validation.schema.json
+  deploy_request_schema: ability-deploy-request.schema.json
+  deploy_invocation_schema: invocation.schema.json
+  resource_ref_fixture: resource-ref.local-fs.v4.json
+  package_validation_fixture: package-validation.v4.json
+  deploy_invocation_fixture: publication-deploy-invocation.v4.json
+  unpublish_invocation_fixture: publication-unpublish-invocation.v4.json
+  deploy_system_ability: ability.deploy
+  unpublish_system_ability: ability.unpublish
+  rejects_relative_path: true
+  rejects_reserved_namespace: true
+  rejects_incomplete_invocation_tuple: true
+  list_show_enable_disable_runtime: scaffold_only

@@ -61,7 +61,14 @@ schema_files=(
   health.schema.json
   events.schema.json
   directory-page.schema.json
+  local-resource-ref-request.schema.json
   publication.schema.json
+  ability-package-manifest.schema.json
+  package-validation.schema.json
+  ability-deploy-request.schema.json
+  ability-deploy-result.schema.json
+  published-ability.schema.json
+  ability-impl-id.schema.json
   resource-ref.schema.json
   host-stream-binding-request.schema.json
   host-stream-binding.schema.json
@@ -109,6 +116,13 @@ fixture_files=(
   host-stream-frame.v4.json
   host-stream-terminal.v4.json
   host-stream-hash-state.v4.json
+  local-resource-ref-request.v4.json
+  resource-ref.local-fs.v4.json
+  ability-package-manifest.v4.json
+  package-validation.v4.json
+  ability-deploy-request.v4.json
+  publication-deploy-invocation.v4.json
+  publication-unpublish-invocation.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -133,6 +147,7 @@ case_files=(
   receipt-projection-causal-ref.yaml
   stream-bidi-lifecycle-state.yaml
   host-binding-codec-hash.yaml
+  publication-resource-carriers.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

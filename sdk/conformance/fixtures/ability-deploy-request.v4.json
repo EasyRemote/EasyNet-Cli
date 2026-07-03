@@ -1,0 +1,23 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "resource_ref": {
+    "resource_ura": "easynet:///r/example/resource/device.dev-a/fs/tmp/easynet-weather-package",
+    "owner_ura": "easynet:///r/example/device/dev-a",
+    "namespace": "fs",
+    "display_path": "tmp/easynet-weather-package",
+    "capability": "read",
+    "expires_unix_ms": 4102444800000,
+    "revision": "fs-local-mapping-v1"
+  },
+  "node_id": "local",
+  "metadata": {
+    "request_id": "publication-deploy-1"
+  }
+}

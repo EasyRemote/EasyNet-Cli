@@ -1,0 +1,27 @@
+{
+  "profile": "publication",
+  "kind": "package_validation",
+  "valid": true,
+  "package_path": "/tmp/easynet-weather-package",
+  "manifest_path": "/tmp/easynet-weather-package/ability.json",
+  "manifest_hash": "sha256:09c6bb09967428f12db1c5f0d0ae726c448dabf01bf7cea8476f4eabdf613bd1",
+  "manifest": {
+    "name": "weather",
+    "namespace": "er",
+    "wire_key": "er.weather",
+    "descriptor_version": "1.0.0",
+    "description": "Weather stream",
+    "exec_kind": "host_stream",
+    "timeout_seconds": null,
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    },
+    "output_schema": null
+  },
+  "errors": [],
+  "metadata": {
+    "profile": "publication",
+    "frame_contract_owner": "daemon_sdk"
+  }
+}

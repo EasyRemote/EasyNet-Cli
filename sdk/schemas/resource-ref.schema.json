@@ -4,12 +4,21 @@
   "title": "ResourceRef",
   "type": "object",
   "additionalProperties": false,
-  "required": ["resource_ref", "owner_ura", "kind"],
+  "required": [
+    "resource_ura",
+    "owner_ura",
+    "namespace",
+    "capability",
+    "expires_unix_ms",
+    "revision"
+  ],
   "properties": {
-    "resource_ref": {"type": "string", "minLength": 1},
+    "resource_ura": {"type": "string", "minLength": 1},
     "owner_ura": {"type": "string", "minLength": 1},
-    "kind": {"type": "string", "minLength": 1},
-    "content_hash": {"type": ["string", "null"]},
-    "metadata": {"type": "object"}
+    "namespace": {"type": "string", "enum": ["fs"]},
+    "display_path": {"type": "string"},
+    "capability": {"type": "string", "enum": ["list", "stat", "read", "write"]},
+    "expires_unix_ms": {"type": "integer"},
+    "revision": {"type": "string", "minLength": 1}
   }
 }

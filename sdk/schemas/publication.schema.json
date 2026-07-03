@@ -4,7 +4,7 @@
   "title": "PublicationRecord",
   "type": "object",
   "additionalProperties": true,
-  "required": ["profile", "kind", "descriptor_ref", "owner_ura"],
+  "required": ["profile", "kind"],
   "properties": {
     "profile": {"const": "publication"},
     "kind": {"type": "string", "minLength": 1},

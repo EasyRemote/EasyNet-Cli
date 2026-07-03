@@ -75,6 +75,10 @@ remain separate Directory + Identity methods rather than string utilities.
 Receipt projection may normalize summary DTOs and derive causal refs from
 explicit receipt facts, but summary-only data must remain `verified: false`
 until an Axon-backed verifier proves a full receipt.
+Publication carrier projection may build daemon-authored local ResourceRefs,
+validate ability package manifests, and build complete Invocation JSON for
+daemon publication system abilities. It must not claim list/show/enable/disable
+runtime results until daemon read models or equivalent governed abilities exist.
 Host Binding codec projection may build host-stream binding DTOs, decode
 daemon request envelopes, encode shared item/error/terminal frames, and fold
 output hashes. It must not execute product host code, inspect language

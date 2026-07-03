@@ -417,6 +417,30 @@ int32_t easynet_host_binding_fold_output_hash(
     char **out_state_json
 );
 
+int32_t easynet_publication_build_resource_ref(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_resource_ref_json
+);
+
+int32_t easynet_publication_validate_package(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_validation_json
+);
+
+int32_t easynet_publication_build_deploy_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_publication_build_unpublish_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 #ifdef __cplusplus
 }
 #endif

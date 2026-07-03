@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/ability-deploy-result.schema.json",
+  "title": "AbilityDeployResult",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["public_name", "namespace", "ability_ura", "node_id", "install_id", "state"],
+  "properties": {
+    "public_name": {"type": "string", "minLength": 1},
+    "namespace": {"type": "string", "minLength": 1},
+    "ability_ura": {"type": "string", "minLength": 1},
+    "node_id": {"type": "string", "minLength": 1},
+    "mutated_by": {"type": "string"},
+    "install_id": {"type": "string", "minLength": 1},
+    "bundle": {"type": "string"},
+    "state": {"type": "string", "minLength": 1}
+  }
+}

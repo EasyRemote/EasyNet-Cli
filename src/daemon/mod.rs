@@ -44,6 +44,7 @@ pub mod invocation;
 pub mod keyring;
 pub mod persistence;
 pub mod plugins;
+pub mod publication_contract;
 pub mod resources;
 pub mod telemetry;
 pub mod trust;

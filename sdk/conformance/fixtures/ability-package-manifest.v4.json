@@ -1,0 +1,14 @@
+{
+  "name": "weather",
+  "namespace": "er",
+  "description": "Weather stream",
+  "input_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "exec": {
+    "kind": "host_stream",
+    "host_socket": "/tmp/easynet-weather.sock",
+    "function": "weather.stream"
+  }
+}

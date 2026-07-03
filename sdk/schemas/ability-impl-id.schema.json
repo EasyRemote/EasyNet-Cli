@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/ability-impl-id.schema.json",
+  "title": "AbilityImplID",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["impl_id", "ability_ura"],
+  "properties": {
+    "impl_id": {"type": "string", "minLength": 1},
+    "ability_ura": {"type": "string", "minLength": 1},
+    "metadata": {"type": "object"}
+  }
+}

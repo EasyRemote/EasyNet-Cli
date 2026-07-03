@@ -1,0 +1,19 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "args": {
+    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "profile": "publication",
+    "system_ability": "ability.unpublish",
+    "carrier_owner": "daemon_sdk"
+  }
+}

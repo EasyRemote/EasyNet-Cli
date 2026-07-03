@@ -8,8 +8,9 @@ ABI v4 is the Daemon SDK Runtime Core projection. It keeps the ABI v3 complete
 Invocation dispatch surface and adds feature discovery, explicit daemon attach
 and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
-typed error JSON, identity projection, receipt projection, and Host Binding
-host-stream codec/hash projection for language bindings.
+typed error JSON, identity projection, receipt projection, Host Binding
+host-stream codec/hash projection, and Publication carrier projection for
+language bindings.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -386,6 +387,51 @@ daemon executor: absolute Unix socket path, no `..` components.
 `HostStreamFrame` DTOs. `fold_output_hash` accepts explicit `HostStreamHashState`
 plus `seq` and `value`, then returns the next state using the daemon-owned
 `sha256(prev_hash || seq_be || canonical_json(value))` algorithm.
+
+### 2.11 Publication Carriers
+
+```c
+int32_t easynet_publication_build_resource_ref(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_resource_ref_json
+);
+
+int32_t easynet_publication_validate_package(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_validation_json
+);
+
+int32_t easynet_publication_build_deploy_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_publication_build_unpublish_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+```
+
+Publication carrier functions are scoped to a live `EasynetHandle`, matching
+the SDK object graph's `PublicationClient`. They are pure DTO/carrier
+projection functions. `build_resource_ref` constructs daemon-authored local
+filesystem `ResourceRef` objects for absolute paths under daemon virtual roots.
+`validate_package` reads an ability package directory's `ability.json`, parses
+it through the daemon `AbilityManifest` validator, and returns deterministic
+package facts including namespace, wire key, descriptor version, exec kind, and
+manifest hash.
+
+`build_deploy_invocation` and `build_unpublish_invocation` return complete
+Invocation JSON carriers for existing daemon system abilities (`ability.deploy`
+and `ability.unpublish`). They require explicit caller, callee, subject,
+descriptor version, nonce, and causal context fields. Bindings submit the
+returned Invocation through Runtime Core; these helpers do not execute
+publication, claim terminal receipts, scan package directories for list/show,
+or fake enable/disable state.
 
 ## 3. Error Code Table
 

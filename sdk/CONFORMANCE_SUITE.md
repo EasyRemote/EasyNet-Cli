@@ -91,6 +91,7 @@ swift test --package-path sdk/swift
 - identity URA and DescriptorRef projection delegates to Axon helpers
 - receipt fetch/project/verify/causal-ref
 - receipt projection never upgrades summary-only data to verified
+- publication ResourceRef, package validation, and complete Invocation carriers
 - host binding frame codec and output-hash folding
 - profile ownership exclusivity
 

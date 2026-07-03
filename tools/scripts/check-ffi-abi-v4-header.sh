@@ -140,6 +140,10 @@ expected_symbols=(
     easynet_host_binding_encode_error
     easynet_host_binding_encode_terminal
     easynet_host_binding_fold_output_hash
+    easynet_publication_build_resource_ref
+    easynet_publication_validate_package
+    easynet_publication_build_deploy_invocation
+    easynet_publication_build_unpublish_invocation
 )
 
 retired_symbols=(
@@ -313,6 +317,9 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_host_binding_build"
     require_literal "$SPEC" "easynet_host_binding_decode_request"
     require_literal "$SPEC" "easynet_host_binding_fold_output_hash"
+    require_literal "$SPEC" "easynet_publication_build_resource_ref"
+    require_literal "$SPEC" "easynet_publication_validate_package"
+    require_literal "$SPEC" "easynet_publication_build_deploy_invocation"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 

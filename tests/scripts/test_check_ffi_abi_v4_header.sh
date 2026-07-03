@@ -132,6 +132,22 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "renamed host binding hash fold symbol should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/int32_t easynet_publication_build_resource_ref/int32_t easynet_publication_resource_missing/' \
+    "$SB/include/easynet_cli.h"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "renamed publication resource-ref symbol should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/int32_t easynet_publication_build_deploy_invocation/int32_t easynet_publication_deploy_missing/' \
+    "$SB/include/easynet_cli.h"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "renamed publication deploy carrier symbol should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's/fn easynet_invocation_bidi_open/fn easynet_invocation_bidi_start/' \
     "$SB/src/ffi/invocation/mod.rs"
 rc=0
