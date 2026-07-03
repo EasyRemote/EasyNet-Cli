@@ -66,7 +66,7 @@ Future runners should add:
 
 ```text
 cd sdk/go && go test ./...
-python -m easynet_sdk_conformance
+cd sdk/python && python3 -m unittest discover -s tests
 npm test --workspace sdk/node
 ./gradlew :sdk:java:test
 swift test --package-path sdk/swift

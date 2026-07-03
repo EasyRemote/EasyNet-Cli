@@ -48,7 +48,11 @@ for path in \
   sdk/go/go.mod \
   sdk/go/client.go \
   sdk/go/errors.go \
-  sdk/go/import_boundary_test.go
+  sdk/go/import_boundary_test.go \
+  sdk/python/pyproject.toml \
+  sdk/python/easynet_sdk/client.py \
+  sdk/python/easynet_sdk/errors.py \
+  sdk/python/tests/test_import_boundary.py
 do
   require_file "$path"
 done
@@ -282,6 +286,8 @@ require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
 require_literal sdk/go/client.go "DiscoveryTransport"
 require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
+require_literal sdk/python/easynet_sdk/client.py "DiscoveryTransport"
+require_literal sdk/python/tests/test_import_boundary.py "test_public_python_sdk_does_not_import_forbidden_runtime_boundaries"
 require_literal sdk/SDK_INTERFACE_SPEC.md "PreparedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "SignedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "No public object in this graph may expose raw Axon"
