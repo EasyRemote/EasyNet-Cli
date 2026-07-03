@@ -21,6 +21,18 @@
 - `cargo fmt --check && git diff --check && find . -name .DS_Store -print`:
   passed with no artifact output.
 
+## Retained Root Artifact Guard Re-Run
+
+- `./tools/scripts/check-project-structure-v1.sh`: passed.
+- `bash tests/scripts/test_check_project_structure_v1.sh`: passed.
+- `cargo fmt --check`: passed.
+- `git diff --check && find . -name .DS_Store -print`: passed with no
+  artifact output.
+- `cargo test --test script_checks --features axon-pb`: passed, 28 tests.
+- `cargo run --bin gen-ability-tomls --features axon-pb`: passed with
+  `0 updated, 129 unchanged, 0 deleted` on final run.
+- `cargo check --all-targets --features axon-pb`: passed.
+
 ## Residual Risk
 
 Historical documentation still references retired roots as part of prior

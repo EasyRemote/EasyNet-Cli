@@ -8,5 +8,8 @@
 - [x] Add this docs-owned plan pack without creating a top-level `pr/` root.
 - [x] Remove active old-root references that are not intentional negative test
       fixtures or historical docs.
+- [x] Preserve `VERSION` and `README.pdf` as retained root release artifacts.
+- [x] Extend the structure guard to require retained root artifacts and reject
+      extra tracked root product files.
 - [x] Re-run formatting, compile, structure, and script checks after cleanup.
-- [ ] Split commits by semantic boundary if the verified state is coherent.
+- [x] Split commits by semantic boundary if the verified state is coherent.

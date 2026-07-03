@@ -21,6 +21,12 @@
 - Schemas remain rooted in `schemas/{descriptor,receipt}` plus
   `schemas/control_plane.proto` and `schemas/common.proto`.
 
+## Retained Root Artifacts
+
+- `VERSION` remains the release-version source used by version maintenance
+  scripts.
+- `README.pdf` remains a retained root documentation artifact.
+
 ## Error And Tenant Rules
 
 - This phase adds no new tenant grammar, admission result, wire error, or

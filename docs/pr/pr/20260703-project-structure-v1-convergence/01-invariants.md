@@ -28,3 +28,5 @@
   `ability-descriptors/system`.
 - Planning records for this convergence live under `docs/`, not a new top-level
   root.
+- Root `VERSION` and `README.pdf` are retained release artifacts and must not
+  be deleted by structure convergence work.

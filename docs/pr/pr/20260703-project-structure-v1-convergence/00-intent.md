@@ -24,4 +24,6 @@ behavior.
 - Source modules compile from the final semantic roots.
 - Descriptor TOMLs live under grouped `ability-descriptors/system/*/`.
 - Shell guard wrappers execute from `tools/scripts/` and `tests/scripts/`.
+- Root `VERSION` and `README.pdf` remain present as retained release artifacts
+  and are protected by the structure guard.
 - Verification evidence is recorded in this plan pack.

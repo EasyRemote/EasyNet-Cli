@@ -14,6 +14,7 @@ mkfinal() {
 
   mkdir -p "$dir"
   touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/build.rs"
+  touch "$dir/README.pdf" "$dir/VERSION"
   mkdir -p "$dir/include"
   touch "$dir/include/easynet_cli.h"
 
@@ -129,6 +130,18 @@ expect_fail "$SB/forbidden"
 cp -R "$SB/pass" "$SB/extra-bin"
 touch "$SB/extra-bin/src/bin/snapshot-probe.rs"
 expect_fail "$SB/extra-bin"
+
+cp -R "$SB/pass" "$SB/extra-root-file"
+touch "$SB/extra-root-file/CHANGELOG.pdf"
+expect_fail "$SB/extra-root-file"
+
+cp -R "$SB/pass" "$SB/missing-version-file"
+rm "$SB/missing-version-file/VERSION"
+expect_fail "$SB/missing-version-file"
+
+cp -R "$SB/pass" "$SB/missing-readme-pdf"
+rm "$SB/missing-readme-pdf/README.pdf"
+expect_fail "$SB/missing-readme-pdf"
 
 cp -R "$SB/pass" "$SB/flat-descriptor"
 touch "$SB/flat-descriptor/ability-descriptors/system/fs.read.ability.toml"

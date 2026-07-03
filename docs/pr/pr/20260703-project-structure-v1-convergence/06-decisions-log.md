@@ -12,3 +12,6 @@
   retired ownership roots.
 - Decision: Delete `.DS_Store` artifacts because final layout and hygiene gates
   require source roots to contain only intentional project files.
+- Decision: Preserve `VERSION` and `README.pdf` as retained root release
+  artifacts, and make the structure guard require them instead of treating them
+  as old-root debt.

@@ -24,6 +24,78 @@ forbid_path() {
   [[ ! -e "$ROOT/$path" ]] || fail "forbidden path exists: $path"
 }
 
+contains_name() {
+  local name="$1"
+  shift
+
+  local expected_name
+  for expected_name in "$@"; do
+    [[ "$name" == "$expected_name" ]] && return 0
+  done
+
+  return 1
+}
+
+check_root_contract() {
+  local allowed_files=(
+    .dockerignore
+    .gitignore
+    Cargo.toml
+    Cargo.lock
+    README.md
+    README.pdf
+    VERSION
+    build.rs
+  )
+  local allowed_dirs=(
+    .github
+    ability-descriptors
+    benches
+    docs
+    examples
+    gallery
+    include
+    packaging
+    platforms
+    plugins
+    schemas
+    sdk
+    skills
+    src
+    tests
+    tools
+  )
+
+  local entry top actual name
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    while IFS= read -r entry; do
+      [[ -n "$entry" ]] || continue
+      [[ -e "$ROOT/$entry" ]] || continue
+      top="${entry%%/*}"
+      if [[ "$entry" == "$top" ]]; then
+        contains_name "$top" "${allowed_files[@]}" \
+          || fail "unexpected tracked root file: $top"
+      else
+        contains_name "$top" "${allowed_dirs[@]}" \
+          || fail "unexpected tracked root directory: $top"
+      fi
+    done < <(git -C "$ROOT" ls-files)
+    return 0
+  fi
+
+  while IFS= read -r actual; do
+    name="$(basename "$actual")"
+    [[ "$name" == ".git" ]] && continue
+    if [[ -f "$actual" ]]; then
+      contains_name "$name" "${allowed_files[@]}" \
+        || fail "unexpected root file: $name"
+    elif [[ -d "$actual" ]]; then
+      contains_name "$name" "${allowed_dirs[@]}" \
+        || fail "unexpected root directory: $name"
+    fi
+  done < <(find "$ROOT" -mindepth 1 -maxdepth 1 | sort)
+}
+
 require_only_dirs() {
   local parent="$1"
   shift
@@ -77,8 +149,11 @@ require_only_files() {
 require_file Cargo.toml
 require_file Cargo.lock
 require_file README.md
+require_file README.pdf
+require_file VERSION
 require_file build.rs
 require_file include/easynet_cli.h
+check_root_contract
 
 require_only_files src/bin \
   easynet.rs \
