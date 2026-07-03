@@ -1,6 +1,6 @@
 [package]
 name = "easynet"
-version = "0.86.20"
+version = "0.91.30"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
