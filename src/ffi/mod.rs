@@ -77,6 +77,8 @@
 // - `easynet_compatibility_build_*_invocation` and
 //   `easynet_compatibility_project_*`: Compatibility carrier and OpenAI-shape
 //   model/chat projection helpers.
+// - `easynet_surface_build_*_invocation` and
+//   `easynet_surface_project_*`: Surface page carrier and projection helpers.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
 //   instead of retained as hard-fail compatibility symbols.
 //
@@ -98,6 +100,7 @@ mod profile_json;
 pub mod publication;
 pub mod receipt;
 pub mod strings;
+pub mod surface;
 
 use std::os::raw::c_char;
 
@@ -162,7 +165,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "mission": "carrier_status_partial",
             "events": "directory_stream_partial",
             "admin_gateway": "carrier_status_partial",
-            "surface": "scaffold",
+            "surface": "carrier_projection_partial",
             "compatibility": "carrier_projection_partial"
         },
         "symbols": {
@@ -181,6 +184,8 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "events_directory_stream": true,
             "admin_gateway_carriers": true,
             "admin_gateway_status_projection": true,
+            "surface_carriers": true,
+            "surface_projection": true,
             "compatibility_carriers": true,
             "compatibility_projection": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
@@ -365,6 +370,8 @@ mod tests {
         assert_eq!(json["symbols"]["events_directory_stream"], true);
         assert_eq!(json["symbols"]["admin_gateway_carriers"], true);
         assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
+        assert_eq!(json["symbols"]["surface_carriers"], true);
+        assert_eq!(json["symbols"]["surface_projection"], true);
         assert_eq!(json["symbols"]["compatibility_carriers"], true);
         assert_eq!(json["symbols"]["compatibility_projection"], true);
         assert_eq!(json["profiles"]["receipt"], "fetch_projection_partial");
@@ -377,6 +384,7 @@ mod tests {
         assert_eq!(json["profiles"]["mission"], "carrier_status_partial");
         assert_eq!(json["profiles"]["events"], "directory_stream_partial");
         assert_eq!(json["profiles"]["admin_gateway"], "carrier_status_partial");
+        assert_eq!(json["profiles"]["surface"], "carrier_projection_partial");
         assert_eq!(
             json["profiles"]["compatibility"],
             "carrier_projection_partial"

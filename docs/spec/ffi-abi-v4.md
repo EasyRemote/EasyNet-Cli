@@ -19,6 +19,9 @@ bus.
 Admin + Gateway carrier and status projection helpers expose daemon-owned
 agent/session lifecycle abilities and lifecycle readiness facts without moving
 backend account, pairing-token, or certificate policy into the SDK.
+Surface carrier and projection helpers expose daemon-owned pages abilities and
+page DTOs without moving backend rendering, browser routing, or CDN policy into
+the SDK.
 Compatibility carrier and projection helpers expose daemon-owned OpenAI
 model/chat adapter abilities without moving product HTTP auth, billing,
 rate-limit, or SSE fanout policy into the SDK.
@@ -705,7 +708,82 @@ token creation/validation, credential verification, certificate policy,
 gateway onboarding UX, and full device-session CRUD remain future daemon or
 product-profile work.
 
-### 2.15 Compatibility Carriers And Projections
+### 2.15 Surface Page Carriers And Projections
+
+```c
+int32_t easynet_surface_build_list_pages_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_surface_build_create_page_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_surface_build_delete_page_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_surface_build_manifest_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_surface_project_page_record(
+    EasynetHandle handle,
+    const char* page_json,
+    char** out_page_json
+);
+
+int32_t easynet_surface_project_page_page(
+    EasynetHandle handle,
+    const char* pages_json,
+    char** out_page_json
+);
+
+int32_t easynet_surface_project_manifest(
+    EasynetHandle handle,
+    const char* page_json,
+    char** out_manifest_json
+);
+
+int32_t easynet_surface_project_public_page_ref(
+    EasynetHandle handle,
+    const char* page_json,
+    char** out_ref_json
+);
+
+int32_t easynet_surface_project_mutation_result(
+    EasynetHandle handle,
+    const char* result_json,
+    char** out_result_json
+);
+```
+
+Surface functions are scoped to a live `EasynetHandle`, matching the SDK
+object graph's `SurfaceClient`. The carrier builders return complete
+Invocation JSON for daemon-owned `pages.list`, `pages.publish`, `pages.get`,
+and `pages.unpublish`. They require explicit caller, callee, subject,
+descriptor version, nonce, and causal context fields. Bindings submit returned
+carriers through Runtime Core; these helpers do not render HTML, call backend
+HTTP routes, or open page folders directly.
+
+The projection helpers normalize daemon page facts into `PageRecord`,
+`Page<PageRecord>`, `SurfaceManifest`, `PublicPageRef`, and
+`SurfaceMutationResult` DTOs. Page identity is derived only from explicit page
+facts such as `project_ura`, `owner_ura`, `realm`, and `user`; public refs are
+product route references, not daemon transport endpoints. ABI v4 Surface
+support is `carrier_projection_partial`: backend route serving, browser auth,
+CDN/cache policy, content-management UX, and full surface status remain future
+daemon or product-profile work.
+
+### 2.16 Compatibility Carriers And Projections
 
 ```c
 int32_t easynet_compatibility_build_list_models_invocation(

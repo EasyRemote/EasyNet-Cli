@@ -1,0 +1,31 @@
+{
+  "profile": "surface",
+  "kind": "surface_manifest",
+  "page_id": "docs",
+  "owner_ura": "easynet:///r/example/agent/alice.pages",
+  "surface_ref": "easynet:///r/example/resource/alice.docs",
+  "public_ref": "https://example/web/alice/docs/",
+  "page": {
+    "profile": "surface",
+    "kind": "page_record",
+    "page_id": "docs",
+    "owner_ura": "easynet:///r/example/agent/alice.pages",
+    "surface_ref": "easynet:///r/example/resource/alice.docs",
+    "public_ref": "https://example/web/alice/docs/",
+    "status": "published",
+    "metadata": {
+      "profile": "surface",
+      "source_ability": "pages.get",
+      "user": "alice",
+      "project_id": "docs"
+    }
+  },
+  "entrypoint": {
+    "kind": "public_page_ref",
+    "href": "https://example/web/alice/docs/"
+  },
+  "metadata": {
+    "profile": "surface",
+    "source_ability": "pages.get"
+  }
+}

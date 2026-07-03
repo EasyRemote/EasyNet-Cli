@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/surface-mutation-result.schema.json",
+  "title": "SurfaceMutationResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "kind", "operation", "page_id", "removed", "state", "metadata"],
+  "properties": {
+    "profile": {"const": "surface"},
+    "kind": {"const": "surface_mutation_result"},
+    "operation": {"enum": ["delete"]},
+    "page_id": {"type": "string", "minLength": 1},
+    "removed": {"type": "boolean"},
+    "state": {"enum": ["deleted", "unknown"]},
+    "metadata": {"type": "object"}
+  }
+}

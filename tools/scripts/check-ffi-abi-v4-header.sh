@@ -170,6 +170,15 @@ expected_symbols=(
     easynet_admin_project_gateway_status
     easynet_admin_project_agent_records
     easynet_admin_project_agent_lifecycle_result
+    easynet_surface_build_list_pages_invocation
+    easynet_surface_build_create_page_invocation
+    easynet_surface_build_delete_page_invocation
+    easynet_surface_build_manifest_invocation
+    easynet_surface_project_page_record
+    easynet_surface_project_page_page
+    easynet_surface_project_manifest
+    easynet_surface_project_public_page_ref
+    easynet_surface_project_mutation_result
     easynet_compatibility_build_list_models_invocation
     easynet_compatibility_build_chat_completion_invocation
     easynet_compatibility_build_stream_chat_completion_invocation
@@ -365,6 +374,8 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_admin_build_agent_start_invocation"
     require_literal "$SPEC" "easynet_admin_project_gateway_status"
     require_literal "$SPEC" "easynet_admin_project_agent_records"
+    require_literal "$SPEC" "easynet_surface_build_create_page_invocation"
+    require_literal "$SPEC" "easynet_surface_project_manifest"
     require_literal "$SPEC" "easynet_compatibility_build_chat_completion_invocation"
     require_literal "$SPEC" "easynet_compatibility_project_model_page"
     require_literal "$SPEC" "easynet_compatibility_project_chat_stream"

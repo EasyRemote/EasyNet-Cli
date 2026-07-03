@@ -54,6 +54,7 @@ pub mod publication_contract;
 pub mod receipt_contract;
 pub mod resources;
 pub mod sdk_contract;
+pub mod surface_contract;
 pub mod telemetry;
 pub mod trust;
 

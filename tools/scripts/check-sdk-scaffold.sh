@@ -98,6 +98,13 @@ schema_files=(
   admin-agent-refresh-request.schema.json
   admin-session-list-request.schema.json
   surface-page.schema.json
+  surface-list-pages-request.schema.json
+  surface-create-page-request.schema.json
+  surface-page-project-request.schema.json
+  surface-page-page.schema.json
+  surface-public-page-ref.schema.json
+  surface-manifest.schema.json
+  surface-mutation-result.schema.json
   compatibility.schema.json
   compatibility-list-models-request.schema.json
   compatibility-chat-completion-request.schema.json
@@ -181,6 +188,19 @@ fixture_files=(
   gateway-status.v4.json
   admin-agent-records.v4.json
   admin-agent-lifecycle-result.v4.json
+  surface-list-pages-request.v4.json
+  surface-list-pages-invocation.v4.json
+  surface-create-page-request.v4.json
+  surface-create-page-invocation.v4.json
+  surface-delete-page-request.v4.json
+  surface-delete-page-invocation.v4.json
+  surface-manifest-request.v4.json
+  surface-manifest-invocation.v4.json
+  surface-page-record.v4.json
+  surface-page-page.v4.json
+  surface-public-page-ref.v4.json
+  surface-manifest.v4.json
+  surface-mutation-result.v4.json
   compatibility-list-models-request.v4.json
   compatibility-chat-completion-request.v4.json
   compatibility-stream-chat-completion-request.v4.json
@@ -219,6 +239,7 @@ case_files=(
   mission-carrier-status.yaml
   events-directory-stream.yaml
   admin-gateway-carrier-status.yaml
+  surface-page-carriers.yaml
   compatibility-openai-carrier-projection.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml

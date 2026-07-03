@@ -1,0 +1,16 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/agent/alice.pages",
+  "subject_ura": "easynet:///r/example/agent/alice.pages",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "project_id": "docs",
+  "folder": "/tmp/easynet-pages-docs",
+  "visibility": "public",
+  "metadata": {
+    "request_id": "surface-create-1"
+  }
+}

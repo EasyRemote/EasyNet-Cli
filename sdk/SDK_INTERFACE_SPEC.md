@@ -94,6 +94,11 @@ Host Binding codec projection may build host-stream binding DTOs, decode
 daemon request envelopes, encode shared item/error/terminal frames, and fold
 output hashes. It must not execute product host code, inspect language
 decorators, load dependencies, or own warm-host process lifecycle.
+Surface carrier/projection may build complete Invocation carriers for daemon
+`pages.list`, `pages.publish`, `pages.get`, and `pages.unpublish`, normalize
+page records, and build public page refs from explicit daemon page facts. It
+must not render HTML, own browser auth, call backend product routes, or open
+page folders directly.
 Mission carrier/status projection may build complete Invocation carriers for
 daemon `mission.run`, `mission.track`, and `mission.cancel`, read explicit
 local EAL source files for `RunFile`, and normalize daemon mission results into

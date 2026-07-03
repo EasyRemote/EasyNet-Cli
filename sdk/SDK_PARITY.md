@@ -35,7 +35,7 @@ method spelling.
 | mission | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | admin + gateway | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | events | directory stream partial | directory stream partial | gap | gap | gap | gap | gap |
-| surface | gap | gap | gap | gap | gap | gap | gap |
+| surface | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | gap | gap | gap | gap | gap |
 | conformance runner | scaffold | scaffold | gap | gap | gap | gap | gap |
 
@@ -72,13 +72,18 @@ method spelling.
   agent-record projections; pairing token flows, credential verification,
   certificate policy, full device-session CRUD, and language facades remain
   incomplete.
+- Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
+  `pages.list/publish/get/unpublish`; backend route serving, browser auth,
+  CDN/cache policy, full surface status, content-management UX, and language
+  facades remain incomplete.
 - Compatibility carrier/projection guardrails exist for Rust/C ABI over daemon
   `openai.list_models` and `openai.chat_completions`; compatibility file
   create/get/delete, product API-key policy, quota/rate limits, billing,
   backend HTTP route shaping, SSE/WebSocket fanout, and language facades remain
   incomplete.
 - Directory subscribe convenience methods, Axon-backed receipt verification,
-  surface, and convenience wrappers are schema/conformance scaffolds only.
+  full surface status, and convenience wrappers are schema/conformance
+  scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

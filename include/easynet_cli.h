@@ -597,6 +597,60 @@ int32_t easynet_admin_project_agent_lifecycle_result(
     char **out_result_json
 );
 
+int32_t easynet_surface_build_list_pages_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_surface_build_create_page_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_surface_build_delete_page_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_surface_build_manifest_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_surface_project_page_record(
+    EasynetHandle handle,
+    const char *page_json,
+    char **out_page_json
+);
+
+int32_t easynet_surface_project_page_page(
+    EasynetHandle handle,
+    const char *pages_json,
+    char **out_page_json
+);
+
+int32_t easynet_surface_project_manifest(
+    EasynetHandle handle,
+    const char *page_json,
+    char **out_manifest_json
+);
+
+int32_t easynet_surface_project_public_page_ref(
+    EasynetHandle handle,
+    const char *page_json,
+    char **out_ref_json
+);
+
+int32_t easynet_surface_project_mutation_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
 int32_t easynet_compatibility_build_list_models_invocation(
     EasynetHandle handle,
     const char *request_json,

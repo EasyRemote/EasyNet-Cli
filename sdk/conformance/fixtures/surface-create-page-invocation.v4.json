@@ -1,0 +1,22 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/agent/alice.pages",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0",
+  "subject_ura": "easynet:///r/example/agent/alice.pages",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "args": {
+    "project_id": "docs",
+    "folder": "/tmp/easynet-pages-docs",
+    "visibility": "public"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "request_id": "surface-create-1",
+    "profile": "surface",
+    "system_ability": "pages.publish",
+    "carrier_owner": "daemon_sdk"
+  }
+}
