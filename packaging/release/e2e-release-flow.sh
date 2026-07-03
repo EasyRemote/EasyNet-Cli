@@ -17,7 +17,9 @@
 # Against a release-shape sandbox install (see e2e-release-install.sh):
 #
 #   1. `easynet device join <token> --boot no` against a local dev-backend
-#      succeeds and writes credentials.json + daemon-config.toml.
+#      succeeds and writes credentials.json + daemon-config.toml. The product
+#      default remains join-and-start; this harness opts out only so the
+#      subsequent `runtime start` step owns the measured lifecycle transition.
 #   2. `easynet runtime start` brings the daemon online.
 #   3. **No `axon-runtime` process is alive** at any point. The
 #      device-mode daemon is the only long-running process; the

@@ -39,8 +39,9 @@ Planned checks:
 - `EASYNET_TEST_BACKEND_NO_BUILD=1 EASYNET_TEST_BACKEND_PORT=18080 EASYNET_TEST_HUB_TLS_PORT=15443 bash packaging/release/e2e-release-flow.sh`
   - passed against the Docker EasyNet backend/Hub using the release-shape
     sandbox install.
-  - `device join --boot no` wrote credentials without starting the daemon, so
-    `runtime start` remained the single lifecycle authority under test.
+  - The harness used `device join --boot no` to keep the measured transition on
+    `runtime start`. This is a test-isolation choice; the product default still
+    remains join-and-start.
   - Backend SSE emitted device-online invalidation in 1227 ms; the backend
     `/api/v1/devices` read model returned `ONLINE` in 52 ms after that
     invalidation.
