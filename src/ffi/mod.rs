@@ -52,6 +52,9 @@
 //   binding/frame/hash DTO projections.
 // - `easynet_publication_build_resource_ref/validate_package` and
 //   publication Invocation carrier builders for daemon system abilities.
+// - `easynet_mission_build_*_invocation` and
+//   `easynet_mission_project_status`: Mission/EAL carrier and status
+//   projection helpers.
 // - No `easynet_ability_*` exports. The ability+args ABI was removed
 //   instead of retained as hard-fail compatibility symbols.
 //
@@ -64,6 +67,8 @@ pub mod errors;
 pub mod host_binding;
 pub mod identity;
 pub mod invocation;
+pub mod mission;
+mod profile_json;
 pub mod publication;
 pub mod receipt;
 pub mod strings;
@@ -128,7 +133,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "directory_identity": "identity_projection_partial",
             "publication": "carrier_partial",
             "host_binding": "codec_partial",
-            "mission": "scaffold",
+            "mission": "carrier_status_partial",
             "admin_gateway": "scaffold",
             "events": "scaffold",
             "surface": "scaffold",
@@ -142,6 +147,8 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "directory_identity_projection": true,
             "host_binding_codec": true,
             "publication_carriers": true,
+            "mission_carriers": true,
+            "mission_status_projection": true,
             "invocation_builder_handles": cfg!(feature = "axon-pb"),
             "invocation_handle_observation": cfg!(feature = "axon-pb"),
             "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
@@ -316,6 +323,8 @@ mod tests {
         assert_eq!(json["symbols"]["directory_identity_projection"], true);
         assert_eq!(json["symbols"]["host_binding_codec"], true);
         assert_eq!(json["symbols"]["publication_carriers"], true);
+        assert_eq!(json["symbols"]["mission_carriers"], true);
+        assert_eq!(json["symbols"]["mission_status_projection"], true);
         assert_eq!(json["profiles"]["receipt"], "projection_partial");
         assert_eq!(
             json["profiles"]["directory_identity"],
@@ -323,6 +332,7 @@ mod tests {
         );
         assert_eq!(json["profiles"]["host_binding"], "codec_partial");
         assert_eq!(json["profiles"]["publication"], "carrier_partial");
+        assert_eq!(json["profiles"]["mission"], "carrier_status_partial");
         assert_eq!(
             json["symbols"]["stream_bidi_lifecycle"],
             serde_json::json!(cfg!(feature = "axon-pb"))

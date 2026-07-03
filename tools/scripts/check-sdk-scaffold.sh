@@ -77,6 +77,10 @@ schema_files=(
   host-stream-frame.schema.json
   host-stream-terminal-summary.schema.json
   host-stream-hash-state.schema.json
+  mission-run-request.schema.json
+  mission-run-file-request.schema.json
+  mission-track-request.schema.json
+  mission-cancel-request.schema.json
   mission-status.schema.json
   admin.schema.json
   gateway.schema.json
@@ -123,6 +127,14 @@ fixture_files=(
   ability-deploy-request.v4.json
   publication-deploy-invocation.v4.json
   publication-unpublish-invocation.v4.json
+  mission-run-request.v4.json
+  mission-run-file-request.v4.json
+  mission-track-request.v4.json
+  mission-cancel-request.v4.json
+  mission-run-invocation.v4.json
+  mission-track-invocation.v4.json
+  mission-cancel-invocation.v4.json
+  mission-status.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -148,6 +160,7 @@ case_files=(
   stream-bidi-lifecycle-state.yaml
   host-binding-codec-hash.yaml
   publication-resource-carriers.yaml
+  mission-carrier-status.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml

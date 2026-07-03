@@ -441,6 +441,36 @@ int32_t easynet_publication_build_unpublish_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_mission_build_run_eal_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_mission_build_run_file_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_mission_build_track_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_mission_build_cancel_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_mission_project_status(
+    EasynetHandle handle,
+    const char *status_json,
+    char **out_status_json
+);
+
 #ifdef __cplusplus
 }
 #endif

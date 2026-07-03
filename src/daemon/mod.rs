@@ -42,10 +42,12 @@ pub mod identity;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod keyring;
+pub mod mission_contract;
 pub mod persistence;
 pub mod plugins;
 pub mod publication_contract;
 pub mod resources;
+pub mod sdk_contract;
 pub mod telemetry;
 pub mod trust;
 

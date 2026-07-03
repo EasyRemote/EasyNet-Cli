@@ -32,7 +32,7 @@ method spelling.
 | receipt | projection partial | projection partial | gap | gap | gap | gap | gap |
 | publication | carrier partial | carrier partial | gap | gap | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | gap | gap | gap | gap | gap |
-| mission | gap | gap | gap | gap | gap | gap | gap |
+| mission | carrier/status partial | carrier/status partial | gap | gap | gap | gap | gap |
 | admin + gateway | gap | gap | gap | gap | gap | gap | gap |
 | events | gap | gap | gap | gap | gap | gap | gap |
 | surface | gap | gap | gap | gap | gap | gap | gap |
@@ -57,8 +57,11 @@ method spelling.
 - Host Binding codec/hash guardrails exist for Rust/C ABI; product host
   lifecycle, language facades, and profile-ready conformance runners remain
   incomplete.
+- Mission carrier/status guardrails exist for Rust/C ABI; live event streams,
+  daemon track/cancel convenience methods, language facades, and profile-ready
+  conformance runners remain incomplete.
 - Directory list/subscribe, receipt fetch/verify,
-  mission, admin/gateway, events, surface, compatibility, and convenience
+  admin/gateway, events, surface, compatibility, and convenience
   wrappers are schema/conformance scaffolds only.
 - Go and Python packages need real Runtime Core facades before backend or
   EasyRemote cutover.

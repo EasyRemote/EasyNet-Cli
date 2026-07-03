@@ -83,6 +83,11 @@ Host Binding codec projection may build host-stream binding DTOs, decode
 daemon request envelopes, encode shared item/error/terminal frames, and fold
 output hashes. It must not execute product host code, inspect language
 decorators, load dependencies, or own warm-host process lifecycle.
+Mission carrier/status projection may build complete Invocation carriers for
+daemon `mission.run`, `mission.track`, and `mission.cancel`, read explicit
+local EAL source files for `RunFile`, and normalize daemon mission results into
+`MissionStatus`. It must not execute EAL, create a second mission runtime, or
+fabricate child receipt refs for receipt-less steps.
 
 ## Invocation Tuple
 

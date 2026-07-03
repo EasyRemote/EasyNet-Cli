@@ -1,0 +1,14 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "mission_id": "2026-07-04_010203_weather",
+  "metadata": {
+    "request_id": "mission-track-1"
+  }
+}

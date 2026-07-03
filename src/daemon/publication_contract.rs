@@ -31,17 +31,17 @@
 // package contents, decorators, and host process code, but not ResourceRef,
 // system-ability carrier, or descriptor-ref semantics.
 
-use std::fmt;
 use std::path::{Component, Path};
 
-use base64::Engine as _;
-use easynet_axon::invocation::canonical_ability_descriptor_ref;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::core::ura;
 use crate::daemon::ability::builtins::device_control::ability_management::store::manifest_digest;
 use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
+use crate::daemon::sdk_contract::{
+    build_system_invocation, object, required_string, SdkContractError,
+};
 
 const SYSTEM_ABILITY_DEPLOY: &str = crate::daemon::ability::names::federation::ABILITY_DEPLOY;
 const SYSTEM_ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::federation::ABILITY_UNPUBLISH;
@@ -86,7 +86,7 @@ pub(crate) fn build_deploy_invocation(request: &Value) -> Result<Value, Publicat
         "resource_ref": resource_ref,
         "node_id": node_id,
     });
-    build_system_invocation(obj, SYSTEM_ABILITY_DEPLOY, args)
+    build_system_invocation(obj, PUBLICATION_PROFILE, SYSTEM_ABILITY_DEPLOY, args)
 }
 
 pub(crate) fn build_unpublish_invocation(request: &Value) -> Result<Value, PublicationError> {
@@ -102,74 +102,12 @@ pub(crate) fn build_unpublish_invocation(request: &Value) -> Result<Value, Publi
     }
     build_system_invocation(
         obj,
+        PUBLICATION_PROFILE,
         SYSTEM_ABILITY_UNPUBLISH,
         json!({
             "ability_ura": ability_ura,
         }),
     )
-}
-
-fn build_system_invocation(
-    obj: &Map<String, Value>,
-    system_ability: &str,
-    args: Value,
-) -> Result<Value, PublicationError> {
-    let caller_ura = required_string(obj, "caller_ura")?;
-    validate_ura(caller_ura, "caller_ura")?;
-    let callee_ura = required_string(obj, "callee_ura")?;
-    validate_ura(callee_ura, "callee_ura")?;
-    let subject_ura = required_string(obj, "subject_ura")?;
-    validate_ura(subject_ura, "subject_ura")?;
-    let descriptor_version = required_string(obj, "descriptor_version")?;
-    if !crate::core::ability::spec::is_valid_descriptor_version(descriptor_version) {
-        return Err(PublicationError::InvalidField(
-            "descriptor_version",
-            "must be MAJOR.MINOR.PATCH numeric form".to_string(),
-        ));
-    }
-    let descriptor_ref = system_descriptor_ref(callee_ura, system_ability, descriptor_version)?;
-    let nonce_base64 = required_string(obj, "nonce_base64")?;
-    validate_nonce(nonce_base64)?;
-    let causal_context = obj
-        .get("causal_context")
-        .ok_or(PublicationError::MissingField("causal_context"))?;
-    if !causal_context.is_object() {
-        return Err(PublicationError::InvalidField(
-            "causal_context",
-            "must be an object".to_string(),
-        ));
-    }
-    let mut metadata = typed_object_or_default(obj, "metadata", json!({}))?;
-    metadata["profile"] = Value::String(PUBLICATION_PROFILE.to_string());
-    metadata["system_ability"] = Value::String(system_ability.to_string());
-    metadata["carrier_owner"] = Value::String("daemon_sdk".to_string());
-
-    Ok(json!({
-        "caller_ura": caller_ura,
-        "callee_ura": callee_ura,
-        "descriptor_ref": descriptor_ref,
-        "subject_ura": subject_ura,
-        "nonce_base64": nonce_base64,
-        "causal_context": causal_context,
-        "args": args,
-        "content_type": "application/json",
-        "metadata": metadata,
-    }))
-}
-
-fn system_descriptor_ref(
-    callee_ura: &str,
-    system_ability: &str,
-    descriptor_version: &str,
-) -> Result<String, PublicationError> {
-    let ability_ura = ura::owner_ability_ura(callee_ura, system_ability).ok_or_else(|| {
-        PublicationError::InvalidField(
-            "callee_ura",
-            format!("cannot derive system ability URA for {system_ability:?}"),
-        )
-    })?;
-    canonical_ability_descriptor_ref(&format!("{ability_ura}@{descriptor_version}"))
-        .map_err(|err| PublicationError::InvalidField("descriptor_ref", err.to_string()))
 }
 
 struct AbilityPackage {
@@ -315,87 +253,7 @@ fn validate_absolute_path<'a>(
     Ok(path)
 }
 
-fn validate_ura(raw: &str, field: &'static str) -> Result<(), PublicationError> {
-    ura::parse_ura(raw)
-        .map(|_| ())
-        .map_err(|err| PublicationError::InvalidField(field, err.to_string()))
-}
-
-fn validate_nonce(nonce_base64: &str) -> Result<(), PublicationError> {
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(nonce_base64)
-        .map_err(|err| PublicationError::InvalidField("nonce_base64", err.to_string()))?;
-    if decoded.len() != 16 {
-        return Err(PublicationError::InvalidField(
-            "nonce_base64",
-            format!("must decode to exactly 16 bytes, got {}", decoded.len()),
-        ));
-    }
-    if decoded.iter().all(|byte| *byte == 0) {
-        return Err(PublicationError::InvalidField(
-            "nonce_base64",
-            "must not be all-zero".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn object<'a>(
-    value: &'a Value,
-    name: &'static str,
-) -> Result<&'a Map<String, Value>, PublicationError> {
-    value.as_object().ok_or(PublicationError::InvalidField(
-        name,
-        "must be an object".to_string(),
-    ))
-}
-
-fn required_string<'a>(
-    obj: &'a Map<String, Value>,
-    key: &'static str,
-) -> Result<&'a str, PublicationError> {
-    obj.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or(PublicationError::MissingField(key))
-}
-
-fn typed_object_or_default(
-    obj: &Map<String, Value>,
-    key: &'static str,
-    default: Value,
-) -> Result<Value, PublicationError> {
-    match obj.get(key) {
-        None | Some(Value::Null) => Ok(default),
-        Some(value @ Value::Object(_)) => Ok(value.clone()),
-        Some(_) => Err(PublicationError::InvalidField(
-            key,
-            "must be an object or null".to_string(),
-        )),
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PublicationError {
-    MissingField(&'static str),
-    InvalidField(&'static str, String),
-    Contract(String),
-}
-
-impl fmt::Display for PublicationError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PublicationError::MissingField(field) => write!(f, "missing required field {field}"),
-            PublicationError::InvalidField(field, message) => {
-                write!(f, "invalid field {field}: {message}")
-            }
-            PublicationError::Contract(message) => f.write_str(message),
-        }
-    }
-}
-
-impl std::error::Error for PublicationError {}
+pub(crate) type PublicationError = SdkContractError;
 
 #[cfg(test)]
 mod tests {

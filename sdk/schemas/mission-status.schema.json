@@ -4,12 +4,87 @@
   "title": "MissionStatus",
   "type": "object",
   "additionalProperties": false,
-  "required": ["mission_id", "state"],
+  "required": [
+    "profile",
+    "kind",
+    "mission_id",
+    "state",
+    "terminal",
+    "partial_failures",
+    "cancelled",
+    "child_invocations",
+    "child_receipts",
+    "output_refs",
+    "metadata"
+  ],
   "properties": {
+    "profile": {"const": "mission"},
+    "kind": {"const": "mission_status"},
     "mission_id": {"type": "string", "minLength": 1},
-    "state": {"type": "string", "minLength": 1},
-    "child_receipts": {"type": "array", "items": {"type": "string"}},
-    "output_refs": {"type": "array", "items": {"type": "string"}},
+    "state": {
+      "type": "string",
+      "enum": ["running", "ok", "partial", "error", "cancelled"]
+    },
+    "terminal": {"type": "boolean"},
+    "partial_failures": {"type": "integer", "minimum": 0},
+    "cancelled": {"type": "boolean"},
+    "parent_invocation_id": {"type": ["string", "null"]},
+    "parent_receipt_ura": {"type": ["string", "null"]},
+    "parent_invocation": {"type": ["object", "null"]},
+    "child_invocations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "step_id": {"type": ["string", "null"]},
+          "request_id": {"type": ["string", "null"]},
+          "trace_id": {"type": ["string", "null"]},
+          "ability": {"type": ["string", "null"]},
+          "invocation_ura": {"type": ["string", "null"]},
+          "caller_ura": {"type": ["string", "null"]},
+          "callee_ura": {"type": ["string", "null"]},
+          "subject_ura": {"type": ["string", "null"]},
+          "metadata_state": {"type": ["string", "null"]},
+          "ledger_state": true,
+          "receipt": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "properties": {
+              "receipt_ura": {"type": "string", "minLength": 1},
+              "receipt_hash": {"type": "string", "minLength": 1},
+              "head_receipt_hash": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "child_receipts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "invocation_ura", "receipt_ura", "receipt_hash"],
+        "properties": {
+          "step_id": {"type": ["string", "null"]},
+          "invocation_ura": {"type": ["string", "null"]},
+          "receipt_ura": {"type": "string", "minLength": 1},
+          "receipt_hash": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "output_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["kind"],
+        "properties": {
+          "kind": {"type": "string", "minLength": 1},
+          "path": {"type": "string"}
+        }
+      }
+    },
     "error": {"$ref": "error.schema.json"},
     "metadata": {"type": "object"}
   }

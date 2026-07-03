@@ -31,18 +31,11 @@
 
 use std::os::raw::c_char;
 
-use serde_json::Value;
-
 use crate::daemon::publication_contract::{
-    build_deploy_invocation, build_local_resource_ref, build_unpublish_invocation,
-    validate_package, PublicationError,
+    build_deploy_invocation, build_local_resource_ref, build_unpublish_invocation, validate_package,
 };
-use crate::ffi::client::handle::{get, EasynetHandle};
-use crate::ffi::errors::{
-    clear_last_error, set_last_error_code, EASYNET_OK, ERR_GENERIC, ERR_INVALID_ARG,
-    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
-};
-use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a daemon-authored local filesystem ResourceRef DTO.
 ///
@@ -139,102 +132,31 @@ fn project_publication_json(
     function: &'static str,
     output_name: &'static str,
     input_name: &'static str,
-    project: fn(&Value) -> Result<Value, PublicationError>,
+    project: fn(
+        &serde_json::Value,
+    )
+        -> Result<serde_json::Value, crate::daemon::publication_contract::PublicationError>,
 ) -> i32 {
-    let raw = match read_publication_args(handle, input, output, function, output_name, input_name)
-    {
-        Ok(raw) => raw,
-        Err(code) => return code,
-    };
-    let input = match parse_json_value(raw, function, input_name) {
-        Ok(value) => value,
-        Err(code) => return code,
-    };
-    match project(&input) {
-        Ok(value) => write_json_output(function, output, value),
-        Err(err) => {
-            set_last_error_code(ERR_INVALID_ARG, format!("{function}: {err}"));
-            ERR_INVALID_ARG
-        }
-    }
-}
-
-fn read_publication_args<'a>(
-    handle: EasynetHandle,
-    input: *const c_char,
-    output: *mut *mut c_char,
-    function: &'static str,
-    output_name: &'static str,
-    input_name: &'static str,
-) -> Result<&'a str, i32> {
-    if output.is_null() {
-        set_last_error_code(
-            ERR_NULL_POINTER,
-            format!("{function}: {output_name} pointer is null"),
-        );
-        return Err(ERR_NULL_POINTER);
-    }
-    unsafe { *output = std::ptr::null_mut() };
-
-    if get(handle).is_none() {
-        set_last_error_code(
-            ERR_INVALID_HANDLE,
-            format!("{function}: handle {handle} is not registered"),
-        );
-        return Err(ERR_INVALID_HANDLE);
-    }
-
-    match read_cstr(input) {
-        Ok(raw) => Ok(raw),
-        Err(StringError::Null) => {
-            set_last_error_code(
-                ERR_NULL_POINTER,
-                format!("{function}: {input_name} pointer is null"),
-            );
-            Err(ERR_NULL_POINTER)
-        }
-        Err(StringError::NotUtf8) => {
-            set_last_error_code(
-                ERR_INVALID_UTF8,
-                format!("{function}: {input_name} is not valid UTF-8"),
-            );
-            Err(ERR_INVALID_UTF8)
-        }
-    }
-}
-
-fn parse_json_value(
-    raw: &str,
-    function: &'static str,
-    input_name: &'static str,
-) -> Result<Value, i32> {
-    serde_json::from_str(raw).map_err(|err| {
-        set_last_error_code(
-            ERR_INVALID_ARG,
-            format!("{function}: decode {input_name} failed: {err}"),
-        );
-        ERR_INVALID_ARG
-    })
-}
-
-fn write_json_output(function: &'static str, output: *mut *mut c_char, value: Value) -> i32 {
-    let ptr = alloc_output_cstring(value.to_string());
-    if ptr.is_null() {
-        set_last_error_code(
-            ERR_GENERIC,
-            format!("{function}: out-of-memory allocating publication JSON"),
-        );
-        return ERR_GENERIC;
-    }
-    unsafe { *output = ptr };
-    clear_last_error();
-    EASYNET_OK
+    project_profile_json(
+        handle,
+        input,
+        output,
+        ProfileJsonSpec {
+            function,
+            output_name,
+            input_name,
+            profile: "publication",
+        },
+        project,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ffi::client::handle::{alloc, release, test_session};
+    use crate::ffi::errors::{EASYNET_OK, ERR_INVALID_ARG, ERR_INVALID_HANDLE};
+    use serde_json::Value;
     use std::ffi::{CStr, CString};
     use std::io::Write;
 

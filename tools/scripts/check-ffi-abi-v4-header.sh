@@ -144,6 +144,11 @@ expected_symbols=(
     easynet_publication_validate_package
     easynet_publication_build_deploy_invocation
     easynet_publication_build_unpublish_invocation
+    easynet_mission_build_run_eal_invocation
+    easynet_mission_build_run_file_invocation
+    easynet_mission_build_track_invocation
+    easynet_mission_build_cancel_invocation
+    easynet_mission_project_status
 )
 
 retired_symbols=(
@@ -320,6 +325,8 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_publication_build_resource_ref"
     require_literal "$SPEC" "easynet_publication_validate_package"
     require_literal "$SPEC" "easynet_publication_build_deploy_invocation"
+    require_literal "$SPEC" "easynet_mission_build_run_eal_invocation"
+    require_literal "$SPEC" "easynet_mission_project_status"
     require_literal "$SPEC" "ability+args symbols are not exported"
 fi
 

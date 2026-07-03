@@ -1,0 +1,38 @@
+id: mission/carrier_status
+profile: mission
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: MissionClient builds complete Invocation carriers for daemon Mission/EAL system abilities and projects daemon mission results into typed MissionStatus without fabricating receipt refs.
+steps:
+  - action: build_run_eal_invocation
+    fixture: mission-run-request.v4.json
+  - action: build_run_file_invocation
+    fixture: mission-run-file-request.v4.json
+  - action: build_track_invocation
+    fixture: mission-track-request.v4.json
+  - action: build_cancel_invocation
+    fixture: mission-cancel-request.v4.json
+  - action: project_status
+    fixture: mission-status.v4.json
+expect:
+  result: mission_carrier_status_observed
+  run_request_schema: mission-run-request.schema.json
+  run_file_request_schema: mission-run-file-request.schema.json
+  track_request_schema: mission-track-request.schema.json
+  cancel_request_schema: mission-cancel-request.schema.json
+  status_schema: mission-status.schema.json
+  invocation_schema: invocation.schema.json
+  run_invocation_fixture: mission-run-invocation.v4.json
+  track_invocation_fixture: mission-track-invocation.v4.json
+  cancel_invocation_fixture: mission-cancel-invocation.v4.json
+  status_fixture: mission-status.v4.json
+  run_system_ability: mission.run
+  track_system_ability: mission.track
+  cancel_system_ability: mission.cancel
+  rejects_incomplete_invocation_tuple: true
+  rejects_path_like_mission_id: true
+  child_receipts_only_when_anchored: true
+  mission_events_runtime: scaffold_only

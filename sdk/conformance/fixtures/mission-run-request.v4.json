@@ -1,0 +1,15 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "source": "mission weather\nlet r = local.observe_health()",
+  "label": "weather",
+  "metadata": {
+    "request_id": "mission-run-1"
+  }
+}

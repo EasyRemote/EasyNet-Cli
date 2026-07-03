@@ -10,7 +10,9 @@ and detach, endpoint discovery, runtime health, and the public
 Draft -> Prepared -> Signed -> Submitted invocation state-machine handles plus
 typed error JSON, identity projection, receipt projection, Host Binding
 host-stream codec/hash projection, and Publication carrier projection for
-language bindings.
+language bindings. It also adds Mission/EAL carrier and status projection so
+language bindings submit daemon-owned orchestration through Runtime Core rather
+than implementing transport facades themselves.
 
 The checked-in `include/easynet_cli.h` header is the binding-facing contract.
 Rust sources under `src/ffi/` own behavior. Repository checks assert that the
@@ -432,6 +434,58 @@ descriptor version, nonce, and causal context fields. Bindings submit the
 returned Invocation through Runtime Core; these helpers do not execute
 publication, claim terminal receipts, scan package directories for list/show,
 or fake enable/disable state.
+
+### 2.12 Mission Carriers And Status
+
+```c
+int32_t easynet_mission_build_run_eal_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_mission_build_run_file_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_mission_build_track_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_mission_build_cancel_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_mission_project_status(
+    EasynetHandle handle,
+    const char* status_json,
+    char** out_status_json
+);
+```
+
+Mission carrier functions are scoped to a live `EasynetHandle`, matching the
+SDK object graph's `MissionClient`. `build_run_eal_invocation` returns a
+complete Invocation JSON carrier for daemon `mission.run` from EAL source text.
+`build_run_file_invocation` reads an absolute local EAL source file, uses the
+file path as the default label, and returns the same `mission.run` carrier.
+`build_track_invocation` and `build_cancel_invocation` map SDK `mission_id` to
+the existing daemon ability argument `run_id` while preserving the complete
+Invocation tuple.
+
+`easynet_mission_project_status` normalizes daemon `mission.run`,
+`mission.track`, or `mission.cancel` JSON into `MissionStatus`. The projection
+exposes mission id, terminal state, partial failure count, cancellation state,
+parent invocation context when available, parent receipt URA when observable,
+child invocation refs, child receipt refs, and output artifact refs. It never
+fabricates receipt anchors for receipt-less steps. Bindings submit returned
+Invocation carriers through Runtime Core; these helpers do not execute EAL,
+start a mission runtime, or replace daemon Mission/EAL semantics.
 
 ## 3. Error Code Table
 

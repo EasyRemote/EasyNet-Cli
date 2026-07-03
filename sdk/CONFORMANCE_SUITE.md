@@ -93,6 +93,8 @@ swift test --package-path sdk/swift
 - receipt projection never upgrades summary-only data to verified
 - publication ResourceRef, package validation, and complete Invocation carriers
 - host binding frame codec and output-hash folding
+- mission run/track/cancel complete Invocation carriers and MissionStatus
+  projection
 - profile ownership exclusivity
 
 The scaffold in `cases/` names the first shared cases. A profile must add its
