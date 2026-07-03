@@ -24,8 +24,19 @@ Planned checks:
   - passed.
 - `cargo test --lib --features axon-pb heartbeat_includes_owner_projection_refresh_batch`
   - passed.
+- `cargo test --test cross_device_invoke_remote_e2e session_graceful_close_emits_stream_closed_offline`
+  - passed.
+- `cargo test --test cross_device_invoke_remote_e2e subscribe_directory_stream_tracks_real_session_online_and_offline`
+  - passed.
+- `cargo test --lib --features axon-pb invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events`
+  - passed.
+- `cargo test --test cross_realm_directory_streaming_e2e streaming_chain_propagates_presence_remove`
+  - passed.
 
 External/manual gates still required for full product release confidence:
 
 - Backend SSE/read-model product presence propagation test.
-- Graceful stop and abrupt kill propagation budgets against a running Hub.
+- Full process-level graceful stop and abrupt-kill propagation budgets against
+  a running backend/Hub. Daemon-local session close and directory-stream
+  propagation are covered above; the remaining gate needs the external product
+  subscriber/read-model path.
