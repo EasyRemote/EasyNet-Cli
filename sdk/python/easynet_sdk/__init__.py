@@ -153,6 +153,10 @@ from .directory import (
     ResolvedRef,
     ResolveQuery,
 )
+from .direct_runtime import (
+    DirectDaemonRuntimeConnector,
+    DirectDaemonRuntimeTransport,
+)
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .environment import SdkEnvironment, default_environment
 from .events import (
@@ -499,6 +503,8 @@ __all__ = [
     "DaemonBidiChannel",
     "DaemonFrameStream",
     "DaemonInvocationTransport",
+    "DirectDaemonRuntimeConnector",
+    "DirectDaemonRuntimeTransport",
     "EasyRemoteTransportAdapter",
     "DaemonLifecycleState",
     "DaemonMode",

@@ -125,6 +125,30 @@ class SdkEnvironment:
         )
         return self._track(connection)
 
+    def runtime_connection_direct(
+        self, options: ConnectOptions = ConnectOptions()
+    ) -> RuntimeConnection:
+        """Open a stateful RuntimeConnection over daemon Axon gRPC UDS."""
+
+        self._require_open()
+        from .direct_runtime import DirectDaemonRuntimeConnector
+
+        control_path = options.control_path or self.control_path
+        connection = RuntimeConnection(
+            DirectDaemonRuntimeConnector(control_path=control_path)
+        )
+        connection.connect(
+            ConnectOptions(
+                endpoint=options.endpoint,
+                control_path=control_path,
+                dial_timeout_ms=options.dial_timeout_ms,
+                invoke_timeout_ms=options.invoke_timeout_ms,
+                max_message_bytes=options.max_message_bytes,
+                reconnect=options.reconnect,
+            )
+        )
+        return self._track(connection)
+
     def runtime_client(self) -> RuntimeClient:
         """Open a direct runtime client for the configured control path."""
 
@@ -137,6 +161,13 @@ class SdkEnvironment:
         )
         return self._track(RuntimeClient(transport))
 
+    def runtime_client_direct(
+        self, options: ConnectOptions = ConnectOptions()
+    ) -> RuntimeClient:
+        """Open a direct daemon Axon gRPC-over-UDS runtime client."""
+
+        return self._track(self.runtime_connection_direct(options).runtime_client())
+
     def invocation_transport(self) -> DaemonInvocationTransport:
         """Open the public JSON-friendly daemon Invocation transport facade."""
 
@@ -145,6 +176,19 @@ class SdkEnvironment:
             DaemonInvocationTransport.connect(
                 control_path=self.control_path,
                 library_path=self.library_path,
+            )
+        )
+
+    def invocation_transport_direct(
+        self, options: ConnectOptions = ConnectOptions()
+    ) -> DaemonInvocationTransport:
+        """Open the JSON-friendly daemon Invocation facade over direct UDS."""
+
+        self._require_open()
+        return self._track(
+            DaemonInvocationTransport.connect_direct(
+                control_path=self.control_path,
+                options=options,
             )
         )
 

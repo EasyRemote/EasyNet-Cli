@@ -79,6 +79,36 @@ class DaemonInvocationTransport:
             connection=connection,
         )
 
+    @classmethod
+    def connect_direct(
+        cls,
+        *,
+        control_path: str = "",
+        options: ConnectOptions = ConnectOptions(),
+    ) -> "DaemonInvocationTransport":
+        """Open a direct daemon Axon gRPC-over-UDS Runtime Core session."""
+
+        from .direct_runtime import DirectDaemonRuntimeConnector
+
+        control_path = options.control_path or control_path
+        connection = RuntimeConnection(
+            DirectDaemonRuntimeConnector(control_path=control_path)
+        )
+        connection.connect(
+            ConnectOptions(
+                endpoint=options.endpoint,
+                control_path=control_path,
+                dial_timeout_ms=options.dial_timeout_ms,
+                invoke_timeout_ms=options.invoke_timeout_ms,
+                max_message_bytes=options.max_message_bytes,
+                reconnect=options.reconnect,
+            )
+        )
+        return cls(
+            runtime=connection.runtime_client(),
+            connection=connection,
+        )
+
     def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> dict[str, object]:
         """Submit one complete Invocation and return its Runtime result JSON."""
 
