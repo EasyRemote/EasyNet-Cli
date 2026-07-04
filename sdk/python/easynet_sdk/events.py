@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
+from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
