@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1549,6 +1550,320 @@ func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	}); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("missing wrapper session state did not produce InvalidArgument: %v", err)
 	}
+}
+
+func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	memcCase := sharedCase(t, root, "memc-profile-exclusivity.yaml")
+	requireCaseID(t, memcCase, "memc/profile_exclusivity")
+	requireCaseAction(t, memcCase, "inspect_public_api")
+	requireCaseExpectation(t, memcCase, "duplicate_profile_owners: 0")
+
+	audits := []sharedProfileOwnershipAudit{
+		{
+			Owner: "runtime_core",
+			Type:  reflect.TypeOf((*Client)(nil)),
+			Operations: map[string]string{
+				"Close":            "runtime_core.client.close",
+				"FeatureDiscovery": "runtime_core.feature_discovery",
+				"RequireABI":       "runtime_core.require_abi",
+			},
+		},
+		{
+			Owner: "runtime_core",
+			Type:  reflect.TypeOf((*DaemonControl)(nil)),
+			Operations: map[string]string{
+				"Attach":       "runtime_core.daemon.attach",
+				"ConnectLocal": "runtime_core.daemon.connect_local",
+				"Discover":     "runtime_core.daemon.discover",
+				"Start":        "runtime_core.daemon.start",
+			},
+		},
+		{
+			Owner: "runtime_core",
+			Type:  reflect.TypeOf((*DaemonHandle)(nil)),
+			Operations: map[string]string{
+				"Detach":      "runtime_core.daemon_handle.detach",
+				"Endpoints":   "runtime_core.daemon_handle.endpoints",
+				"HandleID":    "runtime_core.daemon_handle.id",
+				"OpenRuntime": "runtime_core.daemon_handle.open_runtime",
+				"State":       "runtime_core.daemon_handle.state",
+				"Status":      "runtime_core.daemon_handle.status",
+				"Stop":        "runtime_core.daemon_handle.stop",
+			},
+		},
+		{
+			Owner: "runtime_core",
+			Type:  reflect.TypeOf((*RuntimeClient)(nil)),
+			Operations: map[string]string{
+				"Await":          "runtime_core.invocation.await",
+				"Cancel":         "runtime_core.invocation.cancel",
+				"Close":          "runtime_core.runtime_client.close",
+				"CloseHandle":    "runtime_core.invocation.close_handle",
+				"Events":         "runtime_core.invocation.events",
+				"Invoke":         "runtime_core.invocation.invoke",
+				"InvokeStream":   "runtime_core.invocation.invoke_stream",
+				"OpenBidi":       "runtime_core.invocation.open_bidi",
+				"Prepare":        "runtime_core.invocation.prepare",
+				"PrepareBuilder": "runtime_core.invocation.prepare_builder",
+				"SubmitSigned":   "runtime_core.invocation.submit_signed",
+			},
+		},
+		{
+			Owner: "runtime_core",
+			Type:  reflect.TypeOf((*HealthClient)(nil)),
+			Operations: map[string]string{
+				"RuntimeHealth": "runtime_core.health.runtime_health",
+			},
+		},
+		{
+			Owner: "directory_identity",
+			Type:  reflect.TypeOf((*DirectoryClient)(nil)),
+			Operations: map[string]string{
+				"BuildDirectorySubscriptionInvocation": "directory_identity.directory.build_subscription_invocation",
+				"Close":                                "directory_identity.directory.close",
+				"ListAbilities":                        "directory_identity.directory.list_abilities",
+				"ListAgents":                           "directory_identity.directory.list_agents",
+				"ListDevices":                          "directory_identity.directory.list_devices",
+				"Resolve":                              "directory_identity.directory.resolve",
+				"SubscribeDirectory":                   "directory_identity.directory.subscribe",
+			},
+		},
+		{
+			Owner: "directory_identity",
+			Type:  reflect.TypeOf((*IdentityClient)(nil)),
+			Operations: map[string]string{
+				"BuildResourceRef":     "directory_identity.identity.build_resource_ref",
+				"Close":                "directory_identity.identity.close",
+				"ListSigningKeys":      "directory_identity.identity.list_signing_keys",
+				"ProjectDescriptorRef": "directory_identity.identity.project_descriptor_ref",
+				"ProjectIdentity":      "directory_identity.identity.project_identity",
+				"RegisterSigningKey":   "directory_identity.identity.register_signing_key",
+				"RevokeSigningKey":     "directory_identity.identity.revoke_signing_key",
+				"Signer":               "directory_identity.identity.signer",
+			},
+		},
+		{
+			Owner: "receipt",
+			Type:  reflect.TypeOf((*ReceiptClient)(nil)),
+			Operations: map[string]string{
+				"BuildFetchInvocation": "receipt.build_fetch_invocation",
+				"CausalRef":            "receipt.causal_ref",
+				"Close":                "receipt.close",
+				"Fetch":                "receipt.fetch",
+				"Project":              "receipt.project",
+				"Verify":               "receipt.verify",
+				"VerifyChain":          "receipt.verify_chain",
+			},
+		},
+		{
+			Owner: "publication",
+			Type:  reflect.TypeOf((*PublicationClient)(nil)),
+			Operations: map[string]string{
+				"BuildDeployInvocation":    "publication.build_deploy_invocation",
+				"BuildLocalResourceRef":    "publication.build_local_resource_ref",
+				"BuildUnpublishInvocation": "publication.build_unpublish_invocation",
+				"Close":                    "publication.close",
+				"DeployAbility":            "publication.deploy_ability",
+				"DisableAbilityImpl":       "publication.disable_ability_impl",
+				"EnableAbilityImpl":        "publication.enable_ability_impl",
+				"InstallPlugin":            "publication.install_plugin",
+				"ListAbilities":            "publication.list_abilities",
+				"ShowAbility":              "publication.show_ability",
+				"UnpublishAbility":         "publication.unpublish_ability",
+				"ValidatePackage":          "publication.validate_package",
+			},
+		},
+		{
+			Owner: "host_binding",
+			Type:  reflect.TypeOf((*HostBindingClient)(nil)),
+			Operations: map[string]string{
+				"BuildHostStreamBinding": "host_binding.build_host_stream_binding",
+				"Close":                  "host_binding.close",
+				"DecodeRequest":          "host_binding.decode_request",
+				"EncodeError":            "host_binding.encode_error",
+				"EncodeItem":             "host_binding.encode_item",
+				"EncodeTerminal":         "host_binding.encode_terminal",
+				"FoldOutputHash":         "host_binding.fold_output_hash",
+			},
+		},
+		{
+			Owner: "mission",
+			Type:  reflect.TypeOf((*MissionClient)(nil)),
+			Operations: map[string]string{
+				"BuildCancelInvocation":  "mission.build_cancel_invocation",
+				"BuildRunEALInvocation":  "mission.build_run_eal_invocation",
+				"BuildRunFileInvocation": "mission.build_run_file_invocation",
+				"BuildTrackInvocation":   "mission.build_track_invocation",
+				"Cancel":                 "mission.cancel",
+				"Close":                  "mission.close",
+				"Events":                 "mission.events",
+				"RunEAL":                 "mission.run_eal",
+				"RunFile":                "mission.run_file",
+				"Track":                  "mission.track",
+			},
+		},
+		{
+			Owner: "admin_gateway",
+			Type:  reflect.TypeOf((*AdminClient)(nil)),
+			Operations: map[string]string{
+				"AgentRefresh":                "admin_gateway.agent.refresh",
+				"AgentStart":                  "admin_gateway.agent.start",
+				"AgentStop":                   "admin_gateway.agent.stop",
+				"BuildAgentListInvocation":    "admin_gateway.agent.build_list_invocation",
+				"BuildAgentRefreshInvocation": "admin_gateway.agent.build_refresh_invocation",
+				"BuildAgentStartInvocation":   "admin_gateway.agent.build_start_invocation",
+				"BuildAgentStopInvocation":    "admin_gateway.agent.build_stop_invocation",
+				"BuildSessionListInvocation":  "admin_gateway.session.build_list_invocation",
+				"Close":                       "admin_gateway.close",
+				"CreateDeviceSession":         "admin_gateway.session.create",
+				"CreatePairing":               "admin_gateway.pairing.create",
+				"DeleteDeviceSession":         "admin_gateway.session.delete",
+				"GatewayStatus":               "admin_gateway.gateway.status",
+				"JoinHub":                     "admin_gateway.hub.join",
+				"LeaveHub":                    "admin_gateway.hub.leave",
+				"ListAgents":                  "admin_gateway.agent.list",
+				"ListDeviceSessions":          "admin_gateway.session.list",
+				"PairingPreflight":            "admin_gateway.pairing.preflight",
+				"RevokeDevice":                "admin_gateway.device.revoke",
+				"ValidatePairing":             "admin_gateway.pairing.validate",
+				"VerifyDeviceCredential":      "admin_gateway.device.verify_credential",
+			},
+		},
+		{
+			Owner: "events",
+			Type:  reflect.TypeOf((*EventClient)(nil)),
+			Operations: map[string]string{
+				"BuildDeviceSubscriptionInvocation":     "events.build_device_subscription_invocation",
+				"BuildDirectorySubscriptionInvocation":  "events.build_directory_subscription_invocation",
+				"BuildInvocationSubscriptionInvocation": "events.build_invocation_subscription_invocation",
+				"BuildSessionSubscriptionInvocation":    "events.build_session_subscription_invocation",
+				"Close":                                 "events.close",
+				"ListDeviceEvents":                      "events.list_device_events",
+				"ProjectDirectoryEvent":                 "events.project_directory_event",
+				"ProjectDropReport":                     "events.project_drop_report",
+				"ProjectTerminal":                       "events.project_terminal",
+				"SubscribeDevices":                      "events.subscribe_devices",
+				"SubscribeDirectory":                    "events.subscribe_directory",
+				"SubscribeInvocations":                  "events.subscribe_invocations",
+				"SubscribeSessions":                     "events.subscribe_sessions",
+			},
+		},
+		{
+			Owner: "surface",
+			Type:  reflect.TypeOf((*SurfaceClient)(nil)),
+			Operations: map[string]string{
+				"BuildCreatePageInvocation": "surface.build_create_page_invocation",
+				"BuildDeletePageInvocation": "surface.build_delete_page_invocation",
+				"BuildHealthInvocation":     "surface.build_health_invocation",
+				"BuildListPagesInvocation":  "surface.build_list_pages_invocation",
+				"BuildManifestInvocation":   "surface.build_manifest_invocation",
+				"Close":                     "surface.close",
+				"CreatePage":                "surface.create_page",
+				"DeletePage":                "surface.delete_page",
+				"ListPages":                 "surface.list_pages",
+				"PublicPageRef":             "surface.public_page_ref",
+				"SurfaceHealth":             "surface.health",
+				"SurfaceManifest":           "surface.manifest",
+				"SurfaceStatus":             "surface.status",
+			},
+		},
+		{
+			Owner: "compatibility",
+			Type:  reflect.TypeOf((*CompatibilityClient)(nil)),
+			Operations: map[string]string{
+				"BuildChatCompletionInvocation":       "compatibility.chat.build_completion_invocation",
+				"BuildFileDeleteInvocation":           "compatibility.file.build_delete_invocation",
+				"BuildFileGetInvocation":              "compatibility.file.retrieve",
+				"BuildFileRetrieveInvocation":         "compatibility.file.retrieve",
+				"BuildFileUploadInvocation":           "compatibility.file.build_upload_invocation",
+				"BuildListModelsInvocation":           "compatibility.models.build_list_invocation",
+				"BuildStreamChatCompletionInvocation": "compatibility.chat.build_stream_invocation",
+				"Close":                               "compatibility.close",
+				"CreateChatCompletion":                "compatibility.chat.create_completion",
+				"DeleteFile":                          "compatibility.file.delete",
+				"GetFile":                             "compatibility.file.retrieve",
+				"ListModels":                          "compatibility.models.list",
+				"ProjectFile":                         "compatibility.file.project",
+				"ProjectFileDeleteResult":             "compatibility.file.project_delete_result",
+				"ProjectFileUpload":                   "compatibility.file.project_upload",
+				"RetrieveFile":                        "compatibility.file.retrieve",
+				"StreamChatCompletion":                "compatibility.chat.stream_completion",
+				"UploadFile":                          "compatibility.file.upload",
+			},
+		},
+		{
+			Owner: "wrappers",
+			Type:  reflect.TypeOf((*WrapperClient)(nil)),
+			Operations: map[string]string{
+				"BuildBrowserSessionInvocation":       "wrappers.browser.build_session_invocation",
+				"BuildFileTransferInvocation":         "wrappers.file.build_transfer_invocation",
+				"BuildMediaSessionInvocation":         "wrappers.media.build_session_invocation",
+				"BuildRemoteDesktopSessionInvocation": "wrappers.remote_desktop.build_session_invocation",
+				"BuildTerminalSessionInvocation":      "wrappers.terminal.build_session_invocation",
+				"Close":                               "wrappers.close",
+				"ProjectBrowserSession":               "wrappers.browser.project_session",
+				"ProjectFileRecord":                   "wrappers.file.project_record",
+				"ProjectMediaSession":                 "wrappers.media.project_session",
+				"ProjectRemoteDesktopSession":         "wrappers.remote_desktop.project_session",
+				"ProjectTerminalSession":              "wrappers.terminal.project_session",
+				"StartBrowserSession":                 "wrappers.browser.start_session",
+				"StartMediaSession":                   "wrappers.media.start_session",
+				"StartRemoteDesktopSession":           "wrappers.remote_desktop.start_session",
+				"StartTerminalSession":                "wrappers.terminal.start_session",
+				"TransferFile":                        "wrappers.file.transfer",
+			},
+		},
+	}
+
+	unmapped, duplicateOwners := auditSharedProfileOwnership(audits)
+	if len(unmapped) > 0 {
+		t.Fatalf("public SDK methods without MEMC owner:\n%s", strings.Join(unmapped, "\n"))
+	}
+	if len(duplicateOwners) > 0 {
+		t.Fatalf("public SDK operations with duplicate MEMC owners:\n%s", strings.Join(duplicateOwners, "\n"))
+	}
+}
+
+type sharedProfileOwnershipAudit struct {
+	Owner      string
+	Type       reflect.Type
+	Operations map[string]string
+}
+
+func auditSharedProfileOwnership(audits []sharedProfileOwnershipAudit) ([]string, []string) {
+	var unmapped []string
+	operationOwners := make(map[string]map[string]struct{})
+	for _, audit := range audits {
+		for i := 0; i < audit.Type.NumMethod(); i++ {
+			method := audit.Type.Method(i)
+			operation, ok := audit.Operations[method.Name]
+			if !ok {
+				unmapped = append(unmapped, fmt.Sprintf("%s.%s", audit.Type.Elem().Name(), method.Name))
+				continue
+			}
+			if operationOwners[operation] == nil {
+				operationOwners[operation] = make(map[string]struct{})
+			}
+			operationOwners[operation][audit.Owner] = struct{}{}
+		}
+	}
+	sort.Strings(unmapped)
+
+	var duplicateOwners []string
+	for operation, owners := range operationOwners {
+		if len(owners) < 2 {
+			continue
+		}
+		ownerNames := make([]string, 0, len(owners))
+		for owner := range owners {
+			ownerNames = append(ownerNames, owner)
+		}
+		sort.Strings(ownerNames)
+		duplicateOwners = append(duplicateOwners, fmt.Sprintf("%s owned by %s", operation, strings.Join(ownerNames, ", ")))
+	}
+	sort.Strings(duplicateOwners)
+	return unmapped, duplicateOwners
 }
 
 type sharedMissionTransport struct {

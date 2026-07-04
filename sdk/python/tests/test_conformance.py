@@ -1,3 +1,4 @@
+import inspect
 import json
 import pathlib
 import unittest
@@ -26,6 +27,7 @@ from easynet_sdk import (
     CompatibilityStreamChatCompletionRequest,
     Client,
     DaemonControl,
+    DaemonHandle,
     DescriptorRefRequest,
     DeviceQuery,
     DirectoryClient,
@@ -66,6 +68,7 @@ from easynet_sdk import (
     MissionTrackRequest,
     PreparedInvocation,
     PublicationClient,
+    ReceiptClient,
     ReceiptFetchRequest,
     ReceiptSummary,
     ReceiptVerification,
@@ -2570,6 +2573,270 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_memc_executes_shared_profile_exclusivity_conformance_case(self) -> None:
+        memc_case = shared_case("memc-profile-exclusivity.yaml")
+        self._require_case_id(memc_case, "memc/profile_exclusivity")
+        self._require_case_action(memc_case, "inspect_public_api")
+        self._require_case_expectation(memc_case, "duplicate_profile_owners: 0")
+
+        audits = [
+            (
+                "runtime_core",
+                Client,
+                {
+                    "close": "runtime_core.client.close",
+                    "feature_discovery": "runtime_core.feature_discovery",
+                    "require_abi": "runtime_core.require_abi",
+                },
+            ),
+            (
+                "runtime_core",
+                DaemonControl,
+                {
+                    "attach": "runtime_core.daemon.attach",
+                    "connect_local": "runtime_core.daemon.connect_local",
+                    "discover": "runtime_core.daemon.discover",
+                    "start": "runtime_core.daemon.start",
+                },
+            ),
+            (
+                "runtime_core",
+                DaemonHandle,
+                {
+                    "detach": "runtime_core.daemon_handle.detach",
+                    "open_runtime": "runtime_core.daemon_handle.open_runtime",
+                    "status": "runtime_core.daemon_handle.status",
+                    "stop": "runtime_core.daemon_handle.stop",
+                },
+            ),
+            (
+                "runtime_core",
+                RuntimeClient,
+                {
+                    "await_result": "runtime_core.invocation.await",
+                    "cancel": "runtime_core.invocation.cancel",
+                    "close": "runtime_core.runtime_client.close",
+                    "close_handle": "runtime_core.invocation.close_handle",
+                    "events": "runtime_core.invocation.events",
+                    "invoke": "runtime_core.invocation.invoke",
+                    "invoke_stream": "runtime_core.invocation.invoke_stream",
+                    "open_bidi": "runtime_core.invocation.open_bidi",
+                    "prepare": "runtime_core.invocation.prepare",
+                    "prepare_builder": "runtime_core.invocation.prepare_builder",
+                    "submit_signed": "runtime_core.invocation.submit_signed",
+                },
+            ),
+            (
+                "runtime_core",
+                HealthClient,
+                {
+                    "runtime_health": "runtime_core.health.runtime_health",
+                },
+            ),
+            (
+                "directory_identity",
+                DirectoryClient,
+                {
+                    "build_directory_subscription_invocation": "directory_identity.directory.build_subscription_invocation",
+                    "close": "directory_identity.directory.close",
+                    "list_abilities": "directory_identity.directory.list_abilities",
+                    "list_agents": "directory_identity.directory.list_agents",
+                    "list_devices": "directory_identity.directory.list_devices",
+                    "resolve": "directory_identity.directory.resolve",
+                    "subscribe_directory": "directory_identity.directory.subscribe",
+                },
+            ),
+            (
+                "directory_identity",
+                IdentityClient,
+                {
+                    "build_resource_ref": "directory_identity.identity.build_resource_ref",
+                    "close": "directory_identity.identity.close",
+                    "list_signing_keys": "directory_identity.identity.list_signing_keys",
+                    "project_descriptor_ref": "directory_identity.identity.project_descriptor_ref",
+                    "project_identity": "directory_identity.identity.project_identity",
+                    "register_signing_key": "directory_identity.identity.register_signing_key",
+                    "revoke_signing_key": "directory_identity.identity.revoke_signing_key",
+                    "signer": "directory_identity.identity.signer",
+                },
+            ),
+            (
+                "receipt",
+                ReceiptClient,
+                {
+                    "build_fetch_invocation": "receipt.build_fetch_invocation",
+                    "causal_ref": "receipt.causal_ref",
+                    "close": "receipt.close",
+                    "fetch": "receipt.fetch",
+                    "project": "receipt.project",
+                    "verify": "receipt.verify",
+                    "verify_chain": "receipt.verify_chain",
+                },
+            ),
+            (
+                "publication",
+                PublicationClient,
+                {
+                    "build_deploy_invocation": "publication.build_deploy_invocation",
+                    "build_local_resource_ref": "publication.build_local_resource_ref",
+                    "build_unpublish_invocation": "publication.build_unpublish_invocation",
+                    "close": "publication.close",
+                    "deploy_ability": "publication.deploy_ability",
+                    "disable_ability_impl": "publication.disable_ability_impl",
+                    "enable_ability_impl": "publication.enable_ability_impl",
+                    "install_plugin": "publication.install_plugin",
+                    "list_abilities": "publication.list_abilities",
+                    "show_ability": "publication.show_ability",
+                    "unpublish_ability": "publication.unpublish_ability",
+                    "validate_package": "publication.validate_package",
+                },
+            ),
+            (
+                "host_binding",
+                HostBindingClient,
+                {
+                    "build_host_stream_binding": "host_binding.build_host_stream_binding",
+                    "close": "host_binding.close",
+                    "decode_request": "host_binding.decode_request",
+                    "encode_error": "host_binding.encode_error",
+                    "encode_item": "host_binding.encode_item",
+                    "encode_terminal": "host_binding.encode_terminal",
+                    "fold_output_hash": "host_binding.fold_output_hash",
+                },
+            ),
+            (
+                "mission",
+                MissionClient,
+                {
+                    "build_cancel_invocation": "mission.build_cancel_invocation",
+                    "build_run_eal_invocation": "mission.build_run_eal_invocation",
+                    "build_run_file_invocation": "mission.build_run_file_invocation",
+                    "build_track_invocation": "mission.build_track_invocation",
+                    "cancel": "mission.cancel",
+                    "close": "mission.close",
+                    "events": "mission.events",
+                    "run_eal": "mission.run_eal",
+                    "run_file": "mission.run_file",
+                    "track": "mission.track",
+                },
+            ),
+            (
+                "admin_gateway",
+                AdminClient,
+                {
+                    "agent_refresh": "admin_gateway.agent.refresh",
+                    "agent_start": "admin_gateway.agent.start",
+                    "agent_stop": "admin_gateway.agent.stop",
+                    "build_agent_list_invocation": "admin_gateway.agent.build_list_invocation",
+                    "build_agent_refresh_invocation": "admin_gateway.agent.build_refresh_invocation",
+                    "build_agent_start_invocation": "admin_gateway.agent.build_start_invocation",
+                    "build_agent_stop_invocation": "admin_gateway.agent.build_stop_invocation",
+                    "build_session_list_invocation": "admin_gateway.session.build_list_invocation",
+                    "close": "admin_gateway.close",
+                    "create_device_session": "admin_gateway.session.create",
+                    "create_pairing": "admin_gateway.pairing.create",
+                    "delete_device_session": "admin_gateway.session.delete",
+                    "gateway_status": "admin_gateway.gateway.status",
+                    "join_hub": "admin_gateway.hub.join",
+                    "leave_hub": "admin_gateway.hub.leave",
+                    "list_agents": "admin_gateway.agent.list",
+                    "list_device_sessions": "admin_gateway.session.list",
+                    "pairing_preflight": "admin_gateway.pairing.preflight",
+                    "revoke_device": "admin_gateway.device.revoke",
+                    "validate_pairing": "admin_gateway.pairing.validate",
+                    "verify_device_credential": "admin_gateway.device.verify_credential",
+                },
+            ),
+            (
+                "events",
+                EventClient,
+                {
+                    "build_device_subscription_invocation": "events.build_device_subscription_invocation",
+                    "build_directory_subscription_invocation": "events.build_directory_subscription_invocation",
+                    "build_invocation_subscription_invocation": "events.build_invocation_subscription_invocation",
+                    "build_session_subscription_invocation": "events.build_session_subscription_invocation",
+                    "close": "events.close",
+                    "list_device_events": "events.list_device_events",
+                    "project_directory_event": "events.project_directory_event",
+                    "project_drop_report": "events.project_drop_report",
+                    "project_terminal": "events.project_terminal",
+                    "subscribe_devices": "events.subscribe_devices",
+                    "subscribe_directory": "events.subscribe_directory",
+                    "subscribe_invocations": "events.subscribe_invocations",
+                    "subscribe_sessions": "events.subscribe_sessions",
+                },
+            ),
+            (
+                "surface",
+                SurfaceClient,
+                {
+                    "build_create_page_invocation": "surface.build_create_page_invocation",
+                    "build_delete_page_invocation": "surface.build_delete_page_invocation",
+                    "build_health_invocation": "surface.build_health_invocation",
+                    "build_list_pages_invocation": "surface.build_list_pages_invocation",
+                    "build_manifest_invocation": "surface.build_manifest_invocation",
+                    "close": "surface.close",
+                    "create_page": "surface.create_page",
+                    "delete_page": "surface.delete_page",
+                    "list_pages": "surface.list_pages",
+                    "public_page_ref": "surface.public_page_ref",
+                    "surface_health": "surface.health",
+                    "surface_manifest": "surface.manifest",
+                    "surface_status": "surface.status",
+                },
+            ),
+            (
+                "compatibility",
+                CompatibilityClient,
+                {
+                    "build_chat_completion_invocation": "compatibility.chat.build_completion_invocation",
+                    "build_file_delete_invocation": "compatibility.file.build_delete_invocation",
+                    "build_file_get_invocation": "compatibility.file.retrieve",
+                    "build_file_retrieve_invocation": "compatibility.file.retrieve",
+                    "build_file_upload_invocation": "compatibility.file.build_upload_invocation",
+                    "build_list_models_invocation": "compatibility.models.build_list_invocation",
+                    "build_stream_chat_completion_invocation": "compatibility.chat.build_stream_invocation",
+                    "close": "compatibility.close",
+                    "create_chat_completion": "compatibility.chat.create_completion",
+                    "delete_file": "compatibility.file.delete",
+                    "get_file": "compatibility.file.retrieve",
+                    "list_models": "compatibility.models.list",
+                    "project_file": "compatibility.file.project",
+                    "project_file_delete_result": "compatibility.file.project_delete_result",
+                    "project_file_upload": "compatibility.file.project_upload",
+                    "retrieve_file": "compatibility.file.retrieve",
+                    "stream_chat_completion": "compatibility.chat.stream_completion",
+                    "upload_file": "compatibility.file.upload",
+                },
+            ),
+            (
+                "wrappers",
+                WrapperClient,
+                {
+                    "build_browser_session_invocation": "wrappers.browser.build_session_invocation",
+                    "build_file_transfer_invocation": "wrappers.file.build_transfer_invocation",
+                    "build_media_session_invocation": "wrappers.media.build_session_invocation",
+                    "build_remote_desktop_session_invocation": "wrappers.remote_desktop.build_session_invocation",
+                    "build_terminal_session_invocation": "wrappers.terminal.build_session_invocation",
+                    "close": "wrappers.close",
+                    "project_browser_session": "wrappers.browser.project_session",
+                    "project_file_record": "wrappers.file.project_record",
+                    "project_media_session": "wrappers.media.project_session",
+                    "project_remote_desktop_session": "wrappers.remote_desktop.project_session",
+                    "project_terminal_session": "wrappers.terminal.project_session",
+                    "start_browser_session": "wrappers.browser.start_session",
+                    "start_media_session": "wrappers.media.start_session",
+                    "start_remote_desktop_session": "wrappers.remote_desktop.start_session",
+                    "start_terminal_session": "wrappers.terminal.start_session",
+                    "transfer_file": "wrappers.file.transfer",
+                },
+            ),
+        ]
+
+        unmapped, duplicate_owners = audit_shared_profile_ownership(audits)
+        self.assertEqual([], unmapped)
+        self.assertEqual([], duplicate_owners)
+
     def _require_case_id(self, raw: str, case_id: str) -> None:
         self._require_case_literal(raw, f"id: {case_id}")
 
@@ -2584,6 +2851,28 @@ class SharedConformanceFixtureTests(unittest.TestCase):
 
     def _require_case_literal(self, raw: str, expected: str) -> None:
         self.assertIn(expected, raw)
+
+
+def audit_shared_profile_ownership(audits):
+    unmapped = []
+    operation_owners = {}
+    for owner, cls, operations in audits:
+        for name, _ in inspect.getmembers(cls, inspect.isfunction):
+            if name.startswith("_"):
+                continue
+            operation = operations.get(name)
+            if operation is None:
+                unmapped.append(f"{cls.__name__}.{name}")
+                continue
+            operation_owners.setdefault(operation, set()).add(owner)
+
+    duplicate_owners = []
+    for operation, owners in operation_owners.items():
+        if len(owners) > 1:
+            duplicate_owners.append(
+                f"{operation} owned by {', '.join(sorted(owners))}"
+            )
+    return sorted(unmapped), sorted(duplicate_owners)
 
 
 def shared_directory_query_base(fixture: str) -> DirectoryQueryBase:
