@@ -218,11 +218,12 @@ method spelling.
   C ABI-backed deploy-result projection,
   published-ability list/show execution through Runtime Core invoke, complete unpublish
   execution through Runtime Core invoke, deploy/show/unpublish Invocation carrier,
-  deploy/show/unpublish result, plugin install projection,
-  published-ability read-model seams, and close state seams; concrete daemon
-  enable/disable runtime execution, host binding bridge,
-  EasyRemote decorator/package extraction, and plugin/skill lifecycle policy
-  remain incomplete.
+  deploy/show/unpublish result, published-ability read-model seams, and close
+  state seams; plugin install and ability implementation enable/disable live
+  adapters require daemon/ABI lifecycle result contracts rather than projecting
+  `plugin.reload/status` or published-ability read-model rows into mutation
+  DTOs, and host binding bridge, EasyRemote decorator/package extraction, and
+  plugin/skill lifecycle policy remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, item/error/terminal frame encoding, output-hash folding seams over
   schema-backed transport projections, and a `HostStreamFrameWriter` lifecycle

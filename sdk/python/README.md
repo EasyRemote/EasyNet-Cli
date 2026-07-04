@@ -86,8 +86,9 @@ browser, and media helper execution through Runtime Core invoke,
 transport-backed helper close state seams, and record projections. Direct daemon
 UDS transport, directory subscription live adapters, daemon/ABI-backed signing-key
 lifecycle result contracts, local signer implementations,
-Axon-backed receipt verification, receipt URI construction, publication
-enable/disable and plugin lifecycle live adapters, warm host process execution
+Axon-backed receipt verification, receipt URI construction, publication plugin
+install and ability implementation lifecycle adapters that require daemon/ABI
+lifecycle result contracts, warm host process execution
 and cleanup adapters, mission event streams, concrete Admin trust/pairing carriers,
 device-session create/delete lifecycle,
 certificate policy, Events daemon filtering/live adapters, concrete surface health

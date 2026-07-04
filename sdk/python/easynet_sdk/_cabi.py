@@ -1050,7 +1050,7 @@ class CABIPublicationTransport(_CABIProfileTransport):
         return self._call("easynet_publication_project_deploy_result", result_json)
 
     def install_plugin(self, request_json: bytes) -> bytes:
-        return self._missing("publication install plugin")
+        return self._missing_plugin_lifecycle("publication install plugin")
 
     def list_abilities(self, request_json: bytes) -> bytes:
         return self._invoke_projected_with_controls(
@@ -1087,10 +1087,10 @@ class CABIPublicationTransport(_CABIProfileTransport):
         )
 
     def enable_ability_impl(self, request_json: bytes) -> bytes:
-        return self._missing("publication enable ability impl")
+        return self._missing_ability_impl_lifecycle("publication enable ability impl")
 
     def disable_ability_impl(self, request_json: bytes) -> bytes:
-        return self._missing("publication disable ability impl")
+        return self._missing_ability_impl_lifecycle("publication disable ability impl")
 
     def build_unpublish_invocation(self, request_json: bytes) -> bytes:
         return self._call(
@@ -1103,6 +1103,32 @@ class CABIPublicationTransport(_CABIProfileTransport):
             build_symbol="easynet_publication_build_unpublish_invocation",
             project_symbol="easynet_publication_project_unpublish_result",
             projection_keys=("descriptor_version", "ability_ura"),
+        )
+
+    def _missing_plugin_lifecycle(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=(
+                f"{method} requires a daemon/ABI plugin install lifecycle contract; "
+                "plugin.reload/status runtime abilities cannot be projected into "
+                "PluginInstallResult source/install_id/status semantics"
+            ),
+        )
+
+    def _missing_ability_impl_lifecycle(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=(
+                f"{method} requires a daemon/ABI ability implementation lifecycle "
+                "contract; published ability read-model rows cannot be projected "
+                "into enable/disable mutation semantics"
+            ),
         )
 
 

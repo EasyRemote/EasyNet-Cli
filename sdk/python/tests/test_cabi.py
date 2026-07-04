@@ -22,6 +22,7 @@ from easynet_sdk import (
     CompatibilityStreamChatCompletionRequest,
     AbilityQuery,
     AbilityDeployRequest,
+    AbilityImplID,
     AgentQuery,
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -2581,6 +2582,44 @@ class CABITransportTests(unittest.TestCase):
             raw.profile_requests[1][2]["result"]["content_hash"],
             "sha256:abc",
         )
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_reports_missing_plugin_lifecycle_cabi_contracts(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
+
+        with self.assertRaises(SDKError) as caught:
+            client.install_plugin("file:///tmp/plugin")
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertIn(
+            "requires a daemon/ABI plugin install lifecycle contract",
+            caught.exception.message,
+        )
+        self.assertIn("plugin.reload/status runtime abilities", caught.exception.message)
+
+        impl = AbilityImplID(
+            ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
+            impl_id="impl-1",
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.enable_ability_impl(impl)
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertIn(
+            "requires a daemon/ABI ability implementation lifecycle contract",
+            caught.exception.message,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.disable_ability_impl(impl)
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertIn(
+            "read-model rows cannot be projected into enable/disable mutation semantics",
+            caught.exception.message,
+        )
+        self.assertEqual(raw.profile_requests, [])
+        self.assertEqual(raw.runtime_requests, [])
         self.assertEqual(raw.buffers, {})
 
     def test_admin_live_agent_methods_use_carrier_invoke_and_projection(self) -> None:
