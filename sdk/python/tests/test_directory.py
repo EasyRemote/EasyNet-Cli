@@ -9,11 +9,14 @@ from easynet_sdk import (
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
+    DirectorySubscription,
     DirectorySubscriptionCursor,
+    DirectorySubscriptionEvent,
     DirectorySubscriptionRequest,
     ErrorCode,
     ResolveQuery,
     SDKError,
+    StreamHandle,
     is_code,
 )
 
@@ -93,6 +96,23 @@ class MemoryDirectoryTransport:
         self.close_calls += 1
 
 
+class MemoryStreamTransport:
+    def __init__(self, events: list[bytes]) -> None:
+        self.events = list(events)
+        self.closed = False
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        if not self.events:
+            raise RuntimeError("no event")
+        return self.events.pop(0)
+
+    def cancel(self, reason: str) -> bytes:
+        return b'{"stream_id":"stream-1","cancelled":true,"state":"Cancelled","terminal":true}'
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def base_query(limit: int = 0) -> DirectoryQueryBase:
     return DirectoryQueryBase(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -105,6 +125,65 @@ def base_query(limit: int = 0) -> DirectoryQueryBase:
         limit=limit,
         metadata={"request_id": "directory-test"},
     )
+
+
+def subscription_event(
+    sequence: int,
+    event_id: str,
+    phase: str,
+    *,
+    terminal: bool = False,
+) -> DirectorySubscriptionEvent:
+    return DirectorySubscriptionEvent.from_mapping(
+        {
+            "profile": "directory_identity",
+            "stream": "directory",
+            "kind": phase,
+            "event_id": event_id,
+            "phase": phase,
+            "cursor": {
+                "stream": "directory",
+                "sequence": sequence,
+                "token": f"directory:{sequence}",
+            },
+            "resume_token": f"directory:{sequence}",
+            "terminal": terminal,
+            "metadata": {"source": "directory.subscribe"},
+        }
+    )
+
+
+def subscription_event_payload(event: DirectorySubscriptionEvent) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "profile": event.profile,
+        "stream": event.stream,
+        "kind": event.kind,
+        "event_id": event.event_id,
+        "phase": event.phase,
+        "cursor": event.cursor.to_json_dict(),
+        "resume_token": event.resume_token,
+        "terminal": event.terminal,
+        "metadata": dict(event.metadata),
+    }
+    if event.item_kind:
+        payload["item_kind"] = event.item_kind
+    if event.item is not None:
+        payload["item"] = dict(event.item)
+    return payload
+
+
+def stream_frame(sequence: int, payload: dict[str, object], *, terminal: bool = False) -> bytes:
+    return json.dumps(
+        {
+            "sequence": sequence,
+            "event": payload.get("kind", "directory"),
+            "state": "Open",
+            "terminal": terminal,
+            "payload_content_type": "application/json",
+            "payload_json": payload,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 class DirectoryTests(unittest.TestCase):
@@ -144,6 +223,123 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(len(subscription.events), 3)
         self.assertEqual(subscription.events[2].phase, "live")
         self.assertEqual(subscription.events[2].item_kind, "ability")
+
+    def test_subscription_state_machine_applies_buffered_events_drop_and_resume(self) -> None:
+        stream = StreamHandle.from_json(
+            MemoryStreamTransport([]),
+            b'{"stream_id":"directory-stream","state":"Opening","max_buffered_events":4}',
+        )
+        subscription = DirectorySubscription.from_runtime_stream(
+            stream,
+            cursor=DirectorySubscriptionCursor("directory", 0),
+        )
+
+        subscription.apply_event(subscription_event(1, "evt-1", "snapshot_start"))
+        subscription.apply_event(subscription_event(2, "evt-2", "snapshot_complete"))
+        subscription.apply_event(subscription_event(3, "evt-3", "live"))
+        subscription.apply_drop_report(
+            DirectorySubscriptionCursor("directory", 7),
+            4,
+            metadata={"reason": "consumer_lagged"},
+        )
+        subscription.mark_resume_ok(DirectorySubscriptionCursor("directory", 7))
+        subscription.apply_event(subscription_event(8, "evt-8", "live"))
+
+        self.assertEqual(subscription.state, "Live")
+        self.assertEqual(subscription.cursor.resume_token(), "directory:8")
+        self.assertEqual(subscription.drop_count, 4)
+        self.assertEqual(
+            [event.event_id for event in subscription.events],
+            ["evt-1", "evt-2", "evt-3", "evt-8"],
+        )
+        self.assertTrue(subscription.metadata["drop_reported"])
+
+    def test_subscription_next_event_projects_runtime_stream_payloads(self) -> None:
+        drop_report = {
+            "profile": "events",
+            "stream": "directory",
+            "kind": "directory.drop_report",
+            "event_id": "evt-drop",
+            "cursor": {"stream": "directory", "sequence": 4, "token": "directory:4"},
+            "resume_token": "resnapshot",
+            "dropped_count": 2,
+            "terminal": False,
+            "metadata": {"reason": "consumer_lagged"},
+        }
+        terminal = {
+            "profile": "events",
+            "stream": "directory",
+            "kind": "directory.terminal",
+            "event_id": "evt-terminal",
+            "cursor": {"stream": "directory", "sequence": 5, "token": "directory:5"},
+            "resume_token": "terminal",
+            "dropped_count": 0,
+            "terminal": True,
+            "metadata": {"reason": "client_closed"},
+        }
+        stream = StreamHandle.from_json(
+            MemoryStreamTransport(
+                [
+                    stream_frame(
+                        1,
+                        subscription_event_payload(
+                            subscription_event(1, "evt-1", "snapshot_start")
+                        ),
+                    ),
+                    stream_frame(
+                        2,
+                        subscription_event_payload(
+                            subscription_event(2, "evt-2", "snapshot_complete")
+                        ),
+                    ),
+                    stream_frame(
+                        3,
+                        subscription_event_payload(
+                            subscription_event(3, "evt-3", "live")
+                        ),
+                    ),
+                    stream_frame(4, drop_report),
+                    stream_frame(5, terminal, terminal=True),
+                ]
+            ),
+            b'{"stream_id":"directory-stream","state":"Opening","max_buffered_events":8}',
+        )
+        subscription = DirectorySubscription.from_runtime_stream(
+            stream,
+            cursor=DirectorySubscriptionCursor("directory", 0),
+        )
+
+        first = subscription.next_event()
+        second = subscription.next_event()
+        third = subscription.next_event()
+        drop = subscription.next_event()
+        closed = subscription.next_event()
+
+        self.assertEqual(first.event_id, "evt-1")
+        self.assertEqual(second.phase, "snapshot_complete")
+        self.assertEqual(third.phase, "live")
+        self.assertIsNone(drop)
+        self.assertIsNone(closed)
+        self.assertEqual(subscription.state, "Closed")
+        self.assertEqual(subscription.cursor.resume_token(), "directory:5")
+        self.assertEqual(subscription.drop_count, 2)
+
+    def test_subscription_state_machine_rejects_duplicate_and_cursor_regression(self) -> None:
+        stream = StreamHandle.from_json(
+            MemoryStreamTransport([]),
+            b'{"stream_id":"directory-stream","state":"Opening","max_buffered_events":4}',
+        )
+        subscription = DirectorySubscription.from_runtime_stream(
+            stream,
+            cursor=DirectorySubscriptionCursor("directory", 0),
+        )
+        subscription.apply_event(subscription_event(1, "evt-1", "snapshot_start"))
+
+        with self.assertRaises(SDKError) as caught:
+            subscription.apply_event(subscription_event(1, "evt-1", "snapshot_start"))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(subscription.state, "Failed")
 
     def test_directory_carrier_builders_delegate_to_transport(self) -> None:
         transport = MemoryDirectoryTransport()

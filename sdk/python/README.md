@@ -36,7 +36,8 @@ RuntimeClient/C ABI v4, DirectoryClient resolve/list read-model pages,
 C ABI-backed resolve/list read-model execution through Runtime Core invoke,
 list/resolve Invocation carrier builders, directory
 projection helpers, C ABI-backed directory subscription execution through
-Runtime Core open_stream, directory subscription state seams, and close state seams plus
+Runtime Core open_stream, directory subscription state seams, buffered-event/drop
+projection helpers, and close state seams plus
 AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ura`,
 `owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
 `owner_ability_descriptor_ref`, and

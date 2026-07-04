@@ -26,6 +26,8 @@ _DIRECTORY_SUBSCRIPTION_STATES = {
     "Closed",
     "Failed",
 }
+_DIRECTORY_SUBSCRIPTION_TERMINAL_STATES = {"Closed", "Failed"}
+_DIRECTORY_EVENT_PHASES = {"snapshot_start", "snapshot_complete", "live", "terminal"}
 
 
 @dataclass(frozen=True)
@@ -285,11 +287,192 @@ class DirectorySubscription:
         _validate_subscription(subscription)
         return subscription
 
+    def apply_event(self, event: DirectorySubscriptionEvent) -> DirectorySubscriptionEvent:
+        """Project one daemon-emitted directory event into this subscription."""
+
+        try:
+            _validate_subscription_event(event)
+            state = _DirectorySubscriptionStateMachine.apply_event(self, event)
+            events = self.events + (event,)
+            overflow = max(0, len(events) - MAX_DIRECTORY_SUBSCRIPTION_BUFFERED_EVENTS)
+            if overflow:
+                events = events[overflow:]
+            metadata = dict(self.metadata)
+            if event.phase == "snapshot_complete":
+                metadata["snapshot_complete"] = True
+            if overflow:
+                metadata["buffer_overflow"] = True
+            self._replace_projection(
+                state=state,
+                cursor=event.cursor,
+                resume_token=event.cursor.resume_token(),
+                events=events,
+                drop_count=self.drop_count + overflow,
+                metadata=metadata,
+            )
+        except SDKError:
+            object.__setattr__(self, "state", "Failed")
+            raise
+        return event
+
+    def apply_drop_report(
+        self,
+        cursor: DirectorySubscriptionCursor,
+        dropped_count: int,
+        *,
+        metadata: Mapping[str, object] | None = None,
+    ) -> None:
+        """Project a daemon drop report without pretending the SDK owns fan-out."""
+
+        _validate_subscription_cursor(cursor)
+        if (
+            not isinstance(dropped_count, int)
+            or isinstance(dropped_count, bool)
+            or dropped_count <= 0
+        ):
+            raise _invalid_directory(
+                "directory subscription dropped_count must be greater than zero"
+            )
+        state = _DirectorySubscriptionStateMachine.apply_drop_report(self, cursor)
+        next_metadata = dict(self.metadata)
+        next_metadata["drop_reported"] = True
+        next_metadata["snapshot_complete"] = True
+        next_metadata.update(dict(metadata or {}))
+        self._replace_projection(
+            state=state,
+            cursor=cursor,
+            resume_token=cursor.resume_token(),
+            drop_count=self.drop_count + dropped_count,
+            metadata=next_metadata,
+        )
+
+    def mark_transport_lost(self) -> None:
+        self._replace_projection(
+            state=_DirectorySubscriptionStateMachine.transport_lost(self)
+        )
+
+    def mark_resume_ok(
+        self, cursor: Optional[DirectorySubscriptionCursor] = None
+    ) -> None:
+        next_cursor = cursor or self.cursor
+        _validate_subscription_cursor(next_cursor)
+        self._replace_projection(
+            state=_DirectorySubscriptionStateMachine.resume_ok(self, next_cursor),
+            cursor=next_cursor,
+            resume_token=next_cursor.resume_token(),
+        )
+
+    def mark_resume_failed(self) -> None:
+        self._replace_projection(
+            state=_DirectorySubscriptionStateMachine.resume_failed(self)
+        )
+
+    def next_event(
+        self, timeout: float | None = None
+    ) -> Optional[DirectorySubscriptionEvent]:
+        if self._runtime_stream is None:
+            raise _invalid_directory("directory subscription has no runtime stream")
+        runtime_event = self._runtime_stream.next(timeout)
+        if runtime_event.payload_json is None and runtime_event.terminal:
+            self._replace_projection(state="Closed")
+            return None
+        payload = _mapping_object(runtime_event.payload_json, "directory stream payload")
+        if payload.get("profile") == "events" and payload.get("kind") == "directory.drop_report":
+            cursor = _subscription_cursor_from_json(payload.get("cursor"))
+            dropped_count = _required_positive_int(payload, "dropped_count")
+            self.apply_drop_report(
+                cursor,
+                dropped_count,
+                metadata=_optional_mapping(payload.get("metadata"), "metadata") or {},
+            )
+            return None
+        if payload.get("profile") == "events" and payload.get("kind") == "directory.terminal":
+            cursor = _subscription_cursor_from_json(payload.get("cursor"))
+            self._replace_projection(
+                state="Closed",
+                cursor=cursor,
+                resume_token=cursor.resume_token(),
+            )
+            return None
+        event = DirectorySubscriptionEvent.from_mapping(payload)
+        return self.apply_event(event)
+
     def close(self) -> None:
         if self._runtime_stream is None:
             return
         self._runtime_stream.close()
         object.__setattr__(self, "state", "Closed")
+
+    def _replace_projection(self, **changes: object) -> None:
+        projection = replace(self, **changes)
+        _validate_subscription(projection)
+        for key, value in changes.items():
+            object.__setattr__(self, key, value)
+
+
+class _DirectorySubscriptionStateMachine:
+    @staticmethod
+    def apply_event(
+        subscription: DirectorySubscription, event: DirectorySubscriptionEvent
+    ) -> str:
+        _require_non_terminal_subscription(subscription)
+        if event.cursor.sequence <= subscription.cursor.sequence:
+            raise _invalid_directory("directory subscription event sequence must advance cursor")
+        if event.event_id in {buffered.event_id for buffered in subscription.events}:
+            raise _invalid_directory("duplicate directory subscription event id")
+        if event.terminal:
+            return "Closed"
+        if event.phase == "snapshot_start":
+            if subscription.state not in {"Opening", "CatchingUp"}:
+                raise _invalid_directory(
+                    "snapshot_start requires Opening or CatchingUp subscription"
+                )
+            return "CatchingUp"
+        if event.phase == "snapshot_complete":
+            if subscription.state != "CatchingUp":
+                raise _invalid_directory("snapshot_complete requires CatchingUp subscription")
+            return "Live"
+        if event.phase == "live":
+            if subscription.state != "Live":
+                raise _invalid_directory("live directory event requires Live subscription")
+            return "Live"
+        raise _invalid_directory("unknown directory subscription event phase")
+
+    @staticmethod
+    def apply_drop_report(
+        subscription: DirectorySubscription, cursor: DirectorySubscriptionCursor
+    ) -> str:
+        _require_non_terminal_subscription(subscription)
+        if subscription.state != "Live":
+            raise _invalid_directory("directory drop report requires Live subscription")
+        if cursor.sequence <= subscription.cursor.sequence:
+            raise _invalid_directory("directory drop report cursor must advance")
+        return "Resuming"
+
+    @staticmethod
+    def transport_lost(subscription: DirectorySubscription) -> str:
+        _require_non_terminal_subscription(subscription)
+        if subscription.state != "Live":
+            raise _invalid_directory("transport_lost requires Live subscription")
+        return "Resuming"
+
+    @staticmethod
+    def resume_ok(
+        subscription: DirectorySubscription, cursor: DirectorySubscriptionCursor
+    ) -> str:
+        _require_non_terminal_subscription(subscription)
+        if subscription.state != "Resuming":
+            raise _invalid_directory("resume_ok requires Resuming subscription")
+        if cursor.sequence < subscription.cursor.sequence:
+            raise _invalid_directory("resume cursor must not move backwards")
+        return "Live"
+
+    @staticmethod
+    def resume_failed(subscription: DirectorySubscription) -> str:
+        _require_non_terminal_subscription(subscription)
+        if subscription.state != "Resuming":
+            raise _invalid_directory("resume_failed requires Resuming subscription")
+        return "Failed"
 
 
 @runtime_checkable
@@ -674,7 +857,7 @@ def _validate_subscription(subscription: DirectorySubscription) -> None:
     if subscription.drop_count < 0:
         raise _invalid_directory("directory subscription drop_count must be non-negative")
     seen: set[str] = set()
-    snapshot_complete = False
+    snapshot_complete = _allows_truncated_subscription_buffer(subscription)
     last_sequence = -1
     for event in subscription.events:
         if event.event_id in seen:
@@ -687,6 +870,10 @@ def _validate_subscription(subscription: DirectorySubscription) -> None:
             raise _invalid_directory("directory live event before snapshot_complete")
         if event.phase == "snapshot_complete":
             snapshot_complete = True
+        if event.phase not in _DIRECTORY_EVENT_PHASES:
+            raise _invalid_directory("unknown directory subscription event phase")
+    if last_sequence >= 0 and subscription.cursor.sequence < last_sequence:
+        raise _invalid_directory("directory subscription cursor must cover buffered events")
 
 
 def _validate_subscription_event(event: DirectorySubscriptionEvent) -> None:
@@ -695,6 +882,10 @@ def _validate_subscription_event(event: DirectorySubscriptionEvent) -> None:
     _validate_subscription_cursor(event.cursor)
     if event.resume_token != event.cursor.resume_token():
         raise _invalid_directory("directory subscription event resume token mismatch")
+    if event.phase not in _DIRECTORY_EVENT_PHASES:
+        raise _invalid_directory("unknown directory subscription event phase")
+    if event.terminal and event.phase != "terminal":
+        raise _invalid_directory("terminal directory event must use terminal phase")
 
 
 def _validate_subscription_cursor(cursor: DirectorySubscriptionCursor) -> None:
@@ -719,6 +910,19 @@ def _subscription_cursor_from_json(value: object) -> DirectorySubscriptionCursor
     )
     _validate_subscription_cursor(cursor)
     return cursor
+
+
+def _require_non_terminal_subscription(subscription: DirectorySubscription) -> None:
+    if subscription.state in _DIRECTORY_SUBSCRIPTION_TERMINAL_STATES:
+        raise _invalid_directory("directory subscription is terminal")
+
+
+def _allows_truncated_subscription_buffer(subscription: DirectorySubscription) -> bool:
+    return (
+        subscription.drop_count > 0
+        or subscription.metadata.get("snapshot_complete") is True
+        or subscription.metadata.get("source") == "runtime_stream"
+    )
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
@@ -778,17 +982,17 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     return value
 
 
-def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:
-    value = decoded.get(field_name)
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise _invalid_directory(f"{field_name} is required")
-    return value
-
-
 def _required_non_negative_int(decoded: Mapping[str, object], field_name: str) -> int:
     value = decoded.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise _invalid_directory(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _invalid_directory(f"{field_name} must be a positive integer")
     return value
 
 
