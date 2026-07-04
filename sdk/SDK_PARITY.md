@@ -223,7 +223,8 @@ method spelling.
   while actual EasyRemote repository extraction remains incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
-  receipt-derived child `causal_context` adapters, typed `ReceiptRef` and
+  receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
+  child-context helpers for EasyRemote-style nested calls, typed `ReceiptRef` and
   `ReceiptChain` wrappers that delegate causal-context and continuity projection
   through the client, C ABI-backed fetch execution through Runtime Core invoke,
   and close state seams over opaque receipt refs;

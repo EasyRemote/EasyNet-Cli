@@ -53,7 +53,8 @@ C ABI-backed signer-handle projection from daemon key inventory plus
 `Ed25519SignatureProvider` for local signatures over daemon/Axon-provided
 canonical signing material.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
-receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
+receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
+child-context helpers for EasyRemote-style nested calls, C ABI-backed fetch execution
 through Runtime Core invoke, and close state seams
 over opaque receipt refs plus typed ReceiptRef/ReceiptChain facades that
 delegate causal-context and continuity projection back through ReceiptClient,

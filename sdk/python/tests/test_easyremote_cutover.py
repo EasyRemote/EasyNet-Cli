@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from easynet_sdk import (
@@ -5,11 +6,14 @@ from easynet_sdk import (
     AbilityInvocationClient,
     AbilityTargetRequest,
     AddressingClient,
+    InvocationResult,
+    ReceiptClient,
     RuntimeClient,
     ability_address,
 )
 
 from test_identity import MemoryIdentityTransport
+from test_receipt import MemoryReceiptTransport
 from test_runtime import MemoryRuntimeTransport
 
 
@@ -151,6 +155,103 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             runtime_transport.seen_draft["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
         )
+
+    def test_easyremote_style_child_context_keeps_receipt_causal_anchor(self) -> None:
+        identity_transport = MemoryIdentityTransport()
+        identity_transport.identity_json = (
+            b'{"kind":"ability","valid":true,'
+            b'"ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"owner_kind":"device","public_name":"er.weather",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:er.weather",'
+            b'"namespace":"er","local_name":"weather"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        identity_transport.descriptor_json = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        runtime_transport = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime_transport),
+            addressing=AddressingClient(identity_transport),
+        )
+
+        child = client.child_context(
+            _parent_result_with_receipt(),
+            ReceiptClient(MemoryReceiptTransport()),
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        )
+        result = child.invoke_target(
+            ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
+            args={"city": "Singapore"},
+        )
+
+        self.assertTrue(result.ok)
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+        self.assertEqual(
+            runtime_transport.seen_draft["callee_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            runtime_transport.seen_draft["causal_context"],
+            {
+                "form": "scalar",
+                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_hash_hex": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+            },
+        )
+        self.assertEqual(runtime_transport.seen_draft["args"], {"city": "Singapore"})
+
+
+def _parent_result_with_receipt() -> InvocationResult:
+    return InvocationResult.from_json(
+        json.dumps(
+            {
+                "ok": True,
+                "tuple": {
+                    "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+                    ),
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    "causal_context": {"form": "none"},
+                    "content_type": "application/json",
+                    "args": {},
+                },
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_base64": "e30=",
+                "output_json": {},
+                "receipt": {
+                    "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                    "invocation_id": "inv-parent-1",
+                    "self_hash_hex": (
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    ),
+                },
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

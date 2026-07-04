@@ -6,6 +6,7 @@ import unittest
 from easynet_sdk import (
     AbilityQuery,
     AbilityDeployRequest,
+    AbilityInvocationClient,
     AbilityPackageManifest,
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -3033,6 +3034,32 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             ),
             (
                 "runtime_core",
+                AbilityInvocationClient,
+                {
+                    "await_result": "runtime_core.ability_invocation.await",
+                    "bidi": "runtime_core.ability_invocation.bidi",
+                    "bidi_target": "runtime_core.ability_invocation.bidi_target",
+                    "build_invocation": "runtime_core.ability_invocation.build",
+                    "build_target_invocation": "runtime_core.ability_invocation.build_target",
+                    "cancel": "runtime_core.ability_invocation.cancel",
+                    "child_context": "runtime_core.ability_invocation.child_context",
+                    "close": "runtime_core.ability_invocation.close",
+                    "close_handle": "runtime_core.ability_invocation.close_handle",
+                    "events": "runtime_core.ability_invocation.events",
+                    "invoke": "runtime_core.ability_invocation.invoke",
+                    "invoke_target": "runtime_core.ability_invocation.invoke_target",
+                    "prepare": "runtime_core.ability_invocation.prepare",
+                    "prepare_and_sign": "runtime_core.ability_invocation.prepare_and_sign",
+                    "prepare_and_sign_target": "runtime_core.ability_invocation.prepare_and_sign_target",
+                    "prepare_target": "runtime_core.ability_invocation.prepare_target",
+                    "resolve_target": "runtime_core.ability_invocation.resolve_target",
+                    "stream": "runtime_core.ability_invocation.stream",
+                    "stream_target": "runtime_core.ability_invocation.stream_target",
+                    "submit_signed": "runtime_core.ability_invocation.submit_signed",
+                },
+            ),
+            (
+                "runtime_core",
                 HealthClient,
                 {
                     "close": "runtime_core.health.close",
@@ -3361,6 +3388,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 (
                     (DaemonControl, ("start", "attach", "connect_local")),
                     (RuntimeClient, ("new_invocation", "prepare", "prepare_and_sign", "submit_signed", "invoke", "invoke_stream", "open_bidi")),
+                    (AbilityInvocationClient, ("invoke", "invoke_target", "child_context")),
                     (InvocationBuilder, ("prepare", "invoke")),
                     (InvocationDraft, ("prepare", "invoke", "open_stream", "open_bidi")),
                     (PreparedInvocation, ("sign",)),
