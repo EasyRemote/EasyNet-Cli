@@ -9,7 +9,10 @@ from .ability_invocation import AbilityInvocationClient
 from .client import Client, FeatureSet
 from .admin import AdminClient
 from .compatibility import CompatibilityClient
-from .connection import ConnectOptions, RuntimeConnection
+from .connection import (
+    ConnectOptions,
+    RuntimeConnection,
+)
 from .control_ipc import ControlIpcClient
 from .daemon import DaemonControl
 from .directory import DirectoryClient

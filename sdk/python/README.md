@@ -14,8 +14,9 @@ feature/version discovery with root client close, public `SdkEnvironment`
 process-root factories, direct control-plane UDS boot/status IPC over
 `control.json`/`control.sock`, private C ABI v4 discovery, daemon
 lifecycle/open-runtime, identity projection, and runtime
-health/unary/stream/bidi/prepare-submit handle transports plus C ABI-backed
-RuntimeConnection connector, profile
+health/unary/stream/bidi/prepare-submit handle transports plus
+control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed
+handshake, profile
 carrier/projection transports for Receipt, Directory, Publication, Host
 Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
 Wrapper carrier/projection records, runtime connection

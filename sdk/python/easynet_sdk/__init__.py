@@ -79,6 +79,7 @@ from .bidi import (
 from .connection import (
     ConnectOptions,
     ConnectionState,
+    ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
     RuntimeConnector,
     RuntimeEndpoint,
@@ -363,6 +364,7 @@ __all__ = [
     "CONTROL_IPC_VERSION",
     "MAX_CONTROL_FRAME_BYTES",
     "ControlDiscovery",
+    "ControlDiscoveryRuntimeConnector",
     "ControlFrame",
     "ControlIpcClient",
     "AttachOptions",

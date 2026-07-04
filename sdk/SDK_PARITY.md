@@ -177,7 +177,7 @@ method spelling.
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
-  `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC and private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport plus C ABI-backed RuntimeConnection connector, runtime
+  `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC and private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed handshake, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft

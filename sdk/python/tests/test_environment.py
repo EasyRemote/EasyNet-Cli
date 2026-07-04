@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from easynet_sdk import (
@@ -110,18 +113,21 @@ class SdkEnvironmentTests(unittest.TestCase):
 
     def test_runtime_connection_uses_cabi_connector_and_closes_runtime(self) -> None:
         raw = FakeRawCABI()
-        with _load_patch(raw):
-            env = SdkEnvironment(control_path="/tmp/control.json")
-            connection = env.runtime_connection()
-            self.assertIsInstance(connection, RuntimeConnection)
-            self.assertEqual(connection.state, ConnectionState.READY)
-            assert connection.endpoint is not None
-            self.assertEqual(connection.endpoint.endpoint, "unix:///tmp/daemon.sock")
-            client = connection.runtime_client()
-            self.assertIsInstance(client, RuntimeClient)
-            env.close()
+        with tempfile.TemporaryDirectory() as tmp:
+            control_path = _write_control_discovery(tmp)
+            with _load_patch(raw):
+                env = SdkEnvironment(control_path=str(control_path))
+                connection = env.runtime_connection()
+                self.assertIsInstance(connection, RuntimeConnection)
+                self.assertEqual(connection.state, ConnectionState.READY)
+                assert connection.endpoint is not None
+                self.assertEqual(connection.endpoint.endpoint, f"{tmp}/daemon.sock")
+                self.assertEqual(connection.endpoint.control_endpoint, f"{tmp}/control.sock")
+                client = connection.runtime_client()
+                self.assertIsInstance(client, RuntimeClient)
+                env.close()
 
-        self.assertEqual(raw.daemon_discovers, [{"control_path": "/tmp/control.json"}])
+        self.assertEqual(raw.daemon_discovers, [])
         self.assertEqual(raw.daemon_open_clients, [707])
         self.assertEqual(raw.daemon_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
@@ -852,6 +858,24 @@ def _wrapper_base() -> WrapperCarrierBase:
         nonce_base64=_NONCE,
         causal_context=_CAUSAL,
     )
+
+
+def _write_control_discovery(tmp: str) -> Path:
+    path = Path(tmp) / "control.json"
+    path.write_text(
+        json.dumps(
+            {
+                "socket_path": f"{tmp}/control.sock",
+                "invocation_endpoint": f"{tmp}/daemon.sock",
+                "pid": 123,
+                "daemon_version": "1.2.3",
+                "supported_ipc_versions": {"min": 1, "max": 1},
+                "capability_flags": ["runtime"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 if __name__ == "__main__":

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Callable, Mapping, Protocol, runtime_checkable
 
+from .control_ipc import ControlDiscovery, read_control_discovery
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
 
@@ -63,8 +64,11 @@ class RuntimeEndpoint:
 
     endpoint: str
     control_path: str = ""
+    control_endpoint: str = ""
     protocol_version: str = ""
     abi_version: int = 0
+    daemon_version: str = ""
+    capability_flags: tuple[str, ...] = ()
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "RuntimeEndpoint":
@@ -80,12 +84,23 @@ class RuntimeEndpoint:
             endpoint=endpoint,
             control_path=_optional_string(decoded.get("control_path"), "control_path")
             or "",
+            control_endpoint=_optional_string(
+                decoded.get("control_endpoint"), "control_endpoint"
+            )
+            or "",
             protocol_version=_optional_string(
                 decoded.get("protocol_version"), "protocol_version"
             )
             or "",
             abi_version=_optional_non_negative_int(
                 decoded.get("abi_version"), "abi_version"
+            ),
+            daemon_version=_optional_string(
+                decoded.get("daemon_version"), "daemon_version"
+            )
+            or "",
+            capability_flags=_string_tuple(
+                decoded.get("capability_flags", []), "capability_flags"
             ),
         )
 
@@ -102,6 +117,74 @@ class RuntimeConnector(Protocol):
 
     def close(self) -> None:
         ...
+
+
+@dataclass
+class ControlDiscoveryRuntimeConnector:
+    """Resolve Runtime Core endpoints from daemon control discovery.
+
+    The connector owns only discovery-to-endpoint projection. Handshake,
+    transport lifetime, and Invocation protocol behavior stay delegated to the
+    inner connector, usually the private C ABI v4 connector.
+    """
+
+    inner: RuntimeConnector
+    control_path: str = ""
+    discovery_reader: Callable[[str], ControlDiscovery] = read_control_discovery
+    _closed: bool = False
+
+    def __post_init__(self) -> None:
+        if self.inner is None:
+            raise _invalid_connection("inner runtime connector is required")
+
+    def resolve(self, options_json: bytes) -> bytes:
+        self._require_open()
+        options = _connect_options(options_json)
+        option_endpoint = _optional_string(options.get("endpoint"), "endpoint") or ""
+        option_control_path = (
+            _optional_string(options.get("control_path"), "control_path") or ""
+        )
+        control_path = option_control_path or self.control_path
+        if option_endpoint:
+            return _json_bytes(
+                {
+                    "endpoint": option_endpoint,
+                    "control_path": control_path,
+                }
+            )
+        discovery = self.discovery_reader(control_path)
+        if not discovery.invocation_endpoint:
+            raise SDKError(
+                code=ErrorCode.CONTROL_ONLY,
+                stage="connection",
+                retry=RetryHint.SAFE,
+                retryable=True,
+                message="control discovery did not advertise invocation_endpoint",
+                details={"control_path": control_path},
+            )
+        return _json_bytes(
+            {
+                "endpoint": discovery.invocation_endpoint,
+                "control_path": control_path,
+                "control_endpoint": discovery.socket_path,
+                "daemon_version": discovery.daemon_version,
+                "capability_flags": list(discovery.capability_flags),
+            }
+        )
+
+    def handshake(self, endpoint_json: bytes) -> tuple[RuntimeTransport, bytes]:
+        self._require_open()
+        return self.inner.handshake(endpoint_json)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.inner.close()
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_connection("runtime connector is closed")
 
 
 @dataclass
@@ -189,6 +272,26 @@ def _handshake_facts(raw: bytes) -> Mapping[str, object]:
     return dict(decoded)
 
 
+def _connect_options(raw: bytes) -> Mapping[str, object]:
+    if raw == b"":
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except Exception as exc:
+        raise _invalid_connection(
+            f"decode runtime connect options JSON: {exc}", exc
+        ) from exc
+    if decoded is None:
+        return {}
+    if not isinstance(decoded, dict):
+        raise _invalid_connection("runtime connect options JSON must be an object")
+    return decoded
+
+
+def _json_bytes(value: Mapping[str, object]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
 def _required_string(decoded: Mapping[str, object], field_name: str) -> str:
     value = decoded.get(field_name)
     if not isinstance(value, str) or value.strip() == "":
@@ -210,6 +313,16 @@ def _optional_non_negative_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise _invalid_connection(f"{field_name} must be a non-negative integer")
     return value
+
+
+def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise _invalid_connection(f"{field_name} must be an array of strings")
+    return tuple(value)
 
 
 def _invalid_connection(
@@ -234,4 +347,3 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         message=message,
         cause=cause,
     )
-
