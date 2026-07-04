@@ -274,6 +274,7 @@ from .surface import (
     SurfaceStatusRequest,
     SurfaceTransport,
 )
+from .transport import DaemonBidiChannel, DaemonFrameStream, DaemonInvocationTransport
 from .wrappers import (
     BrowserSessionRecord,
     FileRecord,
@@ -347,6 +348,9 @@ __all__ = [
     "DeleteDeviceSessionRequest",
     "DaemonControl",
     "DaemonHandle",
+    "DaemonBidiChannel",
+    "DaemonFrameStream",
+    "DaemonInvocationTransport",
     "DaemonLifecycleState",
     "DaemonMode",
     "DaemonStatus",

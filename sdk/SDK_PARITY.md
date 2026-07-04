@@ -174,10 +174,12 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
-  transport protocols; `SdkEnvironment.addressing_client()` for the
+  transport protocols; public `DaemonInvocationTransport` dict/JSON unary,
+  stream, and bidi facade over RuntimeClient/C ABI v4;
+  `SdkEnvironment.addressing_client()` for the
   Axon-delegated URA/DescriptorRef helper subset; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
-  Surface, Compatibility, and Wrapper carriers/records; concrete default UDS transport,
+  Surface, Compatibility, and Wrapper carriers/records; direct UDS transport,
   live profile execution adapters, EasyRemote extraction tests, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.

@@ -12,6 +12,7 @@ from easynet_sdk import (
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     ConnectOptions,
+    DaemonInvocationTransport,
     DeviceQuery,
     DirectoryQueryBase,
     ErrorCode,
@@ -168,6 +169,33 @@ class SdkEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(raw.runtime_requests, [("health", 42)])
         self.assertEqual(raw.shutdown_handles, [42, 42])
+
+    def test_invocation_transport_is_environment_owned(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            transport = env.invocation_transport()
+            self.assertIsInstance(transport, DaemonInvocationTransport)
+            result = transport.invoke(
+                {
+                    "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/"
+                        "device.dev-a.observe.health@1.0.0"
+                    ),
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    "causal_context": {"form": "none"},
+                    "content_type": "application/json",
+                    "args": {},
+                }
+            )
+            env.close()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["terminal_state"], "Completed")
+        self.assertEqual(raw.shutdown_handles, [42])
 
     def test_profile_factories_delegate_carriers_to_private_cabi(self) -> None:
         raw = FakeRawCABI()

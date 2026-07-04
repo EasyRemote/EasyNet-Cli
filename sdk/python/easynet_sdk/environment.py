@@ -21,6 +21,7 @@ from .publication import PublicationClient
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
 from .surface import SurfaceClient
+from .transport import DaemonInvocationTransport
 from .wrappers import WrapperClient
 
 
@@ -92,6 +93,18 @@ class SdkEnvironment:
             library_path=self.library_path,
         )
         return self._track(RuntimeClient(transport))
+
+    def invocation_transport(self) -> DaemonInvocationTransport:
+        """Open the public JSON-friendly daemon Invocation transport facade."""
+
+        self._require_open()
+        from . import _cabi
+
+        transport = _cabi.open_cabi_runtime_transport(
+            control_path=self.control_path,
+            library_path=self.library_path,
+        )
+        return self._track(DaemonInvocationTransport(RuntimeClient(transport)))
 
     def health_client(self) -> HealthClient:
         """Open a health facade for the configured control path."""
