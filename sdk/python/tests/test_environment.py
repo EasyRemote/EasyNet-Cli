@@ -701,9 +701,14 @@ class SdkEnvironmentTests(unittest.TestCase):
             env.close()
 
         self.assertEqual(result.state, "enabled")
+        self.assertEqual(result.kind, "ability_deploy_result")
+        self.assertIn(
+            "easynet_publication_build_deploy_invocation",
+            [item[0] for item in raw.profile_requests],
+        )
         self.assertEqual(
             raw.profile_requests[-1][0],
-            "easynet_publication_build_deploy_invocation",
+            "easynet_publication_project_deploy_result",
         )
         self.assertEqual(raw.runtime_requests[-1][0], "invoke")
         self.assertEqual(

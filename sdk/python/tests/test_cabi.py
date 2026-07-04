@@ -760,6 +760,8 @@ class FakeRawCABI:
             return RECEIPT_FETCH_INVOCATION
         if symbol == "easynet_publication_build_deploy_invocation":
             return PUBLICATION_DEPLOY_INVOCATION
+        if symbol == "easynet_publication_project_deploy_result":
+            return PUBLICATION_DEPLOY_RESULT_PROJECTION
         if symbol == "easynet_publication_build_list_abilities_invocation":
             return PUBLICATION_LIST_INVOCATION
         if symbol == "easynet_publication_project_ability_page":
@@ -953,6 +955,14 @@ PUBLICATION_DEPLOY_INVOCATION = (
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"publication","system_ability":"ability.deploy",'
     b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_DEPLOY_RESULT_PROJECTION = (
+    b'{"profile":"publication","kind":"ability_deploy_result",'
+    b'"public_name":"weather","namespace":"er",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+    b'"node_id":"local","install_id":"install-1","state":"enabled",'
+    b'"mutated_by":"","bundle":"","metadata":{}}'
 )
 
 PUBLICATION_LIST_INVOCATION = (
@@ -2106,13 +2116,17 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(result.state, "enabled")
         self.assertEqual(
             [item[0] for item in raw.profile_requests],
-            ["easynet_publication_build_deploy_invocation"],
+            [
+                "easynet_publication_build_deploy_invocation",
+                "easynet_publication_project_deploy_result",
+            ],
         )
         self.assertEqual(raw.runtime_requests[0][0], "invoke")
         self.assertEqual(
             raw.runtime_requests[0][1]["metadata"]["system_ability"],
             "ability.deploy",
         )
+        self.assertEqual(raw.profile_requests[1][2]["state"], "enabled")
         self.assertEqual(raw.buffers, {})
 
     def test_admin_live_agent_methods_use_carrier_invoke_and_projection(self) -> None:

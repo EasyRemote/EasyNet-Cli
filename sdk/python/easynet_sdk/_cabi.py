@@ -51,6 +51,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_publication_build_resource_ref",
     "easynet_publication_validate_package",
     "easynet_publication_build_deploy_invocation",
+    "easynet_publication_project_deploy_result",
     "easynet_publication_build_list_abilities_invocation",
     "easynet_publication_project_ability_page",
     "easynet_publication_build_unpublish_invocation",
@@ -935,18 +936,19 @@ class CABIPublicationTransport(_CABIProfileTransport):
         return self._call("easynet_publication_validate_package", request_json)
 
     def deploy_ability(self, request_json: bytes) -> bytes:
-        handle = self._require_open()
-        output = self._invoke_output_json(
-            handle,
-            "easynet_publication_build_deploy_invocation",
+        return self._invoke_output_projected(
             request_json,
+            build_symbol="easynet_publication_build_deploy_invocation",
+            project_symbol="easynet_publication_project_deploy_result",
         )
-        return _json_bytes(output)
 
     def build_deploy_invocation(self, request_json: bytes) -> bytes:
         return self._call(
             "easynet_publication_build_deploy_invocation", request_json
         )
+
+    def project_deploy_result(self, result_json: bytes) -> bytes:
+        return self._call("easynet_publication_project_deploy_result", result_json)
 
     def install_plugin(self, request_json: bytes) -> bytes:
         return self._missing("publication install plugin")

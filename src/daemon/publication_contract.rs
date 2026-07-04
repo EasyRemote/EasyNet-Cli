@@ -95,6 +95,47 @@ pub(crate) fn build_deploy_invocation(request: &Value) -> Result<Value, Publicat
     build_system_invocation(obj, PUBLICATION_PROFILE, SYSTEM_ABILITY_DEPLOY, args)
 }
 
+pub(crate) fn project_ability_deploy_result(input: &Value) -> Result<Value, PublicationError> {
+    let obj = object(projection_payload(input), "AbilityDeployResult")?;
+    let public_name = required_string(obj, "public_name")?;
+    let namespace = required_string(obj, "namespace")?;
+    parse_namespace(Some(namespace))?;
+    let ability_ura = required_string(obj, "ability_ura")?;
+    let parsed = ura::parse_ura(ability_ura)
+        .map_err(|err| PublicationError::InvalidField("ability_ura", err.to_string()))?;
+    if parsed.kind != ura::URAKind::Ability {
+        return Err(PublicationError::InvalidField(
+            "ability_ura",
+            format!("must be an Ability URA, got {}", parsed.kind),
+        ));
+    }
+    let node_id = required_string(obj, "node_id")?;
+    let install_id = required_string(obj, "install_id")?;
+    let state = normalized_deploy_state(required_string(obj, "state")?)?;
+    let mutated_by = optional_string_field(obj, "mutated_by")?;
+    if let Some(mutated_by) = mutated_by.as_deref() {
+        validate_ura(mutated_by, "mutated_by")?;
+    }
+    let bundle = optional_string_field(obj, "bundle")?;
+    Ok(json!({
+        "profile": PUBLICATION_PROFILE,
+        "kind": "ability_deploy_result",
+        "public_name": public_name,
+        "namespace": namespace,
+        "ability_ura": ability_ura,
+        "node_id": node_id,
+        "install_id": install_id,
+        "state": state,
+        "mutated_by": mutated_by,
+        "bundle": bundle,
+        "metadata": {
+            "profile": PUBLICATION_PROFILE,
+            "source_ability": SYSTEM_ABILITY_DEPLOY,
+            "raw_result": projection_payload(input),
+        },
+    }))
+}
+
 pub(crate) fn build_list_abilities_invocation(request: &Value) -> Result<Value, PublicationError> {
     let obj = object(request, "PublishedAbilityQuery")?;
     let _ = PageControls::from_request(obj)?;
@@ -350,6 +391,17 @@ fn validate_limit(limit: usize) -> Result<(), PublicationError> {
         ));
     }
     Ok(())
+}
+
+fn normalized_deploy_state(raw: &str) -> Result<&'static str, PublicationError> {
+    match raw {
+        "ACTIVE" | "active" | "enabled" => Ok("enabled"),
+        "INSTALLED" | "installed" => Ok("installed"),
+        other => Err(PublicationError::InvalidField(
+            "state",
+            format!("unsupported deploy state {other:?}"),
+        )),
+    }
 }
 
 fn optional_usize(
@@ -673,6 +725,27 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("ability.deploy@1.0.0"));
+    }
+
+    #[test]
+    fn project_ability_deploy_result_normalizes_daemon_state() {
+        let result = project_ability_deploy_result(&json!({
+            "public_name": "weather",
+            "namespace": "er",
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+            "node_id": "dev-a",
+            "mutated_by": "easynet:///r/example/device/dev-a",
+            "install_id": "install-1",
+            "bundle": "tmp/pkg",
+            "state": "ACTIVE"
+        }))
+        .unwrap();
+
+        assert_eq!(result["profile"], PUBLICATION_PROFILE);
+        assert_eq!(result["kind"], "ability_deploy_result");
+        assert_eq!(result["state"], "enabled");
+        assert_eq!(result["metadata"]["source_ability"], SYSTEM_ABILITY_DEPLOY);
+        assert_eq!(result["metadata"]["raw_result"]["state"], "ACTIVE");
     }
 
     #[test]

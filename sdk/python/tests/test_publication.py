@@ -117,9 +117,11 @@ class MemoryPublicationTransport:
         self.resource_ref_json = RESOURCE_REF_JSON
         self.package_validation_json = PACKAGE_VALIDATION_JSON
         self.deploy_result_json = (
-            b'{"public_name":"weather","namespace":"er",'
+            b'{"profile":"publication","kind":"ability_deploy_result",'
+            b'"public_name":"weather","namespace":"er",'
             b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
-            b'"node_id":"local","install_id":"install-1","state":"enabled"}'
+            b'"node_id":"local","install_id":"install-1","state":"enabled",'
+            b'"mutated_by":"","bundle":"","metadata":{}}'
         )
         self.deploy_invocation_json = DEPLOY_INVOCATION_JSON
         self.plugin_install_json = (
@@ -174,6 +176,10 @@ class MemoryPublicationTransport:
     def build_deploy_invocation(self, request_json: bytes) -> bytes:
         self._remember(request_json)
         return self.deploy_invocation_json
+
+    def project_deploy_result(self, result_json: bytes) -> bytes:
+        self.seen_projection = json.loads(result_json.decode("utf-8"))
+        return self.deploy_result_json
 
     def install_plugin(self, request_json: bytes) -> bytes:
         self._remember(request_json)
@@ -315,6 +321,7 @@ class PublicationTests(unittest.TestCase):
 
         result = client.deploy_ability(deploy_request())
         self.assertEqual(result.state, "enabled")
+        self.assertEqual(result.kind, "ability_deploy_result")
 
         draft = client.build_deploy_invocation(deploy_request())
         self.assertEqual(
@@ -347,6 +354,8 @@ class PublicationTests(unittest.TestCase):
             runtime_transport.seen_draft["metadata"]["system_ability"],
             "ability.deploy",
         )
+        assert carrier.seen_projection is not None
+        self.assertEqual(carrier.seen_projection["state"], "enabled")
 
         client.close()
         client.close()

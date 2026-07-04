@@ -45,6 +45,7 @@ receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
 through Runtime Core invoke, and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
+C ABI-backed deploy-result projection,
 published-ability list execution through Runtime Core invoke,
 deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient

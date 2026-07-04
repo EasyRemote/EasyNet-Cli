@@ -208,6 +208,7 @@ method spelling.
   and actual EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
+  C ABI-backed deploy-result projection,
   published-ability list execution through Runtime Core invoke, deploy/unpublish
   Invocation carrier, deploy-result, plugin install projection,
   published-ability read-model seams, and close state seams; concrete daemon

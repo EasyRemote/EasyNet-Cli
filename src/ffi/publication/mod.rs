@@ -33,7 +33,8 @@ use std::os::raw::c_char;
 
 use crate::daemon::publication_contract::{
     build_deploy_invocation, build_list_abilities_invocation, build_local_resource_ref,
-    build_unpublish_invocation, project_published_ability_page, validate_package,
+    build_unpublish_invocation, project_ability_deploy_result, project_published_ability_page,
+    validate_package,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -101,6 +102,28 @@ pub unsafe extern "C" fn easynet_publication_build_deploy_invocation(
         "out_invocation_json",
         "request_json",
         build_deploy_invocation,
+    )
+}
+
+/// Project daemon `ability.deploy` output into an SDK deploy-result DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_project_deploy_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_publication_project_deploy_result",
+        "out_result_json",
+        "result_json",
+        project_ability_deploy_result,
     )
 }
 
@@ -308,6 +331,36 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("ability.deploy@1.0.0"));
+        release(handle);
+    }
+
+    #[test]
+    fn publication_project_deploy_result_projects_daemon_output() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "public_name": "weather",
+                "namespace": "er",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "node_id": "dev-a",
+                "mutated_by": "easynet:///r/example/device/dev-a",
+                "install_id": "install-1",
+                "bundle": "tmp/pkg",
+                "state": "ACTIVE"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_publication_project_deploy_result(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "ability_deploy_result");
+        assert_eq!(value["state"], "enabled");
+        assert_eq!(value["metadata"]["source_ability"], "ability.deploy");
         release(handle);
     }
 

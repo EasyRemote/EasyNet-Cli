@@ -153,6 +153,8 @@ class AbilityDeployRequest:
 class AbilityDeployResult:
     """Daemon deploy execution projection."""
 
+    profile: str
+    kind: str
     public_name: str
     namespace: str
     ability_ura: str
@@ -161,11 +163,19 @@ class AbilityDeployResult:
     state: str
     mutated_by: str = ""
     bundle: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "AbilityDeployResult":
         decoded = _json_object(raw, "ability deploy result")
+        if (
+            decoded.get("profile") != _PROFILE
+            or decoded.get("kind") != "ability_deploy_result"
+        ):
+            raise _invalid_publication("invalid ability deploy result projection")
         return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
             public_name=_required_string(decoded, "public_name"),
             namespace=_required_string(decoded, "namespace"),
             ability_ura=_required_string(decoded, "ability_ura"),
@@ -174,6 +184,7 @@ class AbilityDeployResult:
             state=_required_string(decoded, "state"),
             mutated_by=_optional_string(decoded.get("mutated_by"), "mutated_by") or "",
             bundle=_optional_string(decoded.get("bundle"), "bundle") or "",
+            metadata=_required_mapping(decoded, "metadata"),
         )
 
 
@@ -397,6 +408,9 @@ class PublicationTransport(Protocol):
     def build_deploy_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def project_deploy_result(self, result_json: bytes) -> bytes:
+        ...
+
     def install_plugin(self, request_json: bytes) -> bytes:
         ...
 
@@ -457,7 +471,7 @@ class RuntimePublicationTransport:
         output = result.output_json
         if not isinstance(output, dict):
             raise _invalid_publication("publication deploy output must be an object")
-        return _json_bytes(output)
+        return self.carrier.project_deploy_result(_json_bytes(output))
 
     def build_deploy_invocation(self, request_json: bytes) -> bytes:
         return self._delegate("build_deploy_invocation", request_json)
