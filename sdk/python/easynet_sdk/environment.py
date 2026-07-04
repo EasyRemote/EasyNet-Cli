@@ -6,12 +6,22 @@ from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
 
 from .client import Client, FeatureSet
+from .admin import AdminClient
+from .compatibility import CompatibilityClient
 from .connection import ConnectOptions
 from .daemon import DaemonControl
+from .directory import DirectoryClient
 from .errors import ErrorCode, RetryHint, SDKError
+from .events import EventClient
 from .health import HealthClient
+from .host_binding import HostBindingClient
 from .identity import IdentityClient
+from .mission import MissionClient
+from .publication import PublicationClient
+from .receipt import ReceiptClient
 from .runtime import RuntimeClient
+from .surface import SurfaceClient
+from .wrappers import WrapperClient
 
 
 class _Closable(Protocol):
@@ -108,6 +118,104 @@ class SdkEnvironment:
         )
         return self._track(IdentityClient(transport))
 
+    def directory_client(self) -> DirectoryClient:
+        """Open the Directory profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            DirectoryClient(
+                self._profile_transport(_cabi.open_cabi_directory_transport)
+            )
+        )
+
+    def receipt_client(self) -> ReceiptClient:
+        """Open the Receipt profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            ReceiptClient(self._profile_transport(_cabi.open_cabi_receipt_transport))
+        )
+
+    def publication_client(self) -> PublicationClient:
+        """Open the Publication profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            PublicationClient(
+                self._profile_transport(_cabi.open_cabi_publication_transport)
+            )
+        )
+
+    def host_binding_client(self) -> HostBindingClient:
+        """Open the Host Binding profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            HostBindingClient(
+                self._profile_transport(_cabi.open_cabi_host_binding_transport)
+            )
+        )
+
+    def mission_client(self) -> MissionClient:
+        """Open the Mission profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            MissionClient(self._profile_transport(_cabi.open_cabi_mission_transport))
+        )
+
+    def admin_client(self) -> AdminClient:
+        """Open the Admin + Gateway profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            AdminClient(self._profile_transport(_cabi.open_cabi_admin_transport))
+        )
+
+    def event_client(self) -> EventClient:
+        """Open the Events profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            EventClient(self._profile_transport(_cabi.open_cabi_events_transport))
+        )
+
+    def surface_client(self) -> SurfaceClient:
+        """Open the Surface profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            SurfaceClient(self._profile_transport(_cabi.open_cabi_surface_transport))
+        )
+
+    def compatibility_client(self) -> CompatibilityClient:
+        """Open the Compatibility profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            CompatibilityClient(
+                self._profile_transport(_cabi.open_cabi_compatibility_transport)
+            )
+        )
+
+    def wrapper_client(self) -> WrapperClient:
+        """Open the Convenience Wrapper profile facade."""
+
+        from . import _cabi
+
+        return self._track(
+            WrapperClient(self._profile_transport(_cabi.open_cabi_wrapper_transport))
+        )
+
     def close(self) -> None:
         """Close SDK-owned resources without stopping daemon processes."""
 
@@ -138,6 +246,10 @@ class SdkEnvironment:
     def _track(self, owned: _TClosable) -> _TClosable:
         self._owned.append(owned)
         return owned
+
+    def _profile_transport(self, opener: object) -> _Closable:
+        self._require_open()
+        return opener(control_path=self.control_path, library_path=self.library_path)
 
     def _require_open(self) -> None:
         if self._closed:

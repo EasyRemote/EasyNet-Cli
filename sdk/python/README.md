@@ -13,7 +13,10 @@ partial. The package exposes typed
 feature/version discovery with root client close, public `SdkEnvironment`
 process-root factories, private C ABI v4 discovery, daemon
 lifecycle/open-runtime, identity projection, and runtime
-health/unary/stream/bidi/prepare-submit handle transports, runtime connection
+health/unary/stream/bidi/prepare-submit handle transports, profile
+carrier/projection transports for Receipt, Directory, Publication, Host
+Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
+Wrapper records, runtime connection
 state, runtime health readiness facts, DaemonHandle lifecycle
 status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local
 state seams, schema-backed SDK error projection, complete
@@ -50,10 +53,10 @@ seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, transport-backed helper close state seams, and record projections. Concrete daemon
 default UDS transport, directory live transport adapters, local signer implementations,
-Axon-backed receipt verification, concrete publication/host-binding/mission
-carriers, mission event streams, concrete Admin trust/session carriers,
+Axon-backed receipt verification, live publication/host-binding/mission
+execution adapters, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
-carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
+live adapters, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream/bidi execution adapters, and EasyRemote cutover gates remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

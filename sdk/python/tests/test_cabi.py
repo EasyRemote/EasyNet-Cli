@@ -28,6 +28,7 @@ from easynet_sdk._cabi import (
     CABIRuntimeTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
+    _JSON_HANDLE_OUTPUT_SYMBOLS,
 )
 
 from test_runtime import complete_draft
@@ -51,6 +52,7 @@ class FakeRawCABI:
         self.shutdown_handles: list[int] = []
         self.identity_requests: list[tuple[str, object]] = []
         self.runtime_requests: list[tuple[str, object]] = []
+        self.profile_requests: list[tuple[str, int, object]] = []
         self.prepared_frees: list[int] = []
         self.signed_frees: list[int] = []
         self.handle_frees: list[tuple[int, int]] = []
@@ -140,6 +142,16 @@ class FakeRawCABI:
         )
         self.easynet_invocation_bidi_close = FakeSymbol(self._invocation_bidi_close)
         self.easynet_invocation_bidi_cancel = FakeSymbol(self._invocation_bidi_cancel)
+        for symbol in _JSON_HANDLE_OUTPUT_SYMBOLS:
+            setattr(
+                self,
+                symbol,
+                FakeSymbol(
+                    lambda handle, raw, out_ptr, symbol=symbol: self._profile_call(
+                        symbol, handle, raw, out_ptr
+                    )
+                ),
+            )
 
     def _write(self, out_ptr, payload: bytes) -> int:
         buffer = ctypes.create_string_buffer(payload)
@@ -472,6 +484,93 @@ class FakeRawCABI:
         self.bidi_cancels.append(int(bidi_id.value))
         return 0
 
+    def _profile_call(self, symbol: str, handle, raw, out_ptr) -> int:
+        request = json.loads(raw.value.decode("utf-8"))
+        self.profile_requests.append((symbol, int(handle.value), request))
+        return self._write(out_ptr, self._profile_payload(symbol))
+
+    def _profile_payload(self, symbol: str) -> bytes:
+        if symbol.endswith("_invocation"):
+            return json.dumps(
+                complete_draft().to_json_dict(),
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        if symbol == "easynet_publication_build_resource_ref":
+            return RESOURCE_REF_PROJECTION
+        if symbol == "easynet_publication_validate_package":
+            return PACKAGE_VALIDATION_PROJECTION
+        if symbol == "easynet_receipt_project":
+            return RECEIPT_SUMMARY_PROJECTION
+        if symbol == "easynet_receipt_verify":
+            return RECEIPT_VERIFICATION_PROJECTION
+        if symbol == "easynet_receipt_verify_chain":
+            return RECEIPT_CHAIN_VERIFICATION_PROJECTION
+        if symbol == "easynet_receipt_causal_ref":
+            return CAUSAL_REF_PROJECTION
+        if symbol == "easynet_host_binding_build":
+            return HOST_BINDING_PROJECTION
+        if symbol == "easynet_host_binding_decode_request":
+            return HOST_REQUEST_PROJECTION
+        if symbol == "easynet_host_binding_encode_item":
+            return HOST_ITEM_FRAME_PROJECTION
+        if symbol == "easynet_host_binding_encode_error":
+            return HOST_ERROR_FRAME_PROJECTION
+        if symbol == "easynet_host_binding_encode_terminal":
+            return HOST_TERMINAL_FRAME_PROJECTION
+        if symbol == "easynet_host_binding_fold_output_hash":
+            return HOST_HASH_STATE_PROJECTION
+        if symbol == "easynet_mission_project_status":
+            return MISSION_STATUS_PROJECTION
+        if symbol == "easynet_mission_project_events":
+            return MISSION_EVENT_PAGE_PROJECTION
+        if symbol in {
+            "easynet_events_project_directory_event",
+            "easynet_events_project_terminal",
+            "easynet_events_project_drop_report",
+        }:
+            return EVENT_FRAME_PROJECTION
+        if symbol == "easynet_admin_project_gateway_status":
+            return GATEWAY_STATUS_PROJECTION
+        if symbol == "easynet_admin_project_agent_records":
+            return ADMIN_AGENT_PAGE_PROJECTION
+        if symbol == "easynet_admin_project_agent_lifecycle_result":
+            return ADMIN_RESULT_PROJECTION
+        if symbol == "easynet_surface_project_page_record":
+            return SURFACE_PAGE_RECORD_PROJECTION
+        if symbol == "easynet_surface_project_page_page":
+            return SURFACE_PAGE_PAGE_PROJECTION
+        if symbol == "easynet_surface_project_manifest":
+            return SURFACE_MANIFEST_PROJECTION
+        if symbol == "easynet_surface_project_public_page_ref":
+            return SURFACE_PUBLIC_REF_PROJECTION
+        if symbol == "easynet_surface_project_mutation_result":
+            return SURFACE_MUTATION_PROJECTION
+        if symbol == "easynet_compatibility_project_model_page":
+            return COMPAT_MODEL_PAGE_PROJECTION
+        if symbol == "easynet_compatibility_project_chat_completion":
+            return COMPAT_CHAT_PROJECTION
+        if symbol == "easynet_compatibility_project_chat_stream":
+            return COMPAT_STREAM_PROJECTION
+        if symbol in {
+            "easynet_compatibility_project_file_upload",
+            "easynet_compatibility_project_file",
+        }:
+            return COMPAT_FILE_PROJECTION
+        if symbol == "easynet_compatibility_project_file_delete_result":
+            return COMPAT_FILE_DELETE_PROJECTION
+        if symbol == "easynet_wrappers_project_file_record":
+            return WRAPPER_FILE_PROJECTION
+        if symbol == "easynet_wrappers_project_terminal_session":
+            return WRAPPER_TERMINAL_PROJECTION
+        if symbol == "easynet_wrappers_project_remote_desktop_session":
+            return WRAPPER_REMOTE_DESKTOP_PROJECTION
+        if symbol == "easynet_wrappers_project_browser_session":
+            return WRAPPER_BROWSER_PROJECTION
+        if symbol == "easynet_wrappers_project_media_session":
+            return WRAPPER_MEDIA_PROJECTION
+        return b"{}"
+
 
 DESCRIPTOR_PROJECTION = (
     b'{"kind":"descriptor_ref","valid":true,'
@@ -487,6 +586,225 @@ DAEMON_CABI_STATUS = (
     b'"invocation_accepting":true,'
     b'"control_endpoint":"unix:///tmp/control.sock",'
     b'"invocation_endpoint":"unix:///tmp/daemon.sock"}'
+)
+
+RESOURCE_REF_PROJECTION = (
+    b'{"resource_ura":"easynet:///r/example/resource/device.dev-a/fs/tmp/package",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","namespace":"fs",'
+    b'"display_path":"tmp/package","capability":"read",'
+    b'"expires_unix_ms":4102444800000,"revision":"fs-local-mapping-v1"}'
+)
+
+PACKAGE_VALIDATION_PROJECTION = (
+    b'{"profile":"publication","kind":"package_validation","valid":true,'
+    b'"package_path":"/tmp/package","manifest_path":"/tmp/package/ability.json",'
+    b'"manifest_hash":"sha256:abc","manifest":{"name":"weather",'
+    b'"namespace":"er","wire_key":"er.weather","descriptor_version":"1.0.0",'
+    b'"description":"Weather","exec_kind":"host_stream",'
+    b'"timeout_seconds":null,"input_schema":{"type":"object"},'
+    b'"output_schema":null},"errors":[],"metadata":{"profile":"publication"}}'
+)
+
+RECEIPT_SUMMARY_PROJECTION = (
+    b'{"receipt_ura":null,"invocation_id":"inv-example-1",'
+    b'"state":"completed","verified":false,"output":{"ok":true},'
+    b'"error":null,"causal_ref":null,"metadata":{}}'
+)
+
+RECEIPT_VERIFICATION_PROJECTION = (
+    b'{"verified":true,"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"invocation_id":"inv-example-1","method":"axon-full-receipt",'
+    b'"metadata":{"source":"axon"}}'
+)
+
+RECEIPT_CHAIN_VERIFICATION_PROJECTION = (
+    b'{"verified":false,"continuous":true,'
+    b'"method":"daemon_receipt_chain_continuity","reason":"continuity only",'
+    b'"requires_full_receipt":true,'
+    b'"root_receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2",'
+    b'"receipt_count":1,"items":[{"index":0,'
+    b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+    b'"prev_receipt_hash_hex":null,"continuous":true,"metadata":{}}],'
+    b'"metadata":{"chain_projection":"hash_continuity"}}'
+)
+
+CAUSAL_REF_PROJECTION = (
+    b'{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1",'
+    b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
+)
+
+HOST_BINDING_PROJECTION = (
+    b'{"binding_id":"binding-weather-1",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",'
+    b'"endpoint":"/tmp/easynet-weather.sock",'
+    b'"frame_schema":"host-stream-frame.schema.json",'
+    b'"cleanup":{"mode":"unlink_socket"},"timeout_ms":30000,'
+    b'"readiness":{"state":"declared","checked":false,"endpoint_ready":null},'
+    b'"lifecycle":{"endpoint_owner":"product_host","process_owner":"product_host",'
+    b'"frame_contract_owner":"daemon_sdk"},'
+    b'"metadata":{"profile":"host_binding"}}'
+)
+
+HOST_REQUEST_PROJECTION = (
+    b'{"function":"weather.stream","args":{"city":"Singapore"},'
+    b'"call_id":"call-weather-1","caller":"easynet:///r/example/user/alice",'
+    b'"metadata":{"wire":"host_stream_request_v1"}}'
+)
+
+HOST_ITEM_FRAME_PROJECTION = (
+    b'{"frame_type":"item","seq":0,"value":{"token":"hello"},'
+    b'"error":null,"terminal":null,"output_hash":null}'
+)
+
+HOST_ERROR_FRAME_PROJECTION = (
+    b'{"frame_type":"error","seq":null,"value":null,'
+    b'"error":{"code":"InvalidArgument","stage":"host","message":"bad input",'
+    b'"retry":"never","details":{}},"terminal":null,"output_hash":null}'
+)
+
+HOST_TERMINAL_FRAME_PROJECTION = (
+    b'{"frame_type":"terminal","seq":1,"value":null,"error":null,'
+    b'"terminal":{"output_hash":"sha256:abc","frames":1,"metadata":{}},'
+    b'"output_hash":"sha256:abc"}'
+)
+
+HOST_HASH_STATE_PROJECTION = (
+    b'{"algorithm":"sha256(prev_hash || seq_be || canonical_json(value))",'
+    b'"output_hash":"sha256:abc","frames":1,"last_seq":0,'
+    b'"canonical_json":"{\\"token\\":\\"hello\\"}"}'
+)
+
+MISSION_STATUS_PROJECTION = (
+    b'{"profile":"mission","kind":"mission_status",'
+    b'"mission_id":"mission-1","state":"completed","terminal":true,'
+    b'"partial_failures":0,"cancelled":false,"parent_invocation_id":null,'
+    b'"parent_receipt_ura":null,"parent_invocation":{},'
+    b'"child_invocations":[],"child_receipts":[],"output_refs":[],'
+    b'"metadata":{"profile":"mission"}}'
+)
+
+MISSION_EVENT_PAGE_PROJECTION = (
+    b'{"profile":"mission","kind":"mission_event_page",'
+    b'"mission_id":"mission-1","cursor_sequence":0,"next_cursor_sequence":1,'
+    b'"has_more":false,"dropped_count":0,"events":[{"profile":"mission",'
+    b'"kind":"mission_event","mission_id":"mission-1","sequence":1,'
+    b'"event_type":"completed","occurred_unix_ms":1000,"terminal":true,'
+    b'"payload":{},"receipt":{},"metadata":{}}],"metadata":{}}'
+)
+
+EVENT_FRAME_PROJECTION = (
+    b'{"profile":"events","stream":"directory","sequence":1,'
+    b'"event_type":"upsert","occurred_unix_ms":1000,"cursor":'
+    b'{"stream":"directory","sequence":1,"token":"directory:1"},'
+    b'"payload":{},"dropped_count":0,"terminal":false,"metadata":{}}'
+)
+
+GATEWAY_STATUS_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"gateway_status","state":"ready",'
+    b'"ready":true,"public_endpoint":"https://hub.example",'
+    b'"listeners":[],"checks":[],"metadata":{}}'
+)
+
+ADMIN_AGENT_PAGE_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"agent_page","items":[],'
+    b'"next_cursor":null,"limit":50,"metadata":{}}'
+)
+
+ADMIN_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"admin_result","operation":"agent_start",'
+    b'"state":"completed","ok":true,"metadata":{}}'
+)
+
+SURFACE_PAGE_RECORD_PROJECTION = (
+    b'{"profile":"surface","kind":"page_record","page_id":"page-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","project_id":"proj",'
+    b'"folder":"/tmp/site","visibility":"public","state":"ready",'
+    b'"metadata":{}}'
+)
+
+SURFACE_PAGE_PAGE_PROJECTION = (
+    b'{"profile":"surface","kind":"page_page","item_kind":"page_record",'
+    b'"items":[],"next_cursor":null,"limit":50,"source":"pages_read_model",'
+    b'"metadata":{}}'
+)
+
+SURFACE_MANIFEST_PROJECTION = (
+    b'{"profile":"surface","kind":"surface_manifest","page_id":"page-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","surface_ref":"surface:page-1",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.surface.page@1.0.0",'
+    b'"descriptor_version":"1.0.0","files":[],"routes":[],"metadata":{}}'
+)
+
+SURFACE_PUBLIC_REF_PROJECTION = (
+    b'{"profile":"surface","kind":"public_page_ref","page_id":"page-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"surface_ref":"surface:page-1","public_ref":"https://hub.example/page-1",'
+    b'"route_kind":"hub_web","metadata":{}}'
+)
+
+SURFACE_MUTATION_PROJECTION = (
+    b'{"profile":"surface","kind":"surface_mutation_result","operation":"delete",'
+    b'"page_id":"page-1","removed":true,"state":"deleted","metadata":{}}'
+)
+
+COMPAT_MODEL_PAGE_PROJECTION = (
+    b'{"profile":"compatibility","kind":"model_page","object":"list",'
+    b'"data":[],"metadata":{}}'
+)
+
+COMPAT_CHAT_PROJECTION = (
+    b'{"profile":"compatibility","kind":"chat_completion","id":"chatcmpl-1",'
+    b'"object":"chat.completion","created":1000,"model":"model-1",'
+    b'"choices":[],"usage":null,"metadata":{}}'
+)
+
+COMPAT_STREAM_PROJECTION = (
+    b'{"profile":"compatibility","kind":"chat_completion_stream",'
+    b'"chunks":[],"metadata":{}}'
+)
+
+COMPAT_FILE_PROJECTION = (
+    b'{"profile":"compatibility","kind":"file","id":"file-1","object":"file",'
+    b'"bytes":1,"created_at":1000,"filename":"input.json","purpose":"assistants",'
+    b'"status":"processed","metadata":{}}'
+)
+
+COMPAT_FILE_DELETE_PROJECTION = (
+    b'{"profile":"compatibility","kind":"file_delete_result","id":"file-1",'
+    b'"object":"file","deleted":true,"metadata":{}}'
+)
+
+WRAPPER_FILE_PROJECTION = (
+    b'{"profile":"wrappers","kind":"file_record","file_id":"file-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","resource_ura":"res",'
+    b'"state":"ready","metadata":{}}'
+)
+
+WRAPPER_TERMINAL_PROJECTION = (
+    b'{"profile":"wrappers","kind":"terminal_session","session_id":"term-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
+    b'"pty_ref":"pty:1","metadata":{}}'
+)
+
+WRAPPER_REMOTE_DESKTOP_PROJECTION = (
+    b'{"profile":"wrappers","kind":"remote_desktop_session","session_id":"rdp-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
+    b'"desktop_ref":"desktop:1","metadata":{}}'
+)
+
+WRAPPER_BROWSER_PROJECTION = (
+    b'{"profile":"wrappers","kind":"browser_session","session_id":"browser-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
+    b'"browser_ref":"browser:1","metadata":{}}'
+)
+
+WRAPPER_MEDIA_PROJECTION = (
+    b'{"profile":"wrappers","kind":"media_session","session_id":"media-1",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
+    b'"media_kind":"audio","stream_ref":"stream:1","metadata":{}}'
 )
 
 CURRENT_ABI_PREPARED = b"""{

@@ -28,6 +28,73 @@ _CALLBACK_REGISTRY_LOCK = threading.Lock()
 _CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
 _NEXT_CALLBACK_TOKEN = 1
 
+_JSON_HANDLE_OUTPUT_SYMBOLS = (
+    "easynet_directory_build_list_devices_invocation",
+    "easynet_directory_build_list_agents_invocation",
+    "easynet_directory_build_list_abilities_invocation",
+    "easynet_directory_build_resolve_invocation",
+    "easynet_directory_project_device_page",
+    "easynet_directory_project_agent_page",
+    "easynet_directory_project_ability_page",
+    "easynet_directory_project_resolved_ref",
+    "easynet_receipt_build_fetch_invocation",
+    "easynet_receipt_project",
+    "easynet_receipt_verify",
+    "easynet_receipt_verify_chain",
+    "easynet_receipt_causal_ref",
+    "easynet_host_binding_build",
+    "easynet_host_binding_decode_request",
+    "easynet_host_binding_encode_item",
+    "easynet_host_binding_encode_error",
+    "easynet_host_binding_encode_terminal",
+    "easynet_host_binding_fold_output_hash",
+    "easynet_publication_build_resource_ref",
+    "easynet_publication_validate_package",
+    "easynet_publication_build_deploy_invocation",
+    "easynet_publication_build_unpublish_invocation",
+    "easynet_mission_build_run_eal_invocation",
+    "easynet_mission_build_run_file_invocation",
+    "easynet_mission_build_track_invocation",
+    "easynet_mission_build_cancel_invocation",
+    "easynet_mission_project_status",
+    "easynet_mission_project_events",
+    "easynet_events_build_directory_subscription_invocation",
+    "easynet_events_project_directory_event",
+    "easynet_events_project_terminal",
+    "easynet_events_project_drop_report",
+    "easynet_admin_build_agent_list_invocation",
+    "easynet_admin_build_agent_start_invocation",
+    "easynet_admin_build_agent_stop_invocation",
+    "easynet_admin_build_agent_refresh_invocation",
+    "easynet_admin_build_session_list_invocation",
+    "easynet_admin_project_gateway_status",
+    "easynet_admin_project_agent_records",
+    "easynet_admin_project_agent_lifecycle_result",
+    "easynet_surface_build_list_pages_invocation",
+    "easynet_surface_build_create_page_invocation",
+    "easynet_surface_build_delete_page_invocation",
+    "easynet_surface_build_manifest_invocation",
+    "easynet_surface_project_page_record",
+    "easynet_surface_project_page_page",
+    "easynet_surface_project_manifest",
+    "easynet_surface_project_public_page_ref",
+    "easynet_surface_project_mutation_result",
+    "easynet_compatibility_build_list_models_invocation",
+    "easynet_compatibility_build_chat_completion_invocation",
+    "easynet_compatibility_build_stream_chat_completion_invocation",
+    "easynet_compatibility_project_model_page",
+    "easynet_compatibility_project_chat_completion",
+    "easynet_compatibility_project_chat_stream",
+    "easynet_compatibility_project_file_upload",
+    "easynet_compatibility_project_file",
+    "easynet_compatibility_project_file_delete_result",
+    "easynet_wrappers_project_file_record",
+    "easynet_wrappers_project_terminal_session",
+    "easynet_wrappers_project_remote_desktop_session",
+    "easynet_wrappers_project_browser_session",
+    "easynet_wrappers_project_media_session",
+)
+
 
 class CLILibrary:
     """Typed binding for the EasyNet-Cli C ABI v4 surface."""
@@ -341,6 +408,13 @@ class CLILibrary:
         )
         self._raise_for_code(code)
 
+    def json_handle_output(self, symbol: str, handle: int, payload_json: bytes) -> bytes:
+        return self._call_output(
+            getattr(self._raw, symbol),
+            ctypes.c_uint64(handle),
+            ctypes.c_char_p(payload_json),
+        )
+
     def _bind_symbols(self) -> None:
         self._raw.easynet_abi_version.argtypes = []
         self._raw.easynet_abi_version.restype = ctypes.c_uint32
@@ -526,6 +600,14 @@ class CLILibrary:
             ctypes.c_uint64,
         ]
         self._raw.easynet_invocation_bidi_cancel.restype = ctypes.c_int32
+        for symbol in _JSON_HANDLE_OUTPUT_SYMBOLS:
+            function = getattr(self._raw, symbol)
+            function.argtypes = [
+                ctypes.c_uint64,
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            function.restype = ctypes.c_int32
 
     def _call_output(self, function: Any, *args: Any) -> bytes:
         out = ctypes.c_void_p()
@@ -636,6 +718,521 @@ class CABIIdentityTransport:
                 message="identity transport handle is invalid",
             )
         return self.handle
+
+
+@dataclass
+class _CABIProfileTransport:
+    """Base for schema-backed profile carrier/projection C ABI transports."""
+
+    lib: CLILibrary
+    handle: int
+    owns_handle: bool = False
+    _closed: bool = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self.owns_handle:
+            self.lib.shutdown(self.handle)
+
+    def _call(self, symbol: str, request_json: bytes) -> bytes:
+        return self.lib.json_handle_output(symbol, self._require_open(), request_json)
+
+    def _missing(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=f"{method} is not exposed by the C ABI profile bridge",
+        )
+
+    def _require_open(self) -> int:
+        if self._closed:
+            raise _closed_error("profile transport is closed")
+        if self.handle <= 0:
+            raise SDKError(
+                code=ErrorCode.INVALID_HANDLE,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message="profile transport handle is invalid",
+            )
+        return self.handle
+
+
+@dataclass
+class CABIReceiptTransport(_CABIProfileTransport):
+    """Receipt carrier/projection transport backed by C ABI v4."""
+
+    def fetch(self, request_json: bytes) -> bytes:
+        return self._missing("receipt fetch")
+
+    def build_fetch_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_receipt_build_fetch_invocation", request_json)
+
+    def project(self, receipt_json: bytes) -> bytes:
+        return self._call("easynet_receipt_project", receipt_json)
+
+    def verify(self, receipt_json: bytes) -> bytes:
+        return self._call("easynet_receipt_verify", receipt_json)
+
+    def verify_chain(self, request_json: bytes) -> bytes:
+        return self._call("easynet_receipt_verify_chain", request_json)
+
+    def causal_ref(self, receipt_json: bytes) -> bytes:
+        return self._call("easynet_receipt_causal_ref", receipt_json)
+
+
+@dataclass
+class CABIDirectoryTransport(_CABIProfileTransport):
+    """Directory carrier/projection transport backed by C ABI v4."""
+
+    def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_events_build_directory_subscription_invocation", request_json
+        )
+
+    def resolve(self, request_json: bytes) -> bytes:
+        return self._missing("directory resolve")
+
+    def list_devices(self, request_json: bytes) -> bytes:
+        return self._missing("directory list devices")
+
+    def list_agents(self, request_json: bytes) -> bytes:
+        return self._missing("directory list agents")
+
+    def list_abilities(self, request_json: bytes) -> bytes:
+        return self._missing("directory list abilities")
+
+    def subscribe_directory(self, request_json: bytes) -> bytes:
+        return self._missing("directory subscribe")
+
+    def build_list_devices_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_directory_build_list_devices_invocation", request_json
+        )
+
+    def build_list_agents_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_directory_build_list_agents_invocation", request_json
+        )
+
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_directory_build_list_abilities_invocation", request_json
+        )
+
+    def build_resolve_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_directory_build_resolve_invocation", request_json)
+
+    def project_device_page(self, page_json: bytes) -> bytes:
+        return self._call("easynet_directory_project_device_page", page_json)
+
+    def project_agent_page(self, page_json: bytes) -> bytes:
+        return self._call("easynet_directory_project_agent_page", page_json)
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        return self._call("easynet_directory_project_ability_page", page_json)
+
+    def project_resolved_ref(self, answer_json: bytes) -> bytes:
+        return self._call("easynet_directory_project_resolved_ref", answer_json)
+
+
+@dataclass
+class CABIPublicationTransport(_CABIProfileTransport):
+    """Publication carrier/projection transport backed by C ABI v4."""
+
+    def build_resource_ref(self, request_json: bytes) -> bytes:
+        return self._call("easynet_publication_build_resource_ref", request_json)
+
+    def validate_package(self, request_json: bytes) -> bytes:
+        return self._call("easynet_publication_validate_package", request_json)
+
+    def deploy_ability(self, request_json: bytes) -> bytes:
+        return self._missing("publication deploy ability")
+
+    def build_deploy_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_build_deploy_invocation", request_json
+        )
+
+    def install_plugin(self, request_json: bytes) -> bytes:
+        return self._missing("publication install plugin")
+
+    def list_abilities(self, request_json: bytes) -> bytes:
+        return self._missing("publication list abilities")
+
+    def show_ability(self, request_json: bytes) -> bytes:
+        return self._missing("publication show ability")
+
+    def enable_ability_impl(self, request_json: bytes) -> bytes:
+        return self._missing("publication enable ability impl")
+
+    def disable_ability_impl(self, request_json: bytes) -> bytes:
+        return self._missing("publication disable ability impl")
+
+    def build_unpublish_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_build_unpublish_invocation", request_json
+        )
+
+    def unpublish_ability(self, request_json: bytes) -> bytes:
+        return self._missing("publication unpublish ability")
+
+
+@dataclass
+class CABIHostBindingTransport(_CABIProfileTransport):
+    """Host Binding codec/hash transport backed by C ABI v4."""
+
+    def build_host_stream_binding(self, request_json: bytes) -> bytes:
+        return self._call("easynet_host_binding_build", request_json)
+
+    def decode_request(self, envelope_json: bytes) -> bytes:
+        return self._call("easynet_host_binding_decode_request", envelope_json)
+
+    def encode_item(self, request_json: bytes) -> bytes:
+        return self._call("easynet_host_binding_encode_item", request_json)
+
+    def encode_error(self, request_json: bytes) -> bytes:
+        return self._call("easynet_host_binding_encode_error", request_json)
+
+    def encode_terminal(self, request_json: bytes) -> bytes:
+        return self._call("easynet_host_binding_encode_terminal", request_json)
+
+    def fold_output_hash(self, request_json: bytes) -> bytes:
+        return self._call("easynet_host_binding_fold_output_hash", request_json)
+
+
+@dataclass
+class CABIMissionTransport(_CABIProfileTransport):
+    """Mission carrier/projection transport backed by C ABI v4."""
+
+    def build_run_eal_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_mission_build_run_eal_invocation", request_json)
+
+    def build_run_file_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_mission_build_run_file_invocation", request_json)
+
+    def build_track_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_mission_build_track_invocation", request_json)
+
+    def build_cancel_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_mission_build_cancel_invocation", request_json)
+
+    def run_eal(self, request_json: bytes) -> bytes:
+        return self._missing("mission run eal")
+
+    def run_file(self, request_json: bytes) -> bytes:
+        return self._missing("mission run file")
+
+    def track(self, request_json: bytes) -> bytes:
+        return self._missing("mission track")
+
+    def cancel(self, request_json: bytes) -> bytes:
+        return self._missing("mission cancel")
+
+    def events(self, request_json: bytes) -> bytes:
+        return self._call("easynet_mission_project_events", request_json)
+
+    def project_status(self, status_json: bytes) -> bytes:
+        return self._call("easynet_mission_project_status", status_json)
+
+
+@dataclass
+class CABIAdminTransport(_CABIProfileTransport):
+    """Admin + Gateway carrier/projection transport backed by C ABI v4."""
+
+    def build_agent_list_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_agent_list_invocation", request_json)
+
+    def build_agent_start_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_agent_start_invocation", request_json)
+
+    def build_agent_stop_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_agent_stop_invocation", request_json)
+
+    def build_agent_refresh_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_admin_build_agent_refresh_invocation", request_json
+        )
+
+    def build_session_list_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_session_list_invocation", request_json)
+
+    def gateway_status(self, request_json: bytes) -> bytes:
+        return self._missing("admin gateway status")
+
+    def list_agents(self, request_json: bytes) -> bytes:
+        return self._missing("admin list agents")
+
+    def agent_start(self, request_json: bytes) -> bytes:
+        return self._missing("admin agent start")
+
+    def agent_stop(self, request_json: bytes) -> bytes:
+        return self._missing("admin agent stop")
+
+    def agent_refresh(self, request_json: bytes) -> bytes:
+        return self._missing("admin agent refresh")
+
+    def list_device_sessions(self, request_json: bytes) -> bytes:
+        return self._missing("admin list device sessions")
+
+    def join_hub(self, request_json: bytes) -> bytes:
+        return self._missing("admin join hub")
+
+    def leave_hub(self, request_json: bytes) -> bytes:
+        return self._missing("admin leave hub")
+
+    def pairing_preflight(self, request_json: bytes) -> bytes:
+        return self._missing("admin pairing preflight")
+
+    def validate_pairing(self, request_json: bytes) -> bytes:
+        return self._missing("admin validate pairing")
+
+    def verify_device_credential(self, request_json: bytes) -> bytes:
+        return self._missing("admin verify device credential")
+
+    def create_pairing(self, request_json: bytes) -> bytes:
+        return self._missing("admin create pairing")
+
+    def revoke_device(self, request_json: bytes) -> bytes:
+        return self._missing("admin revoke device")
+
+    def create_device_session(self, request_json: bytes) -> bytes:
+        return self._missing("admin create device session")
+
+    def delete_device_session(self, request_json: bytes) -> bytes:
+        return self._missing("admin delete device session")
+
+    def project_gateway_status(self, status_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_gateway_status", status_json)
+
+    def project_agent_records(self, agents_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_agent_records", agents_json)
+
+    def project_agent_lifecycle_result(self, result_json: bytes) -> bytes:
+        return self._call(
+            "easynet_admin_project_agent_lifecycle_result", result_json
+        )
+
+
+@dataclass
+class CABIEventTransport(_CABIProfileTransport):
+    """Events carrier/projection transport backed by C ABI v4."""
+
+    def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_events_build_directory_subscription_invocation", request_json
+        )
+
+    def build_device_subscription_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("events device subscription carrier")
+
+    def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("events session subscription carrier")
+
+    def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("events invocation subscription carrier")
+
+    def subscribe_directory(self, request_json: bytes) -> bytes:
+        return self._missing("events subscribe directory")
+
+    def subscribe_devices(self, request_json: bytes) -> bytes:
+        return self._missing("events subscribe devices")
+
+    def subscribe_sessions(self, request_json: bytes) -> bytes:
+        return self._missing("events subscribe sessions")
+
+    def subscribe_invocations(self, request_json: bytes) -> bytes:
+        return self._missing("events subscribe invocations")
+
+    def list_device_events(self, request_json: bytes) -> bytes:
+        return self._missing("events list device events")
+
+    def project_directory_event(self, event_json: bytes) -> bytes:
+        return self._call("easynet_events_project_directory_event", event_json)
+
+    def project_drop_report(self, drop_json: bytes) -> bytes:
+        return self._call("easynet_events_project_drop_report", drop_json)
+
+    def project_terminal(self, terminal_json: bytes) -> bytes:
+        return self._call("easynet_events_project_terminal", terminal_json)
+
+
+@dataclass
+class CABISurfaceTransport(_CABIProfileTransport):
+    """Surface carrier/projection transport backed by C ABI v4."""
+
+    def build_list_pages_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_surface_build_list_pages_invocation", request_json)
+
+    def build_create_page_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_surface_build_create_page_invocation", request_json)
+
+    def build_delete_page_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_surface_build_delete_page_invocation", request_json)
+
+    def build_manifest_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_surface_build_manifest_invocation", request_json)
+
+    def build_health_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("surface health carrier")
+
+    def list_pages(self, request_json: bytes) -> bytes:
+        return self._missing("surface list pages")
+
+    def create_page(self, request_json: bytes) -> bytes:
+        return self._missing("surface create page")
+
+    def delete_page(self, request_json: bytes) -> bytes:
+        return self._missing("surface delete page")
+
+    def surface_manifest(self, request_json: bytes) -> bytes:
+        return self._missing("surface manifest")
+
+    def public_page_ref(self, request_json: bytes) -> bytes:
+        return self._missing("surface public page ref")
+
+    def surface_health(self, request_json: bytes) -> bytes:
+        return self._missing("surface health")
+
+    def project_page_record(self, page_json: bytes) -> bytes:
+        return self._call("easynet_surface_project_page_record", page_json)
+
+    def project_page_page(self, pages_json: bytes) -> bytes:
+        return self._call("easynet_surface_project_page_page", pages_json)
+
+    def project_manifest(self, page_json: bytes) -> bytes:
+        return self._call("easynet_surface_project_manifest", page_json)
+
+    def project_public_page_ref(self, page_json: bytes) -> bytes:
+        return self._call("easynet_surface_project_public_page_ref", page_json)
+
+    def project_mutation_result(self, result_json: bytes) -> bytes:
+        return self._call("easynet_surface_project_mutation_result", result_json)
+
+
+@dataclass
+class CABICompatibilityTransport(_CABIProfileTransport):
+    """Compatibility carrier/projection transport backed by C ABI v4."""
+
+    def build_list_models_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_compatibility_build_list_models_invocation", request_json
+        )
+
+    def build_chat_completion_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_compatibility_build_chat_completion_invocation", request_json
+        )
+
+    def build_stream_chat_completion_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_compatibility_build_stream_chat_completion_invocation",
+            request_json,
+        )
+
+    def build_file_upload_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility file upload carrier")
+
+    def build_file_retrieve_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility file retrieve carrier")
+
+    def build_file_delete_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility file delete carrier")
+
+    def list_models(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility list models")
+
+    def create_chat_completion(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility chat completion")
+
+    def stream_chat_completion(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility stream chat completion")
+
+    def upload_file(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility upload file")
+
+    def retrieve_file(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility retrieve file")
+
+    def delete_file(self, request_json: bytes) -> bytes:
+        return self._missing("compatibility delete file")
+
+    def project_model_page(self, models_json: bytes) -> bytes:
+        return self._call("easynet_compatibility_project_model_page", models_json)
+
+    def project_chat_completion(self, completion_json: bytes) -> bytes:
+        return self._call(
+            "easynet_compatibility_project_chat_completion", completion_json
+        )
+
+    def project_chat_stream(self, stream_json: bytes) -> bytes:
+        return self._call("easynet_compatibility_project_chat_stream", stream_json)
+
+    def project_file_upload(self, file_json: bytes) -> bytes:
+        return self._call("easynet_compatibility_project_file_upload", file_json)
+
+    def project_file(self, file_json: bytes) -> bytes:
+        return self._call("easynet_compatibility_project_file", file_json)
+
+    def project_file_delete_result(self, result_json: bytes) -> bytes:
+        return self._call(
+            "easynet_compatibility_project_file_delete_result", result_json
+        )
+
+
+@dataclass
+class CABIWrapperTransport(_CABIProfileTransport):
+    """Convenience wrapper projection transport backed by C ABI v4."""
+
+    def build_file_transfer_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper file-transfer carrier")
+
+    def build_terminal_session_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper terminal-session carrier")
+
+    def build_remote_desktop_session_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper remote-desktop-session carrier")
+
+    def build_browser_session_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper browser-session carrier")
+
+    def build_media_session_invocation(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper media-session carrier")
+
+    def transfer_file(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper file transfer")
+
+    def start_terminal_session(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper terminal session")
+
+    def start_remote_desktop_session(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper remote desktop session")
+
+    def start_browser_session(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper browser session")
+
+    def start_media_session(self, request_json: bytes) -> bytes:
+        return self._missing("wrapper media session")
+
+    def project_file_record(self, file_json: bytes) -> bytes:
+        return self._call("easynet_wrappers_project_file_record", file_json)
+
+    def project_terminal_session(self, session_json: bytes) -> bytes:
+        return self._call("easynet_wrappers_project_terminal_session", session_json)
+
+    def project_remote_desktop_session(self, session_json: bytes) -> bytes:
+        return self._call(
+            "easynet_wrappers_project_remote_desktop_session", session_json
+        )
+
+    def project_browser_session(self, session_json: bytes) -> bytes:
+        return self._call("easynet_wrappers_project_browser_session", session_json)
+
+    def project_media_session(self, session_json: bytes) -> bytes:
+        return self._call("easynet_wrappers_project_media_session", session_json)
 
 
 @dataclass
@@ -1165,6 +1762,146 @@ def open_cabi_identity_transport(
     return CABIIdentityTransport(lib=lib, handle=handle, owns_handle=True)
 
 
+def open_cabi_receipt_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIReceiptTransport:
+    """Open an owned C ABI Receipt profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIReceiptTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_directory_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIDirectoryTransport:
+    """Open an owned C ABI Directory profile carrier/projection transport."""
+
+    return _open_cabi_profile_transport(
+        CABIDirectoryTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_publication_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIPublicationTransport:
+    """Open an owned C ABI Publication profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIPublicationTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_host_binding_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIHostBindingTransport:
+    """Open an owned C ABI Host Binding profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIHostBindingTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_mission_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIMissionTransport:
+    """Open an owned C ABI Mission profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIMissionTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_admin_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIAdminTransport:
+    """Open an owned C ABI Admin + Gateway profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIAdminTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_events_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIEventTransport:
+    """Open an owned C ABI Events profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIEventTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_surface_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABISurfaceTransport:
+    """Open an owned C ABI Surface profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABISurfaceTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_compatibility_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABICompatibilityTransport:
+    """Open an owned C ABI Compatibility profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABICompatibilityTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
+def open_cabi_wrapper_transport(
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> CABIWrapperTransport:
+    """Open an owned C ABI Convenience Wrapper profile transport."""
+
+    return _open_cabi_profile_transport(
+        CABIWrapperTransport,
+        control_path=control_path,
+        library_path=library_path,
+    )
+
+
 def open_cabi_daemon_transport(
     *,
     library_path: str | None = None,
@@ -1184,6 +1921,17 @@ def open_cabi_runtime_transport(
     lib = CLILibrary.load(library_path)
     handle = lib.init(control_path)
     return CABIRuntimeTransport(lib=lib, handle=handle, owns_handle=True)
+
+
+def _open_cabi_profile_transport(
+    transport_type: type[_CABIProfileTransport],
+    *,
+    control_path: str = "",
+    library_path: str | None = None,
+) -> _CABIProfileTransport:
+    lib = CLILibrary.load(library_path)
+    handle = lib.init(control_path)
+    return transport_type(lib=lib, handle=handle, owns_handle=True)
 
 
 def _optional_c_string(value: str) -> bytes | None:

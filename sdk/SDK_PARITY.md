@@ -174,8 +174,10 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
-  transport protocols; concrete default UDS transport,
-  profile clients, host binding bridge, EasyRemote extraction tests, per-profile
+  transport protocols; private C ABI v4 profile carrier/projection bridges for
+  Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
+  Surface, Compatibility, and Wrapper records; concrete default UDS transport,
+  live profile execution adapters, EasyRemote extraction tests, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
@@ -184,8 +186,9 @@ method spelling.
   Axon-delegated `parse_ura`, `owner_ability_ura`,
   `owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helper
   facade, signing-key lifecycle, signer-handle projection, and close state
-  seams; Python now has private C ABI v4 identity projection transport, while
-  directory live transport adapters, local signer implementations, profile C ABI transports, concrete daemon carriers,
+  seams; Python now has private C ABI v4 identity projection and profile carrier
+  transports, while
+  directory live transport adapters, local signer implementations, concrete daemon carriers,
   and EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
