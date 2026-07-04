@@ -231,6 +231,41 @@ class HostBindingTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             client.fold_output_hash(state, 2, {"token": "skip"})
 
+    def test_hash_state_rejects_corrupted_frame_cursor(self) -> None:
+        corrupted_zero = json.loads(HASH_STATE_JSON.decode("utf-8"))
+        corrupted_zero["frames"] = 0
+        corrupted_zero["last_seq"] = 0
+
+        with self.assertRaises(SDKError) as caught:
+            HostStreamHashState.from_json(json.dumps(corrupted_zero))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("cannot have last_seq", caught.exception.message)
+
+        corrupted_gap = json.loads(HASH_STATE_JSON.decode("utf-8"))
+        corrupted_gap["frames"] = 3
+        corrupted_gap["last_seq"] = 0
+
+        with self.assertRaises(SDKError) as caught:
+            HostStreamHashState.from_json(json.dumps(corrupted_gap))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("last_seq must match frames", caught.exception.message)
+
+    def test_fold_output_hash_rejects_corrupted_local_state(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+        state = HostStreamHashState(
+            algorithm=HOST_STREAM_HASH_ALGORITHM,
+            output_hash=HOST_STREAM_EMPTY_OUTPUT_HASH,
+            frames=2,
+            last_seq=0,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.fold_output_hash(state, 2, {"token": "late"})
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("last_seq must match frames", caught.exception.message)
+        self.assertEqual(transport.calls, [])
+
     def test_frame_writer_sequences_items_and_terminal_via_client(self) -> None:
         transport = MemoryHostBindingTransport()
         client = HostBindingClient(transport)

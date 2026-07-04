@@ -204,6 +204,7 @@ class HostStreamHashState:
         )
         if state.algorithm != HOST_STREAM_HASH_ALGORITHM:
             raise _invalid_host_binding("invalid host stream hash algorithm")
+        _validate_hash_state_consistency(state.frames, state.last_seq)
         return state
 
     @classmethod
@@ -218,6 +219,7 @@ class HostStreamHashState:
     def to_json_dict(self) -> dict[str, object]:
         if self.algorithm != HOST_STREAM_HASH_ALGORITHM or not self.output_hash or self.frames < 0:
             raise _invalid_host_binding("valid hash state is required")
+        _validate_hash_state_consistency(self.frames, self.last_seq)
         value: dict[str, object] = {
             "algorithm": self.algorithm,
             "output_hash": self.output_hash,
@@ -473,12 +475,21 @@ def _validate_frame(frame: HostStreamFrame) -> None:
 
 def _validate_hash_fold(state: HostStreamHashState, seq: int) -> None:
     state.to_json_dict()
-    if state.last_seq is None:
-        if state.frames != 0 or seq != 0:
-            raise _invalid_host_binding("host stream hash sequence gap")
-        return
-    if seq != state.last_seq + 1:
+    if seq != state.frames:
         raise _invalid_host_binding("host stream hash sequence gap")
+
+
+def _validate_hash_state_consistency(frames: int, last_seq: Optional[int]) -> None:
+    if frames == 0:
+        if last_seq is not None:
+            raise _invalid_host_binding(
+                "host stream hash state cannot have last_seq when frames is zero"
+            )
+        return
+    if last_seq != frames - 1:
+        raise _invalid_host_binding(
+            "host stream hash state last_seq must match frames"
+        )
 
 
 def _optional_terminal(value: object, field_name: str) -> Optional[HostStreamTerminalSummary]:
