@@ -112,6 +112,7 @@ from .directory import (
     ResolveQuery,
 )
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
+from .environment import SdkEnvironment, default_environment
 from .events import (
     DEFAULT_EVENT_PAGE_SIZE,
     MAX_EVENT_PAGE_SIZE,
@@ -486,6 +487,7 @@ __all__ = [
     "RuntimeError",
     "RuntimeTransport",
     "SDKError",
+    "SdkEnvironment",
     "SessionEvent",
     "SessionEventQuery",
     "SignerHandle",
@@ -559,6 +561,7 @@ __all__ = [
     "WrapperTransport",
     "attach_daemon",
     "connect_local",
+    "default_environment",
     "discover_daemon",
     "is_code",
     "start_daemon",

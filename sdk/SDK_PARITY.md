@@ -164,8 +164,8 @@ method spelling.
   helper close state seams, and record projections; backend HTTP/WebSocket bridges, storage
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
-- Python package exposes Runtime Core feature/version discovery with root client close, private C ABI
-  v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, runtime
+- Python package exposes Runtime Core feature/version discovery with root client close, public
+  `SdkEnvironment` process-root factories over private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft

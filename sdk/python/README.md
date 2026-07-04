@@ -10,8 +10,9 @@ Directory + Identity, Receipt, Publication, Host Binding, Mission,
 Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compatibility
 OpenAI adapter seam, and Convenience Wrapper execution seam
 partial. The package exposes typed
-feature/version discovery with root client close, private C ABI v4 discovery,
-daemon lifecycle/open-runtime, identity projection, and runtime
+feature/version discovery with root client close, public `SdkEnvironment`
+process-root factories, private C ABI v4 discovery, daemon
+lifecycle/open-runtime, identity projection, and runtime
 health/unary/stream/bidi/prepare-submit handle transports, runtime connection
 state, runtime health readiness facts, DaemonHandle lifecycle
 status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local

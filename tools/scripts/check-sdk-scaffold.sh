@@ -104,6 +104,7 @@ for path in \
   sdk/python/easynet_sdk/compatibility.py \
   sdk/python/easynet_sdk/wrappers.py \
   sdk/python/easynet_sdk/connection.py \
+  sdk/python/easynet_sdk/environment.py \
   sdk/python/easynet_sdk/errors.py \
   sdk/python/easynet_sdk/health.py \
   sdk/python/easynet_sdk/invocation.py \
@@ -126,6 +127,7 @@ for path in \
   sdk/python/tests/test_compatibility.py \
   sdk/python/tests/test_wrappers.py \
   sdk/python/tests/test_connection.py \
+  sdk/python/tests/test_environment.py \
   sdk/python/tests/test_invocation.py \
   sdk/python/tests/test_conformance.py \
   sdk/python/tests/test_runtime.py \
@@ -534,6 +536,9 @@ require_literal sdk/python/easynet_sdk/_cabi.py "easynet_runtime_health"
 require_literal sdk/python/easynet_sdk/_cabi.py "easynet_invocation_stream_open"
 require_literal sdk/python/easynet_sdk/_cabi.py "easynet_invocation_bidi_open"
 require_literal sdk/python/easynet_sdk/_cabi.py "EXPECTED_ABI_VERSION"
+require_literal sdk/python/easynet_sdk/environment.py "SdkEnvironment"
+require_literal sdk/python/easynet_sdk/environment.py "default_environment"
+require_literal sdk/python/easynet_sdk/environment.py "connect_local"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonHandle"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonLifecycleState"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonTransport"

@@ -645,13 +645,16 @@ class CABIDaemonTransport:
     lib: CLILibrary
     _handles: dict[str, int] = field(default_factory=dict)
     _status_cache: dict[str, dict[str, object]] = field(default_factory=dict)
+    _closed: bool = False
 
     def discover(self, options_json: bytes) -> bytes:
+        self._require_open()
         raw = self.lib.daemon_discover(options_json)
         status = _daemon_status_from_cabi("0", raw)
         return _json_bytes(status["endpoints"])
 
     def start(self, config_json: bytes) -> bytes:
+        self._require_open()
         daemon_handle = self.lib.daemon_start(_daemon_start_config_for_cabi(config_json))
         public_id = str(daemon_handle)
         self._handles[public_id] = daemon_handle
@@ -660,6 +663,7 @@ class CABIDaemonTransport:
         return _json_bytes(status)
 
     def attach(self, options_json: bytes) -> bytes:
+        self._require_open()
         daemon_handle = self.lib.daemon_attach(options_json)
         public_id = str(daemon_handle)
         self._handles[public_id] = daemon_handle
@@ -717,6 +721,7 @@ class CABIDaemonTransport:
         self._status_cache.pop(handle_id, None)
 
     def _require_daemon_handle(self, handle_id: str) -> int:
+        self._require_open()
         daemon_handle = self._handles.get(handle_id)
         if daemon_handle is None or daemon_handle <= 0:
             raise SDKError(
@@ -726,6 +731,27 @@ class CABIDaemonTransport:
                 message="daemon handle is not owned by this transport",
             )
         return daemon_handle
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        for handle_id, daemon_handle in list(self._handles.items()):
+            try:
+                self.lib.daemon_detach(daemon_handle)
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            finally:
+                self._handles.pop(handle_id, None)
+                self._status_cache.pop(handle_id, None)
+        if first_error is not None:
+            raise first_error
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _closed_error("daemon transport is closed")
 
 
 @dataclass

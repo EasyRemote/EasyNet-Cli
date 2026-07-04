@@ -659,6 +659,24 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
 
+    def test_daemon_transport_close_detaches_owned_handles_once(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        transport = CABIDaemonTransport(lib)
+        control = DaemonControl(transport)
+
+        attached = control.attach(
+            AttachOptions(control_endpoint="unix:///tmp/control.sock")
+        )
+        transport.close()
+        transport.close()
+
+        self.assertEqual(attached.handle_id, "707")
+        self.assertEqual(raw.daemon_detaches, [707])
+        with self.assertRaises(SDKError) as caught:
+            transport.discover(b"{}")
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_runtime_transport_drives_health_and_unary_invoke(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
