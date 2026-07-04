@@ -189,6 +189,7 @@ schema_files=(
   surface-page-page.schema.json
   surface-public-page-ref.schema.json
   surface-manifest.schema.json
+  surface-health.schema.json
   surface-mutation-result.schema.json
   compatibility.schema.json
   compatibility-list-models-request.schema.json
@@ -288,6 +289,7 @@ fixture_files=(
   surface-page-page.v4.json
   surface-public-page-ref.v4.json
   surface-manifest.v4.json
+  surface-health.v4.json
   surface-mutation-result.v4.json
   compatibility-list-models-request.v4.json
   compatibility-chat-completion-request.v4.json
@@ -423,6 +425,7 @@ require_literal sdk/go/surface.go "SurfaceTransport"
 require_literal sdk/go/surface.go "SurfaceCreatePageRequest"
 require_literal sdk/go/surface.go "SurfaceManifest"
 require_literal sdk/go/surface.go "SurfacePublicPageRef"
+require_literal sdk/go/surface.go "SurfaceHealth"
 require_literal sdk/go/compatibility.go "CompatibilityClient"
 require_literal sdk/go/compatibility.go "CompatibilityTransport"
 require_literal sdk/go/compatibility.go "CompatibilityChatCompletionRequest"
@@ -528,6 +531,7 @@ require_literal sdk/python/easynet_sdk/surface.py "SurfaceTransport"
 require_literal sdk/python/easynet_sdk/surface.py "SurfaceCreatePageRequest"
 require_literal sdk/python/easynet_sdk/surface.py "SurfaceManifest"
 require_literal sdk/python/easynet_sdk/surface.py "SurfacePublicPageRef"
+require_literal sdk/python/easynet_sdk/surface.py "SurfaceHealth"
 require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityClient"
 require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityTransport"
 require_literal sdk/python/easynet_sdk/compatibility.py "CompatibilityChatCompletionRequest"

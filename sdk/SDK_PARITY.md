@@ -77,9 +77,11 @@ method spelling.
   policy, concrete daemon trust/session carriers, and product cutovers remain
   incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
-  `pages.list/publish/get/unpublish`; backend route serving, browser auth,
-  CDN/cache policy, full surface status, content-management UX, and product
-  cutovers remain incomplete.
+  `pages.list/publish/get/unpublish`; Go/Python facade seams now expose page
+  carriers, typed page records, public page refs, manifests, mutation results,
+  and SurfaceHealth readiness projections. Backend route serving, browser auth,
+  CDN/cache policy, content-management UX, concrete surface health carriers, and
+  product cutovers remain incomplete.
 - Compatibility carrier/projection guardrails exist for Rust/C ABI over daemon
   `openai.list_models` and `openai.chat_completions` plus file adapter
   projections over SDK file/resource facts; product API-key policy,
@@ -143,8 +145,9 @@ method spelling.
 - Go Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
-  projection seams; surface health/status, backend route serving, browser auth,
-  CDN/cache policy, content-management UX, and backend page-route cutover remain
+  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams;
+  backend route serving, browser auth, CDN/cache policy, content-management UX,
+  concrete surface health carriers, and backend page-route cutover remain
   incomplete.
 - Go Compatibility facade exposes `CompatibilityClient` list-models, chat, and
   stream-chat Invocation carrier builders plus model, chat, stream, file, and
@@ -207,9 +210,9 @@ method spelling.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
-  projection seams; surface health/status, backend route serving, browser auth,
-  CDN/cache policy, content-management UX, and product cutovers remain
-  incomplete.
+  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams;
+  backend route serving, browser auth, CDN/cache policy, content-management UX,
+  concrete surface health carriers, and product cutovers remain incomplete.
 - Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
   and stream-chat Invocation carrier builders plus model, chat, stream, file,
   and file-delete projection seams; product API-key policy, quota/rate limits,

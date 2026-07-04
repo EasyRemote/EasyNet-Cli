@@ -11,11 +11,13 @@ type memorySurfaceTransport struct {
 	createInvocation   string
 	deleteInvocation   string
 	manifestInvocation string
+	healthInvocation   string
 	pagePage           string
 	pageRecord         string
 	manifest           string
 	publicRef          string
 	mutationResult     string
+	health             string
 	seen               map[string]map[string]any
 }
 
@@ -48,6 +50,11 @@ func (m *memorySurfaceTransport) BuildManifestInvocation(_ context.Context, requ
 	return []byte(m.manifestInvocation), nil
 }
 
+func (m *memorySurfaceTransport) BuildHealthInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_health", requestJSON)
+	return []byte(m.healthInvocation), nil
+}
+
 func (m *memorySurfaceTransport) ListPages(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("list_pages", requestJSON)
 	return []byte(m.pagePage), nil
@@ -73,6 +80,11 @@ func (m *memorySurfaceTransport) PublicPageRef(_ context.Context, requestJSON []
 	return []byte(m.publicRef), nil
 }
 
+func (m *memorySurfaceTransport) SurfaceHealth(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("surface_health", requestJSON)
+	return []byte(m.health), nil
+}
+
 func surfaceBaseForTest() SurfaceCarrierBase {
 	return SurfaceCarrierBase{
 		CallerURA:         "easynet:///r/example/agent/alice.sdk",
@@ -91,6 +103,7 @@ func TestSurfaceBuildsPageInvocations(t *testing.T) {
 		createInvocation:   surfaceCreateInvocationJSON,
 		deleteInvocation:   surfaceDeleteInvocationJSON,
 		manifestInvocation: surfaceManifestInvocationJSON,
+		healthInvocation:   surfaceHealthInvocationJSON,
 	}
 	client, err := NewSurfaceClient(transport)
 	if err != nil {
@@ -136,6 +149,17 @@ func TestSurfaceBuildsPageInvocations(t *testing.T) {
 	if manifestDraft.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.get@1.0.0" {
 		t.Fatalf("manifest descriptor = %q", manifestDraft.DescriptorRef())
 	}
+
+	healthDraft, err := client.BuildHealthInvocation(context.Background(), SurfaceHealthRequest{SurfaceCarrierBase: surfaceBaseForTest(), SurfaceRef: "easynet:///r/example/resource/alice.docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if healthDraft.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.health@1.0.0" {
+		t.Fatalf("health descriptor = %q", healthDraft.DescriptorRef())
+	}
+	if transport.seen["build_health"]["surface_ref"] != "easynet:///r/example/resource/alice.docs" {
+		t.Fatalf("surface_ref not preserved: %#v", transport.seen["build_health"])
+	}
 }
 
 func TestSurfaceProjectsPagesManifestRefAndMutation(t *testing.T) {
@@ -145,6 +169,7 @@ func TestSurfaceProjectsPagesManifestRefAndMutation(t *testing.T) {
 		manifest:       surfaceManifestJSON,
 		publicRef:      surfacePublicPageRefJSON,
 		mutationResult: surfaceMutationResultJSON,
+		health:         surfaceHealthJSON,
 	}
 	client, err := NewSurfaceClient(transport)
 	if err != nil {
@@ -190,6 +215,25 @@ func TestSurfaceProjectsPagesManifestRefAndMutation(t *testing.T) {
 	if !result.Removed || result.State != "deleted" {
 		t.Fatalf("unexpected mutation result: %#v", result)
 	}
+
+	health, err := client.SurfaceHealth(context.Background(), SurfaceHealthRequest{SurfaceCarrierBase: surfaceBaseForTest(), ProjectID: "docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !health.Ready || health.PageCount != 1 || len(health.Checks) != 2 {
+		t.Fatalf("unexpected surface health: %#v", health)
+	}
+	if health.DescriptorVersion != "1.0.0" || health.Checks[0].Name != "manifest" {
+		t.Fatalf("descriptor/check not preserved: %#v", health)
+	}
+
+	status, err := client.SurfaceStatus(context.Background(), SurfaceStatusRequest{SurfaceCarrierBase: surfaceBaseForTest(), ProjectID: "docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.SurfaceRef != health.SurfaceRef {
+		t.Fatalf("surface status mismatch: %#v", status)
+	}
 }
 
 func TestSurfaceRejectsInvalidRequests(t *testing.T) {
@@ -208,6 +252,9 @@ func TestSurfaceRejectsInvalidRequests(t *testing.T) {
 	}
 	if _, err := client.ListPages(context.Background(), SurfaceListPagesRequest{SurfaceCarrierBase: surfaceBaseForTest(), Limit: MaxSurfacePageSize + 1}); err == nil {
 		t.Fatal("expected page limit rejection")
+	}
+	if _, err := client.BuildHealthInvocation(context.Background(), SurfaceHealthRequest{SurfaceCarrierBase: surfaceBaseForTest(), SurfaceRef: "https://example/web/alice/docs/"}); err == nil {
+		t.Fatal("expected HTTP surface_ref rejection")
 	}
 }
 
@@ -257,6 +304,18 @@ const surfaceManifestInvocationJSON = `{
   "args": {"project_id": "docs"},
   "content_type": "application/json",
   "metadata": {"request_id": "surface-manifest-1", "profile": "surface", "system_ability": "pages.get", "carrier_owner": "daemon_sdk"}
+}`
+
+const surfaceHealthInvocationJSON = `{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/agent/alice.pages",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+  "subject_ura": "easynet:///r/example/agent/alice.pages",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"surface_ref": "easynet:///r/example/resource/alice.docs"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "surface-health-1", "profile": "surface", "system_ability": "pages.health", "carrier_owner": "daemon_sdk"}
 }`
 
 const surfacePageRecordJSON = `{
@@ -312,4 +371,21 @@ const surfaceMutationResultJSON = `{
   "removed": true,
   "state": "deleted",
   "metadata": {"profile": "surface", "source_ability": "pages.unpublish"}
+}`
+
+const surfaceHealthJSON = `{
+  "profile": "surface",
+  "kind": "surface_health",
+  "state": "ready",
+  "ready": true,
+  "owner_ura": "easynet:///r/example/agent/alice.pages",
+  "surface_ref": "easynet:///r/example/resource/alice.docs",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+  "descriptor_version": "1.0.0",
+  "page_count": 1,
+  "checks": [
+    {"name": "manifest", "state": "ready", "ready": true, "message": null, "latency_ms": 3, "metadata": {"source": "pages.get"}},
+    {"name": "public_ref", "state": "ready", "ready": true, "message": null, "latency_ms": 1, "metadata": {"route_kind": "hub_web"}}
+  ],
+  "metadata": {"profile": "surface", "source_ability": "pages.health", "rendering_owner": "backend"}
 }`

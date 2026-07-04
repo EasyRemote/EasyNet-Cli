@@ -7,8 +7,10 @@ from easynet_sdk.surface import (
     SurfaceClient,
     SurfaceCreatePageRequest,
     SurfaceDeletePageRequest,
+    SurfaceHealthRequest,
     SurfaceListPagesRequest,
     SurfaceManifestRequest,
+    SurfaceStatusRequest,
 )
 
 
@@ -58,6 +60,18 @@ SURFACE_MANIFEST_INVOCATION = b"""{
   "args": {"project_id": "docs"},
   "content_type": "application/json",
   "metadata": {"request_id": "surface-manifest-1", "profile": "surface", "system_ability": "pages.get", "carrier_owner": "daemon_sdk"}
+}"""
+
+SURFACE_HEALTH_INVOCATION = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/agent/alice.pages",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+  "subject_ura": "easynet:///r/example/agent/alice.pages",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"surface_ref": "easynet:///r/example/resource/alice.docs"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "surface-health-1", "profile": "surface", "system_ability": "pages.health", "carrier_owner": "daemon_sdk"}
 }"""
 
 SURFACE_PAGE_RECORD = b"""{
@@ -123,6 +137,23 @@ SURFACE_MUTATION_RESULT = b"""{
   "metadata": {"profile": "surface", "source_ability": "pages.unpublish"}
 }"""
 
+SURFACE_HEALTH = b"""{
+  "profile": "surface",
+  "kind": "surface_health",
+  "state": "ready",
+  "ready": true,
+  "owner_ura": "easynet:///r/example/agent/alice.pages",
+  "surface_ref": "easynet:///r/example/resource/alice.docs",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+  "descriptor_version": "1.0.0",
+  "page_count": 1,
+  "checks": [
+    {"name": "manifest", "state": "ready", "ready": true, "message": null, "latency_ms": 3, "metadata": {"source": "pages.get"}},
+    {"name": "public_ref", "state": "ready", "ready": true, "message": null, "latency_ms": 1, "metadata": {"route_kind": "hub_web"}}
+  ],
+  "metadata": {"profile": "surface", "source_ability": "pages.health", "rendering_owner": "backend"}
+}"""
+
 
 class MemorySurfaceTransport:
     def __init__(self) -> None:
@@ -147,6 +178,10 @@ class MemorySurfaceTransport:
         self._remember("build_manifest", request_json)
         return SURFACE_MANIFEST_INVOCATION
 
+    def build_health_invocation(self, request_json: bytes) -> bytes:
+        self._remember("build_health", request_json)
+        return SURFACE_HEALTH_INVOCATION
+
     def list_pages(self, request_json: bytes) -> bytes:
         self._remember("list_pages", request_json)
         return SURFACE_PAGE_PAGE
@@ -166,6 +201,10 @@ class MemorySurfaceTransport:
     def public_page_ref(self, request_json: bytes) -> bytes:
         self._remember("public_page_ref", request_json)
         return SURFACE_PUBLIC_PAGE_REF
+
+    def surface_health(self, request_json: bytes) -> bytes:
+        self._remember("surface_health", request_json)
+        return SURFACE_HEALTH
 
 
 def surface_base() -> SurfaceCarrierBase:
@@ -223,6 +262,20 @@ class SurfaceClientTests(unittest.TestCase):
             "easynet:///r/example/ability/alice.pages.pages.get@1.0.0",
         )
 
+        health_draft = client.build_health_invocation(
+            SurfaceHealthRequest(
+                surface_base(), surface_ref="easynet:///r/example/resource/alice.docs"
+            )
+        )
+        self.assertEqual(
+            health_draft.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+        )
+        self.assertEqual(
+            transport.seen["build_health"]["surface_ref"],
+            "easynet:///r/example/resource/alice.docs",
+        )
+
     def test_projects_pages_manifest_ref_and_mutation(self) -> None:
         client = SurfaceClient(MemorySurfaceTransport())
 
@@ -258,6 +311,19 @@ class SurfaceClientTests(unittest.TestCase):
         self.assertTrue(result.removed)
         self.assertEqual(result.state, "deleted")
 
+        health = client.surface_health(
+            SurfaceHealthRequest(surface_base(), project_id="docs")
+        )
+        self.assertTrue(health.ready)
+        self.assertEqual(health.page_count, 1)
+        self.assertEqual(len(health.checks), 2)
+        self.assertEqual(health.checks[0].name, "manifest")
+
+        status = client.surface_status(
+            SurfaceStatusRequest(surface_base(), project_id="docs")
+        )
+        self.assertEqual(status.surface_ref, health.surface_ref)
+
     def test_rejects_invalid_requests(self) -> None:
         client = SurfaceClient(MemorySurfaceTransport())
 
@@ -285,6 +351,12 @@ class SurfaceClientTests(unittest.TestCase):
             client.list_pages(
                 SurfaceListPagesRequest(
                     surface_base(), limit=MAX_SURFACE_PAGE_SIZE + 1
+                )
+            )
+        with self.assertRaises(Exception):
+            client.build_health_invocation(
+                SurfaceHealthRequest(
+                    surface_base(), surface_ref="https://example/web/alice/docs/"
                 )
             )
 

@@ -106,9 +106,29 @@ class SurfaceManifestRequest:
         return _json_bytes(value)
 
 
+@dataclass(frozen=True)
+class SurfaceHealthRequest:
+    base: SurfaceCarrierBase
+    project_id: str = ""
+    surface_ref: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        if self.project_id:
+            _validate_project_id(self.project_id)
+        if self.surface_ref:
+            _validate_surface_ref(self.surface_ref)
+        value = self.base.to_json_dict()
+        if self.project_id:
+            value["project_id"] = self.project_id
+        if self.surface_ref:
+            value["surface_ref"] = self.surface_ref
+        return _json_bytes(value)
+
+
 PageQuery = SurfaceListPagesRequest
 CreatePageRequest = SurfaceCreatePageRequest
 DeletePageRequest = SurfaceDeletePageRequest
+SurfaceStatusRequest = SurfaceHealthRequest
 
 
 @dataclass(frozen=True)
@@ -277,6 +297,59 @@ class SurfaceMutationResult:
         )
 
 
+@dataclass(frozen=True)
+class SurfaceHealthCheck:
+    name: str
+    state: str
+    ready: bool
+    message: Optional[str]
+    latency_ms: int
+    metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class SurfaceHealth:
+    """Daemon-governed surface readiness projection."""
+
+    profile: str
+    kind: str
+    state: str
+    ready: bool
+    owner_ura: str
+    surface_ref: str
+    descriptor_ref: str
+    descriptor_version: str
+    page_count: int
+    checks: tuple[SurfaceHealthCheck, ...]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "SurfaceHealth":
+        decoded = _json_object(raw, "surface health")
+        if decoded.get("profile") != _PROFILE or decoded.get("kind") != "surface_health":
+            raise _invalid_surface("invalid surface health projection")
+        page_count = _required_non_negative_int(decoded, "page_count")
+        checks = decoded.get("checks")
+        if not isinstance(checks, list):
+            raise _invalid_surface("checks must be an array")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            state=_required_string(decoded, "state"),
+            ready=_required_bool(decoded, "ready"),
+            owner_ura=_required_string(decoded, "owner_ura"),
+            surface_ref=_required_string(decoded, "surface_ref"),
+            descriptor_ref=_required_string(decoded, "descriptor_ref"),
+            descriptor_version=_required_string(decoded, "descriptor_version"),
+            page_count=page_count,
+            checks=tuple(_health_check(item) for item in checks),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+SurfaceStatus = SurfaceHealth
+
+
 @runtime_checkable
 class SurfaceTransport(Protocol):
     """Concrete Surface operations supplied by the integration layer."""
@@ -293,6 +366,9 @@ class SurfaceTransport(Protocol):
     def build_manifest_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def build_health_invocation(self, request_json: bytes) -> bytes:
+        ...
+
     def list_pages(self, request_json: bytes) -> bytes:
         ...
 
@@ -306,6 +382,9 @@ class SurfaceTransport(Protocol):
         ...
 
     def public_page_ref(self, request_json: bytes) -> bytes:
+        ...
+
+    def surface_health(self, request_json: bytes) -> bytes:
         ...
 
 
@@ -345,6 +424,13 @@ class SurfaceClient:
             request.to_json_bytes(),
             self.transport.build_manifest_invocation,
             "surface manifest invocation failed",
+        )
+
+    def build_health_invocation(self, request: SurfaceHealthRequest) -> InvocationDraft:
+        return self._invocation(
+            request.to_json_bytes(),
+            self.transport.build_health_invocation,
+            "surface health invocation failed",
         )
 
     def list_pages(self, request: SurfaceListPagesRequest) -> SurfacePagePage:
@@ -389,6 +475,18 @@ class SurfaceClient:
             raise _transport_error("surface public page ref failed", exc) from exc
         return SurfacePublicPageRef.from_json(raw)
 
+    def surface_health(self, request: SurfaceHealthRequest) -> SurfaceHealth:
+        try:
+            raw = self.transport.surface_health(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("surface health failed", exc) from exc
+        return SurfaceHealth.from_json(raw)
+
+    def surface_status(self, request: SurfaceStatusRequest) -> SurfaceStatus:
+        return self.surface_health(request)
+
     def _invocation(
         self, request_json: bytes, fn: Callable[[bytes], bytes], label: str
     ) -> InvocationDraft:
@@ -431,6 +529,15 @@ def _validate_project_id(value: str) -> None:
         raise _invalid_surface("invalid surface project_id")
 
 
+def _validate_surface_ref(value: str) -> None:
+    if not value or not value.strip() or value.strip() != value:
+        raise _invalid_surface("surface_ref must be a clean daemon ref")
+    if value.startswith("http://") or value.startswith("https://"):
+        raise _invalid_surface("surface_ref must not be an HTTP route")
+    if not value.startswith("easynet://"):
+        raise _invalid_surface("surface_ref must be an EasyNet ref")
+
+
 def _validate_page_record(record: SurfacePageRecord) -> None:
     if (
         record.profile != _PROFILE
@@ -459,6 +566,20 @@ def _page_record(value: object) -> SurfacePageRecord:
     )
     _validate_page_record(record)
     return record
+
+
+def _health_check(value: object) -> SurfaceHealthCheck:
+    if not isinstance(value, dict):
+        raise _invalid_surface("surface health check must be an object")
+    latency = _required_non_negative_int(value, "latency_ms")
+    return SurfaceHealthCheck(
+        name=_required_string(value, "name"),
+        state=_required_string(value, "state"),
+        ready=_required_bool(value, "ready"),
+        message=_optional_string(value.get("message"), "message"),
+        latency_ms=latency,
+        metadata=_required_mapping(value, "metadata"),
+    )
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
@@ -502,6 +623,13 @@ def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> in
     value = decoded.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise _invalid_surface(f"{field_name} is required")
+    return value
+
+
+def _required_non_negative_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_surface(f"{field_name} must be a non-negative integer")
     return value
 
 

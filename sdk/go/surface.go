@@ -50,6 +50,12 @@ type SurfaceManifestRequest struct {
 	ProjectID string `json:"project_id"`
 }
 
+type SurfaceHealthRequest struct {
+	SurfaceCarrierBase
+	ProjectID  string `json:"project_id,omitempty"`
+	SurfaceRef string `json:"surface_ref,omitempty"`
+}
+
 type SurfacePublicPageRefRequest struct {
 	Page SurfacePageRecord `json:"page"`
 }
@@ -58,6 +64,7 @@ type PageQuery = SurfaceListPagesRequest
 type CreatePageRequest = SurfaceCreatePageRequest
 type DeletePageRequest = SurfaceDeletePageRequest
 type PublicPageRefRequest = SurfacePublicPageRefRequest
+type SurfaceStatusRequest = SurfaceHealthRequest
 
 type SurfacePageRecord struct {
 	Profile    string         `json:"profile"`
@@ -114,17 +121,45 @@ type SurfaceMutationResult struct {
 	Metadata  map[string]any `json:"metadata"`
 }
 
+type SurfaceHealthCheck struct {
+	Name      string         `json:"name"`
+	State     string         `json:"state"`
+	Ready     bool           `json:"ready"`
+	Message   *string        `json:"message"`
+	LatencyMS int64          `json:"latency_ms,omitempty"`
+	Metadata  map[string]any `json:"metadata"`
+}
+
+// SurfaceHealth preserves daemon-governed surface readiness facts.
+type SurfaceHealth struct {
+	Profile           string               `json:"profile"`
+	Kind              string               `json:"kind"`
+	State             string               `json:"state"`
+	Ready             bool                 `json:"ready"`
+	OwnerURA          string               `json:"owner_ura"`
+	SurfaceRef        string               `json:"surface_ref"`
+	DescriptorRef     string               `json:"descriptor_ref"`
+	DescriptorVersion string               `json:"descriptor_version"`
+	PageCount         int                  `json:"page_count"`
+	Checks            []SurfaceHealthCheck `json:"checks"`
+	Metadata          map[string]any       `json:"metadata"`
+}
+
+type SurfaceStatus = SurfaceHealth
+
 // SurfaceTransport supplies daemon Surface operations behind the facade.
 type SurfaceTransport interface {
 	BuildListPagesInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildCreatePageInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildDeletePageInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildManifestInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildHealthInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListPages(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CreatePage(ctx context.Context, requestJSON []byte) ([]byte, error)
 	DeletePage(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SurfaceManifest(ctx context.Context, requestJSON []byte) ([]byte, error)
 	PublicPageRef(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SurfaceHealth(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 // SurfaceTransportFunc adapts functions into a SurfaceTransport.
@@ -133,11 +168,13 @@ type SurfaceTransportFunc struct {
 	BuildCreatePageInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildDeletePageInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildManifestInvocationFunc   func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildHealthInvocationFunc     func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListPagesFunc                 func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CreatePageFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	DeletePageFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SurfaceManifestFunc           func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	PublicPageRefFunc             func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SurfaceHealthFunc             func(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 func (f SurfaceTransportFunc) BuildListPagesInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -166,6 +203,13 @@ func (f SurfaceTransportFunc) BuildManifestInvocation(ctx context.Context, reque
 		return nil, invalidRuntimeClient("surface manifest invocation transport function is required")
 	}
 	return f.BuildManifestInvocationFunc(ctx, requestJSON)
+}
+
+func (f SurfaceTransportFunc) BuildHealthInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildHealthInvocationFunc == nil {
+		return nil, invalidRuntimeClient("surface health invocation transport function is required")
+	}
+	return f.BuildHealthInvocationFunc(ctx, requestJSON)
 }
 
 func (f SurfaceTransportFunc) ListPages(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -203,6 +247,13 @@ func (f SurfaceTransportFunc) PublicPageRef(ctx context.Context, requestJSON []b
 	return f.PublicPageRefFunc(ctx, requestJSON)
 }
 
+func (f SurfaceTransportFunc) SurfaceHealth(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.SurfaceHealthFunc == nil {
+		return nil, invalidRuntimeClient("surface health transport function is required")
+	}
+	return f.SurfaceHealthFunc(ctx, requestJSON)
+}
+
 // SurfaceClient is the Surface profile facade.
 type SurfaceClient struct {
 	transport SurfaceTransport
@@ -229,6 +280,10 @@ func (c *SurfaceClient) BuildDeletePageInvocation(ctx context.Context, req Surfa
 
 func (c *SurfaceClient) BuildManifestInvocation(ctx context.Context, req SurfaceManifestRequest) (InvocationDraft, error) {
 	return c.buildInvocation(ctx, req, validateSurfaceManifestRequest, c.transport.BuildManifestInvocation, "surface manifest invocation failed")
+}
+
+func (c *SurfaceClient) BuildHealthInvocation(ctx context.Context, req SurfaceHealthRequest) (InvocationDraft, error) {
+	return c.buildInvocation(ctx, req, validateSurfaceHealthRequest, c.transport.BuildHealthInvocation, "surface health invocation failed")
 }
 
 func (c *SurfaceClient) ListPages(ctx context.Context, req SurfaceListPagesRequest) (SurfacePagePage, error) {
@@ -296,6 +351,25 @@ func (c *SurfaceClient) PublicPageRef(ctx context.Context, req SurfacePublicPage
 		return SurfacePublicPageRef{}, wrapSurfaceTransportError("surface public page ref failed", err)
 	}
 	return NewSurfacePublicPageRefFromJSON(raw)
+}
+
+func (c *SurfaceClient) SurfaceHealth(ctx context.Context, req SurfaceHealthRequest) (SurfaceHealth, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return SurfaceHealth{}, err
+	}
+	requestJSON, err := marshalSurfaceRequest(req, validateSurfaceHealthRequest)
+	if err != nil {
+		return SurfaceHealth{}, err
+	}
+	raw, err := c.transport.SurfaceHealth(ctx, requestJSON)
+	if err != nil {
+		return SurfaceHealth{}, wrapSurfaceTransportError("surface health failed", err)
+	}
+	return NewSurfaceHealthFromJSON(raw)
+}
+
+func (c *SurfaceClient) SurfaceStatus(ctx context.Context, req SurfaceStatusRequest) (SurfaceStatus, error) {
+	return c.SurfaceHealth(ctx, SurfaceHealthRequest(req))
 }
 
 func (c *SurfaceClient) buildInvocation(ctx context.Context, req any, validate func(any) error, fn func(context.Context, []byte) ([]byte, error), label string) (InvocationDraft, error) {
@@ -414,6 +488,70 @@ func NewSurfaceMutationResultFromJSON(raw []byte) (SurfaceMutationResult, error)
 	return result, nil
 }
 
+func NewSurfaceHealthFromJSON(raw []byte) (SurfaceHealth, error) {
+	var dto struct {
+		Profile           string `json:"profile"`
+		Kind              string `json:"kind"`
+		State             string `json:"state"`
+		Ready             bool   `json:"ready"`
+		OwnerURA          string `json:"owner_ura"`
+		SurfaceRef        string `json:"surface_ref"`
+		DescriptorRef     string `json:"descriptor_ref"`
+		DescriptorVersion string `json:"descriptor_version"`
+		PageCount         int    `json:"page_count"`
+		Checks            []struct {
+			Name      string         `json:"name"`
+			State     string         `json:"state"`
+			Ready     bool           `json:"ready"`
+			Message   *string        `json:"message"`
+			LatencyMS *int64         `json:"latency_ms"`
+			Metadata  map[string]any `json:"metadata"`
+		} `json:"checks"`
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return SurfaceHealth{}, invalidRuntimePayload(fmt.Sprintf("decode surface health JSON: %v", err), err)
+	}
+	health := SurfaceHealth{
+		Profile:           dto.Profile,
+		Kind:              dto.Kind,
+		State:             dto.State,
+		Ready:             dto.Ready,
+		OwnerURA:          dto.OwnerURA,
+		SurfaceRef:        dto.SurfaceRef,
+		DescriptorRef:     dto.DescriptorRef,
+		DescriptorVersion: dto.DescriptorVersion,
+		PageCount:         dto.PageCount,
+		Checks:            make([]SurfaceHealthCheck, 0, len(dto.Checks)),
+		Metadata:          dto.Metadata,
+	}
+	for _, check := range dto.Checks {
+		if check.LatencyMS == nil {
+			return SurfaceHealth{}, invalidRuntimePayload("invalid surface health check projection", nil)
+		}
+		health.Checks = append(health.Checks, SurfaceHealthCheck{
+			Name:      check.Name,
+			State:     check.State,
+			Ready:     check.Ready,
+			Message:   check.Message,
+			LatencyMS: *check.LatencyMS,
+			Metadata:  check.Metadata,
+		})
+	}
+	if health.Profile != surfaceProfile || health.Kind != "surface_health" || health.State == "" ||
+		health.OwnerURA == "" || health.SurfaceRef == "" || health.DescriptorRef == "" ||
+		health.DescriptorVersion == "" || health.PageCount < 0 || health.Checks == nil ||
+		health.Metadata == nil {
+		return SurfaceHealth{}, invalidRuntimePayload("invalid surface health projection", nil)
+	}
+	for _, check := range health.Checks {
+		if check.Name == "" || check.State == "" || check.LatencyMS < 0 || check.Metadata == nil {
+			return SurfaceHealth{}, invalidRuntimePayload("invalid surface health check projection", nil)
+		}
+	}
+	return health, nil
+}
+
 func marshalSurfaceRequest(req any, validate func(any) error) ([]byte, error) {
 	if err := validate(req); err != nil {
 		return nil, err
@@ -473,10 +611,39 @@ func validateSurfaceManifestRequest(req any) error {
 	return validateSurfaceProjectID(value.ProjectID)
 }
 
+func validateSurfaceHealthRequest(req any) error {
+	value := req.(SurfaceHealthRequest)
+	if err := validateSurfaceCarrierBase(value.SurfaceCarrierBase); err != nil {
+		return err
+	}
+	if value.ProjectID != "" {
+		if err := validateSurfaceProjectID(value.ProjectID); err != nil {
+			return err
+		}
+	}
+	if value.SurfaceRef != "" {
+		return validateSurfaceRef(value.SurfaceRef)
+	}
+	return nil
+}
+
 func validateSurfaceCarrierBase(base SurfaceCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
 		return invalidRuntimePayload("complete surface invocation carrier is required", nil)
+	}
+	return nil
+}
+
+func validateSurfaceRef(value string) error {
+	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+		return invalidRuntimePayload("surface_ref must be a clean daemon ref", nil)
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return invalidRuntimePayload("surface_ref must not be an HTTP route", nil)
+	}
+	if !strings.HasPrefix(value, "easynet://") {
+		return invalidRuntimePayload("surface_ref must be an EasyNet ref", nil)
 	}
 	return nil
 }
