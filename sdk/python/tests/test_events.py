@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from easynet_sdk import ErrorCode, SDKError, is_code
 from easynet_sdk.events import (
     DEFAULT_EVENT_PAGE_SIZE,
     MAX_EVENT_PAGE_SIZE,
@@ -199,6 +200,7 @@ def event_stream(stream: str) -> bytes:
 class MemoryEventTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
+        self.close_calls = 0
 
     def _remember(self, name: str, request_json: bytes) -> None:
         self.seen[name] = json.loads(request_json.decode("utf-8"))
@@ -250,6 +252,9 @@ class MemoryEventTransport:
     def project_terminal(self, terminal_json: bytes) -> bytes:
         self._remember("project_terminal", terminal_json)
         return EVENTS_TERMINAL
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def events_base() -> EventsCarrierBase:
@@ -421,6 +426,21 @@ class EventClientTests(unittest.TestCase):
             )
         with self.assertRaises(Exception):
             DeviceEventPage.from_json(EVENTS_DEVICE_EVENT_PAGE_WITH_DIRECTORY_ITEM)
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryEventTransport()
+        client = EventClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_directory_subscription_invocation(
+                EventsDirectorySubscriptionRequest(events_base())
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(transport.seen, {})
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 
@@ -393,12 +394,15 @@ class SurfaceClient:
     """Surface profile facade."""
 
     transport: SurfaceTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_surface("surface transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("surface"))
 
     def build_list_pages_invocation(self, request: SurfaceListPagesRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_list_pages_invocation,
@@ -406,6 +410,7 @@ class SurfaceClient:
         )
 
     def build_create_page_invocation(self, request: SurfaceCreatePageRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_create_page_invocation,
@@ -413,6 +418,7 @@ class SurfaceClient:
         )
 
     def build_delete_page_invocation(self, request: SurfaceDeletePageRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_delete_page_invocation,
@@ -420,6 +426,7 @@ class SurfaceClient:
         )
 
     def build_manifest_invocation(self, request: SurfaceManifestRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_manifest_invocation,
@@ -427,6 +434,7 @@ class SurfaceClient:
         )
 
     def build_health_invocation(self, request: SurfaceHealthRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_health_invocation,
@@ -434,11 +442,13 @@ class SurfaceClient:
         )
 
     def list_pages(self, request: SurfaceListPagesRequest) -> SurfacePagePage:
+        self._require_open()
         return self._page(
             request.to_json_bytes(), self.transport.list_pages, "surface list pages failed"
         )
 
     def create_page(self, request: SurfaceCreatePageRequest) -> SurfacePageRecord:
+        self._require_open()
         try:
             raw = self.transport.create_page(request.to_json_bytes())
         except SDKError:
@@ -448,6 +458,7 @@ class SurfaceClient:
         return SurfacePageRecord.from_json(raw)
 
     def delete_page(self, request: SurfaceDeletePageRequest) -> SurfaceMutationResult:
+        self._require_open()
         try:
             raw = self.transport.delete_page(request.to_json_bytes())
         except SDKError:
@@ -457,6 +468,7 @@ class SurfaceClient:
         return SurfaceMutationResult.from_json(raw)
 
     def surface_manifest(self, request: SurfaceManifestRequest) -> SurfaceManifest:
+        self._require_open()
         try:
             raw = self.transport.surface_manifest(request.to_json_bytes())
         except SDKError:
@@ -466,6 +478,7 @@ class SurfaceClient:
         return SurfaceManifest.from_json(raw)
 
     def public_page_ref(self, page: SurfacePageRecord) -> SurfacePublicPageRef:
+        self._require_open()
         _validate_page_record(page)
         try:
             raw = self.transport.public_page_ref(_json_bytes(page.to_json_dict()))
@@ -476,6 +489,7 @@ class SurfaceClient:
         return SurfacePublicPageRef.from_json(raw)
 
     def surface_health(self, request: SurfaceHealthRequest) -> SurfaceHealth:
+        self._require_open()
         try:
             raw = self.transport.surface_health(request.to_json_bytes())
         except SDKError:
@@ -508,6 +522,12 @@ class SurfaceClient:
         except Exception as exc:
             raise _transport_error(label, exc) from exc
         return SurfacePagePage.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_base(base: SurfaceCarrierBase) -> None:

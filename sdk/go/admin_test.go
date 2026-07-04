@@ -22,6 +22,7 @@ type memoryAdminTransport struct {
 	deviceSession          string
 	deviceSessionPage      string
 	seen                   map[string]map[string]any
+	closeCalls             int
 }
 
 func (m *memoryAdminTransport) remember(name string, requestJSON []byte) {
@@ -134,6 +135,11 @@ func (m *memoryAdminTransport) CreateDeviceSession(_ context.Context, requestJSO
 func (m *memoryAdminTransport) DeleteDeviceSession(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("delete_device_session", requestJSON)
 	return []byte(adminDeleteSessionResultJSON), nil
+}
+
+func (m *memoryAdminTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func adminBaseForTest() AdminCarrierBase {
@@ -412,6 +418,33 @@ func TestAdminRejectsIncompleteCarrierAndSystemLifecycle(t *testing.T) {
 	}
 	if _, err := client.DeleteDeviceSession(context.Background(), DeleteDeviceSessionRequest{AdminCarrierBase: adminBaseForTest(), SessionID: "browser-session-1"}); err == nil {
 		t.Fatal("expected browser session id rejection")
+	}
+}
+
+func TestAdminClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryAdminTransport{agentListInvocation: adminAgentListInvocationJSON}
+	client, err := NewAdminClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildAgentListInvocation(context.Background(), AdminAgentListRequest{AdminCarrierBase: adminBaseForTest()})
+	if err == nil {
+		t.Fatalf("BuildAgentListInvocation after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if len(transport.seen) != 0 {
+		t.Fatalf("transport called after close: %#v", transport.seen)
 	}
 }
 

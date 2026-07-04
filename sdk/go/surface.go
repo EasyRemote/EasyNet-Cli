@@ -257,6 +257,7 @@ func (f SurfaceTransportFunc) SurfaceHealth(ctx context.Context, requestJSON []b
 // SurfaceClient is the Surface profile facade.
 type SurfaceClient struct {
 	transport SurfaceTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewSurfaceClient(transport SurfaceTransport) (*SurfaceClient, error) {
@@ -402,14 +403,18 @@ func (c *SurfaceClient) pageOperation(ctx context.Context, req any, validate fun
 	return NewSurfacePagePageFromJSON(raw)
 }
 
+func (c *SurfaceClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("surface client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "surface")
+}
+
 func (c *SurfaceClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("surface client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "surface")
 }
 
 func NewSurfacePageRecordFromJSON(raw []byte) (SurfacePageRecord, error) {

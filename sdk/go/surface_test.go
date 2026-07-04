@@ -19,6 +19,7 @@ type memorySurfaceTransport struct {
 	mutationResult     string
 	health             string
 	seen               map[string]map[string]any
+	closeCalls         int
 }
 
 func (m *memorySurfaceTransport) remember(name string, requestJSON []byte) {
@@ -83,6 +84,11 @@ func (m *memorySurfaceTransport) PublicPageRef(_ context.Context, requestJSON []
 func (m *memorySurfaceTransport) SurfaceHealth(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("surface_health", requestJSON)
 	return []byte(m.health), nil
+}
+
+func (m *memorySurfaceTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func surfaceBaseForTest() SurfaceCarrierBase {
@@ -255,6 +261,33 @@ func TestSurfaceRejectsInvalidRequests(t *testing.T) {
 	}
 	if _, err := client.BuildHealthInvocation(context.Background(), SurfaceHealthRequest{SurfaceCarrierBase: surfaceBaseForTest(), SurfaceRef: "https://example/web/alice/docs/"}); err == nil {
 		t.Fatal("expected HTTP surface_ref rejection")
+	}
+}
+
+func TestSurfaceClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memorySurfaceTransport{listInvocation: surfaceListInvocationJSON}
+	client, err := NewSurfaceClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildListPagesInvocation(context.Background(), SurfaceListPagesRequest{SurfaceCarrierBase: surfaceBaseForTest(), Limit: 50})
+	if err == nil {
+		t.Fatalf("BuildListPagesInvocation after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if len(transport.seen) != 0 {
+		t.Fatalf("transport called after close: %#v", transport.seen)
 	}
 }
 

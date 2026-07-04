@@ -263,6 +263,7 @@ func (f WrapperTransportFunc) StartMediaSession(ctx context.Context, requestJSON
 // WrapperClient projects daemon/resource facts and optionally executes wrapper helpers.
 type WrapperClient struct {
 	transport WrapperTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewWrapperClient() *WrapperClient {
@@ -414,10 +415,17 @@ func (c *WrapperClient) requireTransportReady(ctx context.Context) error {
 	if c.transport == nil {
 		return invalidRuntimeClient("wrapper transport is required")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
+	return c.lifecycle.RequireOpen(ctx, "wrapper")
+}
+
+func (c *WrapperClient) Close(ctx context.Context) error {
+	if c == nil {
+		return invalidRuntimeClient("wrapper client is not initialized")
 	}
-	return nil
+	if c.transport == nil {
+		return invalidRuntimeClient("wrapper transport is required")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "wrapper")
 }
 
 func (c *WrapperClient) ProjectTerminalSession(req WrapperTerminalSessionRequest) (WrapperTerminalSessionRecord, error) {

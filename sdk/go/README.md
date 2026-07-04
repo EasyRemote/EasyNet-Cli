@@ -33,18 +33,18 @@ seams and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing token,
 device credential, credential verification, and typed device-session projection
-seams. EventClient exposes directory/device/session/invocation subscription
+seams plus close state seams. EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, device event history pages, and EventFrame
-cursor/resume/drop-report/terminal projection seams. SurfaceClient
+cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
-seams. CompatibilityClient exposes
+seams and close state seams. CompatibilityClient exposes
 OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
 Invocation carriers plus model, chat, stream, file, and file-delete projection
-seams. WrapperClient exposes
+seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
-builders, transport-backed helper seams, and record projections. Concrete daemon
+builders, transport-backed helper close state seams, and record projections. Concrete daemon
 process spawn/default C ABI or UDS transport, directory live transport adapters, local signer implementations,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, concrete Admin trust/session carriers,

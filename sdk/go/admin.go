@@ -450,6 +450,7 @@ func (f AdminTransportFunc) DeleteDeviceSession(ctx context.Context, requestJSON
 // AdminClient is the Admin + Gateway profile facade.
 type AdminClient struct {
 	transport AdminTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewAdminClient(transport AdminTransport) (*AdminClient, error) {
@@ -657,14 +658,18 @@ func (c *AdminClient) resultOperation(ctx context.Context, req any, validate fun
 	return NewAdminGatewayResultFromJSON(raw)
 }
 
+func (c *AdminClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("admin client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "admin")
+}
+
 func (c *AdminClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("admin client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "admin")
 }
 
 func NewGatewayStatusFromJSON(raw []byte) (GatewayStatus, error) {

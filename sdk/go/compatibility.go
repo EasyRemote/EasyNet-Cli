@@ -285,6 +285,7 @@ func (f CompatibilityTransportFunc) DeleteFile(ctx context.Context, requestJSON 
 // CompatibilityClient is the Compatibility profile facade.
 type CompatibilityClient struct {
 	transport CompatibilityTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewCompatibilityClient(transport CompatibilityTransport) (*CompatibilityClient, error) {
@@ -447,6 +448,13 @@ func (c *CompatibilityClient) ProjectFileDeleteResult(req CompatibilityFileDelet
 	}, nil
 }
 
+func (c *CompatibilityClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("compatibility client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "compatibility")
+}
+
 func (c *CompatibilityClient) buildInvocation(ctx context.Context, req any, validate func(any) error, marshal func(any, func(any) error) ([]byte, error), fn func(context.Context, []byte) ([]byte, error), label string) (InvocationDraft, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return InvocationDraft{}, err
@@ -466,10 +474,7 @@ func (c *CompatibilityClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("compatibility client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "compatibility")
 }
 
 func NewCompatibilityModelPageFromJSON(raw []byte) (CompatibilityModelPage, error) {

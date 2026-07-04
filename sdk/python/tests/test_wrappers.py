@@ -2,6 +2,7 @@ import json
 import unittest
 
 from easynet_sdk import (
+    ErrorCode,
     SDKError,
     WrapperBrowserSessionRecord,
     WrapperBrowserSessionRequest,
@@ -20,6 +21,7 @@ from easynet_sdk import (
     WrapperTerminalSessionRecord,
     WrapperTerminalSessionRequest,
     WrapperTerminalStartRequest,
+    is_code,
 )
 
 
@@ -160,6 +162,7 @@ MEDIA_INVOCATION_JSON = b"""
 class MemoryWrapperTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
+        self.close_calls = 0
 
     def _remember(self, name: str, request_json: bytes) -> None:
         self.seen[name] = json.loads(request_json.decode("utf-8"))
@@ -203,6 +206,9 @@ class MemoryWrapperTransport:
     def start_media_session(self, request_json: bytes) -> bytes:
         self._remember("start_media", request_json)
         return MEDIA_SESSION_JSON
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def wrapper_base() -> WrapperCarrierBase:
@@ -438,6 +444,29 @@ class WrapperClientTests(unittest.TestCase):
             WrapperFileRecord.from_json(
                 b'{"profile":"wrappers","kind":"file_record","file_ref":"x","owner_ura":"easynet:///r/example/agent/a","content_type":"text/plain","size_bytes":-1,"metadata":{}}'
             )
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryWrapperTransport()
+        client = WrapperClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_file_transfer_invocation(file_transfer_request())
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(transport.seen, {})
+
+        projected = client.project_file_record(
+            WrapperFileRecordRequest(
+                file_ref="easynet:///r/example/resource/alice.files/report.txt",
+                owner_ura="easynet:///r/example/agent/alice.sdk",
+                content_type="text/plain",
+                size_bytes=42,
+            )
+        )
+        self.assertEqual(projected.kind, "file_record")
 
 
 if __name__ == "__main__":

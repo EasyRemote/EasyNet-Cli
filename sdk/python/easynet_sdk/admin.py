@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 
@@ -689,12 +690,15 @@ class AdminClient:
     """Admin + Gateway profile facade."""
 
     transport: AdminTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_admin("admin transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("admin"))
 
     def build_agent_list_invocation(self, request: AdminAgentListRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_agent_list_invocation,
@@ -702,6 +706,7 @@ class AdminClient:
         )
 
     def build_agent_start_invocation(self, request: AdminAgentStartRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_agent_start_invocation,
@@ -709,6 +714,7 @@ class AdminClient:
         )
 
     def build_agent_stop_invocation(self, request: AdminAgentStopRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_agent_stop_invocation,
@@ -718,6 +724,7 @@ class AdminClient:
     def build_agent_refresh_invocation(
         self, request: AdminAgentRefreshRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_agent_refresh_invocation,
@@ -727,6 +734,7 @@ class AdminClient:
     def build_session_list_invocation(
         self, request: AdminSessionListRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_session_list_invocation,
@@ -734,6 +742,7 @@ class AdminClient:
         )
 
     def gateway_status(self, request: AdminGatewayStatusRequest) -> GatewayStatus:
+        self._require_open()
         try:
             raw = self.transport.gateway_status(request.to_json_bytes())
         except SDKError:
@@ -743,6 +752,7 @@ class AdminClient:
         return GatewayStatus.from_json(raw)
 
     def list_agents(self, request: AdminAgentListRequest) -> AdminAgentPage:
+        self._require_open()
         try:
             raw = self.transport.list_agents(request.to_json_bytes())
         except SDKError:
@@ -752,6 +762,7 @@ class AdminClient:
         return AdminAgentPage.from_json(raw)
 
     def agent_start(self, request: AdminAgentStartRequest) -> AgentStartResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.agent_start,
@@ -759,6 +770,7 @@ class AdminClient:
         )
 
     def agent_stop(self, request: AdminAgentStopRequest) -> AgentStopResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.agent_stop,
@@ -766,6 +778,7 @@ class AdminClient:
         )
 
     def agent_refresh(self, request: AdminAgentRefreshRequest) -> AgentRefreshResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.agent_refresh,
@@ -773,6 +786,7 @@ class AdminClient:
         )
 
     def list_device_sessions(self, request: AdminSessionListRequest) -> DeviceSessionPage:
+        self._require_open()
         try:
             raw = self.transport.list_device_sessions(request.to_json_bytes())
         except SDKError:
@@ -782,6 +796,7 @@ class AdminClient:
         return DeviceSessionPage.from_json(raw)
 
     def join_hub(self, request: AdminJoinHubRequest) -> JoinResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.join_hub,
@@ -789,6 +804,7 @@ class AdminClient:
         )
 
     def leave_hub(self, request: AdminLeaveHubRequest) -> LeaveResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.leave_hub,
@@ -796,6 +812,7 @@ class AdminClient:
         )
 
     def pairing_preflight(self, request: PairingPreflightRequest) -> PairingPreflight:
+        self._require_open()
         try:
             raw = self.transport.pairing_preflight(request.to_json_bytes())
         except SDKError:
@@ -805,6 +822,7 @@ class AdminClient:
         return PairingPreflight.from_json(raw)
 
     def validate_pairing(self, request: ValidatePairingRequest) -> DeviceCredential:
+        self._require_open()
         try:
             raw = self.transport.validate_pairing(request.to_json_bytes())
         except SDKError:
@@ -816,6 +834,7 @@ class AdminClient:
     def verify_device_credential(
         self, request: VerifyDeviceCredentialRequest
     ) -> VerificationResult:
+        self._require_open()
         try:
             raw = self.transport.verify_device_credential(request.to_json_bytes())
         except SDKError:
@@ -825,6 +844,7 @@ class AdminClient:
         return DeviceCredentialVerification.from_json(raw)
 
     def create_pairing(self, request: CreatePairingRequest) -> PairingToken:
+        self._require_open()
         try:
             raw = self.transport.create_pairing(request.to_json_bytes())
         except SDKError:
@@ -834,6 +854,7 @@ class AdminClient:
         return PairingToken.from_json(raw)
 
     def revoke_device(self, request: RevokeDeviceRequest) -> DeviceAdminResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.revoke_device,
@@ -843,6 +864,7 @@ class AdminClient:
     def create_device_session(
         self, request: CreateDeviceSessionRequest
     ) -> DeviceSession:
+        self._require_open()
         try:
             raw = self.transport.create_device_session(request.to_json_bytes())
         except SDKError:
@@ -854,6 +876,7 @@ class AdminClient:
     def delete_device_session(
         self, request: DeleteDeviceSessionRequest
     ) -> DeviceAdminResult:
+        self._require_open()
         return self._result(
             request.to_json_bytes(),
             self.transport.delete_device_session,
@@ -881,6 +904,12 @@ class AdminClient:
         except Exception as exc:
             raise _transport_error(label, exc) from exc
         return AdminGatewayResult.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_base(base: AdminCarrierBase) -> None:

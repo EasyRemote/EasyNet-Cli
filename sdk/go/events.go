@@ -290,6 +290,7 @@ func (f EventTransportFunc) ProjectTerminal(ctx context.Context, terminalJSON []
 // EventClient is the Events profile facade.
 type EventClient struct {
 	transport EventTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewEventClient(transport EventTransport) (*EventClient, error) {
@@ -438,14 +439,18 @@ func (c *EventClient) projectFrame(ctx context.Context, input any, validate func
 	return NewEventFrameFromJSON(raw)
 }
 
+func (c *EventClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("events client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "events")
+}
+
 func (c *EventClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("events client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "events")
 }
 
 func NewEventStreamFromJSON(raw []byte) (EventStream, error) {

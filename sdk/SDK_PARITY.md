@@ -135,30 +135,32 @@ method spelling.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh
   and session-list Invocation carrier builders plus `GatewayStatus`,
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
-  credential verification, and typed device-session projection seams;
+  credential verification, typed device-session projection seams, and close
+  state seams;
   certificate policy, concrete daemon trust/session carriers, and backend route
   cutover remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
-  event history pages; daemon-side filtering, live stream transport adapters,
+  event history pages plus close state seams; daemon-side filtering, live stream transport adapters,
   and backend SSE/WebSocket cutover remain incomplete.
 - Go Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
-  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams;
+  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams and
+  close state seams;
   backend route serving, browser auth, CDN/cache policy, content-management UX,
   concrete surface health carriers, and backend page-route cutover remain
   incomplete.
 - Go Compatibility facade exposes `CompatibilityClient` list-models, chat,
   stream-chat, and file upload/get/delete Invocation carrier builders plus
-  model, chat, stream, file, and file-delete projection seams; product API-key
+  model, chat, stream, file, file-delete projection seams, and close state seams; product API-key
   policy, quota/rate limits, billing, backend HTTP route shaping, multipart
   storage execution, SSE/WebSocket fanout, and backend compatibility-route
   cutover remain incomplete.
 - Go Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session Invocation carrier builders, transport-backed
-  helper seams, and record projections; backend HTTP/WebSocket bridges, storage
+  helper close state seams, and record projections; backend HTTP/WebSocket bridges, storage
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - Python package exposes Runtime Core feature/version discovery with root client close, runtime
@@ -204,28 +206,29 @@ method spelling.
   list/start/stop/refresh and session-list Invocation carrier builders plus
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
   credential, credential verification, and typed device-session projection
-  seams; certificate policy, concrete daemon trust/session carriers, and
+  seams plus close state seams; certificate policy, concrete daemon trust/session carriers, and
   EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
-  event history pages; daemon-side filtering, live stream transport adapters,
+  event history pages plus close state seams; daemon-side filtering, live stream transport adapters,
   and product cutovers remain incomplete.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
-  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams;
+  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams and
+  close state seams;
   backend route serving, browser auth, CDN/cache policy, content-management UX,
   concrete surface health carriers, and product cutovers remain incomplete.
 - Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
   stream-chat, and file upload/get/delete Invocation carrier builders plus
-  model, chat, stream, file, and file-delete projection seams; product API-key
+  model, chat, stream, file, file-delete projection seams, and close state seams; product API-key
   policy, quota/rate limits, billing, backend HTTP route shaping, multipart
   storage execution, SSE/WebSocket fanout, and EasyRemote/Hub compatibility
   cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session Invocation carrier builders, transport-backed
-  helper seams, and record projections; backend HTTP/WebSocket bridges, storage
+  helper close state seams, and record projections; backend HTTP/WebSocket bridges, storage
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send

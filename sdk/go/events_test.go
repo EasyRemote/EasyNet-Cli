@@ -14,6 +14,7 @@ type memoryEventTransport struct {
 	terminal   string
 	page       string
 	seen       map[string]map[string]any
+	closeCalls int
 }
 
 func (m *memoryEventTransport) remember(name string, requestJSON []byte) {
@@ -83,6 +84,11 @@ func (m *memoryEventTransport) ProjectDropReport(_ context.Context, dropJSON []b
 func (m *memoryEventTransport) ProjectTerminal(_ context.Context, terminalJSON []byte) ([]byte, error) {
 	m.remember("project_terminal", terminalJSON)
 	return []byte(m.terminal), nil
+}
+
+func (m *memoryEventTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func eventsBaseForTest() EventsCarrierBase {
@@ -316,6 +322,33 @@ func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
 	}
 	if _, err := NewDeviceEventPageFromJSON([]byte(eventsDeviceEventPageWithDirectoryItemJSON)); err == nil {
 		t.Fatal("expected device event page item stream mismatch rejection")
+	}
+}
+
+func TestEventClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON}
+	client, err := NewEventClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildDirectorySubscriptionInvocation(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	if err == nil {
+		t.Fatalf("BuildDirectorySubscriptionInvocation after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if len(transport.seen) != 0 {
+		t.Fatalf("transport called after close: %#v", transport.seen)
 	}
 }
 

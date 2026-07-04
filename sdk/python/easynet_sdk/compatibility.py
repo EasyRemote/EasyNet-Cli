@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 
@@ -371,12 +372,15 @@ class CompatibilityClient:
     """Compatibility profile facade."""
 
     transport: CompatibilityTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_compatibility("compatibility transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("compatibility"))
 
     def build_list_models_invocation(self, request: CompatibilityListModelsRequest) -> InvocationDraft:
+        self._require_open()
         return self._build_invocation(
             request.to_json_bytes(),
             self.transport.build_list_models_invocation,
@@ -384,6 +388,7 @@ class CompatibilityClient:
         )
 
     def build_chat_completion_invocation(self, request: CompatibilityChatCompletionRequest) -> InvocationDraft:
+        self._require_open()
         return self._build_invocation(
             request.to_json_bytes(),
             self.transport.build_chat_completion_invocation,
@@ -393,6 +398,7 @@ class CompatibilityClient:
     def build_stream_chat_completion_invocation(
         self, request: CompatibilityStreamChatCompletionRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._build_invocation(
             request.to_json_bytes(),
             self.transport.build_stream_chat_completion_invocation,
@@ -400,6 +406,7 @@ class CompatibilityClient:
         )
 
     def build_file_upload_invocation(self, request: CompatibilityFileUploadRequest) -> InvocationDraft:
+        self._require_open()
         return self._build_invocation(
             request.to_json_bytes(),
             self.transport.build_file_upload_invocation,
@@ -407,6 +414,7 @@ class CompatibilityClient:
         )
 
     def build_file_retrieve_invocation(self, request: CompatibilityFileRequest) -> InvocationDraft:
+        self._require_open()
         return self._build_invocation(
             request.to_json_bytes(),
             self.transport.build_file_retrieve_invocation,
@@ -417,6 +425,7 @@ class CompatibilityClient:
         return self.build_file_retrieve_invocation(request)
 
     def build_file_delete_invocation(self, request: CompatibilityFileDeleteRequest) -> InvocationDraft:
+        self._require_open()
         return self._build_invocation(
             request.to_json_bytes(),
             self.transport.build_file_delete_invocation,
@@ -424,6 +433,7 @@ class CompatibilityClient:
         )
 
     def list_models(self, request: CompatibilityListModelsRequest) -> CompatibilityModelPage:
+        self._require_open()
         try:
             raw = self.transport.list_models(request.to_json_bytes())
         except SDKError:
@@ -435,6 +445,7 @@ class CompatibilityClient:
     def create_chat_completion(
         self, request: CompatibilityChatCompletionRequest
     ) -> CompatibilityChatCompletion:
+        self._require_open()
         try:
             raw = self.transport.create_chat_completion(request.to_json_bytes())
         except SDKError:
@@ -446,6 +457,7 @@ class CompatibilityClient:
     def stream_chat_completion(
         self, request: CompatibilityStreamChatCompletionRequest
     ) -> CompatibilityChatCompletionStream:
+        self._require_open()
         try:
             raw = self.transport.stream_chat_completion(request.to_json_bytes())
         except SDKError:
@@ -455,6 +467,7 @@ class CompatibilityClient:
         return CompatibilityChatCompletionStream.from_json(raw)
 
     def upload_file(self, request: CompatibilityFileUploadRequest) -> CompatibilityFile:
+        self._require_open()
         try:
             raw = self.transport.upload_file(request.to_json_bytes())
         except SDKError:
@@ -464,6 +477,7 @@ class CompatibilityClient:
         return CompatibilityFile.from_json(raw)
 
     def retrieve_file(self, request: CompatibilityFileRequest) -> CompatibilityFile:
+        self._require_open()
         try:
             raw = self.transport.retrieve_file(request.to_json_bytes())
         except SDKError:
@@ -476,6 +490,7 @@ class CompatibilityClient:
         return self.retrieve_file(request)
 
     def delete_file(self, request: CompatibilityFileDeleteRequest) -> CompatibilityFileDeleteResult:
+        self._require_open()
         try:
             raw = self.transport.delete_file(request.to_json_bytes())
         except SDKError:
@@ -554,6 +569,12 @@ class CompatibilityClient:
         except Exception as exc:
             raise _transport_error(label, exc) from exc
         return InvocationDraft.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_base(base: CompatibilityCarrierBase) -> None:

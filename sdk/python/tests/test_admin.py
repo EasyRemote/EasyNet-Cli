@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from easynet_sdk import ErrorCode, SDKError, is_code
 from easynet_sdk.admin import (
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -310,6 +311,7 @@ ADMIN_DELETE_SESSION_RESULT = b"""{
 class MemoryAdminTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
+        self.close_calls = 0
 
     def _remember(self, name: str, request_json: bytes) -> None:
         self.seen[name] = json.loads(request_json.decode("utf-8"))
@@ -393,6 +395,9 @@ class MemoryAdminTransport:
     def delete_device_session(self, request_json: bytes) -> bytes:
         self._remember("delete_device_session", request_json)
         return ADMIN_DELETE_SESSION_RESULT
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def admin_base() -> AdminCarrierBase:
@@ -631,6 +636,19 @@ class AdminClientTests(unittest.TestCase):
             client.delete_device_session(
                 DeleteDeviceSessionRequest(admin_base(), session_id="browser-session-1")
             )
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryAdminTransport()
+        client = AdminClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_agent_list_invocation(AdminAgentListRequest(admin_base()))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(transport.seen, {})
 
 
 if __name__ == "__main__":

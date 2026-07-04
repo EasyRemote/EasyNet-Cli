@@ -13,6 +13,7 @@ type memoryWrapperTransport struct {
 	rdpInvocation     string
 	browserInvocation string
 	mediaInvocation   string
+	closeCalls        int
 }
 
 func (m *memoryWrapperTransport) remember(name string, requestJSON []byte) {
@@ -72,6 +73,11 @@ func (m *memoryWrapperTransport) StartBrowserSession(_ context.Context, requestJ
 func (m *memoryWrapperTransport) StartMediaSession(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("start_media", requestJSON)
 	return []byte(wrapperMediaSessionJSON), nil
+}
+
+func (m *memoryWrapperTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func wrapperBaseForTest() WrapperCarrierBase {
@@ -394,6 +400,47 @@ func TestWrapperRejectsInvalidRecords(t *testing.T) {
 	}
 	if _, err := NewWrapperFileRecordFromJSON([]byte(`{"profile":"wrappers","kind":"file_record","file_ref":"x","owner_ura":"easynet:///r/example/agent/a","content_type":"text/plain","size_bytes":-1,"metadata":{}}`)); err == nil {
 		t.Fatal("expected negative size rejection")
+	}
+}
+
+func TestWrapperClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryWrapperTransport{fileInvocation: wrapperFileInvocationJSON}
+	client, err := NewWrapperClientWithTransport(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildFileTransferInvocation(context.Background(), wrapperFileTransferRequest())
+	if err == nil {
+		t.Fatalf("BuildFileTransferInvocation after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if len(transport.seen) != 0 {
+		t.Fatalf("transport called after close: %#v", transport.seen)
+	}
+
+	size := int64(42)
+	projected, err := client.ProjectFileRecord(WrapperFileRecordRequest{
+		FileRef:     "easynet:///r/example/resource/alice.files/report.txt",
+		OwnerURA:    "easynet:///r/example/agent/alice.sdk",
+		ContentType: "text/plain",
+		SizeBytes:   &size,
+	})
+	if err != nil {
+		t.Fatalf("ProjectFileRecord after close: %v", err)
+	}
+	if projected.Kind != "file_record" {
+		t.Fatalf("unexpected projected file after close: %#v", projected)
 	}
 }
 

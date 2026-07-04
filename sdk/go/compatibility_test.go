@@ -19,6 +19,7 @@ type memoryCompatibilityTransport struct {
 	file                   string
 	fileDelete             string
 	seen                   map[string]map[string]any
+	closeCalls             int
 }
 
 func (m *memoryCompatibilityTransport) remember(name string, requestJSON []byte) {
@@ -88,6 +89,11 @@ func (m *memoryCompatibilityTransport) RetrieveFile(_ context.Context, requestJS
 func (m *memoryCompatibilityTransport) DeleteFile(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("delete_file", requestJSON)
 	return []byte(m.fileDelete), nil
+}
+
+func (m *memoryCompatibilityTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func compatibilityBaseForTest() CompatibilityCarrierBase {
@@ -378,6 +384,33 @@ func TestCompatibilityRejectsInvalidRequests(t *testing.T) {
 	}
 	if _, err := client.ProjectFileDeleteResult(CompatibilityFileDeleteRequest{ID: "file-1", Deleted: false}); err == nil {
 		t.Fatal("expected non-deleted result rejection")
+	}
+}
+
+func TestCompatibilityClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryCompatibilityTransport{listInvocation: compatibilityListModelsInvocationJSON}
+	client, err := NewCompatibilityClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildListModelsInvocation(context.Background(), CompatibilityListModelsRequest{CompatibilityCarrierBase: compatibilityBaseForTest()})
+	if err == nil {
+		t.Fatalf("BuildListModelsInvocation after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if len(transport.seen) != 0 {
+		t.Fatalf("transport called after close: %#v", transport.seen)
 	}
 }
 

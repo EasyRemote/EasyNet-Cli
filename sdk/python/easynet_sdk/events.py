@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 
@@ -399,46 +400,57 @@ class EventClient:
     """Events profile facade."""
 
     transport: EventTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_events("events transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("events"))
 
     def build_directory_subscription_invocation(
         self, request: EventsDirectorySubscriptionRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._subscription_invocation(request, _DIRECTORY_STREAM)
 
     def build_device_subscription_invocation(
         self, request: EventsDeviceSubscriptionRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._subscription_invocation(request, _DEVICE_STREAM)
 
     def build_session_subscription_invocation(
         self, request: EventsSessionSubscriptionRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._subscription_invocation(request, _SESSION_STREAM)
 
     def build_invocation_subscription_invocation(
         self, request: EventsInvocationSubscriptionRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._subscription_invocation(request, _INVOCATION_STREAM)
 
     def subscribe_directory(self, request: EventsDirectorySubscriptionRequest) -> EventStream:
+        self._require_open()
         return self._subscribe(request, _DIRECTORY_STREAM)
 
     def subscribe_devices(self, request: EventsDeviceSubscriptionRequest) -> EventStream:
+        self._require_open()
         return self._subscribe(request, _DEVICE_STREAM)
 
     def subscribe_sessions(self, request: EventsSessionSubscriptionRequest) -> EventStream:
+        self._require_open()
         return self._subscribe(request, _SESSION_STREAM)
 
     def subscribe_invocations(
         self, request: EventsInvocationSubscriptionRequest
     ) -> EventStream:
+        self._require_open()
         return self._subscribe(request, _INVOCATION_STREAM)
 
     def list_device_events(self, request: EventsDeviceEventListRequest) -> DeviceEventPage:
+        self._require_open()
         try:
             raw = self.transport.list_device_events(request.to_json_bytes())
         except SDKError:
@@ -507,6 +519,7 @@ class EventClient:
         raise _invalid_events("unsupported event stream")
 
     def project_directory_event(self, input: EventProjectionInput) -> DirectoryEvent:
+        self._require_open()
         return self._frame(
             input.to_json_bytes(),
             self.transport.project_directory_event,
@@ -514,6 +527,7 @@ class EventClient:
         )
 
     def project_drop_report(self, input: EventDropReportInput) -> EventDropReport:
+        self._require_open()
         return self._frame(
             input.to_json_bytes(),
             self.transport.project_drop_report,
@@ -521,6 +535,7 @@ class EventClient:
         )
 
     def project_terminal(self, input: EventTerminalInput) -> EventFrame:
+        self._require_open()
         return self._frame(
             input.to_json_bytes(),
             self.transport.project_terminal,
@@ -548,6 +563,12 @@ class EventClient:
         except Exception as exc:
             raise _transport_error(label, exc) from exc
         return EventFrame.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _copy_optional_event_projection_fields(value: object, output: dict[str, object]) -> None:

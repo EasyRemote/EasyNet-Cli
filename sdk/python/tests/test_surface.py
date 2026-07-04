@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from easynet_sdk import ErrorCode, SDKError, is_code
 from easynet_sdk.surface import (
     MAX_SURFACE_PAGE_SIZE,
     SurfaceCarrierBase,
@@ -158,6 +159,7 @@ SURFACE_HEALTH = b"""{
 class MemorySurfaceTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
+        self.close_calls = 0
 
     def _remember(self, name: str, request_json: bytes) -> None:
         self.seen[name] = json.loads(request_json.decode("utf-8"))
@@ -205,6 +207,9 @@ class MemorySurfaceTransport:
     def surface_health(self, request_json: bytes) -> bytes:
         self._remember("surface_health", request_json)
         return SURFACE_HEALTH
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def surface_base() -> SurfaceCarrierBase:
@@ -359,6 +364,21 @@ class SurfaceClientTests(unittest.TestCase):
                     surface_base(), surface_ref="https://example/web/alice/docs/"
                 )
             )
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemorySurfaceTransport()
+        client = SurfaceClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_list_pages_invocation(
+                SurfaceListPagesRequest(surface_base(), limit=50)
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(transport.seen, {})
 
 
 if __name__ == "__main__":

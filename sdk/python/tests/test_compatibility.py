@@ -5,12 +5,14 @@ from easynet_sdk import (
     CompatibilityCarrierBase,
     CompatibilityChatCompletionRequest,
     CompatibilityClient,
+    ErrorCode,
     CompatibilityFileDeleteRequest,
     CompatibilityFileRequest,
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     CompatibilityStreamChatCompletionRequest,
     SDKError,
+    is_code,
 )
 
 
@@ -169,6 +171,7 @@ FILE_DELETE_RESULT_JSON = b"""
 class MemoryCompatibilityTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
+        self.close_calls = 0
 
     def _remember(self, name: str, request_json: bytes) -> None:
         self.seen[name] = json.loads(request_json)
@@ -220,6 +223,9 @@ class MemoryCompatibilityTransport:
     def delete_file(self, request_json: bytes) -> bytes:
         self._remember("delete_file", request_json)
         return FILE_DELETE_RESULT_JSON
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def compat_base() -> CompatibilityCarrierBase:
@@ -463,6 +469,21 @@ class CompatibilityClientTests(unittest.TestCase):
             client.project_file_delete_result(
                 CompatibilityFileDeleteRequest(id="file-1", deleted=False)
             )
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryCompatibilityTransport()
+        client = CompatibilityClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_list_models_invocation(
+                CompatibilityListModelsRequest(compat_base())
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(transport.seen, {})
 
 
 if __name__ == "__main__":

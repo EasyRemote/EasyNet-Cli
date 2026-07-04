@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 
@@ -298,8 +299,13 @@ class WrapperClient:
     """Facade for SDK wrapper DTO records and optional daemon execution helpers."""
 
     transport: Optional[WrapperTransport] = None
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("wrapper"))
 
     def build_file_transfer_invocation(self, request: WrapperFileTransferRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self._transport().build_file_transfer_invocation,
@@ -307,6 +313,7 @@ class WrapperClient:
         )
 
     def build_terminal_session_invocation(self, request: WrapperTerminalStartRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self._transport().build_terminal_session_invocation,
@@ -316,6 +323,7 @@ class WrapperClient:
     def build_remote_desktop_session_invocation(
         self, request: WrapperRemoteDesktopStartRequest
     ) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self._transport().build_remote_desktop_session_invocation,
@@ -323,6 +331,7 @@ class WrapperClient:
         )
 
     def build_browser_session_invocation(self, request: WrapperBrowserStartRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self._transport().build_browser_session_invocation,
@@ -330,6 +339,7 @@ class WrapperClient:
         )
 
     def build_media_session_invocation(self, request: WrapperMediaStartRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self._transport().build_media_session_invocation,
@@ -337,6 +347,7 @@ class WrapperClient:
         )
 
     def transfer_file(self, request: WrapperFileTransferRequest) -> WrapperFileRecord:
+        self._require_open()
         return WrapperFileRecord.from_json(
             self._execute(
                 request.to_json_bytes(),
@@ -346,6 +357,7 @@ class WrapperClient:
         )
 
     def start_terminal_session(self, request: WrapperTerminalStartRequest) -> WrapperTerminalSessionRecord:
+        self._require_open()
         return WrapperTerminalSessionRecord.from_json(
             self._execute(
                 request.to_json_bytes(),
@@ -357,6 +369,7 @@ class WrapperClient:
     def start_remote_desktop_session(
         self, request: WrapperRemoteDesktopStartRequest
     ) -> WrapperRemoteDesktopSessionRecord:
+        self._require_open()
         return WrapperRemoteDesktopSessionRecord.from_json(
             self._execute(
                 request.to_json_bytes(),
@@ -366,6 +379,7 @@ class WrapperClient:
         )
 
     def start_browser_session(self, request: WrapperBrowserStartRequest) -> WrapperBrowserSessionRecord:
+        self._require_open()
         return WrapperBrowserSessionRecord.from_json(
             self._execute(
                 request.to_json_bytes(),
@@ -375,6 +389,7 @@ class WrapperClient:
         )
 
     def start_media_session(self, request: WrapperMediaStartRequest) -> WrapperMediaSessionRecord:
+        self._require_open()
         return WrapperMediaSessionRecord.from_json(
             self._execute(
                 request.to_json_bytes(),
@@ -480,6 +495,12 @@ class WrapperClient:
             raise
         except Exception as exc:
             raise _transport_error(label, exc) from exc
+
+    def close(self) -> None:
+        self._lifecycle.close(self._transport())
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _file_record(decoded: Mapping[str, object]) -> WrapperFileRecord:
