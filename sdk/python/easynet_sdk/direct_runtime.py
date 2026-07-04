@@ -27,12 +27,15 @@ from .control_ipc import ControlDiscovery, read_control_discovery
 from .errors import ErrorCode, RetryHint, SDKError, normalize_error_code
 from .invocation import InvocationDraft
 from .runtime import RuntimeTransport
+from .bidi import BidiFrame, BidiTransport
 from .stream import StreamTransport
 
 DEFAULT_URA_PROFILE = "easynet-strict-v2"
 DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
 DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
+DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
+_DIRECT_BIDI_EOF = object()
 
 invoke_pb2: Any = _invoke_pb2
 invoke_pb2_grpc: Any = _invoke_pb2_grpc
@@ -115,7 +118,7 @@ class DirectDaemonRuntimeConnector:
             "protocol": "axon.v1.Invocation",
             "unary": True,
             "stream": True,
-            "bidi": False,
+            "bidi": True,
             "prepare": False,
             "submit_signed": False,
         }
@@ -254,8 +257,38 @@ class DirectDaemonRuntimeTransport:
                 cause=exc,
             ) from exc
 
-    def open_bidi(self, draft_json: bytes, streams_json: bytes) -> tuple[Any, bytes]:
-        raise _unsupported("direct daemon bidirectional transport is not implemented")
+    def open_bidi(self, draft_json: bytes, streams_json: bytes) -> tuple[BidiTransport, bytes]:
+        self._require_open()
+        try:
+            draft = InvocationDraft.from_json(draft_json)
+            streams = _bidi_stream_descriptors(streams_json)
+            open_frame = _draft_to_bidi_open_frame(draft, streams)
+            transport = DirectDaemonBidiTransport(endpoint=self._endpoint)
+            transport.start(
+                self._stub,
+                open_frame,
+                timeout_seconds=self._invoke_timeout_seconds,
+            )
+            return transport, _json_bytes(
+                {
+                    "session_id": transport.session_id,
+                    "state": "Open",
+                    "max_buffered_frames": DEFAULT_DIRECT_BIDI_QUEUE_FRAMES,
+                }
+            )
+        except SDKError:
+            raise
+        except grpc.RpcError as exc:
+            raise _grpc_error(exc, endpoint=self._endpoint) from exc
+        except Exception as exc:
+            raise _direct_error(
+                f"open daemon bidi endpoint failed: {exc}",
+                code=ErrorCode.TRANSPORT,
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                details={"endpoint": self._endpoint},
+                cause=exc,
+            ) from exc
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         raise _unsupported("direct daemon prepare transport is not implemented")
@@ -397,6 +430,198 @@ class DirectDaemonStreamTransport:
             raise _direct_error("stream transport is closed", code=ErrorCode.INVALID_HANDLE)
 
 
+class DirectDaemonBidiTransport:
+    """Bounded BidiTransport adapter over one Axon InvokeBidi call."""
+
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        max_buffered_frames: int = DEFAULT_DIRECT_BIDI_QUEUE_FRAMES,
+    ) -> None:
+        if max_buffered_frames <= 0:
+            raise _direct_error(
+                "max_buffered_frames must be positive",
+                code=ErrorCode.INVALID_ARGUMENT,
+            )
+        self._endpoint = endpoint
+        self.session_id = f"direct-bidi-{secrets.token_hex(8)}"
+        self._outbox: queue.Queue[Any] = queue.Queue(maxsize=max_buffered_frames)
+        self._inbox: queue.Queue[bytes | SDKError] = queue.Queue(
+            maxsize=max_buffered_frames
+        )
+        self._lock = threading.Lock()
+        self._closed = False
+        self._send_closed = False
+        self._terminal_seen = False
+        self._last_up_sequence = 0
+        self._call: Any = None
+        self._reader: threading.Thread | None = None
+
+    def start(self, stub: Any, open_frame: Any, *, timeout_seconds: float) -> None:
+        with self._lock:
+            self._require_open()
+            self._call = stub.InvokeBidi(
+                self._request_iterator(open_frame),
+                timeout=timeout_seconds,
+            )
+            self._reader = threading.Thread(
+                target=self._read_bidi,
+                name=f"easynet-direct-bidi-{self.session_id}",
+                daemon=True,
+            )
+            self._reader.start()
+
+    def send(self, frame_json: bytes) -> bytes:
+        frame = BidiFrame.from_json(frame_json)
+        with self._lock:
+            self._require_send_open()
+            if frame.sequence != self._last_up_sequence + 1:
+                raise _direct_error(
+                    "bidi up frames must be contiguous",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={
+                        "session_id": self.session_id,
+                        "expected_sequence": self._last_up_sequence + 1,
+                        "actual_sequence": frame.sequence,
+                    },
+                )
+            up = _bidi_frame_to_up(frame)
+            self._put_outbound(up)
+            self._last_up_sequence = frame.sequence
+        return frame.to_json()
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        with self._lock:
+            self._require_open()
+        try:
+            item = self._inbox.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise TimeoutError("no direct daemon bidi frame available") from exc
+        if isinstance(item, SDKError):
+            raise item
+        return item
+
+    def close_send(self) -> bytes:
+        with self._lock:
+            self._require_send_open()
+            sequence = self._last_up_sequence + 1
+            self._put_outbound(
+                invoke_pb2.InvokeBidiUp(
+                    sequence=sequence,
+                    control=invoke_pb2.BidiControl(eof=True),
+                )
+            )
+            self._last_up_sequence = sequence
+            self._send_closed = True
+            self._put_outbound(_DIRECT_BIDI_EOF)
+        return _json_bytes(
+            {
+                "session_id": self.session_id,
+                "state": "HalfClosedLocal",
+                "terminal": False,
+            }
+        )
+
+    def cancel(self, reason: str) -> bytes:
+        self.close()
+        return _json_bytes(
+            {
+                "session_id": self.session_id,
+                "state": "Cancelled",
+                "terminal": True,
+                "reason": reason,
+            }
+        )
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._put_outbound(_DIRECT_BIDI_EOF)
+            self._closed = True
+            self._send_closed = True
+            _cancel_stream_iterator(self._call)
+
+    def _request_iterator(self, open_frame: Any) -> Any:
+        yield open_frame
+        while True:
+            item = self._outbox.get()
+            if item is _DIRECT_BIDI_EOF:
+                return
+            yield item
+
+    def _read_bidi(self) -> None:
+        try:
+            for frame in self._call:
+                if _bidi_down_is_internal_admission(frame):
+                    continue
+                raw = _bidi_down_json(frame)
+                if not self._put_inbound(raw):
+                    return
+                if _bidi_down_terminal(frame):
+                    self._terminal_seen = True
+                    return
+            if not self._closed and not self._terminal_seen:
+                self._put_inbound(
+                    _direct_error(
+                        "daemon bidi ended without a terminal frame",
+                        code=ErrorCode.PROTOCOL,
+                        retry=RetryHint.NEVER,
+                        details={"endpoint": self._endpoint, "session_id": self.session_id},
+                    )
+                )
+        except SDKError as exc:
+            if not self._closed:
+                self._put_inbound(exc)
+        except grpc.RpcError as exc:
+            if not self._closed:
+                self._put_inbound(_grpc_error(exc, endpoint=self._endpoint))
+        except Exception as exc:
+            if not self._closed:
+                self._put_inbound(
+                    _direct_error(
+                        f"daemon bidi recv failed: {exc}",
+                        code=ErrorCode.TRANSPORT,
+                        retry=RetryHint.UNKNOWN,
+                        details={"endpoint": self._endpoint, "session_id": self.session_id},
+                        cause=exc,
+                    )
+                )
+
+    def _put_outbound(self, item: Any) -> None:
+        while not self._closed:
+            try:
+                self._outbox.put(item, timeout=0.1)
+                return
+            except queue.Full:
+                continue
+        if item is not _DIRECT_BIDI_EOF:
+            raise _direct_error("bidi transport is closed", code=ErrorCode.INVALID_HANDLE)
+
+    def _put_inbound(self, item: bytes | SDKError) -> bool:
+        while not self._closed:
+            try:
+                self._inbox.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _direct_error("bidi transport is closed", code=ErrorCode.INVALID_HANDLE)
+
+    def _require_send_open(self) -> None:
+        self._require_open()
+        if self._send_closed:
+            raise _direct_error(
+                "bidi send path is closed",
+                code=ErrorCode.CANCELLED,
+                retry=RetryHint.NEVER,
+            )
+
+
 def _cancel_stream_iterator(iterator: Any) -> None:
     cancel = getattr(iterator, "cancel", None)
     if cancel is not None:
@@ -420,6 +645,23 @@ def _draft_to_invoke_request(draft: InvocationDraft) -> Any:
 def _draft_to_stream_request(draft: InvocationDraft) -> Any:
     fields = _invoke_request_fields(draft)
     return invoke_pb2.InvokeServerStreamRequest(**fields)
+
+
+def _draft_to_bidi_open_frame(draft: InvocationDraft, streams: list[Any]) -> Any:
+    fields = _invoke_request_fields(draft)
+    return invoke_pb2.InvokeBidiUp(
+        sequence=0,
+        mac=_bidi_open_mac(draft),
+        envelope_open=invoke_pb2.EnvelopeOpen(
+            envelope=fields["envelope"],
+            target=_bidi_target(draft),
+            initial_args=fields["arguments"],
+            args_content_type=fields["content_type"],
+            streams=streams,
+            metadata=fields["metadata"],
+            content_envelope=fields["content_envelope"],
+        ),
+    )
 
 
 def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
@@ -446,6 +688,75 @@ def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
             encoding="identity",
         ),
     }
+
+
+def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
+    try:
+        decoded = json.loads(streams_json.decode("utf-8"))
+    except Exception as exc:
+        raise _direct_error(
+            f"decode bidi streams JSON: {exc}",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+            cause=exc,
+        ) from exc
+    if not isinstance(decoded, list):
+        raise _direct_error(
+            "bidi streams JSON must be an array",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    if not decoded:
+        raise _direct_error(
+            "bidi streams must not be empty",
+            code=ErrorCode.INVALID_INVOCATION,
+            retry=RetryHint.NEVER,
+            details={"field": "bidi_streams"},
+        )
+    result: list[Any] = []
+    seen: set[int] = set()
+    for index, item in enumerate(decoded):
+        if not isinstance(item, Mapping):
+            raise _direct_error(
+                "bidi stream descriptor must be an object",
+                code=ErrorCode.INVALID_ARGUMENT,
+                retry=RetryHint.NEVER,
+                details={"index": index},
+            )
+        stream_id = _required_positive_int(item, "stream_id")
+        if stream_id in seen:
+            raise _direct_error(
+                "bidi stream ids must be unique",
+                code=ErrorCode.INVALID_ARGUMENT,
+                retry=RetryHint.NEVER,
+                details={"stream_id": stream_id},
+            )
+        seen.add(stream_id)
+        result.append(
+            invoke_pb2.StreamDescriptor(
+                stream_id=stream_id,
+                content_type=_optional_string(item.get("content_type"), "content_type")
+                or "",
+                codec_params=_optional_string(item.get("codec_params"), "codec_params")
+                or "",
+                ordering=_optional_string(item.get("ordering"), "ordering") or "",
+            )
+        )
+    return result
+
+
+def _bidi_target(draft: InvocationDraft) -> Any:
+    return types_pb2.InvocationTarget(ability_name=draft.descriptor_ref)
+
+
+def _bidi_open_mac(draft: InvocationDraft) -> bytes:
+    signature = draft.caller_signature
+    if signature is None:
+        return b""
+    return _base64_decode(
+        signature.signature_base64,
+        "caller_signature.signature_base64",
+    )
 
 
 def _invoke_response_json(
@@ -500,16 +811,177 @@ def _stream_chunk_json(chunk: Any) -> bytes:
     return _json_bytes(event)
 
 
+def _bidi_frame_to_up(frame: BidiFrame) -> Any:
+    kind = frame.kind
+    if kind in {"data", "binary_chunk", "chunk"}:
+        return invoke_pb2.InvokeBidiUp(
+            sequence=frame.sequence,
+            binary_chunk=invoke_pb2.BinaryChunk(
+                stream_id=frame.stream_id,
+                data=_bidi_payload_bytes(frame),
+            ),
+        )
+    if kind in {"eof", "close_send"}:
+        return invoke_pb2.InvokeBidiUp(
+            sequence=frame.sequence,
+            control=invoke_pb2.BidiControl(eof=True),
+        )
+    if kind == "control":
+        return invoke_pb2.InvokeBidiUp(
+            sequence=frame.sequence,
+            control=_bidi_control(frame.payload_json),
+        )
+    raise _direct_error(
+        f"unsupported bidi frame kind: {kind}",
+        code=ErrorCode.INVALID_ARGUMENT,
+        retry=RetryHint.NEVER,
+        details={"kind": kind},
+    )
+
+
+def _bidi_payload_bytes(frame: BidiFrame) -> bytes:
+    if frame.payload_base64:
+        return _base64_decode(frame.payload_base64, "payload_base64")
+    if frame.payload_json is not None:
+        return json.dumps(
+            frame.payload_json,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    return b""
+
+
+def _bidi_control(payload: object) -> Any:
+    if not isinstance(payload, Mapping):
+        raise _direct_error(
+            "bidi control payload_json must be an object",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    if payload.get("eof") is True:
+        return invoke_pb2.BidiControl(eof=True)
+    resize = payload.get("pty_resize")
+    if isinstance(resize, Mapping):
+        return invoke_pb2.BidiControl(
+            pty_resize=invoke_pb2.PtyResize(
+                cols=_required_positive_int(resize, "cols"),
+                rows=_required_positive_int(resize, "rows"),
+            )
+        )
+    signal = payload.get("pty_signal")
+    if isinstance(signal, Mapping):
+        return invoke_pb2.BidiControl(
+            pty_signal=invoke_pb2.PtySignal(signal=_required_int(signal, "signal"))
+        )
+    media = payload.get("media_pts")
+    if isinstance(media, Mapping):
+        return invoke_pb2.BidiControl(
+            media_pts=invoke_pb2.MediaTimestamp(
+                stream_id=_required_positive_int(media, "stream_id"),
+                pts=_required_non_negative_int(media, "pts"),
+            )
+        )
+    raise _direct_error(
+        "unsupported bidi control payload",
+        code=ErrorCode.INVALID_ARGUMENT,
+        retry=RetryHint.NEVER,
+    )
+
+
+def _bidi_down_json(frame: Any) -> bytes:
+    payload = frame.WhichOneof("payload")
+    sequence = int(frame.sequence) + 1
+    event: dict[str, object] = {
+        "sequence": sequence,
+        "kind": _bidi_down_kind(frame, payload),
+        "stream_id": 0,
+        "terminal": _bidi_down_terminal(frame),
+    }
+    if payload == "binary_chunk":
+        chunk = frame.binary_chunk
+        event["stream_id"] = int(chunk.stream_id)
+        event["payload_base64"] = base64.b64encode(chunk.data).decode("ascii")
+    elif payload == "receipt":
+        receipt = _receipt(frame.receipt)
+        event["payload_json"] = {"receipt": receipt}
+        if frame.receipt.HasField("failure"):
+            event["error"] = _axon_failure(frame.receipt.failure, "direct_runtime.bidi")
+    elif payload == "control":
+        event["payload_json"] = _bidi_control_json(frame.control)
+    elif payload in {"dispatch_call", "reverse_dispatch_result"}:
+        event["error"] = {
+            "code": ErrorCode.PROTOCOL_MISMATCH.value,
+            "stage": "direct_runtime.bidi",
+            "message": "carrier-v1 dispatch frame before SDK dual-read support",
+            "retryable": False,
+        }
+    else:
+        raise _direct_error(
+            "daemon bidi frame did not include a payload",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+        )
+    return _json_bytes(event)
+
+
+def _bidi_down_kind(frame: Any, payload: str | None) -> str:
+    if payload == "binary_chunk":
+        return "data"
+    if payload == "control":
+        if frame.control.WhichOneof("control") == "eof":
+            return "remote_close_send"
+        return "control"
+    if payload == "receipt":
+        return "terminal" if _bidi_receipt_terminal(frame.receipt) else "receipt"
+    if payload in {"dispatch_call", "reverse_dispatch_result"}:
+        return "unsupported_frame"
+    return "unknown"
+
+
+def _bidi_down_terminal(frame: Any) -> bool:
+    return frame.WhichOneof("payload") == "receipt" and _bidi_receipt_terminal(
+        frame.receipt
+    )
+
+
+def _bidi_down_is_internal_admission(frame: Any) -> bool:
+    return (
+        int(frame.sequence) == 0
+        and frame.WhichOneof("payload") == "receipt"
+        and not _bidi_receipt_terminal(frame.receipt)
+    )
+
+
+def _bidi_receipt_terminal(receipt: Any) -> bool:
+    return bool(receipt.cleanup_complete) or _state_name(receipt.state) in {
+        "Completed",
+        "Failed",
+        "TimedOut",
+        "Cancelled",
+    }
+
+
+def _bidi_control_json(control: Any) -> dict[str, object]:
+    variant = control.WhichOneof("control")
+    if variant == "eof":
+        return {"eof": True}
+    if variant == "pty_resize":
+        return {"pty_resize": {"cols": control.pty_resize.cols, "rows": control.pty_resize.rows}}
+    if variant == "pty_signal":
+        return {"pty_signal": {"signal": control.pty_signal.signal}}
+    if variant == "media_pts":
+        return {
+            "media_pts": {
+                "stream_id": control.media_pts.stream_id,
+                "pts": control.media_pts.pts,
+            }
+        }
+    return {}
+
+
 def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
     if chunk.HasField("error"):
-        error = chunk.error
-        code = _response_error_code(error.code)
-        return {
-            "code": code.value,
-            "stage": _error_stage(error.stage),
-            "message": error.message,
-            "retryable": error.retryable,
-        }
+        return _axon_failure(chunk.error, _error_stage(chunk.error.stage))
     state = _state_name(chunk.state)
     if state in {"Failed", "TimedOut", "Cancelled"}:
         code = ErrorCode.TIMEOUT if state == "TimedOut" else ErrorCode.ABILITY_FAILED
@@ -520,6 +992,16 @@ def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
             "retryable": code == ErrorCode.TIMEOUT,
         }
     return None
+
+
+def _axon_failure(error: Any, stage: str) -> dict[str, object]:
+    code = _response_error_code(error.code)
+    return {
+        "code": code.value,
+        "stage": stage,
+        "message": error.message,
+        "retryable": error.retryable,
+    }
 
 
 def _agent_identity(ura: str) -> Any:
@@ -847,6 +1329,39 @@ def _optional_non_negative_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or value < 0:
         raise _direct_error(
             f"{field_name} must be a non-negative integer",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    return value
+
+
+def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _direct_error(
+            f"{field_name} is required",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    return value
+
+
+def _required_non_negative_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _direct_error(
+            f"{field_name} must be a non-negative integer",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    return value
+
+
+def _required_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _direct_error(
+            f"{field_name} must be an integer",
             code=ErrorCode.INVALID_ARGUMENT,
             retry=RetryHint.NEVER,
         )

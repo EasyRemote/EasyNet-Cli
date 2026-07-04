@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -36,6 +37,7 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
     def __init__(self) -> None:
         self.requests: list[Any] = []
         self.stream_requests: list[Any] = []
+        self.bidi_up_frames: list[Any] = []
         self.stream_chunks: list[Any] = [
             invoke_pb2.InvokeStreamChunk(
                 invocation_id="inv-stream",
@@ -93,6 +95,46 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
         self.stream_requests.append(request)
         yield from self.stream_chunks
 
+    def InvokeBidi(self, request_iterator, context) -> Iterator[Any]:
+        first = next(request_iterator)
+        self.bidi_up_frames.append(first)
+        yield invoke_pb2.InvokeBidiDown(
+            sequence=0,
+            receipt=invoke_pb2.InvocationReceipt(
+                index=1,
+                invocation_id="inv-bidi",
+                receipt_type="admission",
+                state=types_pb2.INVOCATION_STATE_ACCEPTED,
+                timestamp_unix_ms=1783100000123,
+                self_hash=bytes.fromhex("33" * 32),
+            ),
+        )
+        for frame in request_iterator:
+            self.bidi_up_frames.append(frame)
+            payload = frame.WhichOneof("payload")
+            if payload == "binary_chunk":
+                yield invoke_pb2.InvokeBidiDown(
+                    sequence=frame.sequence,
+                    binary_chunk=invoke_pb2.BinaryChunk(
+                        stream_id=frame.binary_chunk.stream_id,
+                        data=frame.binary_chunk.data,
+                    ),
+                )
+            elif payload == "control" and frame.control.WhichOneof("control") == "eof":
+                yield invoke_pb2.InvokeBidiDown(
+                    sequence=frame.sequence,
+                    receipt=invoke_pb2.InvocationReceipt(
+                        index=2,
+                        invocation_id="inv-bidi",
+                        receipt_type="terminal",
+                        state=types_pb2.INVOCATION_STATE_COMPLETED,
+                        timestamp_unix_ms=1783100000456,
+                        self_hash=bytes.fromhex("44" * 32),
+                        cleanup_complete=True,
+                    ),
+                )
+                return
+
 
 class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_resolves_invocation_endpoint_from_discovery(self) -> None:
@@ -141,7 +183,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertTrue(is_code(raised.exception, ErrorCode.CONTROL_ONLY))
         self.assertEqual(raised.exception.stage, "direct_runtime.resolve")
 
-    def test_direct_connector_handshake_reports_unary_only_capabilities(self) -> None:
+    def test_direct_connector_handshake_reports_runtime_capabilities(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
             connector = DirectDaemonRuntimeConnector()
@@ -165,7 +207,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(facts["protocol"], "axon.v1.Invocation")
         self.assertEqual(facts["unary"], True)
         self.assertEqual(facts["stream"], True)
-        self.assertEqual(facts["bidi"], False)
+        self.assertEqual(facts["bidi"], True)
         self.assertEqual(facts["prepare"], False)
         self.assertEqual(facts["submit_signed"], False)
 
@@ -176,7 +218,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
-                    invoke_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
                 )
             )
             try:
@@ -301,7 +343,109 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(event["kind"], "chunk")
         self.assertFalse(event["terminal"])
 
-    def test_direct_transport_reports_unsupported_modes_explicitly(self) -> None:
+    def test_direct_transport_opens_bidi_over_axon_grpc_uds(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=1000,
+                )
+            )
+            try:
+                bidi = transport.bidi(
+                    complete_draft(),
+                    (
+                        {
+                            "stream_id": 1,
+                            "content_type": "application/json",
+                            "ordering": "STRICT",
+                        },
+                    ),
+                )
+                ack = bidi.send(
+                    {
+                        "sequence": 1,
+                        "kind": "data",
+                        "stream_id": 1,
+                        "payload_base64": "eyJwaW5nIjp0cnVlfQ==",
+                    }
+                )
+                echoed = bidi.recv(timeout=5)
+                outcome = bidi.close_send()
+                terminal = bidi.recv(timeout=5)
+                bidi.close()
+            finally:
+                transport.close()
+
+        self.assertEqual(ack["sequence"], 1)
+        self.assertEqual(echoed["sequence"], 2)
+        self.assertEqual(echoed["kind"], "data")
+        self.assertEqual(echoed["stream_id"], 1)
+        self.assertEqual(echoed["payload_base64"], "eyJwaW5nIjp0cnVlfQ==")
+        self.assertEqual(outcome["state"], "HalfClosedLocal")
+        self.assertFalse(outcome["terminal"])
+        self.assertEqual(terminal["sequence"], 3)
+        self.assertEqual(terminal["kind"], "terminal")
+        self.assertTrue(terminal["terminal"])
+
+        self.assertEqual(len(servicer.bidi_up_frames), 3)
+        open_frame = servicer.bidi_up_frames[0]
+        self.assertEqual(open_frame.sequence, 0)
+        self.assertEqual(open_frame.WhichOneof("payload"), "envelope_open")
+        envelope_open = open_frame.envelope_open
+        self.assertEqual(
+            envelope_open.envelope.caller.ura,
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            envelope_open.envelope.callee.ura,
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            envelope_open.envelope.subject.ura,
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(envelope_open.target.ability_name, complete_draft().descriptor_ref)
+        self.assertEqual(envelope_open.initial_args, b"{}")
+        self.assertEqual(envelope_open.args_content_type, "application/json")
+        self.assertEqual(envelope_open.content_envelope.encoding, "identity")
+        self.assertEqual(len(envelope_open.streams), 1)
+        self.assertEqual(envelope_open.streams[0].stream_id, 1)
+        self.assertEqual(envelope_open.streams[0].content_type, "application/json")
+        self.assertEqual(envelope_open.streams[0].ordering, "STRICT")
+        self.assertEqual(servicer.bidi_up_frames[1].sequence, 1)
+        self.assertEqual(servicer.bidi_up_frames[1].WhichOneof("payload"), "binary_chunk")
+        self.assertEqual(servicer.bidi_up_frames[2].sequence, 2)
+        self.assertEqual(servicer.bidi_up_frames[2].WhichOneof("payload"), "control")
+        self.assertEqual(servicer.bidi_up_frames[2].control.WhichOneof("control"), "eof")
+
+    def test_direct_transport_rejects_non_contiguous_bidi_up_sequence(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
+                )
+            )
+            try:
+                bidi = transport.bidi(
+                    complete_draft(),
+                    ({"stream_id": 1, "content_type": "application/json"},),
+                )
+                with self.assertRaises(SDKError) as raised:
+                    bidi.send({"sequence": 2, "kind": "data", "stream_id": 1})
+                bidi.close()
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(raised.exception.stage, "direct_runtime")
+
+    def test_direct_transport_rejects_empty_bidi_streams_before_wire_call(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
             transport = DirectDaemonRuntimeTransport.open(
@@ -314,6 +458,27 @@ class DirectRuntimeTests(unittest.TestCase):
                     transport.open_bidi(
                         complete_draft().to_json().encode("utf-8"),
                         b"[]",
+                    )
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
+        self.assertEqual(raised.exception.stage, "direct_runtime")
+        self.assertEqual(servicer.bidi_up_frames, [])
+
+    def test_direct_transport_reports_unsupported_modes_explicitly(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectDaemonRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    transport.prepare(
+                        complete_draft().to_json().encode("utf-8"),
+                        b"{}",
                     )
             finally:
                 transport.close()
@@ -348,7 +513,7 @@ class _fake_daemon:
     def __init__(self, servicer: RecordingInvocationServicer) -> None:
         self._servicer = servicer
         self._tmp = tempfile.TemporaryDirectory()
-        self._server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        self._server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=4))
         self.endpoint = str(Path(self._tmp.name) / "daemon.sock")
 
     def __enter__(self) -> str:
