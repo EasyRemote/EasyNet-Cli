@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
+from .stream import StreamHandle
 
 
 _PROFILE = "events"
@@ -236,6 +237,9 @@ class EventStream:
     metadata: Mapping[str, object]
     stream_id: str = ""
     resume_token: str = ""
+    _runtime_stream: Optional[StreamHandle] = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "EventStream":
@@ -249,6 +253,36 @@ class EventStream:
             resume_token=_optional_string(decoded.get("resume_token"), "resume_token") or "",
             metadata=_required_mapping(decoded, "metadata"),
         )
+
+    @classmethod
+    def from_runtime_stream(
+        cls,
+        stream: str,
+        runtime_stream: StreamHandle,
+        *,
+        resume_token: str = "",
+        metadata: Mapping[str, object] | None = None,
+    ) -> "EventStream":
+        if stream not in _SUPPORTED_STREAMS:
+            raise _invalid_events("invalid event stream projection")
+        if runtime_stream is None:
+            raise _invalid_events("runtime stream handle is required")
+        state = getattr(runtime_stream.state, "value", str(runtime_stream.state))
+        return cls(
+            stream=stream,
+            state=state,
+            stream_id=runtime_stream.stream_id,
+            resume_token=resume_token,
+            metadata=dict(metadata or {"profile": _PROFILE}),
+            _runtime_stream=runtime_stream,
+        )
+
+    def close(self) -> None:
+        if self._runtime_stream is None:
+            return
+        self._runtime_stream.close()
+        state = getattr(self._runtime_stream.state, "value", str(self._runtime_stream.state))
+        object.__setattr__(self, "state", state)
 
 
 @dataclass(frozen=True)
@@ -370,16 +404,16 @@ class EventTransport(Protocol):
     def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
         ...
 
-    def subscribe_directory(self, request_json: bytes) -> bytes:
+    def subscribe_directory(self, request_json: bytes) -> bytes | EventStream:
         ...
 
-    def subscribe_devices(self, request_json: bytes) -> bytes:
+    def subscribe_devices(self, request_json: bytes) -> bytes | EventStream:
         ...
 
-    def subscribe_sessions(self, request_json: bytes) -> bytes:
+    def subscribe_sessions(self, request_json: bytes) -> bytes | EventStream:
         ...
 
-    def subscribe_invocations(self, request_json: bytes) -> bytes:
+    def subscribe_invocations(self, request_json: bytes) -> bytes | EventStream:
         ...
 
     def list_device_events(self, request_json: bytes) -> bytes:
@@ -477,6 +511,8 @@ class EventClient:
             raise
         except Exception as exc:
             raise _transport_error(label, exc) from exc
+        if isinstance(raw, EventStream):
+            return raw
         return EventStream.from_json(raw)
 
     def _subscription_invocation_transport(

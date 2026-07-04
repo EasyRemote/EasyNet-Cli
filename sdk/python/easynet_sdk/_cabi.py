@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
+from .events import EventStream
 from .stream import StreamHandle
 
 EXPECTED_ABI_VERSION = 4
@@ -1338,6 +1339,8 @@ class CABIAdminTransport(_CABIProfileTransport):
 class CABIEventTransport(_CABIProfileTransport):
     """Events carrier/projection transport backed by C ABI v4."""
 
+    _event_streams: list[EventStream] = field(default_factory=list)
+
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         return self._call(
             "easynet_events_build_directory_subscription_invocation", request_json
@@ -1352,8 +1355,24 @@ class CABIEventTransport(_CABIProfileTransport):
     def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
         return self._missing("events invocation subscription carrier")
 
-    def subscribe_directory(self, request_json: bytes) -> bytes:
-        return self._missing("events subscribe directory")
+    def subscribe_directory(self, request_json: bytes) -> EventStream:
+        runtime_stream = self._open_runtime_stream(
+            request_json,
+            build_symbol="easynet_events_build_directory_subscription_invocation",
+        )
+        stream = EventStream.from_runtime_stream(
+            "directory",
+            runtime_stream,
+            resume_token=_resume_token_from_event_subscription(request_json),
+            metadata={
+                "profile": "events",
+                "source": "runtime_stream",
+                "stream_ability": "federation.subscribe_directory_v2",
+                "carrier_owner": "daemon_sdk",
+            },
+        )
+        self._event_streams.append(stream)
+        return stream
 
     def subscribe_devices(self, request_json: bytes) -> bytes:
         return self._missing("events subscribe devices")
@@ -1375,6 +1394,14 @@ class CABIEventTransport(_CABIProfileTransport):
 
     def project_terminal(self, terminal_json: bytes) -> bytes:
         return self._call("easynet_events_project_terminal", terminal_json)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        for stream in tuple(self._event_streams):
+            stream.close()
+        self._event_streams.clear()
+        super().close()
 
 
 @dataclass
@@ -2515,6 +2542,21 @@ def _projection_request_json(
         if value is not None:
             projection[key] = value
     return _json_bytes(projection)
+
+
+def _resume_token_from_event_subscription(request_json: bytes) -> str:
+    request = _json_object(request_json, "events subscription request")
+    cursor = request.get("resume_cursor")
+    if not isinstance(cursor, dict):
+        return ""
+    token = cursor.get("token")
+    if isinstance(token, str) and token:
+        return token
+    stream = cursor.get("stream")
+    sequence = cursor.get("sequence")
+    if isinstance(stream, str) and isinstance(sequence, int) and not isinstance(sequence, bool):
+        return f"{stream}:{sequence}"
+    return ""
 
 
 def _admin_gateway_status_projection_input(

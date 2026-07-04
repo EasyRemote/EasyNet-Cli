@@ -35,7 +35,7 @@ method spelling.
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | admin + gateway | carrier/status/session partial | carrier/status partial | carrier/status/session seam partial | carrier/status seam partial | gap | gap | gap |
-| events | directory stream partial | directory stream partial | directory stream seam partial | directory stream seam partial | gap | gap | gap |
+| events | directory stream partial | directory stream partial | directory stream runtime seam partial | directory stream seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | wrappers | carrier/projection partial | carrier/projection partial | execution carrier seam partial | execution carrier seam partial | gap | gap | gap |
@@ -202,8 +202,7 @@ method spelling.
   Runtime Core invoke, while
   signing-key lifecycle live adapters still require a daemon/ABI key lifecycle
   result contract rather than projecting `identity.register_pubkey` trust-anchor
-  acks into richer signing-key DTOs; directory subscription live adapters,
-  local signer implementations, and
+  acks into richer signing-key DTOs; local signer implementations, and
   actual EasyRemote repository extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
@@ -246,10 +245,11 @@ method spelling.
   state seams; concrete daemon trust/pairing carriers, device-session create/delete lifecycle, certificate policy, and
   EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
-  subscription Invocation carrier builders plus `EventFrame` cursor,
+  subscription Invocation carrier builders, C ABI-backed directory subscription
+  execution through Runtime Core open_stream, plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
-  event history pages plus close state seams; daemon-side filtering, live stream transport adapters,
-  and product cutovers remain incomplete.
+  event history pages plus close state seams; device/session/invocation live
+  stream adapters, daemon-side filtering, and product cutovers remain incomplete.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders, C ABI-backed page list/create/delete/manifest
   execution through Runtime Core, plus `SurfacePageRecord`, `SurfacePagePage`,

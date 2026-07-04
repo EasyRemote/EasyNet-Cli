@@ -68,7 +68,8 @@ C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page projection plus close state seams.
 EventClient exposes directory/device/session/invocation subscription
-Invocation carriers, device event history pages, and EventFrame
+Invocation carriers, C ABI-backed directory subscription execution through
+Runtime Core open_stream, device event history pages, and EventFrame
 cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers, C ABI-backed
 page list/create/delete/manifest execution through Runtime Core invoke, plus
@@ -84,8 +85,8 @@ file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed record-returning file, terminal, remote desktop,
 browser, and media helper execution through Runtime Core invoke,
 transport-backed helper close state seams, and record projections. Direct daemon
-UDS transport, directory subscription live adapters, daemon/ABI-backed signing-key
-lifecycle result contracts, local signer implementations,
+UDS transport, daemon/ABI-backed signing-key lifecycle result contracts,
+local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication plugin
 install and ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution

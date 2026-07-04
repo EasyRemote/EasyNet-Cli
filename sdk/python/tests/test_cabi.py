@@ -36,6 +36,10 @@ from easynet_sdk import (
     DirectoryClient,
     DirectoryQueryBase,
     ErrorCode,
+    EventClient,
+    EventCursor,
+    EventsCarrierBase,
+    EventsDirectorySubscriptionRequest,
     HealthClient,
     IdentityCarrierBase,
     IdentityClient,
@@ -91,6 +95,7 @@ from easynet_sdk._cabi import (
     CABIDirectoryTransport,
     CABIDiscoveryTransport,
     CABIDaemonTransport,
+    CABIEventTransport,
     CABIIdentityTransport,
     CABIMissionTransport,
     CABIPublicationTransport,
@@ -818,6 +823,8 @@ class FakeRawCABI:
             return DIRECTORY_RESOLVE_INVOCATION
         if symbol == "easynet_receipt_build_fetch_invocation":
             return RECEIPT_FETCH_INVOCATION
+        if symbol == "easynet_events_build_directory_subscription_invocation":
+            return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
         if symbol == "easynet_publication_build_deploy_invocation":
             return PUBLICATION_DEPLOY_INVOCATION
         if symbol == "easynet_publication_project_deploy_result":
@@ -1010,6 +1017,21 @@ PACKAGE_VALIDATION_PROJECTION = (
     b'"description":"Weather","exec_kind":"host_stream",'
     b'"timeout_seconds":null,"input_schema":{"type":"object"},'
     b'"output_schema":null},"errors":[],"metadata":{"profile":"publication"}}'
+)
+
+EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.federation.subscribe_directory_v2@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"stream":"directory","resume_cursor":{"stream":"directory","sequence":8}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"events",'
+    b'"system_ability":"federation.subscribe_directory_v2",'
+    b'"carrier_owner":"daemon_sdk"}}'
 )
 
 PUBLICATION_DEPLOY_INVOCATION = (
@@ -2621,6 +2643,77 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.profile_requests, [])
         self.assertEqual(raw.runtime_requests, [])
         self.assertEqual(raw.buffers, {})
+
+    def test_events_subscribe_directory_opens_runtime_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = EventClient(CABIEventTransport(lib, handle=7))
+
+        stream = client.subscribe_directory(
+            EventsDirectorySubscriptionRequest(
+                EventsCarrierBase(
+                    caller_ura="easynet:///r/example/agent/alice.sdk",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/device/dev-a",
+                    descriptor_version="1.0.0",
+                    nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                    causal_context={"form": "none"},
+                ),
+                resume_cursor=EventCursor("directory", 8),
+            )
+        )
+
+        self.assertEqual(stream.stream, "directory")
+        self.assertEqual(stream.state, "Open")
+        self.assertEqual(stream.stream_id, "404")
+        self.assertEqual(stream.resume_token, "directory:8")
+        self.assertEqual(stream.metadata["stream_ability"], "federation.subscribe_directory_v2")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_events_build_directory_subscription_invocation"],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "stream_open")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["descriptor_ref"],
+            "easynet:///r/example/ability/"
+            "device.dev-a.federation.subscribe_directory_v2@1.0.0",
+        )
+        self.assertEqual(
+            raw.runtime_requests[0][1]["args"]["resume_cursor"],
+            {"stream": "directory", "sequence": 8},
+        )
+        self.assertEqual(raw.stream_closes, [])
+
+        stream.close()
+
+        self.assertEqual(stream.state, "Closed")
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
+        self.assertEqual(raw.buffers, {})
+
+    def test_events_client_close_closes_directory_runtime_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = EventClient(CABIEventTransport(lib, handle=7))
+
+        client.subscribe_directory(
+            EventsDirectorySubscriptionRequest(
+                EventsCarrierBase(
+                    caller_ura="easynet:///r/example/agent/alice.sdk",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/device/dev-a",
+                    descriptor_version="1.0.0",
+                    nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                    causal_context={"form": "none"},
+                ),
+            )
+        )
+        client.close()
+
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
 
     def test_admin_live_agent_methods_use_carrier_invoke_and_projection(self) -> None:
         raw = FakeRawCABI()
