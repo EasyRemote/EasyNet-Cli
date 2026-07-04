@@ -143,10 +143,12 @@ method spelling.
   certificate policy, concrete daemon trust/session carriers, and backend route
   cutover remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
-  subscription Invocation carrier builders plus `EventFrame` cursor,
-  resume-token, drop-report, terminal projection seams, and bounded device
-  event history pages plus close state seams; daemon-side filtering, live stream transport adapters,
-  and backend SSE/WebSocket cutover remain incomplete.
+  subscription Invocation carrier builders, with session subscriptions requiring
+  explicit daemon `session_id` rather than product `session_ura`, plus
+  `EventFrame` cursor, resume-token, drop-report, terminal projection seams,
+  and bounded device event history pages plus close state seams; daemon-side
+  filtering, live stream transport adapters, and backend SSE/WebSocket cutover
+  remain incomplete.
 - Go Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`

@@ -237,12 +237,12 @@ func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
 
 	sessionStream, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
 		EventsCarrierBase: eventsBaseForTest(),
-		SessionURA:        "easynet:///r/example/session/sess-1",
+		SessionID:         "sess-1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sessionStream.Stream != "session" || transport.seen["subscribe_sessions"]["session_ura"] == "" {
+	if sessionStream.Stream != "session" || transport.seen["subscribe_sessions"]["session_id"] != "sess-1" {
 		t.Fatalf("unexpected session stream/request: stream=%#v request=%#v", sessionStream, transport.seen["subscribe_sessions"])
 	}
 
@@ -309,6 +309,17 @@ func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
 		ResumeCursor:      &sessionCursor,
 	}); err == nil {
 		t.Fatal("expected cursor stream mismatch rejection")
+	}
+	if _, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		SessionURA:        "easynet:///r/example/resource/daemon.browser/sess-1",
+	}); err == nil {
+		t.Fatal("expected session_ura rejection")
+	}
+	if _, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+	}); err == nil {
+		t.Fatal("expected missing session_id rejection")
 	}
 	cursor, _ := NewEventCursor("directory", 9)
 	if _, err := client.ProjectDropReport(context.Background(), EventDropReportInput{Cursor: cursor, OccurredUnixMS: 1, DroppedCount: 0}); err == nil {

@@ -72,6 +72,7 @@ type EventsSubscriptionRequest struct {
 	OwnerURA            string          `json:"owner_ura,omitempty"`
 	DeviceURA           string          `json:"device_ura,omitempty"`
 	AgentURA            string          `json:"agent_ura,omitempty"`
+	SessionID           string          `json:"session_id,omitempty"`
 	SessionURA          string          `json:"session_ura,omitempty"`
 	InvocationID        string          `json:"invocation_id,omitempty"`
 	ResumeCursor        *EventCursor    `json:"resume_cursor,omitempty"`
@@ -583,6 +584,7 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 		"owner_ura":     req.OwnerURA,
 		"device_ura":    req.DeviceURA,
 		"agent_ura":     req.AgentURA,
+		"session_id":    req.SessionID,
 		"session_ura":   req.SessionURA,
 		"invocation_id": req.InvocationID,
 	} {
@@ -596,6 +598,17 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 		}
 		if EventStreamKind(req.ResumeCursor.Stream) != expected {
 			return EventsSubscriptionRequest{}, invalidRuntimePayload("resume cursor stream mismatch", nil)
+		}
+	}
+	if expected == EventStreamSession {
+		if req.SessionURA != "" {
+			return EventsSubscriptionRequest{}, invalidRuntimePayload("session_ura cannot be converted into daemon session_id", nil)
+		}
+		if req.SessionID == "" {
+			return EventsSubscriptionRequest{}, invalidRuntimePayload("session_id is required", nil)
+		}
+		if strings.ContainsAny(req.SessionID, " \t\r\n") {
+			return EventsSubscriptionRequest{}, invalidRuntimePayload("session_id must not contain whitespace", nil)
 		}
 	}
 	if req.HeartbeatIntervalMS != 0 &&
