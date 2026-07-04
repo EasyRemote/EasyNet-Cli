@@ -266,6 +266,11 @@ class AbilityInvocationClientTests(unittest.TestCase):
             _target_request(owner_ura="easynet:///r/example/device/dev-a"),
             _target_request(ability_name="observe.health"),
             _target_request(
+                ability_ura=(
+                    " easynet:///r/example/ability/device.dev-a.observe.health"
+                )
+            ),
+            _target_request(
                 ability_ura="easynet:///r/example/ability/device.dev-a.observe.health",
                 owner_ura="easynet:///r/example/device/dev-a",
                 ability_name="observe.health",

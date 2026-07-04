@@ -273,10 +273,10 @@ class AbilityInvocationClient:
         )
 
     def _target_selector(self, request: AbilityTargetRequest) -> str:
-        descriptor_ref = request.descriptor_ref.strip()
-        ability_ura = request.ability_ura.strip()
-        owner_ura = request.owner_ura.strip()
-        ability_name = request.ability_name.strip()
+        descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
+        ability_ura = _selector_string(request.ability_ura, "ability_ura")
+        owner_ura = _selector_string(request.owner_ura, "owner_ura")
+        ability_name = _selector_string(request.ability_name, "ability_name")
         selector_count = sum(
             (
                 bool(descriptor_ref),
@@ -314,6 +314,16 @@ class AbilityInvocationClient:
 def _required_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or value.strip() == "":
         raise _invalid_ability_invocation(f"{field_name} is required")
+    if value.strip() != value:
+        raise _invalid_ability_invocation(
+            f"{field_name} must not contain surrounding whitespace"
+        )
+    return value
+
+
+def _selector_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise _invalid_ability_invocation(f"{field_name} must be a string")
     if value.strip() != value:
         raise _invalid_ability_invocation(
             f"{field_name} must not contain surrounding whitespace"
