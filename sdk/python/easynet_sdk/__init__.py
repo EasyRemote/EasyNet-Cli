@@ -264,6 +264,7 @@ from .publication import (
     ValidatePackageOptions,
 )
 from .signing import (
+    Ed25519SignatureProvider,
     PreparedInvocation,
     SignatureProvider,
     SignedInvocation,
@@ -415,6 +416,7 @@ __all__ = [
     "DeviceSessionPage",
     "Endpoints",
     "ErrorCode",
+    "Ed25519SignatureProvider",
     "EventClient",
     "EventCursor",
     "EventDropReport",

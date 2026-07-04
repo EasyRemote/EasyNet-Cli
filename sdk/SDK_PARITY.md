@@ -212,9 +212,10 @@ method spelling.
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, plus C ABI-backed signing-key register/list/revoke
   execution through daemon identity abilities and signer-handle projection from
-  daemon key inventory; directory buffered-event
-  projection, local signer implementations, and actual EasyRemote repository
-  extraction remain incomplete.
+  daemon key inventory plus a Python `Ed25519SignatureProvider` for local
+  signatures over daemon/Axon-provided canonical signing material; directory
+  buffered-event projection and actual EasyRemote repository extraction remain
+  incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   receipt-derived child `causal_context` adapters, typed `ReceiptRef` and
