@@ -396,6 +396,7 @@ def _stream_event_dict(event: StreamEvent) -> dict[str, object]:
         "kind": event.kind,
         "state": event.state,
         "terminal": event.terminal,
+        "content_type": event.payload_content_type,
         "payload_content_type": event.payload_content_type,
         "payload_base64": event.payload_base64,
         "payload_json": event.payload_json,
