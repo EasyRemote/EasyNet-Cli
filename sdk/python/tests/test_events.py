@@ -2,12 +2,16 @@ import json
 import unittest
 
 from easynet_sdk.events import (
+    DEFAULT_EVENT_PAGE_SIZE,
+    MAX_EVENT_PAGE_SIZE,
+    DeviceEventPage,
     EventClient,
     EventCursor,
     EventDropReportInput,
     EventProjectionInput,
     EventTerminalInput,
     EventsCarrierBase,
+    EventsDeviceEventListRequest,
     EventsDeviceSubscriptionRequest,
     EventsDirectorySubscriptionRequest,
     EventsInvocationSubscriptionRequest,
@@ -123,6 +127,64 @@ EVENTS_TERMINAL = b"""{
   }
 }"""
 
+EVENTS_DEVICE_EVENT_PAGE = b"""{
+  "profile": "events",
+  "stream": "device",
+  "item_kind": "device_event",
+  "items": [
+    {
+      "profile": "events",
+      "stream": "device",
+      "kind": "device.status_changed",
+      "event_id": "evt-device-8",
+      "cursor": {"stream": "device", "sequence": 8, "token": "device:8"},
+      "resume_token": "device:8",
+      "occurred_unix_ms": 1783100000123,
+      "occurred_at": "2026-07-03T17:33:20.123Z",
+      "subject_ref": {"kind": "ura", "ura": "easynet:///r/example/device/dev-a", "role": "device"},
+      "tenant_ref": {"kind": "realm", "realm": "example"},
+      "payload": {"type": "status_changed", "state": "online"},
+      "dropped_count": 0,
+      "reconnect_after_ms": null,
+      "terminal": false,
+      "metadata": {"profile": "events", "stream": "device", "source": "daemon_device_event"}
+    }
+  ],
+  "next_cursor": "device:9",
+  "has_more": true,
+  "limit": 50,
+  "metadata": {"profile": "events", "source": "device_event_history"}
+}"""
+
+EVENTS_DEVICE_EVENT_PAGE_WITH_DIRECTORY_ITEM = b"""{
+  "profile": "events",
+  "stream": "device",
+  "item_kind": "device_event",
+  "items": [
+    {
+      "profile": "events",
+      "stream": "directory",
+      "kind": "directory.agent_advertised",
+      "event_id": "evt-directory-8",
+      "cursor": {"stream": "directory", "sequence": 8, "token": "directory:8"},
+      "resume_token": "directory:8",
+      "occurred_unix_ms": 1783100000123,
+      "occurred_at": "2026-07-03T17:33:20.123Z",
+      "subject_ref": null,
+      "tenant_ref": null,
+      "payload": {},
+      "dropped_count": 0,
+      "reconnect_after_ms": null,
+      "terminal": false,
+      "metadata": {"profile": "events", "stream": "directory"}
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false,
+  "limit": 50,
+  "metadata": {"profile": "events"}
+}"""
+
 
 def event_stream(stream: str) -> bytes:
     return (
@@ -172,6 +234,10 @@ class MemoryEventTransport:
     def subscribe_invocations(self, request_json: bytes) -> bytes:
         self._remember("subscribe_invocations", request_json)
         return event_stream("invocation")
+
+    def list_device_events(self, request_json: bytes) -> bytes:
+        self._remember("list_device_events", request_json)
+        return EVENTS_DEVICE_EVENT_PAGE
 
     def project_directory_event(self, event_json: bytes) -> bytes:
         self._remember("project_directory_event", event_json)
@@ -306,6 +372,23 @@ class EventClientTests(unittest.TestCase):
         )
         self.assertEqual(transport.seen["build_device_subscription"]["stream"], "device")
 
+    def test_lists_device_event_history_page(self) -> None:
+        transport = MemoryEventTransport()
+        client = EventClient(transport)
+
+        page = client.list_device_events(
+            EventsDeviceEventListRequest(
+                events_base(),
+                device_ura="easynet:///r/example/device/dev-a",
+            )
+        )
+
+        self.assertEqual(page.stream, "device")
+        self.assertTrue(page.has_more)
+        self.assertEqual(page.next_cursor, "device:9")
+        self.assertEqual(page.items[0].kind, "device.status_changed")
+        self.assertEqual(transport.seen["list_device_events"]["limit"], DEFAULT_EVENT_PAGE_SIZE)
+
     def test_rejects_incomplete_carrier_and_invalid_cursors(self) -> None:
         client = EventClient(MemoryEventTransport())
 
@@ -332,6 +415,12 @@ class EventClientTests(unittest.TestCase):
                     dropped_count=0,
                 )
             )
+        with self.assertRaises(Exception):
+            client.list_device_events(
+                EventsDeviceEventListRequest(events_base(), limit=MAX_EVENT_PAGE_SIZE + 1)
+            )
+        with self.assertRaises(Exception):
+            DeviceEventPage.from_json(EVENTS_DEVICE_EVENT_PAGE_WITH_DIRECTORY_ITEM)
 
 
 if __name__ == "__main__":

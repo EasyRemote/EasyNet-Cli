@@ -22,6 +22,8 @@ const (
 const (
 	MinEventHeartbeatIntervalMS = 1000
 	MaxEventHeartbeatIntervalMS = 300000
+	DefaultEventPageSize        = 50
+	MaxEventPageSize            = 500
 )
 
 // EventsCarrierBase is the complete carrier context shared by Events operations.
@@ -84,6 +86,14 @@ type DirectoryEventQuery = EventsDirectorySubscriptionRequest
 type DeviceEventQuery = EventsDeviceSubscriptionRequest
 type SessionEventQuery = EventsSessionSubscriptionRequest
 type InvocationEventQuery = EventsInvocationSubscriptionRequest
+
+// EventsDeviceEventListRequest requests a bounded historical device-event page.
+type EventsDeviceEventListRequest struct {
+	EventsCarrierBase
+	DeviceURA string `json:"device_ura,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	Cursor    string `json:"cursor,omitempty"`
+}
 
 // EventProjectionInput asks the daemon contract to project one raw directory event.
 type EventProjectionInput struct {
@@ -150,6 +160,17 @@ type SessionEvent = EventFrame
 type InvocationEvent = EventFrame
 type EventDropReport = EventFrame
 
+type DeviceEventPage struct {
+	Profile    string         `json:"profile"`
+	Stream     string         `json:"stream"`
+	ItemKind   string         `json:"item_kind"`
+	Items      []DeviceEvent  `json:"items"`
+	NextCursor *string        `json:"next_cursor"`
+	HasMore    bool           `json:"has_more"`
+	Limit      int            `json:"limit"`
+	Metadata   map[string]any `json:"metadata"`
+}
+
 // EventTransport supplies daemon Events operations behind the facade.
 type EventTransport interface {
 	BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -160,6 +181,7 @@ type EventTransport interface {
 	SubscribeDevices(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeSessions(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
 	ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error)
 	ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error)
@@ -175,6 +197,7 @@ type EventTransportFunc struct {
 	SubscribeDevicesFunc                      func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeSessionsFunc                     func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeInvocationsFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListDeviceEventsFunc                      func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectDirectoryEventFunc                 func(ctx context.Context, eventJSON []byte) ([]byte, error)
 	ProjectDropReportFunc                     func(ctx context.Context, dropJSON []byte) ([]byte, error)
 	ProjectTerminalFunc                       func(ctx context.Context, terminalJSON []byte) ([]byte, error)
@@ -234,6 +257,13 @@ func (f EventTransportFunc) SubscribeInvocations(ctx context.Context, requestJSO
 		return nil, invalidRuntimeClient("events subscribe-invocations transport function is required")
 	}
 	return f.SubscribeInvocationsFunc(ctx, requestJSON)
+}
+
+func (f EventTransportFunc) ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.ListDeviceEventsFunc == nil {
+		return nil, invalidRuntimeClient("events list-device-events transport function is required")
+	}
+	return f.ListDeviceEventsFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
@@ -299,6 +329,21 @@ func (c *EventClient) SubscribeSessions(ctx context.Context, req EventsSessionSu
 
 func (c *EventClient) SubscribeInvocations(ctx context.Context, req EventsInvocationSubscriptionRequest) (EventStream, error) {
 	return c.subscribe(ctx, req, EventStreamInvocation)
+}
+
+func (c *EventClient) ListDeviceEvents(ctx context.Context, req EventsDeviceEventListRequest) (DeviceEventPage, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return DeviceEventPage{}, err
+	}
+	requestJSON, err := marshalEventsDeviceEventListRequest(req)
+	if err != nil {
+		return DeviceEventPage{}, err
+	}
+	raw, err := c.transport.ListDeviceEvents(ctx, requestJSON)
+	if err != nil {
+		return DeviceEventPage{}, wrapEventsTransportError("events list device events failed", err)
+	}
+	return NewDeviceEventPageFromJSON(raw)
 }
 
 func (c *EventClient) buildSubscriptionInvocation(ctx context.Context, req EventsSubscriptionRequest, stream EventStreamKind) (InvocationDraft, error) {
@@ -419,27 +464,55 @@ func NewEventFrameFromJSON(raw []byte) (EventFrame, error) {
 	if err := json.Unmarshal(raw, &frame); err != nil {
 		return EventFrame{}, invalidRuntimePayload(fmt.Sprintf("decode event frame JSON: %v", err), err)
 	}
+	if err := validateEventFrame(&frame); err != nil {
+		return EventFrame{}, err
+	}
+	return frame, nil
+}
+
+func validateEventFrame(frame *EventFrame) error {
 	if frame.Profile != eventsProfile || !validEventStreamKind(EventStreamKind(frame.Stream)) ||
 		frame.Kind == "" || frame.EventID == "" || frame.ResumeToken == "" ||
 		frame.OccurredUnixMS < 0 || frame.OccurredAt == "" || frame.Metadata == nil {
-		return EventFrame{}, invalidRuntimePayload("invalid event frame projection", nil)
+		return invalidRuntimePayload("invalid event frame projection", nil)
 	}
 	if err := validateEventCursor(frame.Cursor); err != nil {
-		return EventFrame{}, err
+		return err
 	}
 	if frame.Cursor.Token == "" {
 		frame.Cursor.Token = frame.Cursor.ResumeToken()
 	}
 	if frame.DroppedCount < 0 {
-		return EventFrame{}, invalidRuntimePayload("dropped_count must be non-negative", nil)
+		return invalidRuntimePayload("dropped_count must be non-negative", nil)
 	}
 	if strings.Contains(frame.Kind, "drop_report") && frame.DroppedCount == 0 {
-		return EventFrame{}, invalidRuntimePayload("dropped_count must be greater than zero", nil)
+		return invalidRuntimePayload("dropped_count must be greater than zero", nil)
 	}
 	if strings.Contains(frame.Kind, "terminal") && !frame.Terminal {
-		return EventFrame{}, invalidRuntimePayload("terminal event frame must be terminal", nil)
+		return invalidRuntimePayload("terminal event frame must be terminal", nil)
 	}
-	return frame, nil
+	return nil
+}
+
+func NewDeviceEventPageFromJSON(raw []byte) (DeviceEventPage, error) {
+	var page DeviceEventPage
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return DeviceEventPage{}, invalidRuntimePayload(fmt.Sprintf("decode device event page JSON: %v", err), err)
+	}
+	if page.Profile != eventsProfile || page.Stream != string(EventStreamDevice) ||
+		page.ItemKind == "" || page.Limit < 1 || page.Limit > MaxEventPageSize ||
+		page.Items == nil || page.Metadata == nil {
+		return DeviceEventPage{}, invalidRuntimePayload("invalid device event page projection", nil)
+	}
+	for idx := range page.Items {
+		if page.Items[idx].Stream != string(EventStreamDevice) {
+			return DeviceEventPage{}, invalidRuntimePayload("device event page item stream mismatch", nil)
+		}
+		if err := validateEventFrame(&page.Items[idx]); err != nil {
+			return DeviceEventPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func marshalEventsSubscriptionRequest(req EventsSubscriptionRequest, expected EventStreamKind) ([]byte, error) {
@@ -452,6 +525,39 @@ func marshalEventsSubscriptionRequest(req EventsSubscriptionRequest, expected Ev
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode events subscription request: %v", err), err)
 	}
 	return requestJSON, nil
+}
+
+func marshalEventsDeviceEventListRequest(req EventsDeviceEventListRequest) ([]byte, error) {
+	normalized, err := normalizeEventsDeviceEventListRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	requestJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode events device event list request: %v", err), err)
+	}
+	return requestJSON, nil
+}
+
+func normalizeEventsDeviceEventListRequest(req EventsDeviceEventListRequest) (EventsDeviceEventListRequest, error) {
+	if err := validateEventsCarrierBase(req.EventsCarrierBase); err != nil {
+		return EventsDeviceEventListRequest{}, err
+	}
+	for field, value := range map[string]string{
+		"device_ura": req.DeviceURA,
+		"cursor":     req.Cursor,
+	} {
+		if strings.TrimSpace(value) != value {
+			return EventsDeviceEventListRequest{}, invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+		}
+	}
+	if req.Limit == 0 {
+		req.Limit = DefaultEventPageSize
+	}
+	if req.Limit < 1 || req.Limit > MaxEventPageSize {
+		return EventsDeviceEventListRequest{}, invalidRuntimePayload("event page limit exceeds bounds", nil)
+	}
+	return req, nil
 }
 
 func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected EventStreamKind) (EventsSubscriptionRequest, error) {

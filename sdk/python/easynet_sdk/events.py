@@ -23,6 +23,8 @@ _SUPPORTED_STREAMS = {
 }
 MIN_EVENT_HEARTBEAT_INTERVAL_MS = 1000
 MAX_EVENT_HEARTBEAT_INTERVAL_MS = 300000
+DEFAULT_EVENT_PAGE_SIZE = 50
+MAX_EVENT_PAGE_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,30 @@ DirectoryEventQuery = EventsDirectorySubscriptionRequest
 DeviceEventQuery = EventsDeviceSubscriptionRequest
 SessionEventQuery = EventsSessionSubscriptionRequest
 InvocationEventQuery = EventsInvocationSubscriptionRequest
+
+
+@dataclass(frozen=True)
+class EventsDeviceEventListRequest:
+    base: EventsCarrierBase
+    device_ura: str = ""
+    limit: int = 0
+    cursor: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        for key, raw in (
+            ("device_ura", self.device_ura),
+            ("cursor", self.cursor),
+        ):
+            if raw:
+                if raw.strip() != raw:
+                    raise _invalid_events(f"{key} must not contain surrounding whitespace")
+                value[key] = raw
+        limit = self.limit or DEFAULT_EVENT_PAGE_SIZE
+        if limit < 1 or limit > MAX_EVENT_PAGE_SIZE:
+            raise _invalid_events("event page limit exceeds bounds")
+        value["limit"] = limit
+        return _json_bytes(value)
 
 
 @dataclass(frozen=True)
@@ -244,7 +270,10 @@ class EventFrame:
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "EventFrame":
-        decoded = _json_object(raw, "event frame")
+        return cls.from_mapping(_json_object(raw, "event frame"))
+
+    @classmethod
+    def from_mapping(cls, decoded: Mapping[str, object]) -> "EventFrame":
         if decoded.get("profile") != _PROFILE or decoded.get("stream") not in _SUPPORTED_STREAMS:
             raise _invalid_events("invalid event frame projection")
         cursor = _cursor_from_json(decoded.get("cursor"), require_token=True)
@@ -283,6 +312,47 @@ InvocationEvent = EventFrame
 EventDropReport = EventFrame
 
 
+@dataclass(frozen=True)
+class DeviceEventPage:
+    profile: str
+    stream: str
+    item_kind: str
+    items: tuple[DeviceEvent, ...]
+    next_cursor: Optional[str]
+    has_more: bool
+    limit: int
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DeviceEventPage":
+        decoded = _json_object(raw, "device event page")
+        if decoded.get("profile") != _PROFILE or decoded.get("stream") != _DEVICE_STREAM:
+            raise _invalid_events("invalid device event page projection")
+        limit = _required_non_negative_int(decoded, "limit")
+        if limit < 1 or limit > MAX_EVENT_PAGE_SIZE:
+            raise _invalid_events("event page limit exceeds bounds")
+        items_raw = decoded.get("items")
+        if not isinstance(items_raw, list):
+            raise _invalid_events("items must be a list")
+        items: list[DeviceEvent] = []
+        for item in items_raw:
+            if not isinstance(item, dict):
+                raise _invalid_events("device event page item must be an object")
+            if item.get("stream") != _DEVICE_STREAM:
+                raise _invalid_events("device event page item stream mismatch")
+            items.append(EventFrame.from_mapping(item))
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            stream=_required_string(decoded, "stream"),
+            item_kind=_required_string(decoded, "item_kind"),
+            items=tuple(items),
+            next_cursor=_optional_string(decoded.get("next_cursor"), "next_cursor"),
+            has_more=_required_bool(decoded, "has_more"),
+            limit=limit,
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
 @runtime_checkable
 class EventTransport(Protocol):
     """Concrete Events operations supplied by the integration layer."""
@@ -309,6 +379,9 @@ class EventTransport(Protocol):
         ...
 
     def subscribe_invocations(self, request_json: bytes) -> bytes:
+        ...
+
+    def list_device_events(self, request_json: bytes) -> bytes:
         ...
 
     def project_directory_event(self, event_json: bytes) -> bytes:
@@ -364,6 +437,15 @@ class EventClient:
         self, request: EventsInvocationSubscriptionRequest
     ) -> EventStream:
         return self._subscribe(request, _INVOCATION_STREAM)
+
+    def list_device_events(self, request: EventsDeviceEventListRequest) -> DeviceEventPage:
+        try:
+            raw = self.transport.list_device_events(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("events list device events failed", exc) from exc
+        return DeviceEventPage.from_json(raw)
 
     def _subscription_invocation(
         self, request: EventsSubscriptionRequest, stream: str

@@ -30,8 +30,9 @@ output-hash folding seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders and MissionStatus projection seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders plus GatewayStatus, AdminAgentPage, and lifecycle-result projection
-seams. EventClient exposes directory subscription Invocation carriers plus
-EventFrame cursor/resume/drop-report/terminal projection seams. SurfaceClient
+seams. EventClient exposes directory/device/session/invocation subscription
+Invocation carriers, device event history pages, and EventFrame
+cursor/resume/drop-report/terminal projection seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams. CompatibilityClient exposes
@@ -42,7 +43,7 @@ seams. Concrete daemon
 process spawn/default C ABI or UDS transport, directory subscriptions, signer key lifecycle,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, pairing/credential/device-session Admin
-flows, Events historical pages/daemon filtering/live adapters, surface health/status,
+flows, Events daemon filtering/live adapters, surface health/status,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE
 product cutovers, wrapper execution helpers and backend HTTP/WebSocket bridges,
 concrete bidi adapters, and backend cutover gates remain incomplete. See

@@ -12,6 +12,7 @@ type memoryEventTransport struct {
 	event      string
 	drop       string
 	terminal   string
+	page       string
 	seen       map[string]map[string]any
 }
 
@@ -62,6 +63,11 @@ func (m *memoryEventTransport) SubscribeSessions(_ context.Context, requestJSON 
 func (m *memoryEventTransport) SubscribeInvocations(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("subscribe_invocations", requestJSON)
 	return []byte(eventStreamJSON("invocation")), nil
+}
+
+func (m *memoryEventTransport) ListDeviceEvents(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("list_device_events", requestJSON)
+	return []byte(m.page), nil
 }
 
 func (m *memoryEventTransport) ProjectDirectoryEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
@@ -253,8 +259,33 @@ func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
 	}
 }
 
+func TestEventsListsDeviceEventHistoryPage(t *testing.T) {
+	transport := &memoryEventTransport{page: eventsDeviceEventPageJSON}
+	client, err := NewEventClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := client.ListDeviceEvents(context.Background(), EventsDeviceEventListRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Stream != "device" || !page.HasMore || page.NextCursor == nil || *page.NextCursor != "device:9" {
+		t.Fatalf("unexpected device event page: %#v", page)
+	}
+	if len(page.Items) != 1 || page.Items[0].Kind != "device.status_changed" {
+		t.Fatalf("unexpected page items: %#v", page.Items)
+	}
+	if transport.seen["list_device_events"]["limit"].(float64) != DefaultEventPageSize {
+		t.Fatalf("default limit not applied: %#v", transport.seen["list_device_events"])
+	}
+}
+
 func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
-	transport := &memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON, drop: eventsDropReportJSON}
+	transport := &memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON, drop: eventsDropReportJSON, page: eventsDeviceEventPageJSON}
 	client, err := NewEventClient(transport)
 	if err != nil {
 		t.Fatal(err)
@@ -276,6 +307,15 @@ func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
 	cursor, _ := NewEventCursor("directory", 9)
 	if _, err := client.ProjectDropReport(context.Background(), EventDropReportInput{Cursor: cursor, OccurredUnixMS: 1, DroppedCount: 0}); err == nil {
 		t.Fatal("expected zero dropped_count rejection")
+	}
+	if _, err := client.ListDeviceEvents(context.Background(), EventsDeviceEventListRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		Limit:             MaxEventPageSize + 1,
+	}); err == nil {
+		t.Fatal("expected event page limit rejection")
+	}
+	if _, err := NewDeviceEventPageFromJSON([]byte(eventsDeviceEventPageWithDirectoryItemJSON)); err == nil {
+		t.Fatal("expected device event page item stream mismatch rejection")
 	}
 }
 
@@ -385,4 +425,62 @@ const eventsTerminalJSON = `{
     "lifecycle": "terminal",
     "reason": "client_closed"
   }
+}`
+
+const eventsDeviceEventPageJSON = `{
+  "profile": "events",
+  "stream": "device",
+  "item_kind": "device_event",
+  "items": [
+    {
+      "profile": "events",
+      "stream": "device",
+      "kind": "device.status_changed",
+      "event_id": "evt-device-8",
+      "cursor": {"stream": "device", "sequence": 8, "token": "device:8"},
+      "resume_token": "device:8",
+      "occurred_unix_ms": 1783100000123,
+      "occurred_at": "2026-07-03T17:33:20.123Z",
+      "subject_ref": {"kind": "ura", "ura": "easynet:///r/example/device/dev-a", "role": "device"},
+      "tenant_ref": {"kind": "realm", "realm": "example"},
+      "payload": {"type": "status_changed", "state": "online"},
+      "dropped_count": 0,
+      "reconnect_after_ms": null,
+      "terminal": false,
+      "metadata": {"profile": "events", "stream": "device", "source": "daemon_device_event"}
+    }
+  ],
+  "next_cursor": "device:9",
+  "has_more": true,
+  "limit": 50,
+  "metadata": {"profile": "events", "source": "device_event_history"}
+}`
+
+const eventsDeviceEventPageWithDirectoryItemJSON = `{
+  "profile": "events",
+  "stream": "device",
+  "item_kind": "device_event",
+  "items": [
+    {
+      "profile": "events",
+      "stream": "directory",
+      "kind": "directory.agent_advertised",
+      "event_id": "evt-directory-8",
+      "cursor": {"stream": "directory", "sequence": 8, "token": "directory:8"},
+      "resume_token": "directory:8",
+      "occurred_unix_ms": 1783100000123,
+      "occurred_at": "2026-07-03T17:33:20.123Z",
+      "subject_ref": null,
+      "tenant_ref": null,
+      "payload": {},
+      "dropped_count": 0,
+      "reconnect_after_ms": null,
+      "terminal": false,
+      "metadata": {"profile": "events", "stream": "directory"}
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false,
+  "limit": 50,
+  "metadata": {"profile": "events"}
 }`
