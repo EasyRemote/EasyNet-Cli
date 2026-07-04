@@ -19,18 +19,6 @@ _RAW_FFI_MARKERS = (
     "ctypes.pydll",
     "dl" + "open",
 )
-_RAW_CODEC_MARKERS = (
-    "InvocationDraft.from_json",
-    "InvocationResult.from_json",
-    '"caller_ura"',
-    '"callee_ura"',
-    '"descriptor_ref"',
-    '"subject_ura"',
-    '"nonce_base64"',
-    '"causal_context"',
-)
-
-
 @dataclass(frozen=True)
 class CutoverViolation:
     """One consumer source boundary violation."""
@@ -154,14 +142,21 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
 
 def _audit_raw_abi_symbols(path: str, text: str) -> tuple[CutoverViolation, ...]:
     violations: list[CutoverViolation] = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        for match in _RAW_ABI_SYMBOL.finditer(line):
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        for symbol in sorted(_raw_abi_symbols_in_node(node)):
             violations.append(
                 CutoverViolation(
                     path=path,
                     rule="raw_c_abi_symbol",
-                    detail=match.group(0),
-                    line=line_no,
+                    detail=symbol,
+                    line=getattr(node, "lineno", 1),
                 )
             )
     return tuple(violations)
@@ -169,18 +164,85 @@ def _audit_raw_abi_symbols(path: str, text: str) -> tuple[CutoverViolation, ...]
 
 def _audit_raw_ffi_markers(path: str, text: str) -> tuple[CutoverViolation, ...]:
     violations: list[CutoverViolation] = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        for marker in _RAW_FFI_MARKERS:
-            if marker in line:
-                violations.append(
-                    CutoverViolation(
-                        path=path,
-                        rule="raw_ffi_loader",
-                        detail=marker,
-                        line=line_no,
-                    )
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        for marker in sorted(_raw_ffi_markers_in_node(node)):
+            violations.append(
+                CutoverViolation(
+                    path=path,
+                    rule="raw_ffi_loader",
+                    detail=marker,
+                    line=getattr(node, "lineno", 1),
                 )
+            )
     return tuple(violations)
+
+
+def _raw_abi_symbols_in_node(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return {node.id} if _is_raw_abi_symbol(node.id) else set()
+    if isinstance(node, ast.Attribute):
+        return {node.attr} if _is_raw_abi_symbol(node.attr) else set()
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {
+            symbol
+            for symbol in _RAW_ABI_SYMBOL.findall(node.value)
+            if _is_raw_abi_symbol(symbol)
+        }
+    return set()
+
+
+def _raw_ffi_markers_in_node(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Call):
+        dotted = _dotted_name(node.func)
+        if dotted in _RAW_FFI_MARKERS:
+            return {dotted}
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {marker for marker in _RAW_FFI_MARKERS if marker in node.value}
+    return set()
+
+
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _docstring_node_ids(tree: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        body = getattr(node, "body", [])
+        if not body:
+            continue
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            ids.add(id(first.value))
+    return ids
+
+
+def _is_raw_abi_symbol(value: str) -> bool:
+    return (
+        _RAW_ABI_SYMBOL.fullmatch(value) is not None
+        and value != _RAW_AXON_MODULE
+        and not value.startswith("easynet" + "_" + "sdk")
+    )
 
 
 def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...]:
@@ -191,9 +253,12 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...
         tree = None
     if tree is not None:
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not _is_json_codec_call(node):
+            if isinstance(node, ast.Call) and _is_json_codec_call(node):
+                markers = sorted(_invocation_field_markers(node))
+            elif isinstance(node, ast.Dict):
+                markers = sorted(_invocation_dict_fields(node))
+            else:
                 continue
-            markers = sorted(_invocation_field_markers(node))
             if markers:
                 violations.append(
                     CutoverViolation(
@@ -203,22 +268,6 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...
                         line=node.lineno,
                     )
                 )
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        if "json.dumps" not in line and "json.loads" not in line:
-            continue
-        markers = [marker for marker in _RAW_CODEC_MARKERS if marker in line]
-        if markers and not any(
-            item.rule == "raw_invocation_json_codec" and item.line == line_no
-            for item in violations
-        ):
-            violations.append(
-                CutoverViolation(
-                    path=path,
-                    rule="raw_invocation_json_codec",
-                    detail=", ".join(markers),
-                    line=line_no,
-                )
-            )
     return tuple(violations)
 
 
@@ -247,6 +296,23 @@ def _invocation_field_markers(node: ast.AST) -> set[str]:
             if child.value in fields:
                 markers.add(child.value)
     return markers
+
+
+def _invocation_dict_fields(node: ast.Dict) -> set[str]:
+    fields = {
+        "caller_ura",
+        "callee_ura",
+        "descriptor_ref",
+        "subject_ura",
+        "nonce_base64",
+        "causal_context",
+    }
+    markers: set[str] = set()
+    for key in node.keys:
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            if key.value in fields:
+                markers.add(key.value)
+    return markers if len(markers) >= 3 else set()
 
 
 def _is_raw_axon_module(module: str) -> bool:

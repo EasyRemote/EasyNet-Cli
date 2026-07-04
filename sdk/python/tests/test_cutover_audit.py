@@ -52,6 +52,50 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertIn("raw_ffi_loader", _rules(result))
         self.assertIn("raw_c_abi_symbol", _rules(result))
 
+    def test_ignores_docstrings_and_comments_about_old_raw_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs.py").write_text(
+                textwrap.dedent(
+                    '''
+                    """Legacy notes mention easynet_daemon_start and ctypes.CDLL."""
+
+                    def explain() -> str:
+                        """This docstring says easynet_invocation_invoke."""
+                        # A comment also mentions easynet_last_error.
+                        return "sdk-only"
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
+
+    def test_flags_executable_raw_symbol_strings_and_attributes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "abi.py").write_text(
+                textwrap.dedent(
+                    """
+                    class Lib:
+                        pass
+
+                    lib = Lib()
+                    symbol = "easynet_invocation_invoke"
+                    getattr(lib, "easynet_last_error")
+                    lib.easynet_daemon_start
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_c_abi_symbol", _rules(result))
+
     def test_flags_raw_axon_imports_and_invocation_json_codec(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -72,6 +116,31 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("raw_lower_layer_import", _rules(result))
         self.assertIn("raw_invocation_json_codec", _rules(result))
+        self.assertNotIn("raw_c_abi_symbol", _rules(result))
+
+    def test_ignores_comments_and_docstrings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs_only.py").write_text(
+                textwrap.dedent(
+                    '''
+                    """Mentions easynet_daemon_start and dlopen in prose only."""
+
+                    # ctypes.CDLL("libeasynet_cli.dylib")
+                    # symbol = "easynet_runtime_invoke"
+                    from easynet_sdk import RuntimeClient
+
+                    def use(client: RuntimeClient) -> None:
+                        """References easynet_last_error in documentation."""
+                        client.close()
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
 
     def test_flags_multiline_raw_invocation_json_codec(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,6 +160,31 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                             "causal_context": {"form": "none"},
                         }
                     )
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_invocation_json_codec", _rules(result))
+
+    def test_flags_invocation_tuple_dict_without_json_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "invocation.py").write_text(
+                textwrap.dedent(
+                    """
+                    def encode():
+                        return {
+                            "caller_ura": "easynet:///r/example/agent/alice",
+                            "callee_ura": "easynet:///r/example/device/dev-a",
+                            "descriptor_ref": "easynet:///r/example/ability/a@1.0.0",
+                            "subject_ura": "easynet:///r/example/device/dev-a",
+                            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                            "causal_context": {"form": "none"},
+                        }
                     """
                 ),
                 encoding="utf-8",
