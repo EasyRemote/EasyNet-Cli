@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,7 +55,10 @@ type WrapperFileRecordRequest struct {
 type WrapperFileTransferRequest struct {
 	WrapperCarrierBase
 	WrapperFileRecordRequest
-	Operation string `json:"operation,omitempty"`
+	Operation   string `json:"operation,omitempty"`
+	AbilityName string `json:"ability_name,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	BytesBase64 string `json:"bytes_b64,omitempty"`
 }
 
 type WrapperTerminalSessionRecord struct {
@@ -593,6 +597,9 @@ func wrapperExecutionPayload(req any) (map[string]any, error) {
 		payload := wrapperCarrierMap(value.WrapperCarrierBase)
 		payload["wrapper_kind"] = string(WrapperKindFile)
 		payload["operation"] = firstNonEmptyWrapper(value.Operation, "transfer")
+		putWrapperString(payload, "ability_name", value.AbilityName)
+		putWrapperString(payload, "filename", value.Filename)
+		putWrapperString(payload, "bytes_b64", value.BytesBase64)
 		putWrapperFileRecordRequest(payload, value.WrapperFileRecordRequest)
 		return payload, nil
 	case WrapperTerminalStartRequest:
@@ -643,7 +650,7 @@ func wrapperCarrierMap(base WrapperCarrierBase) map[string]any {
 }
 
 func putWrapperFileRecordRequest(payload map[string]any, req WrapperFileRecordRequest) {
-	payload["file_ref"] = req.FileRef
+	putWrapperString(payload, "file_ref", req.FileRef)
 	payload["owner_ura"] = req.OwnerURA
 	payload["content_type"] = req.ContentType
 	if req.SizeBytes != nil {
@@ -694,7 +701,7 @@ func putWrapperString(payload map[string]any, key string, value string) {
 
 func validateWrapperFileRecordRequest(req WrapperFileRecordRequest) error {
 	if req.FileRef == "" || req.ContentType == "" {
-		return invalidProfilePayload(wrappersProfile, "wrapper file_ref and content_type are required", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper file_ref and content_type are required for file records", nil)
 	}
 	if err := validateWrapperOwnerURA(req.OwnerURA); err != nil {
 		return err
@@ -712,6 +719,27 @@ func validateWrapperFileTransferRequest(req any) error {
 	}
 	if value.Operation != "" && strings.TrimSpace(value.Operation) != value.Operation {
 		return invalidProfilePayload(wrappersProfile, "wrapper operation must not contain surrounding whitespace", nil)
+	}
+	if value.AbilityName != "" && strings.TrimSpace(value.AbilityName) != value.AbilityName {
+		return invalidProfilePayload(wrappersProfile, "wrapper ability_name must not contain surrounding whitespace", nil)
+	}
+	if value.Filename != "" && strings.TrimSpace(value.Filename) != value.Filename {
+		return invalidProfilePayload(wrappersProfile, "wrapper filename must not contain surrounding whitespace", nil)
+	}
+	if value.BytesBase64 != "" {
+		if value.Filename == "" {
+			return invalidProfilePayload(wrappersProfile, "wrapper filename is required when bytes_b64 is present", nil)
+		}
+		if _, err := base64.StdEncoding.DecodeString(value.BytesBase64); err != nil {
+			return invalidProfilePayload(wrappersProfile, "wrapper bytes_b64 must be valid base64", err)
+		}
+		if value.OwnerURA == "" || value.ContentType == "" {
+			return invalidProfilePayload(wrappersProfile, "wrapper owner_ura and content_type are required for file upload", nil)
+		}
+		if value.SizeBytes != nil && *value.SizeBytes < 0 {
+			return invalidProfilePayload(wrappersProfile, "wrapper size_bytes must be non-negative", nil)
+		}
+		return validateWrapperOwnerURA(value.OwnerURA)
 	}
 	return validateWrapperFileRecordRequest(value.WrapperFileRecordRequest)
 }
