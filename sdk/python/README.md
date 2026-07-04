@@ -29,7 +29,8 @@ exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
 output-hash folding seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders and MissionStatus projection seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
-builders plus GatewayStatus, AdminAgentPage, and lifecycle-result projection
+builders plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing token,
+device credential, credential verification, and typed device-session projection
 seams. EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, device event history pages, and EventFrame
 cursor/resume/drop-report/terminal projection seams. SurfaceClient
@@ -42,8 +43,8 @@ file, terminal, remote desktop, browser, and media session record projection
 seams. Concrete daemon
 process spawn/default C ABI or UDS transport, directory subscriptions, local signer implementations,
 Axon-backed receipt verification, concrete publication/host-binding/mission
-carriers, mission event streams, pairing/credential/device-session Admin
-flows, Events daemon filtering/live adapters, surface health/status,
+carriers, mission event streams, concrete Admin trust/session carriers,
+certificate policy, Events daemon filtering/live adapters, surface health/status,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE
 product cutovers, wrapper execution helpers and backend HTTP/WebSocket bridges,
 concrete bidi adapters, and EasyRemote cutover gates remain incomplete. See

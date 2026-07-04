@@ -9,7 +9,16 @@ from easynet_sdk.admin import (
     AdminCarrierBase,
     AdminClient,
     AdminGatewayStatusRequest,
+    AdminJoinHubRequest,
+    AdminLeaveHubRequest,
     AdminSessionListRequest,
+    CreateDeviceSessionRequest,
+    CreatePairingRequest,
+    DeleteDeviceSessionRequest,
+    PairingPreflightRequest,
+    RevokeDeviceRequest,
+    ValidatePairingRequest,
+    VerifyDeviceCredentialRequest,
 )
 
 
@@ -175,6 +184,128 @@ ADMIN_LIFECYCLE_RESULT = b"""{
   }
 }"""
 
+ADMIN_JOIN_RESULT = b"""{
+  "profile": "admin_gateway",
+  "kind": "hub_membership_result",
+  "operation": "hub.join",
+  "state": "ok",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "hub.join"}
+}"""
+
+ADMIN_LEAVE_RESULT = b"""{
+  "profile": "admin_gateway",
+  "kind": "hub_membership_result",
+  "operation": "hub.leave",
+  "state": "ok",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "hub.leave"}
+}"""
+
+ADMIN_PAIRING_PREFLIGHT = b"""{
+  "profile": "admin_gateway",
+  "kind": "pairing_preflight",
+  "state": "requires_pairing",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "pairing_required": true,
+  "trust_ready": false,
+  "scopes": ["invoke", "events"],
+  "metadata": {"profile": "admin_gateway", "source": "pairing.preflight"}
+}"""
+
+ADMIN_PAIRING_TOKEN = b"""{
+  "profile": "admin_gateway",
+  "kind": "pairing_token",
+  "token_id": "pair-token-1",
+  "token": "pair-token-value",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "state": "issued",
+  "expires_unix_ms": 1893456000000,
+  "scopes": ["invoke", "events"],
+  "metadata": {"profile": "admin_gateway", "source": "pairing.create"}
+}"""
+
+ADMIN_DEVICE_CREDENTIAL = b"""{
+  "profile": "admin_gateway",
+  "kind": "device_credential",
+  "credential_id": "cred-dev-a",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "state": "active",
+  "issued_unix_ms": 1767225600000,
+  "expires_unix_ms": 1893456000000,
+  "scopes": ["invoke", "events"],
+  "metadata": {"profile": "admin_gateway", "source": "pairing.validate"}
+}"""
+
+ADMIN_CREDENTIAL_VERIFICATION = b"""{
+  "profile": "admin_gateway",
+  "kind": "device_credential_verification",
+  "verified": true,
+  "credential_id": "cred-dev-a",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "method": "daemon-trust-store",
+  "metadata": {"profile": "admin_gateway", "source": "credential.verify"}
+}"""
+
+ADMIN_DEVICE_SESSION = b"""{
+  "profile": "admin_gateway",
+  "kind": "device_session",
+  "session_id": "dev-session-1",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "state": "active",
+  "session_kind": "remote_desktop",
+  "created_unix_ms": 1767225600000,
+  "expires_unix_ms": 1893456000000,
+  "metadata": {"profile": "admin_gateway", "source": "session.create"}
+}"""
+
+ADMIN_DEVICE_SESSION_PAGE = b"""{
+  "profile": "admin_gateway",
+  "kind": "device_sessions",
+  "state": "ok",
+  "items": [{
+    "profile": "admin_gateway",
+    "kind": "device_session",
+    "session_id": "dev-session-1",
+    "device_ura": "easynet:///r/example/device/dev-a",
+    "hub_ura": "easynet:///r/example/hub/main",
+    "state": "active",
+    "session_kind": "remote_desktop",
+    "created_unix_ms": 1767225600000,
+    "expires_unix_ms": 1893456000000,
+    "metadata": {"profile": "admin_gateway", "source": "session.list"}
+  }],
+  "next_cursor": null,
+  "metadata": {"profile": "admin_gateway", "source": "session.list"}
+}"""
+
+ADMIN_REVOKE_DEVICE_RESULT = b"""{
+  "profile": "admin_gateway",
+  "kind": "device_admin_result",
+  "operation": "device.revoke",
+  "state": "revoked",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "device.revoke"}
+}"""
+
+ADMIN_DELETE_SESSION_RESULT = b"""{
+  "profile": "admin_gateway",
+  "kind": "device_admin_result",
+  "operation": "session.delete",
+  "state": "deleted",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "session.delete"}
+}"""
+
 
 class MemoryAdminTransport:
     def __init__(self) -> None:
@@ -225,7 +356,43 @@ class MemoryAdminTransport:
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
         self._remember("list_device_sessions", request_json)
-        return b'{"profile":"admin_gateway","kind":"device_sessions","state":"ok","items":[],"next_cursor":null,"metadata":{"profile":"admin_gateway","source":"session.list"}}'
+        return ADMIN_DEVICE_SESSION_PAGE
+
+    def join_hub(self, request_json: bytes) -> bytes:
+        self._remember("join_hub", request_json)
+        return ADMIN_JOIN_RESULT
+
+    def leave_hub(self, request_json: bytes) -> bytes:
+        self._remember("leave_hub", request_json)
+        return ADMIN_LEAVE_RESULT
+
+    def pairing_preflight(self, request_json: bytes) -> bytes:
+        self._remember("pairing_preflight", request_json)
+        return ADMIN_PAIRING_PREFLIGHT
+
+    def validate_pairing(self, request_json: bytes) -> bytes:
+        self._remember("validate_pairing", request_json)
+        return ADMIN_DEVICE_CREDENTIAL
+
+    def verify_device_credential(self, request_json: bytes) -> bytes:
+        self._remember("verify_device_credential", request_json)
+        return ADMIN_CREDENTIAL_VERIFICATION
+
+    def create_pairing(self, request_json: bytes) -> bytes:
+        self._remember("create_pairing", request_json)
+        return ADMIN_PAIRING_TOKEN
+
+    def revoke_device(self, request_json: bytes) -> bytes:
+        self._remember("revoke_device", request_json)
+        return ADMIN_REVOKE_DEVICE_RESULT
+
+    def create_device_session(self, request_json: bytes) -> bytes:
+        self._remember("create_device_session", request_json)
+        return ADMIN_DEVICE_SESSION
+
+    def delete_device_session(self, request_json: bytes) -> bytes:
+        self._remember("delete_device_session", request_json)
+        return ADMIN_DELETE_SESSION_RESULT
 
 
 def admin_base() -> AdminCarrierBase:
@@ -318,6 +485,106 @@ class AdminClientTests(unittest.TestCase):
         self.assertEqual(result.state, "ok")
         self.assertEqual(result.agent_ura, "easynet:///r/example/agent/alice.codex")
 
+    def test_trust_and_device_session_lifecycle(self) -> None:
+        transport = MemoryAdminTransport()
+        client = AdminClient(transport)
+
+        join = client.join_hub(
+            AdminJoinHubRequest(
+                admin_base(),
+                hub_ura="easynet:///r/example/hub/main",
+                device_ura="easynet:///r/example/device/dev-a",
+            )
+        )
+        self.assertEqual(join.operation, "hub.join")
+        self.assertEqual(
+            transport.seen["join_hub"]["hub_ura"], "easynet:///r/example/hub/main"
+        )
+
+        preflight = client.pairing_preflight(
+            PairingPreflightRequest(
+                admin_base(),
+                hub_ura="easynet:///r/example/hub/main",
+                device_ura="easynet:///r/example/device/dev-a",
+                requested_scopes=("invoke", "events"),
+            )
+        )
+        self.assertTrue(preflight.pairing_required)
+        self.assertFalse(preflight.trust_ready)
+
+        token = client.create_pairing(
+            CreatePairingRequest(
+                admin_base(),
+                hub_ura="easynet:///r/example/hub/main",
+                device_ura="easynet:///r/example/device/dev-a",
+                expires_unix_ms=1893456000000,
+                scopes=("invoke", "events"),
+            )
+        )
+        self.assertEqual(token.token_id, "pair-token-1")
+
+        credential = client.validate_pairing(
+            ValidatePairingRequest(
+                admin_base(),
+                token="pair-token-value",
+                device_ura="easynet:///r/example/device/dev-a",
+            )
+        )
+        self.assertEqual(credential.credential_id, "cred-dev-a")
+        self.assertEqual(credential.state, "active")
+
+        verification = client.verify_device_credential(
+            VerifyDeviceCredentialRequest(
+                admin_base(),
+                credential_id="cred-dev-a",
+                device_ura="easynet:///r/example/device/dev-a",
+                hub_ura="easynet:///r/example/hub/main",
+            )
+        )
+        self.assertTrue(verification.verified)
+        self.assertEqual(verification.method, "daemon-trust-store")
+
+        session = client.create_device_session(
+            CreateDeviceSessionRequest(
+                admin_base(),
+                device_ura="easynet:///r/example/device/dev-a",
+                hub_ura="easynet:///r/example/hub/main",
+                session_kind="remote_desktop",
+                expires_unix_ms=1893456000000,
+            )
+        )
+        self.assertEqual(session.session_id, "dev-session-1")
+        self.assertEqual(session.session_kind, "remote_desktop")
+
+        page = client.list_device_sessions(AdminSessionListRequest(admin_base()))
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(page.items[0].session_id, "dev-session-1")
+
+        leave = client.leave_hub(
+            AdminLeaveHubRequest(
+                admin_base(),
+                hub_ura="easynet:///r/example/hub/main",
+                reason="rotation",
+            )
+        )
+        self.assertEqual(leave.operation, "hub.leave")
+
+        revoked = client.revoke_device(
+            RevokeDeviceRequest(
+                admin_base(),
+                device_ura="easynet:///r/example/device/dev-a",
+                reason="compromised",
+            )
+        )
+        self.assertEqual(revoked.operation, "device.revoke")
+
+        deleted = client.delete_device_session(
+            DeleteDeviceSessionRequest(
+                admin_base(), session_id="dev-session-1", reason="done"
+            )
+        )
+        self.assertEqual(deleted.operation, "session.delete")
+
     def test_rejects_incomplete_carrier_and_system_lifecycle(self) -> None:
         client = AdminClient(MemoryAdminTransport())
 
@@ -342,6 +609,27 @@ class AdminClientTests(unittest.TestCase):
                 AdminAgentStopRequest(
                     admin_base(), agent_ura="easynet:///r/example/device/dev-a"
                 )
+            )
+        with self.assertRaises(Exception):
+            client.create_pairing(
+                CreatePairingRequest(
+                    admin_base(),
+                    hub_ura="not-a-hub",
+                    device_ura="easynet:///r/example/device/dev-a",
+                    expires_unix_ms=1,
+                )
+            )
+        with self.assertRaises(Exception):
+            client.validate_pairing(
+                ValidatePairingRequest(
+                    admin_base(),
+                    token="../pairing",
+                    device_ura="easynet:///r/example/device/dev-a",
+                )
+            )
+        with self.assertRaises(Exception):
+            client.delete_device_session(
+                DeleteDeviceSessionRequest(admin_base(), session_id="browser-session-1")
             )
 
 

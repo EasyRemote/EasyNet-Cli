@@ -161,6 +161,149 @@ class AdminSessionListRequest:
 
 
 @dataclass(frozen=True)
+class AdminJoinHubRequest:
+    base: AdminCarrierBase
+    hub_ura: str
+    device_ura: str
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["hub_ura"] = _validate_hub_ura(self.hub_ura)
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class AdminLeaveHubRequest:
+    base: AdminCarrierBase
+    hub_ura: str
+    reason: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["hub_ura"] = _validate_hub_ura(self.hub_ura)
+        if self.reason:
+            value["reason"] = _validate_admin_identifier(self.reason, "reason")
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class PairingPreflightRequest:
+    base: AdminCarrierBase
+    hub_ura: str
+    device_ura: str
+    requested_scopes: tuple[str, ...] = ()
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["hub_ura"] = _validate_hub_ura(self.hub_ura)
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        if self.requested_scopes:
+            value["requested_scopes"] = list(_validate_admin_scopes(self.requested_scopes))
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class ValidatePairingRequest:
+    base: AdminCarrierBase
+    token: str
+    device_ura: str
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["token"] = _validate_admin_identifier(self.token, "token")
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class VerifyDeviceCredentialRequest:
+    base: AdminCarrierBase
+    credential_id: str
+    device_ura: str
+    hub_ura: str
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["credential_id"] = _validate_admin_identifier(
+            self.credential_id, "credential_id"
+        )
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        value["hub_ura"] = _validate_hub_ura(self.hub_ura)
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class CreatePairingRequest:
+    base: AdminCarrierBase
+    hub_ura: str
+    device_ura: str
+    expires_unix_ms: int
+    scopes: tuple[str, ...] = ()
+
+    def to_json_bytes(self) -> bytes:
+        if self.expires_unix_ms <= 0:
+            raise _invalid_admin("expires_unix_ms is required")
+        value = self.base.to_json_dict()
+        value["hub_ura"] = _validate_hub_ura(self.hub_ura)
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        value["expires_unix_ms"] = self.expires_unix_ms
+        if self.scopes:
+            value["scopes"] = list(_validate_admin_scopes(self.scopes))
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class RevokeDeviceRequest:
+    base: AdminCarrierBase
+    device_ura: str
+    reason: str
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        value["reason"] = _validate_admin_identifier(self.reason, "reason")
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class CreateDeviceSessionRequest:
+    base: AdminCarrierBase
+    device_ura: str
+    hub_ura: str
+    session_kind: str
+    expires_unix_ms: int = 0
+
+    def to_json_bytes(self) -> bytes:
+        value = self.base.to_json_dict()
+        value["device_ura"] = _validate_device_ura(self.device_ura)
+        value["hub_ura"] = _validate_hub_ura(self.hub_ura)
+        value["session_kind"] = _validate_admin_identifier(
+            self.session_kind, "session_kind"
+        )
+        if self.expires_unix_ms:
+            value["expires_unix_ms"] = self.expires_unix_ms
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class DeleteDeviceSessionRequest:
+    base: AdminCarrierBase
+    session_id: str
+    reason: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        session_id = _validate_admin_identifier(self.session_id, "session_id")
+        if "browser" in session_id.lower():
+            raise _invalid_admin("session_id must be a daemon device-session id")
+        value = self.base.to_json_dict()
+        value["session_id"] = session_id
+        if self.reason:
+            value["reason"] = _validate_admin_identifier(self.reason, "reason")
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
 class GatewayListener:
     kind: str
     endpoint: str
@@ -290,10 +433,190 @@ class AdminGatewayResult:
         )
 
 
+@dataclass(frozen=True)
+class PairingPreflight:
+    profile: str
+    kind: str
+    state: str
+    hub_ura: str
+    device_ura: str
+    pairing_required: bool
+    trust_ready: bool
+    scopes: tuple[str, ...]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "PairingPreflight":
+        decoded = _json_object(raw, "pairing preflight")
+        if decoded.get("profile") != _PROFILE:
+            raise _invalid_admin("invalid pairing preflight projection")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            state=_required_string(decoded, "state"),
+            hub_ura=_required_string(decoded, "hub_ura"),
+            device_ura=_required_string(decoded, "device_ura"),
+            pairing_required=_required_bool(decoded, "pairing_required"),
+            trust_ready=_required_bool(decoded, "trust_ready"),
+            scopes=_string_array(decoded.get("scopes"), "scopes"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+@dataclass(frozen=True)
+class PairingToken:
+    profile: str
+    kind: str
+    token_id: str
+    token: str
+    hub_ura: str
+    device_ura: str
+    state: str
+    expires_unix_ms: int
+    scopes: tuple[str, ...]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "PairingToken":
+        decoded = _json_object(raw, "pairing token")
+        if decoded.get("profile") != _PROFILE:
+            raise _invalid_admin("invalid pairing token projection")
+        expires = _required_int(decoded, "expires_unix_ms")
+        if expires <= 0:
+            raise _invalid_admin("invalid pairing token projection")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            token_id=_required_string(decoded, "token_id"),
+            token=_required_string(decoded, "token"),
+            hub_ura=_required_string(decoded, "hub_ura"),
+            device_ura=_required_string(decoded, "device_ura"),
+            state=_required_string(decoded, "state"),
+            expires_unix_ms=expires,
+            scopes=_string_array(decoded.get("scopes"), "scopes"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+@dataclass(frozen=True)
+class DeviceCredential:
+    profile: str
+    kind: str
+    credential_id: str
+    device_ura: str
+    hub_ura: str
+    state: str
+    issued_unix_ms: int
+    expires_unix_ms: int
+    scopes: tuple[str, ...]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DeviceCredential":
+        decoded = _json_object(raw, "device credential")
+        if decoded.get("profile") != _PROFILE:
+            raise _invalid_admin("invalid device credential projection")
+        issued = _required_int(decoded, "issued_unix_ms")
+        expires = _required_int(decoded, "expires_unix_ms")
+        if issued <= 0 or expires <= 0:
+            raise _invalid_admin("invalid device credential projection")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            credential_id=_required_string(decoded, "credential_id"),
+            device_ura=_required_string(decoded, "device_ura"),
+            hub_ura=_required_string(decoded, "hub_ura"),
+            state=_required_string(decoded, "state"),
+            issued_unix_ms=issued,
+            expires_unix_ms=expires,
+            scopes=_string_array(decoded.get("scopes"), "scopes"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+@dataclass(frozen=True)
+class DeviceCredentialVerification:
+    profile: str
+    kind: str
+    verified: bool
+    credential_id: str
+    device_ura: str
+    hub_ura: str
+    method: str
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DeviceCredentialVerification":
+        decoded = _json_object(raw, "device credential verification")
+        if decoded.get("profile") != _PROFILE:
+            raise _invalid_admin("invalid device credential verification projection")
+        verification = cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            verified=_required_bool(decoded, "verified"),
+            credential_id=_required_string(decoded, "credential_id"),
+            device_ura=_required_string(decoded, "device_ura"),
+            hub_ura=_required_string(decoded, "hub_ura"),
+            method=_optional_string(decoded.get("method"), "method") or "",
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+        if verification.verified and not verification.method:
+            raise _invalid_admin("verified device credential must include method")
+        return verification
+
+
+@dataclass(frozen=True)
+class DeviceSession:
+    profile: str
+    kind: str
+    session_id: str
+    device_ura: str
+    hub_ura: str
+    state: str
+    session_kind: str
+    created_unix_ms: int
+    expires_unix_ms: int
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DeviceSession":
+        return _device_session(_json_object(raw, "device session"))
+
+
+@dataclass(frozen=True)
+class DeviceSessionPage:
+    profile: str
+    kind: str
+    state: str
+    items: tuple[DeviceSession, ...]
+    next_cursor: object
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DeviceSessionPage":
+        decoded = _json_object(raw, "device session page")
+        if decoded.get("profile") != _PROFILE or decoded.get("kind") != "device_sessions":
+            raise _invalid_admin("invalid device session page projection")
+        items = decoded.get("items")
+        if not isinstance(items, list):
+            raise _invalid_admin("items must be an array")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            state=_required_string(decoded, "state"),
+            items=tuple(_device_session(item) for item in items),
+            next_cursor=decoded.get("next_cursor"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
 AgentStartResult = AdminGatewayResult
 AgentStopResult = AdminGatewayResult
 AgentRefreshResult = AdminGatewayResult
-DeviceSessionPage = AdminGatewayResult
+JoinResult = AdminGatewayResult
+LeaveResult = AdminGatewayResult
+DeviceAdminResult = AdminGatewayResult
+VerificationResult = DeviceCredentialVerification
 
 
 @runtime_checkable
@@ -331,6 +654,33 @@ class AdminTransport(Protocol):
         ...
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
+        ...
+
+    def join_hub(self, request_json: bytes) -> bytes:
+        ...
+
+    def leave_hub(self, request_json: bytes) -> bytes:
+        ...
+
+    def pairing_preflight(self, request_json: bytes) -> bytes:
+        ...
+
+    def validate_pairing(self, request_json: bytes) -> bytes:
+        ...
+
+    def verify_device_credential(self, request_json: bytes) -> bytes:
+        ...
+
+    def create_pairing(self, request_json: bytes) -> bytes:
+        ...
+
+    def revoke_device(self, request_json: bytes) -> bytes:
+        ...
+
+    def create_device_session(self, request_json: bytes) -> bytes:
+        ...
+
+    def delete_device_session(self, request_json: bytes) -> bytes:
         ...
 
 
@@ -423,10 +773,91 @@ class AdminClient:
         )
 
     def list_device_sessions(self, request: AdminSessionListRequest) -> DeviceSessionPage:
+        try:
+            raw = self.transport.list_device_sessions(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("admin list device sessions failed", exc) from exc
+        return DeviceSessionPage.from_json(raw)
+
+    def join_hub(self, request: AdminJoinHubRequest) -> JoinResult:
         return self._result(
             request.to_json_bytes(),
-            self.transport.list_device_sessions,
-            "admin list device sessions failed",
+            self.transport.join_hub,
+            "admin join hub failed",
+        )
+
+    def leave_hub(self, request: AdminLeaveHubRequest) -> LeaveResult:
+        return self._result(
+            request.to_json_bytes(),
+            self.transport.leave_hub,
+            "admin leave hub failed",
+        )
+
+    def pairing_preflight(self, request: PairingPreflightRequest) -> PairingPreflight:
+        try:
+            raw = self.transport.pairing_preflight(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("admin pairing preflight failed", exc) from exc
+        return PairingPreflight.from_json(raw)
+
+    def validate_pairing(self, request: ValidatePairingRequest) -> DeviceCredential:
+        try:
+            raw = self.transport.validate_pairing(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("admin validate pairing failed", exc) from exc
+        return DeviceCredential.from_json(raw)
+
+    def verify_device_credential(
+        self, request: VerifyDeviceCredentialRequest
+    ) -> VerificationResult:
+        try:
+            raw = self.transport.verify_device_credential(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("admin verify device credential failed", exc) from exc
+        return DeviceCredentialVerification.from_json(raw)
+
+    def create_pairing(self, request: CreatePairingRequest) -> PairingToken:
+        try:
+            raw = self.transport.create_pairing(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("admin create pairing failed", exc) from exc
+        return PairingToken.from_json(raw)
+
+    def revoke_device(self, request: RevokeDeviceRequest) -> DeviceAdminResult:
+        return self._result(
+            request.to_json_bytes(),
+            self.transport.revoke_device,
+            "admin revoke device failed",
+        )
+
+    def create_device_session(
+        self, request: CreateDeviceSessionRequest
+    ) -> DeviceSession:
+        try:
+            raw = self.transport.create_device_session(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("admin create device session failed", exc) from exc
+        return DeviceSession.from_json(raw)
+
+    def delete_device_session(
+        self, request: DeleteDeviceSessionRequest
+    ) -> DeviceAdminResult:
+        return self._result(
+            request.to_json_bytes(),
+            self.transport.delete_device_session,
+            "admin delete device session failed",
         )
 
     def _invocation(
@@ -462,6 +893,36 @@ def _validate_base(base: AdminCarrierBase) -> None:
         or base.causal_context is None
     ):
         raise _invalid_admin("complete admin invocation carrier is required")
+
+
+def _validate_admin_identifier(value: str, field_name: str) -> str:
+    if not value or not value.strip():
+        raise _invalid_admin(f"{field_name} is required")
+    if value.strip() != value or any(ch in value for ch in ("/", "\\", "\t", "\r", "\n")):
+        raise _invalid_admin(f"{field_name} must be an opaque daemon identifier")
+    return value
+
+
+def _validate_admin_scopes(value: tuple[str, ...]) -> tuple[str, ...]:
+    for item in value:
+        _validate_admin_identifier(item, "scope")
+    return value
+
+
+def _validate_hub_ura(value: str) -> str:
+    if not value or not value.strip():
+        raise _invalid_admin("hub_ura is required")
+    if "/hub/" not in value:
+        raise _invalid_admin("hub_ura must be a Hub URA")
+    return value
+
+
+def _validate_device_ura(value: str) -> str:
+    if not value or not value.strip():
+        raise _invalid_admin("device_ura is required")
+    if "/device/" not in value:
+        raise _invalid_admin("device_ura must be a Device URA")
+    return value
 
 
 def _validate_agent_name(value: str, field_name: str) -> None:
@@ -519,6 +980,26 @@ def _agent_record(value: object) -> AdminAgentRecord:
     )
 
 
+def _device_session(value: object) -> DeviceSession:
+    if not isinstance(value, dict):
+        raise _invalid_admin("device session must be an object")
+    created = _required_int(value, "created_unix_ms")
+    if created <= 0:
+        raise _invalid_admin("invalid device session projection")
+    return DeviceSession(
+        profile=_required_string(value, "profile"),
+        kind=_required_string(value, "kind"),
+        session_id=_required_string(value, "session_id"),
+        device_ura=_required_string(value, "device_ura"),
+        hub_ura=_required_string(value, "hub_ura"),
+        state=_required_string(value, "state"),
+        session_kind=_required_string(value, "session_kind"),
+        created_unix_ms=created,
+        expires_unix_ms=_optional_int(value.get("expires_unix_ms"), "expires_unix_ms") or 0,
+        metadata=_required_mapping(value, "metadata"),
+    )
+
+
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -553,6 +1034,21 @@ def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:
     value = decoded.get(field_name)
     if not isinstance(value, bool):
         raise _invalid_admin(f"{field_name} must be a boolean")
+    return value
+
+
+def _required_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _invalid_admin(f"{field_name} must be an integer")
+    return value
+
+
+def _optional_int(value: object, field_name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _invalid_admin(f"{field_name} must be an integer or null")
     return value
 
 

@@ -15,6 +15,12 @@ type memoryAdminTransport struct {
 	gatewayStatus          string
 	agentRecords           string
 	lifecycleResult        string
+	pairingPreflight       string
+	deviceCredential       string
+	credentialVerification string
+	pairingToken           string
+	deviceSession          string
+	deviceSessionPage      string
 	seen                   map[string]map[string]any
 }
 
@@ -79,7 +85,55 @@ func (m *memoryAdminTransport) AgentRefresh(_ context.Context, requestJSON []byt
 
 func (m *memoryAdminTransport) ListDeviceSessions(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("list_device_sessions", requestJSON)
+	if m.deviceSessionPage != "" {
+		return []byte(m.deviceSessionPage), nil
+	}
 	return []byte(`{"profile":"admin_gateway","kind":"device_sessions","state":"ok","items":[],"next_cursor":null,"metadata":{"profile":"admin_gateway","source":"session.list"}}`), nil
+}
+
+func (m *memoryAdminTransport) JoinHub(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("join_hub", requestJSON)
+	return []byte(adminJoinResultJSON), nil
+}
+
+func (m *memoryAdminTransport) LeaveHub(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("leave_hub", requestJSON)
+	return []byte(adminLeaveResultJSON), nil
+}
+
+func (m *memoryAdminTransport) PairingPreflight(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("pairing_preflight", requestJSON)
+	return []byte(m.pairingPreflight), nil
+}
+
+func (m *memoryAdminTransport) ValidatePairing(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("validate_pairing", requestJSON)
+	return []byte(m.deviceCredential), nil
+}
+
+func (m *memoryAdminTransport) VerifyDeviceCredential(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("verify_device_credential", requestJSON)
+	return []byte(m.credentialVerification), nil
+}
+
+func (m *memoryAdminTransport) CreatePairing(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("create_pairing", requestJSON)
+	return []byte(m.pairingToken), nil
+}
+
+func (m *memoryAdminTransport) RevokeDevice(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("revoke_device", requestJSON)
+	return []byte(adminRevokeDeviceResultJSON), nil
+}
+
+func (m *memoryAdminTransport) CreateDeviceSession(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("create_device_session", requestJSON)
+	return []byte(m.deviceSession), nil
+}
+
+func (m *memoryAdminTransport) DeleteDeviceSession(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("delete_device_session", requestJSON)
+	return []byte(adminDeleteSessionResultJSON), nil
 }
 
 func adminBaseForTest() AdminCarrierBase {
@@ -208,6 +262,131 @@ func TestAdminProjectsGatewayAgentsAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdminTrustAndDeviceSessionLifecycle(t *testing.T) {
+	transport := &memoryAdminTransport{
+		pairingPreflight:       adminPairingPreflightJSON,
+		deviceCredential:       adminDeviceCredentialJSON,
+		credentialVerification: adminCredentialVerificationJSON,
+		pairingToken:           adminPairingTokenJSON,
+		deviceSession:          adminDeviceSessionJSON,
+		deviceSessionPage:      adminDeviceSessionPageJSON,
+	}
+	client, err := NewAdminClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	join, err := client.JoinHub(context.Background(), AdminJoinHubRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if join.Operation != "hub.join" || transport.seen["join_hub"]["hub_ura"] != "easynet:///r/example/hub/main" {
+		t.Fatalf("unexpected join result/request: %#v %#v", join, transport.seen["join_hub"])
+	}
+
+	preflight, err := client.PairingPreflight(context.Background(), PairingPreflightRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		RequestedScopes:  []string{"invoke", "events"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preflight.PairingRequired || preflight.TrustReady {
+		t.Fatalf("unexpected preflight: %#v", preflight)
+	}
+
+	token, err := client.CreatePairing(context.Background(), CreatePairingRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		ExpiresUnixMS:    1893456000000,
+		Scopes:           []string{"invoke", "events"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.TokenID != "pair-token-1" || token.Token == "" {
+		t.Fatalf("unexpected pairing token: %#v", token)
+	}
+
+	credential, err := client.ValidatePairing(context.Background(), ValidatePairingRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		Token:            "pair-token-value",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.CredentialID != "cred-dev-a" || credential.State != "active" {
+		t.Fatalf("unexpected credential: %#v", credential)
+	}
+
+	verification, err := client.VerifyDeviceCredential(context.Background(), VerifyDeviceCredentialRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		CredentialID:     "cred-dev-a",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verification.Verified || verification.Method != "daemon-trust-store" {
+		t.Fatalf("unexpected verification: %#v", verification)
+	}
+
+	session, err := client.CreateDeviceSession(context.Background(), CreateDeviceSessionRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+		SessionKind:      "remote_desktop",
+		ExpiresUnixMS:    1893456000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.SessionID != "dev-session-1" || session.SessionKind != "remote_desktop" {
+		t.Fatalf("unexpected device session: %#v", session)
+	}
+
+	page, err := client.ListDeviceSessions(context.Background(), AdminSessionListRequest{AdminCarrierBase: adminBaseForTest()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].SessionID != "dev-session-1" {
+		t.Fatalf("unexpected device session page: %#v", page)
+	}
+
+	leave, err := client.LeaveHub(context.Background(), AdminLeaveHubRequest{AdminCarrierBase: adminBaseForTest(), HubURA: "easynet:///r/example/hub/main", Reason: "rotation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leave.Operation != "hub.leave" {
+		t.Fatalf("unexpected leave result: %#v", leave)
+	}
+
+	revoke, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{AdminCarrierBase: adminBaseForTest(), DeviceURA: "easynet:///r/example/device/dev-a", Reason: "compromised"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoke.Operation != "device.revoke" {
+		t.Fatalf("unexpected revoke result: %#v", revoke)
+	}
+
+	deleted, err := client.DeleteDeviceSession(context.Background(), DeleteDeviceSessionRequest{AdminCarrierBase: adminBaseForTest(), SessionID: "dev-session-1", Reason: "done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Operation != "session.delete" {
+		t.Fatalf("unexpected delete result: %#v", deleted)
+	}
+}
+
 func TestAdminRejectsIncompleteCarrierAndSystemLifecycle(t *testing.T) {
 	client, err := NewAdminClient(&memoryAdminTransport{agentStartInvocation: adminAgentStartInvocationJSON})
 	if err != nil {
@@ -224,6 +403,15 @@ func TestAdminRejectsIncompleteCarrierAndSystemLifecycle(t *testing.T) {
 	}
 	if _, err := client.BuildAgentStopInvocation(context.Background(), AdminAgentStopRequest{AdminCarrierBase: adminBaseForTest(), AgentURA: "easynet:///r/example/device/dev-a"}); err == nil {
 		t.Fatal("expected non-agent URA rejection")
+	}
+	if _, err := client.CreatePairing(context.Background(), CreatePairingRequest{AdminCarrierBase: adminBaseForTest(), HubURA: "not-a-hub", DeviceURA: "easynet:///r/example/device/dev-a", ExpiresUnixMS: 1}); err == nil {
+		t.Fatal("expected non-hub URA rejection")
+	}
+	if _, err := client.ValidatePairing(context.Background(), ValidatePairingRequest{AdminCarrierBase: adminBaseForTest(), Token: "../pairing", DeviceURA: "easynet:///r/example/device/dev-a"}); err == nil {
+		t.Fatal("expected path-like pairing token rejection")
+	}
+	if _, err := client.DeleteDeviceSession(context.Background(), DeleteDeviceSessionRequest{AdminCarrierBase: adminBaseForTest(), SessionID: "browser-session-1"}); err == nil {
+		t.Fatal("expected browser session id rejection")
 	}
 }
 
@@ -387,4 +575,126 @@ const adminLifecycleResultJSON = `{
       "runtime_catalog_not_ready": false
     }
   }
+}`
+
+const adminJoinResultJSON = `{
+  "profile": "admin_gateway",
+  "kind": "hub_membership_result",
+  "operation": "hub.join",
+  "state": "ok",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "hub.join"}
+}`
+
+const adminLeaveResultJSON = `{
+  "profile": "admin_gateway",
+  "kind": "hub_membership_result",
+  "operation": "hub.leave",
+  "state": "ok",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "hub.leave"}
+}`
+
+const adminPairingPreflightJSON = `{
+  "profile": "admin_gateway",
+  "kind": "pairing_preflight",
+  "state": "requires_pairing",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "pairing_required": true,
+  "trust_ready": false,
+  "scopes": ["invoke", "events"],
+  "metadata": {"profile": "admin_gateway", "source": "pairing.preflight"}
+}`
+
+const adminPairingTokenJSON = `{
+  "profile": "admin_gateway",
+  "kind": "pairing_token",
+  "token_id": "pair-token-1",
+  "token": "pair-token-value",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "state": "issued",
+  "expires_unix_ms": 1893456000000,
+  "scopes": ["invoke", "events"],
+  "metadata": {"profile": "admin_gateway", "source": "pairing.create"}
+}`
+
+const adminDeviceCredentialJSON = `{
+  "profile": "admin_gateway",
+  "kind": "device_credential",
+  "credential_id": "cred-dev-a",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "state": "active",
+  "issued_unix_ms": 1767225600000,
+  "expires_unix_ms": 1893456000000,
+  "scopes": ["invoke", "events"],
+  "metadata": {"profile": "admin_gateway", "source": "pairing.validate"}
+}`
+
+const adminCredentialVerificationJSON = `{
+  "profile": "admin_gateway",
+  "kind": "device_credential_verification",
+  "verified": true,
+  "credential_id": "cred-dev-a",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "method": "daemon-trust-store",
+  "metadata": {"profile": "admin_gateway", "source": "credential.verify"}
+}`
+
+const adminDeviceSessionJSON = `{
+  "profile": "admin_gateway",
+  "kind": "device_session",
+  "session_id": "dev-session-1",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "state": "active",
+  "session_kind": "remote_desktop",
+  "created_unix_ms": 1767225600000,
+  "expires_unix_ms": 1893456000000,
+  "metadata": {"profile": "admin_gateway", "source": "session.create"}
+}`
+
+const adminDeviceSessionPageJSON = `{
+  "profile": "admin_gateway",
+  "kind": "device_sessions",
+  "state": "ok",
+  "items": [{
+    "profile": "admin_gateway",
+    "kind": "device_session",
+    "session_id": "dev-session-1",
+    "device_ura": "easynet:///r/example/device/dev-a",
+    "hub_ura": "easynet:///r/example/hub/main",
+    "state": "active",
+    "session_kind": "remote_desktop",
+    "created_unix_ms": 1767225600000,
+    "expires_unix_ms": 1893456000000,
+    "metadata": {"profile": "admin_gateway", "source": "session.list"}
+  }],
+  "next_cursor": null,
+  "metadata": {"profile": "admin_gateway", "source": "session.list"}
+}`
+
+const adminRevokeDeviceResultJSON = `{
+  "profile": "admin_gateway",
+  "kind": "device_admin_result",
+  "operation": "device.revoke",
+  "state": "revoked",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "device.revoke"}
+}`
+
+const adminDeleteSessionResultJSON = `{
+  "profile": "admin_gateway",
+  "kind": "device_admin_result",
+  "operation": "session.delete",
+  "state": "deleted",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "ack": true,
+  "metadata": {"profile": "admin_gateway", "source": "session.delete"}
 }`

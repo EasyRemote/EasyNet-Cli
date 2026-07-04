@@ -71,8 +71,10 @@ method spelling.
   product cutovers remain incomplete.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
   `agent.list/start/stop/refresh`, `session.list`, lifecycle status, and
-  agent-record projections; pairing token flows, credential verification,
-  certificate policy, full device-session CRUD, and product cutovers remain
+  agent-record projections; Go/Python facade seams also cover Hub join/leave,
+  pairing preflight/create/validate, device credential verification, device
+  revocation, and device-session create/list/delete projections. Certificate
+  policy, concrete daemon trust/session carriers, and product cutovers remain
   incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
   `pages.list/publish/get/unpublish`; backend route serving, browser auth,
@@ -129,9 +131,10 @@ method spelling.
   remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh
   and session-list Invocation carrier builders plus `GatewayStatus`,
-  `AdminAgentPage`, and lifecycle-result projection seams; pairing token flows,
-  credential verification, certificate policy, concrete device-session CRUD,
-  and backend route cutover remain incomplete.
+  `AdminAgentPage`, lifecycle-result, pairing token, device credential,
+  credential verification, and typed device-session projection seams;
+  certificate policy, concrete daemon trust/session carriers, and backend route
+  cutover remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
@@ -192,10 +195,10 @@ method spelling.
   policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders plus
-  `GatewayStatus`, `AdminAgentPage`, and lifecycle-result projection seams;
-  pairing token flows, credential verification, certificate policy, concrete
-  device-session CRUD, and EasyRemote Server/AgentControl extraction remain
-  incomplete.
+  `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
+  credential, credential verification, and typed device-session projection
+  seams; certificate policy, concrete daemon trust/session carriers, and
+  EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
