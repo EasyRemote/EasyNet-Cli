@@ -18,7 +18,7 @@ from .health import HealthClient
 from .host_binding import HostBindingClient
 from .identity import AddressingClient, IdentityClient
 from .mission import MissionClient
-from .publication import PublicationClient
+from .publication import PublicationClient, RuntimePublicationTransport
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
 from .surface import SurfaceClient
@@ -213,9 +213,17 @@ class SdkEnvironment:
 
         from . import _cabi
 
+        carrier = self._profile_transport(_cabi.open_cabi_publication_transport)
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=self.control_path,
+            library_path=self.library_path,
+        )
         return self._track(
             PublicationClient(
-                self._profile_transport(_cabi.open_cabi_publication_transport)
+                RuntimePublicationTransport(
+                    carrier=carrier,
+                    runtime=RuntimeClient(runtime_transport),
+                )
             )
         )
 

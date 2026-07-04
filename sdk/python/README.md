@@ -44,7 +44,8 @@ It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
 through Runtime Core invoke, and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
-package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
+package-validation, C ABI-backed deploy execution through Runtime Core invoke,
+deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
 output-hash folding seams plus close state seams. MissionClient exposes run/run-file/track/cancel
@@ -68,7 +69,8 @@ file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed concrete carrier builders,
 transport-backed helper close state seams, and record projections. Direct daemon
 UDS transport, directory subscription live adapters, local signer implementations,
-Axon-backed receipt verification, receipt URI construction, live publication/host-binding/mission
+Axon-backed receipt verification, receipt URI construction, publication
+list/show/unpublish and plugin lifecycle live adapters, host-binding/mission
 execution adapters, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 live adapters, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,

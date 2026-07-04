@@ -11,6 +11,7 @@ from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .identity import LocalResourceRefRequest, ResourceRef
 from .invocation import InvocationDraft
+from .runtime import RuntimeClient
 
 
 DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50
@@ -416,6 +417,97 @@ class PublicationTransport(Protocol):
 
     def unpublish_ability(self, request_json: bytes) -> bytes:
         ...
+
+
+@dataclass
+class RuntimePublicationTransport:
+    """Publication transport that dispatches complete operations through Runtime Core."""
+
+    carrier: PublicationTransport
+    runtime: RuntimeClient
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def build_resource_ref(self, request_json: bytes) -> bytes:
+        return self._delegate("build_resource_ref", request_json)
+
+    def validate_package(self, request_json: bytes) -> bytes:
+        return self._delegate("validate_package", request_json)
+
+    def deploy_ability(self, request_json: bytes) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(
+            self.carrier.build_deploy_invocation(request_json)
+        )
+        result = self.runtime.invoke(draft)
+        if not result.ok:
+            raise SDKError(
+                code=ErrorCode.ABILITY_FAILED,
+                stage="publication",
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                message="publication deploy invocation failed",
+                cause=result.error,
+            )
+        output = result.output_json
+        if not isinstance(output, dict):
+            raise _invalid_publication("publication deploy output must be an object")
+        return _json_bytes(output)
+
+    def build_deploy_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_deploy_invocation", request_json)
+
+    def install_plugin(self, request_json: bytes) -> bytes:
+        return self._delegate("install_plugin", request_json)
+
+    def list_abilities(self, request_json: bytes) -> bytes:
+        return self._delegate("list_abilities", request_json)
+
+    def show_ability(self, request_json: bytes) -> bytes:
+        return self._delegate("show_ability", request_json)
+
+    def enable_ability_impl(self, request_json: bytes) -> bytes:
+        return self._delegate("enable_ability_impl", request_json)
+
+    def disable_ability_impl(self, request_json: bytes) -> bytes:
+        return self._delegate("disable_ability_impl", request_json)
+
+    def build_unpublish_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_unpublish_invocation", request_json)
+
+    def unpublish_ability(self, request_json: bytes) -> bytes:
+        return self._delegate("unpublish_ability", request_json)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        for owned in (self.runtime, self.carrier):
+            try:
+                owned.close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            except Exception as exc:
+                if first_error is None:
+                    first_error = SDKError(
+                        code=ErrorCode.TRANSPORT,
+                        stage="publication",
+                        retry=RetryHint.SAFE,
+                        retryable=True,
+                        message="publication runtime transport close failed",
+                        cause=exc,
+                    )
+        if first_error is not None:
+            raise first_error
+
+    def _delegate(self, method_name: str, request_json: bytes) -> bytes:
+        self._require_open()
+        return getattr(self.carrier, method_name)(request_json)
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_publication("publication runtime transport is closed")
 
 
 @dataclass(frozen=True)

@@ -494,7 +494,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_wrappers_build_browser_session_invocation", symbols)
         self.assertIn("easynet_wrappers_build_media_session_invocation", symbols)
 
-    def test_missing_live_profile_operations_are_typed_not_implemented(self) -> None:
+    def test_publication_deploy_uses_cabi_carrier_and_runtime_core(self) -> None:
         raw = FakeRawCABI()
         with _load_patch(raw):
             env = SdkEnvironment(control_path="/tmp/control.json")
@@ -502,23 +502,31 @@ class SdkEnvironmentTests(unittest.TestCase):
             resource_ref = publication.build_local_resource_ref(
                 LocalResourceRefRequest(path="/tmp/package", capability="read")
             )
-
-            with self.assertRaises(SDKError) as raised:
-                publication.deploy_ability(
-                    AbilityDeployRequest(
-                        caller_ura=_CALLER,
-                        callee_ura=_CALLEE,
-                        subject_ura=_SUBJECT,
-                        descriptor_version="1.0.0",
-                        nonce_base64=_NONCE,
-                        causal_context=_CAUSAL,
-                        resource_ref=resource_ref,
-                        node_id="local",
-                    )
+            result = publication.deploy_ability(
+                AbilityDeployRequest(
+                    caller_ura=_CALLER,
+                    callee_ura=_CALLEE,
+                    subject_ura=_SUBJECT,
+                    descriptor_version="1.0.0",
+                    nonce_base64=_NONCE,
+                    causal_context=_CAUSAL,
+                    resource_ref=resource_ref,
+                    node_id="local",
                 )
+            )
             env.close()
 
-        self.assertTrue(is_code(raised.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(result.state, "enabled")
+        self.assertEqual(
+            raw.profile_requests[-1][0],
+            "easynet_publication_build_deploy_invocation",
+        )
+        self.assertEqual(raw.runtime_requests[-1][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[-1][1]["metadata"]["system_ability"],
+            "ability.deploy",
+        )
+        self.assertEqual(raw.shutdown_handles, [42, 42])
 
     def test_environment_rejects_use_after_close(self) -> None:
         env = SdkEnvironment()

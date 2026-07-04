@@ -349,6 +349,15 @@ class FakeRawCABI:
                     }
                 ]
             }
+        if system_ability == "ability.deploy":
+            return {
+                "public_name": "weather",
+                "namespace": "er",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "node_id": "local",
+                "install_id": "install-1",
+                "state": "enabled",
+            }
         if system_ability == "namespace.resolve":
             return {
                 "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
@@ -559,6 +568,8 @@ class FakeRawCABI:
             return DIRECTORY_RESOLVE_INVOCATION
         if symbol == "easynet_receipt_build_fetch_invocation":
             return RECEIPT_FETCH_INVOCATION
+        if symbol == "easynet_publication_build_deploy_invocation":
+            return PUBLICATION_DEPLOY_INVOCATION
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -680,6 +691,25 @@ PACKAGE_VALIDATION_PROJECTION = (
     b'"description":"Weather","exec_kind":"host_stream",'
     b'"timeout_seconds":null,"input_schema":{"type":"object"},'
     b'"output_schema":null},"errors":[],"metadata":{"profile":"publication"}}'
+)
+
+PUBLICATION_DEPLOY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.ability.deploy@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"resource_ref":{'
+    b'"resource_ura":"easynet:///r/example/resource/device.dev-a/fs/tmp/package",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"namespace":"fs","display_path":"tmp/package","capability":"read",'
+    b'"expires_unix_ms":4102444800000,"revision":"fs-local-mapping-v1"},'
+    b'"node_id":"local"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"publication","system_ability":"ability.deploy",'
+    b'"carrier_owner":"daemon_sdk"}}'
 )
 
 RECEIPT_SUMMARY_PROJECTION = (

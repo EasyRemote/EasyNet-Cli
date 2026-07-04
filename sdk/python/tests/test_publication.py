@@ -9,10 +9,14 @@ from easynet_sdk import (
     PublicationClient,
     PublishedAbilityQuery,
     ResourceRef,
+    RuntimeClient,
+    RuntimePublicationTransport,
     SDKError,
     UnpublishAbilityRequest,
     is_code,
 )
+
+from test_runtime import MemoryRuntimeTransport
 
 
 RESOURCE_REF_JSON = b"""{
@@ -186,6 +190,43 @@ class MemoryPublicationTransport:
         self.close_calls += 1
 
 
+class DeployRuntimeTransport(MemoryRuntimeTransport):
+    def __init__(self, output_json: object | None = None) -> None:
+        super().__init__()
+        self.output_json = (
+            {
+                "public_name": "weather",
+                "namespace": "er",
+                "ability_ura": (
+                    "easynet:///r/example/ability/device.dev-a.er.weather"
+                ),
+                "node_id": "local",
+                "install_id": "install-1",
+                "state": "enabled",
+            }
+            if output_json is None
+            else output_json
+        )
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_draft,
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_base64": "e30=",
+                "output_json": self.output_json,
+                "elapsed_ms": 7,
+                "receipt": None,
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+
 def resource_ref() -> ResourceRef:
     return ResourceRef.from_json(RESOURCE_REF_JSON)
 
@@ -256,6 +297,49 @@ class PublicationTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0",
         )
         self.assertEqual(draft.args["node_id"], "local")
+
+    def test_runtime_publication_transport_executes_deploy_via_runtime_core(self) -> None:
+        carrier = MemoryPublicationTransport()
+        runtime_transport = DeployRuntimeTransport()
+        client = PublicationClient(
+            RuntimePublicationTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        result = client.deploy_ability(deploy_request())
+
+        self.assertEqual(result.state, "enabled")
+        assert carrier.seen_request is not None
+        self.assertEqual(carrier.seen_request["node_id"], "local")
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0",
+        )
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "ability.deploy",
+        )
+
+        client.close()
+        client.close()
+        self.assertEqual(runtime_transport.close_calls, 1)
+        self.assertEqual(carrier.close_calls, 1)
+
+    def test_runtime_publication_transport_rejects_invalid_deploy_output(self) -> None:
+        client = PublicationClient(
+            RuntimePublicationTransport(
+                carrier=MemoryPublicationTransport(),
+                runtime=RuntimeClient(DeployRuntimeTransport(output_json=[])),
+            )
+        )
+
+        with self.assertRaises(SDKError) as raised:
+            client.deploy_ability(deploy_request())
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_rejects_incomplete_deploy_carrier(self) -> None:
         client = PublicationClient(MemoryPublicationTransport())

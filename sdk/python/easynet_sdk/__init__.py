@@ -240,6 +240,7 @@ from .publication import (
     PublishedAbility,
     PublishedAbilityPage,
     PublishedAbilityQuery,
+    RuntimePublicationTransport,
     UnpublishAbilityRequest,
     ValidatePackageOptions,
 )
@@ -484,6 +485,7 @@ __all__ = [
     "PublishedAbility",
     "PublishedAbilityPage",
     "PublishedAbilityQuery",
+    "RuntimePublicationTransport",
     "CausalRef",
     "ReceiptChainItemVerification",
     "ReceiptChainVerification",
