@@ -20,7 +20,8 @@ ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed
 methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
-read-model pages and IdentityClient descriptor/resource projection seams.
+read-model pages and IdentityClient descriptor/resource projection,
+signing-key lifecycle, and signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
@@ -40,7 +41,7 @@ OpenAI-compatible list-models/chat/stream-chat Invocation carriers plus model,
 chat, stream, file, and file-delete projection seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session record projection
 seams. Concrete daemon
-process spawn/default C ABI or UDS transport, directory subscriptions, signer key lifecycle,
+process spawn/default C ABI or UDS transport, directory subscriptions, local signer implementations,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, pairing/credential/device-session Admin
 flows, Events daemon filtering/live adapters, surface health/status,

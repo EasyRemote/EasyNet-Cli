@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+
+DEFAULT_SIGNING_KEY_PAGE_SIZE = 50
+MAX_SIGNING_KEY_PAGE_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,106 @@ class LocalResourceRefRequest:
         if not self.path or not self.capability:
             raise _invalid_identity("path and capability are required")
         return _json_bytes({"path": self.path, "capability": self.capability})
+
+
+@dataclass(frozen=True)
+class SigningKeyRegistrationRequest:
+    """Register daemon-owned public signing-key metadata."""
+
+    owner_ura: str
+    key_id: str
+    algorithm: str
+    public_key_base64: str
+    usage: tuple[str, ...]
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_bytes(self) -> bytes:
+        owner_ura = _required_clean_string(self.owner_ura, "owner_ura")
+        key_id = _required_clean_string(self.key_id, "key_id")
+        algorithm = _required_clean_string(self.algorithm, "algorithm")
+        public_key_base64 = _required_clean_string(
+            self.public_key_base64, "public_key_base64"
+        )
+        if not self.usage:
+            raise _invalid_identity(
+                "owner_ura, key_id, algorithm, public_key_base64, and usage are required"
+            )
+        usage = _clean_string_tuple(self.usage, "usage")
+        if _contains_private_key_metadata(self.metadata):
+            raise _invalid_identity(
+                "private key material must not be supplied to identity facade"
+            )
+        return _json_bytes(
+            {
+                "owner_ura": owner_ura,
+                "key_id": key_id,
+                "algorithm": algorithm,
+                "public_key_base64": public_key_base64,
+                "usage": list(usage),
+                **({"metadata": dict(self.metadata)} if self.metadata else {}),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class SigningKeyListRequest:
+    owner_ura: str = ""
+    limit: int = 0
+    cursor: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        if self.owner_ura.strip() != self.owner_ura or self.cursor.strip() != self.cursor:
+            raise _invalid_identity(
+                "owner_ura and cursor must not contain surrounding whitespace"
+            )
+        limit = self.limit or DEFAULT_SIGNING_KEY_PAGE_SIZE
+        if limit < 1 or limit > MAX_SIGNING_KEY_PAGE_SIZE:
+            raise _invalid_identity("signing-key page limit exceeds bounds")
+        value: dict[str, object] = {"limit": limit}
+        if self.owner_ura:
+            value["owner_ura"] = self.owner_ura
+        if self.cursor:
+            value["cursor"] = self.cursor
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class SigningKeyRevokeRequest:
+    key_id: str
+    reason: str
+
+    def to_json_bytes(self) -> bytes:
+        return _json_bytes(
+            {
+                "key_id": _required_clean_string(self.key_id, "key_id"),
+                "reason": _required_clean_string(self.reason, "reason"),
+            }
+        )
+
+
+@dataclass(frozen=True)
+class SignerRequest:
+    owner_ura: str
+    key_id: str
+    usage: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_bytes(self) -> bytes:
+        owner_ura = _required_clean_string(self.owner_ura, "owner_ura")
+        key_id = _required_clean_string(self.key_id, "key_id")
+        if _contains_private_key_metadata(self.metadata):
+            raise _invalid_identity(
+                "private key material must not be supplied to identity facade"
+            )
+        value: dict[str, object] = {
+            "owner_ura": owner_ura,
+            "key_id": key_id,
+        }
+        if self.usage:
+            value["usage"] = _required_clean_string(self.usage, "usage")
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return _json_bytes(value)
 
 
 @dataclass(frozen=True)
@@ -134,6 +237,120 @@ class ResourceRef:
         )
 
 
+@dataclass(frozen=True)
+class SigningKeyRecord:
+    profile: str
+    key_id: str
+    owner_ura: str
+    algorithm: str
+    public_key_base64: str
+    state: str
+    usage: tuple[str, ...]
+    metadata: Mapping[str, object]
+    created_unix_ms: int = 0
+    revoked_unix_ms: int = 0
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "SigningKeyRecord":
+        return cls.from_mapping(_json_object(raw, "signing-key record"))
+
+    @classmethod
+    def from_mapping(cls, decoded: Mapping[str, object]) -> "SigningKeyRecord":
+        usage = _string_tuple(decoded.get("usage"), "usage")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            key_id=_required_string(decoded, "key_id"),
+            owner_ura=_required_string(decoded, "owner_ura"),
+            algorithm=_required_string(decoded, "algorithm"),
+            public_key_base64=_required_string(decoded, "public_key_base64"),
+            state=_required_string(decoded, "state"),
+            usage=usage,
+            metadata=_required_mapping(decoded, "metadata"),
+            created_unix_ms=_optional_int(decoded.get("created_unix_ms"), "created_unix_ms") or 0,
+            revoked_unix_ms=_optional_int(decoded.get("revoked_unix_ms"), "revoked_unix_ms") or 0,
+        )
+
+
+@dataclass(frozen=True)
+class SigningKeyPage:
+    profile: str
+    items: tuple[SigningKeyRecord, ...]
+    next_cursor: Optional[str]
+    limit: int
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "SigningKeyPage":
+        decoded = _json_object(raw, "signing-key page")
+        items_raw = decoded.get("items")
+        if not isinstance(items_raw, list):
+            raise _invalid_identity("items must be a list")
+        limit = _required_int(decoded, "limit")
+        if limit < 1 or limit > MAX_SIGNING_KEY_PAGE_SIZE:
+            raise _invalid_identity("signing-key page limit exceeds bounds")
+        items: list[SigningKeyRecord] = []
+        for item in items_raw:
+            if not isinstance(item, dict):
+                raise _invalid_identity("signing-key page item must be an object")
+            items.append(SigningKeyRecord.from_mapping(item))
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            items=tuple(items),
+            next_cursor=_optional_string(decoded.get("next_cursor"), "next_cursor"),
+            limit=limit,
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
+@dataclass(frozen=True)
+class SigningKeyRevokeResult:
+    profile: str
+    key_id: str
+    revoked: bool
+    state: str
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "SigningKeyRevokeResult":
+        decoded = _json_object(raw, "signing-key revoke result")
+        result = cls(
+            profile=_required_string(decoded, "profile"),
+            key_id=_required_string(decoded, "key_id"),
+            revoked=_required_bool(decoded, "revoked"),
+            state=_required_string(decoded, "state"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+        if not result.revoked:
+            raise _invalid_identity("signing-key revoke result is not terminal")
+        return result
+
+
+@dataclass(frozen=True)
+class SignerHandle:
+    """Daemon-authorized signer reference, not local key material."""
+
+    profile: str
+    signer_id: str
+    owner_ura: str
+    key_id: str
+    algorithm: str
+    policy: Mapping[str, object]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "SignerHandle":
+        decoded = _json_object(raw, "signer handle")
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            signer_id=_required_string(decoded, "signer_id"),
+            owner_ura=_required_string(decoded, "owner_ura"),
+            key_id=_required_string(decoded, "key_id"),
+            algorithm=_required_string(decoded, "algorithm"),
+            policy=_required_mapping(decoded, "policy"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+
+
 @runtime_checkable
 class IdentityTransport(Protocol):
     """Concrete identity projections supplied by the integration layer."""
@@ -145,6 +362,18 @@ class IdentityTransport(Protocol):
         ...
 
     def build_resource_ref(self, request_json: bytes) -> bytes:
+        ...
+
+    def register_signing_key(self, request_json: bytes) -> bytes:
+        ...
+
+    def list_signing_keys(self, request_json: bytes) -> bytes:
+        ...
+
+    def revoke_signing_key(self, request_json: bytes) -> bytes:
+        ...
+
+    def signer(self, request_json: bytes) -> bytes:
         ...
 
 
@@ -185,6 +414,46 @@ class IdentityClient:
             raise _transport_error("identity resource-ref build failed", exc) from exc
         return ResourceRef.from_json(raw)
 
+    def register_signing_key(
+        self, request: SigningKeyRegistrationRequest
+    ) -> SigningKeyRecord:
+        try:
+            raw = self.transport.register_signing_key(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("identity register signing key failed", exc) from exc
+        return SigningKeyRecord.from_json(raw)
+
+    def list_signing_keys(self, request: SigningKeyListRequest) -> SigningKeyPage:
+        try:
+            raw = self.transport.list_signing_keys(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("identity list signing keys failed", exc) from exc
+        return SigningKeyPage.from_json(raw)
+
+    def revoke_signing_key(
+        self, request: SigningKeyRevokeRequest
+    ) -> SigningKeyRevokeResult:
+        try:
+            raw = self.transport.revoke_signing_key(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("identity revoke signing key failed", exc) from exc
+        return SigningKeyRevokeResult.from_json(raw)
+
+    def signer(self, request: SignerRequest) -> SignerHandle:
+        try:
+            raw = self.transport.signer(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("identity signer failed", exc) from exc
+        return SignerHandle.from_json(raw)
+
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -216,6 +485,14 @@ def _optional_string(value: object, field_name: str) -> str | None:
     return value
 
 
+def _required_clean_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or value.strip() == "":
+        raise _invalid_identity(f"{field_name} is required")
+    if value.strip() != value:
+        raise _invalid_identity(f"{field_name} must not contain surrounding whitespace")
+    return value
+
+
 def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:
     value = decoded.get(field_name)
     if not isinstance(value, bool):
@@ -230,11 +507,42 @@ def _required_int(decoded: Mapping[str, object], field_name: str) -> int:
     return value
 
 
+def _optional_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _invalid_identity(f"{field_name} must be an integer or null")
+    return value
+
+
 def _required_mapping(decoded: Mapping[str, object], field_name: str) -> Mapping[str, object]:
     value = decoded.get(field_name)
     if not isinstance(value, dict):
         raise _invalid_identity(f"{field_name} must be an object")
     return dict(value)
+
+
+def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) or item.strip() == "" for item in value):
+        raise _invalid_identity(f"{field_name} must be a non-empty array of strings")
+    return tuple(value)
+
+
+def _clean_string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple) or not value:
+        raise _invalid_identity(f"{field_name} must be a non-empty tuple of strings")
+    items: list[str] = []
+    for item in value:
+        items.append(_required_clean_string(item, field_name))
+    return tuple(items)
+
+
+def _contains_private_key_metadata(metadata: Mapping[str, object]) -> bool:
+    for key in metadata:
+        normalized = key.replace("_", "").lower()
+        if "privatekey" in normalized or "secret" in normalized or "seed" in normalized:
+            return True
+    return False
 
 
 def _invalid_identity(

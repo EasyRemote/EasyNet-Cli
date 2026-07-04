@@ -104,9 +104,9 @@ method spelling.
   conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination plus `IdentityClient` descriptor,
-  identity, and ResourceRef projection seams; directory subscriptions, signer
-  key lifecycle, local signer implementations, concrete daemon carriers, and
-  backend route cutover remain incomplete.
+  identity, ResourceRef, signing-key lifecycle, and signer-handle projection
+  seams; directory subscriptions, local signer implementations, concrete daemon
+  carriers, and backend route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection seams over opaque receipt refs; Axon-backed cryptographic
   verification, concrete daemon carrier execution, receipt URI construction
@@ -167,9 +167,9 @@ method spelling.
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination plus `IdentityClient` descriptor,
-  identity, and ResourceRef projection seams; directory subscriptions, signer
-  key lifecycle, local signer implementations, concrete daemon carriers, and
-  EasyRemote extraction remain incomplete.
+  identity, ResourceRef, signing-key lifecycle, and signer-handle projection
+  seams; directory subscriptions, local signer implementations, concrete daemon
+  carriers, and EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection seams over opaque receipt refs; Axon-backed cryptographic
   verification, concrete daemon carrier execution, receipt URI construction
