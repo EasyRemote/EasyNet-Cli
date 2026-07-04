@@ -229,6 +229,16 @@ class SharedDirectoryTransport:
 class SharedIdentityTransport:
     def __init__(self) -> None:
         self.descriptor_json = shared_fixture("identity.descriptor-ref.v4.json")
+        self.ability_json = (
+            b'{"kind":"ability","valid":true,'
+            b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"realm":"example","profile":"easynet-strict-v2",'
+            b'"display_id":"device.dev-a.observe.health",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"owner_kind":"device","public_name":"observe.health",'
+            b'"local_registry_ability":"observe.health"},'
+            b'"metadata":{"grammar_owner":"axon","source":"shared-conformance"}}'
+        )
 
     def project_descriptor_ref(self, request_json: bytes) -> bytes:
         request = json.loads(request_json.decode("utf-8"))
@@ -239,13 +249,30 @@ class SharedIdentityTransport:
             raise AssertionError(f"unexpected descriptor projection request: {request}")
         return self.descriptor_json
 
+    def build_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        if request != {
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+            "descriptor_version": "1.0.0",
+        }:
+            raise AssertionError(f"unexpected descriptor build request: {request}")
+        return self.descriptor_json
+
     def project_identity(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared identity conformance fixture test",
-        )
+        request = json.loads(request_json.decode("utf-8"))
+        if request.get("ura") != "easynet:///r/example/ability/device.dev-a.observe.health":
+            raise AssertionError(f"unexpected identity projection request: {request}")
+        return self.ability_json
+
+    def build_ura(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        if request != {
+            "ability_name": "observe.health",
+            "kind": "ability",
+            "owner_ura": "easynet:///r/example/device/dev-a",
+        }:
+            raise AssertionError(f"unexpected identity build request: {request}")
+        return self.ability_json
 
     def build_resource_ref(self, request_json: bytes) -> bytes:
         raise SDKError(
@@ -1776,6 +1803,30 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertTrue(projection.valid)
         self.assertEqual(projection.metadata["grammar_owner"], "axon")
         self.assertEqual(projection.descriptor_version, "1.0.0")
+        parsed = identity.parse_ura(
+            "easynet:///r/example/ability/device.dev-a.observe.health"
+        )
+        self.assertEqual(parsed.kind, "ability")
+        ability_ura = identity.owner_ability_ura(
+            "easynet:///r/example/device/dev-a", "observe.health"
+        )
+        self.assertEqual(
+            ability_ura, "easynet:///r/example/ability/device.dev-a.observe.health"
+        )
+        self.assertEqual(
+            identity.owner_ura_for_ability(ability_ura),
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            identity.canonical_ability_descriptor_ref(ability_ura, "1.0.0"),
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            identity.canonical_ability_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            ),
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
 
         with self.assertRaises(SDKError) as caught:
             IdentityProjection.from_json(
@@ -2708,8 +2759,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 IdentityClient,
                 {
                     "build_resource_ref": "directory_identity.identity.build_resource_ref",
+                    "canonical_ability_descriptor_ref": "directory_identity.identity.canonical_ability_descriptor_ref",
                     "close": "directory_identity.identity.close",
                     "list_signing_keys": "directory_identity.identity.list_signing_keys",
+                    "owner_ability_ura": "directory_identity.identity.owner_ability_ura",
+                    "owner_ura_for_ability": "directory_identity.identity.owner_ura_for_ability",
+                    "parse_ura": "directory_identity.identity.parse_ura",
                     "project_descriptor_ref": "directory_identity.identity.project_descriptor_ref",
                     "project_identity": "directory_identity.identity.project_identity",
                     "register_signing_key": "directory_identity.identity.register_signing_key",

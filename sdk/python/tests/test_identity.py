@@ -27,34 +27,52 @@ class MemoryIdentityTransport:
         self.revoke_json = SIGNING_KEY_REVOKE
         self.signer_json = SIGNER_HANDLE
         self.seen_request: dict[str, object] | None = None
+        self.seen_requests: list[dict[str, object]] = []
         self.close_calls = 0
 
     def project_descriptor_ref(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
+        return self.descriptor_json
+
+    def build_descriptor_ref(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.descriptor_json
 
     def project_identity(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
+        return self.identity_json
+
+    def build_ura(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.identity_json
 
     def build_resource_ref(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.resource_json
 
     def register_signing_key(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.key_json
 
     def list_signing_keys(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.key_page_json
 
     def revoke_signing_key(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.revoke_json
 
     def signer(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
         return self.signer_json
 
     def close(self) -> None:
@@ -90,6 +108,85 @@ class IdentityTests(unittest.TestCase):
             transport.seen_request["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+
+    def test_addressing_helpers_delegate_to_identity_transport(self) -> None:
+        transport = MemoryIdentityTransport()
+        ability_projection = (
+            b'{"kind":"ability","valid":true,'
+            b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"public_name":"observe.health"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        descriptor_projection = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        transport.identity_json = ability_projection
+        transport.descriptor_json = descriptor_projection
+        client = IdentityClient(transport)
+
+        parsed = client.parse_ura(
+            "easynet:///r/example/ability/device.dev-a.observe.health"
+        )
+        ability_ura = client.owner_ability_ura(
+            "easynet:///r/example/device/dev-a", "observe.health"
+        )
+        owner_ura = client.owner_ura_for_ability(ability_ura)
+        built_ref = client.canonical_ability_descriptor_ref(ability_ura, "1.0.0")
+        projected_ref = client.canonical_ability_descriptor_ref(built_ref)
+
+        self.assertEqual(parsed.kind, "ability")
+        self.assertEqual(
+            ability_ura, "easynet:///r/example/ability/device.dev-a.observe.health"
+        )
+        self.assertEqual(owner_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(
+            built_ref,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(projected_ref, built_ref)
+        self.assertEqual(
+            transport.seen_requests,
+            [
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+                {
+                    "kind": "ability",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "ability_name": "observe.health",
+                },
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+                    "descriptor_version": "1.0.0",
+                },
+                {
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                },
+            ],
+        )
+
+    def test_addressing_helpers_reject_invalid_transport_projection(self) -> None:
+        transport = MemoryIdentityTransport()
+        transport.identity_json = (
+            b'{"kind":"device","valid":true,'
+            b'"ura":"easynet:///r/example/device/dev-a",'
+            b'"profile":"easynet-strict-v2","components":{},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        client = IdentityClient(transport)
+
+        with self.assertRaises(SDKError):
+            client.owner_ability_ura(
+                "easynet:///r/example/device/dev-a", "observe.health"
+            )
+        with self.assertRaises(SDKError):
+            client.owner_ura_for_ability("easynet:///r/example/device/dev-a")
 
     def test_build_resource_ref_validates_projection(self) -> None:
         transport = MemoryIdentityTransport()

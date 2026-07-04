@@ -359,7 +359,13 @@ class IdentityTransport(Protocol):
     def project_descriptor_ref(self, request_json: bytes) -> bytes:
         ...
 
+    def build_descriptor_ref(self, request_json: bytes) -> bytes:
+        ...
+
     def project_identity(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_ura(self, request_json: bytes) -> bytes:
         ...
 
     def build_resource_ref(self, request_json: bytes) -> bytes:
@@ -399,6 +405,76 @@ class IdentityClient:
         except Exception as exc:
             raise _transport_error("identity descriptor projection failed", exc) from exc
         return IdentityProjection.from_json(raw)
+
+    def parse_ura(self, ura: str) -> IdentityProjection:
+        """Project a URA through the daemon/Axon identity boundary."""
+
+        return self.project_identity(IdentityProjectionRequest(ura=ura))
+
+    def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
+        """Build a canonical Ability URA through the identity transport."""
+
+        self._require_open()
+        request = _json_bytes(
+            {
+                "kind": "ability",
+                "owner_ura": owner_ura,
+                "ability_name": ability_name,
+            }
+        )
+        try:
+            raw = self.transport.build_ura(request)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("identity ability URA build failed", exc) from exc
+        projection = IdentityProjection.from_json(raw)
+        if projection.kind != "ability" or not projection.ura:
+            raise _invalid_identity("invalid ability URA projection")
+        return projection.ura
+
+    def owner_ura_for_ability(self, ability_ura: str) -> str:
+        """Return the Axon-projected owner URA for a canonical Ability URA."""
+
+        projection = self.parse_ura(ability_ura)
+        if projection.kind != "ability":
+            raise _invalid_identity("ability_ura must project to an ability")
+        owner_ura = projection.components.get("owner_ura")
+        if not isinstance(owner_ura, str) or not owner_ura:
+            raise _invalid_identity("ability projection missing owner_ura")
+        return owner_ura
+
+    def canonical_ability_descriptor_ref(
+        self, value: str, descriptor_version: str = ""
+    ) -> str:
+        """Canonicalize or build an AbilityDescriptorRef via identity transport."""
+
+        self._require_open()
+        version = descriptor_version.strip()
+        try:
+            if version:
+                raw = self.transport.build_descriptor_ref(
+                    _json_bytes(
+                        {
+                            "ability_ura": value,
+                            "descriptor_version": version,
+                        }
+                    )
+                )
+            else:
+                raw = self.transport.project_descriptor_ref(
+                    DescriptorRefRequest(value).to_json_bytes()
+                )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(
+                "identity descriptor-ref canonicalization failed", exc
+            ) from exc
+        projection = IdentityProjection.from_json(raw)
+        if projection.kind != "descriptor_ref" or not projection.descriptor_ref:
+            raise _invalid_identity("invalid descriptor_ref projection")
+        return projection.descriptor_ref
 
     def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
         self._require_open()

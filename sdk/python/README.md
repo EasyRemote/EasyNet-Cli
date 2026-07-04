@@ -20,7 +20,8 @@ await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow transport protocols, plus DirectoryClient resolve/list
 read-model pages, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
-signing-key lifecycle, and signer-handle seams.
+Axon-delegated addressing helper facade, signing-key lifecycle, and
+signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
