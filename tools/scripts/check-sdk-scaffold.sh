@@ -89,6 +89,8 @@ for path in \
   sdk/go/signing_test.go \
   sdk/go/import_boundary_test.go \
   tools/scripts/check-backend-sdk-only-boundary.sh \
+  tools/scripts/check-backend-route-family-coverage.sh \
+  sdk/conformance/backend-route-family-coverage.json \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/_cabi.py \
@@ -144,6 +146,7 @@ require_dir sdk/schemas
 require_dir sdk/conformance/cases
 require_dir sdk/conformance/fixtures
 require_dir sdk/conformance/runner
+validate_json_file sdk/conformance/backend-route-family-coverage.json
 
 schema_files=(
   invocation.schema.json
@@ -340,6 +343,7 @@ case_files=(
   error-typed-json.yaml
   error-profile-source-refs.yaml
   backend-sdk-only-import-ban.yaml
+  backend-route-family-coverage.yaml
   identity-ura-descriptor-projection.yaml
   receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml
@@ -372,6 +376,7 @@ for case_file in "${case_files[@]}"; do
 done
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
@@ -393,6 +398,8 @@ require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedConsumerCove
 require_literal sdk/go/conformance_test.go "memc/consumer_coverage"
 require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedNoCoreBloatConformanceCase"
 require_literal sdk/go/conformance_test.go "memc/no_core_bloat"
+require_literal sdk/go/conformance_test.go "TestGoBackendCutoverExecutesSharedRouteFamilyCoverageConformanceCase"
+require_literal sdk/go/conformance_test.go "backend/hub_route_family_coverage"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/cases"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/fixtures"
 require_literal sdk/python/tests/test_conformance.py "SharedConformanceFixtureTests"

@@ -9,7 +9,7 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, profile error source-ref, and backend SDK-only import-ban actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, profile error source-ref, backend SDK-only import-ban, and Hub route-family coverage actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/direct control-plane UDS/direct daemon UDS unary/server-stream/bidi/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, and profile error source-ref actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
@@ -54,6 +54,11 @@ method spelling.
   conformance case and executable scanner gate; the sibling EasyNet backend
   still reports raw Axon, generated Axon protobuf, and direct daemon transport
   violations before cutover can be claimed.
+- Backend Hub route-family coverage now has a shared
+  `backend/hub_route_family_coverage` conformance case, a SPEC 29.2 manifest,
+  and an executable validator gate for all 14 Hub route families; real backend
+  route source cutover and per-family smokes remain incomplete before cutover
+  can be claimed.
 - Receipt fetch carrier, projection, and causal-ref guardrails exist for
   Rust/C ABI over daemon `invocation.history.get`; Axon-backed full
   verification, fetched-record execution convenience, and language facades

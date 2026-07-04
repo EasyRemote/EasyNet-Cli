@@ -230,6 +230,34 @@ func TestGoBackendCutoverExecutesSharedImportBanConformanceCase(t *testing.T) {
 	}
 }
 
+func TestGoBackendCutoverExecutesSharedRouteFamilyCoverageConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	coverageCase := sharedCase(t, root, "backend-route-family-coverage.yaml")
+	requireCaseID(t, coverageCase, "backend/hub_route_family_coverage")
+	for _, action := range []string{
+		"load_hub_route_family_manifest",
+		"require_all_spec_29_2_route_families",
+		"require_assigned_sdk_clients",
+		"require_coverage_evidence",
+		"reject_backend_local_runtime_ownership",
+	} {
+		requireCaseAction(t, coverageCase, action)
+	}
+	requireCaseExpectation(t, coverageCase, "route_family_count: 14")
+	requireCaseExpectation(t, coverageCase, "missing_route_family: false")
+	requireCaseExpectation(t, coverageCase, "duplicate_route_family: false")
+	requireCaseExpectation(t, coverageCase, "backend_local_runtime_ownership: false")
+
+	cmd := exec.Command(filepath.Join(root, "tools/scripts/check-backend-route-family-coverage.sh"), "--self-test")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("backend route-family coverage self-test failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "self-test ok") {
+		t.Fatalf("backend route-family coverage self-test output = %q", output)
+	}
+}
+
 func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing.T) {
 	root := repositoryRoot(t)
 

@@ -69,6 +69,7 @@ cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh
 bash tools/scripts/check-backend-sdk-only-boundary.sh "$EASYNET_BACKEND_ROOT"
+bash tools/scripts/check-backend-route-family-coverage.sh
 ```
 
 Future runners should add:
@@ -120,6 +121,7 @@ swift test --package-path sdk/swift
 - profile ownership exclusivity
 - first-class consumer coverage through declared profiles
 - Runtime Core no-bloat boundary
+- backend SDK-only import-ban enforcement and Hub route-family coverage mapping
 
 The scaffold in `cases/` names the first shared cases. A profile must add its
 full case set before it can be marked profile-ready.
