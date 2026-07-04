@@ -91,8 +91,9 @@ local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication plugin
 install and ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
-and cleanup adapters, mission event streams, concrete Admin trust/pairing carriers,
-device-session create/delete lifecycle,
+and cleanup adapters, mission event streams, Admin hub lifecycle,
+pairing/credential lifecycle, and device-session create/delete adapters that
+require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,

@@ -1322,31 +1322,31 @@ class CABIAdminTransport(_CABIProfileTransport):
         )
 
     def join_hub(self, request_json: bytes) -> bytes:
-        return self._missing("admin join hub")
+        return self._missing_hub_lifecycle("admin join hub")
 
     def leave_hub(self, request_json: bytes) -> bytes:
-        return self._missing("admin leave hub")
+        return self._missing_hub_lifecycle("admin leave hub")
 
     def pairing_preflight(self, request_json: bytes) -> bytes:
-        return self._missing("admin pairing preflight")
+        return self._missing_pairing_lifecycle("admin pairing preflight")
 
     def validate_pairing(self, request_json: bytes) -> bytes:
-        return self._missing("admin validate pairing")
+        return self._missing_pairing_lifecycle("admin validate pairing")
 
     def verify_device_credential(self, request_json: bytes) -> bytes:
-        return self._missing("admin verify device credential")
+        return self._missing_pairing_lifecycle("admin verify device credential")
 
     def create_pairing(self, request_json: bytes) -> bytes:
-        return self._missing("admin create pairing")
+        return self._missing_pairing_lifecycle("admin create pairing")
 
     def revoke_device(self, request_json: bytes) -> bytes:
-        return self._missing("admin revoke device")
+        return self._missing_pairing_lifecycle("admin revoke device")
 
     def create_device_session(self, request_json: bytes) -> bytes:
-        return self._missing("admin create device session")
+        return self._missing_device_session_lifecycle("admin create device session")
 
     def delete_device_session(self, request_json: bytes) -> bytes:
-        return self._missing("admin delete device session")
+        return self._missing_device_session_lifecycle("admin delete device session")
 
     def project_gateway_status(self, status_json: bytes) -> bytes:
         return self._call("easynet_admin_project_gateway_status", status_json)
@@ -1361,6 +1361,45 @@ class CABIAdminTransport(_CABIProfileTransport):
 
     def project_device_session_page(self, sessions_json: bytes) -> bytes:
         return self._call("easynet_admin_project_device_session_page", sessions_json)
+
+    def _missing_hub_lifecycle(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=(
+                f"{method} requires a daemon/ABI hub lifecycle contract; "
+                "gateway readiness projections cannot be projected into join/leave "
+                "mutation semantics"
+            ),
+        )
+
+    def _missing_pairing_lifecycle(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=(
+                f"{method} requires a daemon/ABI pairing and device-credential "
+                "lifecycle contract; session.list and gateway status read models "
+                "cannot be projected into trust mutation semantics"
+            ),
+        )
+
+    def _missing_device_session_lifecycle(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=(
+                f"{method} requires a daemon/ABI device-session lifecycle contract; "
+                "session.list read-model rows cannot be projected into create/delete "
+                "mutation semantics"
+            ),
+        )
 
 
 @dataclass

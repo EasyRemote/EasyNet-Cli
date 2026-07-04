@@ -31,12 +31,17 @@ from easynet_sdk import (
     AdminCarrierBase,
     AdminClient,
     AdminGatewayStatusRequest,
+    AdminJoinHubRequest,
+    AdminLeaveHubRequest,
     AdminSessionListRequest,
     DeviceQuery,
+    CreateDeviceSessionRequest,
+    CreatePairingRequest,
     DirectoryClient,
     DirectoryQueryBase,
     DirectorySubscriptionCursor,
     DirectorySubscriptionRequest,
+    DeleteDeviceSessionRequest,
     ErrorCode,
     EventClient,
     EventCursor,
@@ -54,6 +59,7 @@ from easynet_sdk import (
     MissionRunFileRequest,
     MissionRunRequest,
     MissionTrackRequest,
+    PairingPreflightRequest,
     PrepareOptions,
     PublicationClient,
     PublishedAbilityQuery,
@@ -64,6 +70,7 @@ from easynet_sdk import (
     RetryHint,
     RuntimeClient,
     SDKError,
+    RevokeDeviceRequest,
     SignerRequest,
     SigningKeyListRequest,
     SigningKeyRegistrationRequest,
@@ -78,6 +85,8 @@ from easynet_sdk import (
     SurfaceListPagesRequest,
     SurfaceManifestRequest,
     UnpublishAbilityRequest,
+    ValidatePairingRequest,
+    VerifyDeviceCredentialRequest,
     WrapperBrowserSessionRequest,
     WrapperBrowserStartRequest,
     WrapperCarrierBase,
@@ -2920,6 +2929,105 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(
             raw.profile_requests[1][2]["sessions"][0]["id"], "dev-session-1"
         )
+        self.assertEqual(raw.buffers, {})
+
+    def test_admin_trust_and_session_mutations_report_daemon_contract_boundary(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = AdminClient(CABIAdminTransport(lib, handle=7))
+        base = AdminCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+        hub = "easynet:///r/example/hub/main"
+        device = "easynet:///r/example/device/dev-a"
+
+        cases = [
+            (
+                "hub lifecycle",
+                lambda: client.join_hub(AdminJoinHubRequest(base, hub, device)),
+                "requires a daemon/ABI hub lifecycle contract",
+                "gateway readiness projections cannot be projected",
+            ),
+            (
+                "leave hub",
+                lambda: client.leave_hub(AdminLeaveHubRequest(base, hub, "rotation")),
+                "requires a daemon/ABI hub lifecycle contract",
+                "gateway readiness projections cannot be projected",
+            ),
+            (
+                "pairing preflight",
+                lambda: client.pairing_preflight(
+                    PairingPreflightRequest(base, hub, device, ("invoke",))
+                ),
+                "requires a daemon/ABI pairing and device-credential lifecycle contract",
+                "cannot be projected into trust mutation semantics",
+            ),
+            (
+                "pairing create",
+                lambda: client.create_pairing(
+                    CreatePairingRequest(base, hub, device, 1_893_456_000_000)
+                ),
+                "requires a daemon/ABI pairing and device-credential lifecycle contract",
+                "cannot be projected into trust mutation semantics",
+            ),
+            (
+                "pairing validate",
+                lambda: client.validate_pairing(
+                    ValidatePairingRequest(base, "pair-token-value", device)
+                ),
+                "requires a daemon/ABI pairing and device-credential lifecycle contract",
+                "cannot be projected into trust mutation semantics",
+            ),
+            (
+                "credential verify",
+                lambda: client.verify_device_credential(
+                    VerifyDeviceCredentialRequest(base, "cred-dev-a", device, hub)
+                ),
+                "requires a daemon/ABI pairing and device-credential lifecycle contract",
+                "cannot be projected into trust mutation semantics",
+            ),
+            (
+                "device revoke",
+                lambda: client.revoke_device(
+                    RevokeDeviceRequest(base, device, "rotation")
+                ),
+                "requires a daemon/ABI pairing and device-credential lifecycle contract",
+                "cannot be projected into trust mutation semantics",
+            ),
+            (
+                "session create",
+                lambda: client.create_device_session(
+                    CreateDeviceSessionRequest(base, device, hub, "remote_desktop")
+                ),
+                "requires a daemon/ABI device-session lifecycle contract",
+                "session.list read-model rows cannot be projected",
+            ),
+            (
+                "session delete",
+                lambda: client.delete_device_session(
+                    DeleteDeviceSessionRequest(base, "dev-session-1", "done")
+                ),
+                "requires a daemon/ABI device-session lifecycle contract",
+                "session.list read-model rows cannot be projected",
+            ),
+        ]
+
+        for name, operation, expected, detail in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(SDKError) as caught:
+                    operation()
+                self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+                self.assertEqual(caught.exception.stage, "cabi")
+                self.assertIn(expected, caught.exception.message)
+                self.assertIn(detail, caught.exception.message)
+
+        self.assertEqual(raw.profile_requests, [])
+        self.assertEqual(raw.runtime_requests, [])
         self.assertEqual(raw.buffers, {})
 
     def test_admin_gateway_status_uses_daemon_lifecycle_status_projection(self) -> None:

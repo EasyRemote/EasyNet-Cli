@@ -74,8 +74,9 @@ method spelling.
   agent-record projections; Go/Python facade seams also cover Hub join/leave,
   pairing preflight/create/validate, device credential verification, device
   revocation, and device-session create/list/delete projections. Certificate
-  policy, concrete daemon trust/session carriers, and product cutovers remain
-  incomplete.
+  policy, daemon/ABI hub lifecycle contracts, daemon/ABI pairing and
+  device-credential lifecycle contracts, daemon/ABI device-session mutation
+  contracts, and product cutovers remain incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
   `pages.list/publish/get/unpublish/health`; Go/Python facade seams now expose page
   carriers, typed page records, public page refs, manifests, mutation results,
@@ -243,7 +244,9 @@ method spelling.
   C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, and C ABI-backed typed device-session page projection plus close
-  state seams; concrete daemon trust/pairing carriers, device-session create/delete lifecycle, certificate policy, and
+  state seams; C ABI transport reports explicit semantic-boundary errors for hub
+  join/leave, pairing/credential trust lifecycle, and device-session
+  create/delete until daemon/ABI lifecycle contracts exist. Certificate policy and
   EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory subscription
