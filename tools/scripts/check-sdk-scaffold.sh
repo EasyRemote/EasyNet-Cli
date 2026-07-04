@@ -47,6 +47,8 @@ for path in \
   sdk/CONFORMANCE_SUITE.md \
   sdk/go/go.mod \
   sdk/go/client.go \
+  sdk/go/environment.go \
+  sdk/go/environment_test.go \
   sdk/go/daemon.go \
   sdk/go/daemon_test.go \
   sdk/go/directory.go \
@@ -331,6 +333,7 @@ done
 case_files=(
   version-abi-compatible.yaml
   version-abi-incompatible.yaml
+  environment-process-root.yaml
   daemon-control-only.yaml
   invocation-complete-tuple.yaml
   invocation-builder-handle-state.yaml
@@ -384,6 +387,8 @@ require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
 require_literal sdk/go/conformance_test.go "sdk/conformance/cases"
 require_literal sdk/go/conformance_test.go "sdk/conformance/fixtures"
 require_literal sdk/go/conformance_test.go "TestGoFacadeExecutesSharedRuntimeCoreConformanceCases"
+require_literal sdk/go/conformance_test.go "TestGoEnvironmentExecutesSharedProcessRootConformanceCase"
+require_literal sdk/go/conformance_test.go "environment/process_root"
 require_literal sdk/go/conformance_test.go "TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases"
 require_literal sdk/go/conformance_test.go "TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase"
 require_literal sdk/go/conformance_test.go "TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase"
@@ -418,6 +423,9 @@ require_literal sdk/python/tests/test_conformance.py "memc/consumer_coverage"
 require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_no_core_bloat_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "memc/no_core_bloat"
 require_literal sdk/go/client.go "DiscoveryTransport"
+require_literal sdk/go/environment.go "SdkEnvironment"
+require_literal sdk/go/environment.go "NewSdkEnvironment"
+require_literal sdk/go/environment.go "ConnectLocal"
 require_literal sdk/go/daemon.go "DaemonHandle"
 require_literal sdk/go/daemon.go "DaemonLifecycleState"
 require_literal sdk/go/daemon.go "DaemonTransport"

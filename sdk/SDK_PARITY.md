@@ -9,7 +9,7 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, profile error source-ref, backend SDK-only import-ban, and Hub route-family coverage actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with `SdkEnvironment` process root, optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, profile error source-ref, backend SDK-only import-ban, and Hub route-family coverage actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/direct control-plane UDS/direct daemon UDS unary/server-stream/bidi/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, and profile error source-ref actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
@@ -110,7 +110,10 @@ method spelling.
   file, terminal, remote desktop, browser, and media session DTOs; execution
   helpers, backend HTTP/WebSocket bridges, storage policy, and product cutovers
   remain incomplete.
-- Go package exposes Runtime Core feature/version discovery with root client close and optional
+- Go package exposes Runtime Core feature/version discovery with `SdkEnvironment`
+  process root, default daemon discovery/connect policy, explicit
+  `DaemonControl` access, local runtime connect, idempotent environment close,
+  root client close, and optional
   `easynet_cabi,cgo` C ABI v4 feature-discovery, daemon lifecycle/open-runtime,
   runtime-health, unary invoke, stream/bidi callback, prepare/sign/submit-handle,
   await/cancel/events/free-handle adapters, runtime connection

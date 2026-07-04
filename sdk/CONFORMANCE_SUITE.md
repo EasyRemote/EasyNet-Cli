@@ -85,6 +85,8 @@ swift test --package-path sdk/swift
 ## Required Case Families
 
 - version and ABI compatibility
+- environment process root feature discovery, ABI check, daemon lifecycle
+  facade access, local connect, and idempotent cleanup
 - daemon lifecycle and degraded readiness
 - complete Invocation tuple
 - invocation builder handle state transitions

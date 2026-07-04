@@ -81,6 +81,62 @@ func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	}
 }
 
+func TestGoEnvironmentExecutesSharedProcessRootConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	environmentCase := sharedCase(t, root, "environment-process-root.yaml")
+	requireCaseID(t, environmentCase, "environment/process_root")
+	for _, action := range []string{
+		"create_environment",
+		"require_abi",
+		"discover_daemon",
+		"connect_local_runtime",
+		"close_environment",
+		"reject_after_close",
+	} {
+		requireCaseAction(t, environmentCase, action)
+	}
+	requireCaseExpectation(t, environmentCase, "exposes_raw_axon: false")
+	requireCaseExpectation(t, environmentCase, "owns_invocation_tuple: false")
+	requireCaseExpectation(t, environmentCase, "close_idempotent: true")
+	requireCaseExpectation(t, environmentCase, "connect_local_starts_daemon: false")
+
+	discovery := &memoryDiscoveryTransport{payload: sharedFeatureDiscoveryJSON(t, 4)}
+	daemon := &memoryDaemonTransport{
+		discoverJSON: `{"control_endpoint":"/tmp/control.sock","invocation_endpoint":"/tmp/daemon.sock"}`,
+		attachJSON:   readyDaemonStatus(),
+	}
+	env, err := NewSdkEnvironment(discovery, daemon, SdkEnvironmentOptions{
+		ExpectedABIVersion: 4,
+		Discover:           DiscoverOptions{ControlPath: "/tmp/control.sock"},
+		Connect:            ConnectOptions{MaxMessageBytes: 4096},
+	})
+	if err != nil {
+		t.Fatalf("NewSdkEnvironment(shared process root): %v", err)
+	}
+	if _, err := env.RequireABI(context.Background()); err != nil {
+		t.Fatalf("RequireABI(shared process root): %v", err)
+	}
+	if _, err := env.DiscoverDaemon(context.Background(), DiscoverOptions{}); err != nil {
+		t.Fatalf("DiscoverDaemon(shared process root): %v", err)
+	}
+	runtimeClient, err := env.ConnectLocal(context.Background(), ConnectOptions{InvokeTimeoutMS: 5000})
+	if err != nil {
+		t.Fatalf("ConnectLocal(shared process root): %v", err)
+	}
+	if runtimeClient == nil || daemon.openCalls != 1 || daemon.startCalls != 0 {
+		t.Fatalf("unexpected process-root connect state: runtime=%#v openCalls=%d startCalls=%d", runtimeClient, daemon.openCalls, daemon.startCalls)
+	}
+	if err := env.Close(context.Background()); err != nil {
+		t.Fatalf("Close(shared process root): %v", err)
+	}
+	if err := env.Close(context.Background()); err != nil {
+		t.Fatalf("second Close(shared process root): %v", err)
+	}
+	if _, err := env.ConnectLocal(context.Background(), ConnectOptions{}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ConnectLocal after Close = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *testing.T) {
 	root := repositoryRoot(t)
 
