@@ -10,7 +10,7 @@ method spelling.
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
 | Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/direct control-plane UDS/direct daemon UDS unary/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/direct control-plane UDS/direct daemon UDS unary/server-stream/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -180,7 +180,7 @@ method spelling.
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
-  `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
+  `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
   connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, SDK-owned `EasyRemoteDaemonStartConfig` and
@@ -208,7 +208,7 @@ method spelling.
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   EasyRemote-style descriptor-ref and target-dispatch cutover tests; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
-  Surface, Compatibility, and Wrapper carriers/records; direct daemon stream/bidi and direct
+  Surface, Compatibility, and Wrapper carriers/records; direct daemon bidi and direct
   prepare/submit adapters, live profile execution adapters, remaining EasyRemote repository extraction, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
@@ -291,8 +291,8 @@ method spelling.
   planning/EAL rendering/child Invocation fact conformance projection, plus
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
-  gates, and product Invocation direct daemon UDS unary transport is available through the SDK facade,
-  while direct daemon stream/bidi adapters, direct daemon prepare/submit adapters,
+  gates, and product Invocation direct daemon UDS unary/server-stream transport is available through the SDK facade,
+  while direct daemon bidi adapters, direct daemon prepare/submit adapters,
   daemon-owned signer acquisition/keyring policy, daemon-backed
   Pipeline child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover, and full receipt verification remain

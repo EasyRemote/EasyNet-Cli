@@ -10,7 +10,9 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import queue
 import secrets
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -25,10 +27,12 @@ from .control_ipc import ControlDiscovery, read_control_discovery
 from .errors import ErrorCode, RetryHint, SDKError, normalize_error_code
 from .invocation import InvocationDraft
 from .runtime import RuntimeTransport
+from .stream import StreamTransport
 
 DEFAULT_URA_PROFILE = "easynet-strict-v2"
 DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
+DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 
 invoke_pb2: Any = _invoke_pb2
 invoke_pb2_grpc: Any = _invoke_pb2_grpc
@@ -110,7 +114,7 @@ class DirectDaemonRuntimeConnector:
             "endpoint": endpoint_value,
             "protocol": "axon.v1.Invocation",
             "unary": True,
-            "stream": False,
+            "stream": True,
             "bidi": False,
             "prepare": False,
             "submit_signed": False,
@@ -130,7 +134,7 @@ class DirectDaemonRuntimeConnector:
 
 
 class DirectDaemonRuntimeTransport:
-    """Concrete unary RuntimeTransport using daemon Axon gRPC over UDS."""
+    """Concrete RuntimeTransport using daemon Axon gRPC over UDS."""
 
     def __init__(
         self,
@@ -216,8 +220,39 @@ class DirectDaemonRuntimeTransport:
                 cause=exc,
             ) from exc
 
-    def open_stream(self, draft_json: bytes) -> tuple[Any, bytes]:
-        raise _unsupported("direct daemon server-stream transport is not implemented")
+    def open_stream(self, draft_json: bytes) -> tuple[StreamTransport, bytes]:
+        self._require_open()
+        try:
+            draft = InvocationDraft.from_json(draft_json)
+            request = _draft_to_stream_request(draft)
+            iterator = self._stub.InvokeStream(
+                request,
+                timeout=self._invoke_timeout_seconds,
+            )
+            transport = DirectDaemonStreamTransport(
+                iterator,
+                endpoint=self._endpoint,
+            )
+            return transport, _json_bytes(
+                {
+                    "stream_id": transport.stream_id,
+                    "state": "Open",
+                    "max_buffered_events": DEFAULT_DIRECT_STREAM_QUEUE_EVENTS,
+                }
+            )
+        except SDKError:
+            raise
+        except grpc.RpcError as exc:
+            raise _grpc_error(exc, endpoint=self._endpoint) from exc
+        except Exception as exc:
+            raise _direct_error(
+                f"open daemon stream endpoint failed: {exc}",
+                code=ErrorCode.TRANSPORT,
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                details={"endpoint": self._endpoint},
+                cause=exc,
+            ) from exc
 
     def open_bidi(self, draft_json: bytes, streams_json: bytes) -> tuple[Any, bytes]:
         raise _unsupported("direct daemon bidirectional transport is not implemented")
@@ -251,10 +286,146 @@ class DirectDaemonRuntimeTransport:
             raise _direct_error("runtime transport is closed", code=ErrorCode.INVALID_HANDLE)
 
 
+class DirectDaemonStreamTransport:
+    """Bounded StreamTransport adapter over one Axon InvokeStream iterator."""
+
+    def __init__(
+        self,
+        iterator: Any,
+        *,
+        endpoint: str,
+        max_buffered_events: int = DEFAULT_DIRECT_STREAM_QUEUE_EVENTS,
+    ) -> None:
+        if max_buffered_events <= 0:
+            raise _direct_error(
+                "max_buffered_events must be positive",
+                code=ErrorCode.INVALID_ARGUMENT,
+            )
+        self._iterator = iterator
+        self._endpoint = endpoint
+        self.stream_id = f"direct-stream-{secrets.token_hex(8)}"
+        self._queue: queue.Queue[bytes | SDKError] = queue.Queue(
+            maxsize=max_buffered_events
+        )
+        self._lock = threading.Lock()
+        self._closed = False
+        self._terminal_seen = False
+        self._reader = threading.Thread(
+            target=self._read_stream,
+            name=f"easynet-direct-stream-{self.stream_id}",
+            daemon=True,
+        )
+        self._reader.start()
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        with self._lock:
+            self._require_open()
+        try:
+            item = self._queue.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise TimeoutError("no direct daemon stream frame available") from exc
+        if isinstance(item, SDKError):
+            raise item
+        return item
+
+    def cancel(self, reason: str) -> bytes:
+        self.close()
+        return _json_bytes(
+            {
+                "stream_id": self.stream_id,
+                "cancelled": True,
+                "state": "Cancelled",
+                "terminal": True,
+                "reason": reason,
+            }
+        )
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            _cancel_stream_iterator(self._iterator)
+
+    def _read_stream(self) -> None:
+        try:
+            for chunk in self._iterator:
+                raw = _stream_chunk_json(chunk)
+                if not self._put(raw):
+                    return
+                if _stream_chunk_terminal(chunk):
+                    self._terminal_seen = True
+                    return
+            if not self._closed and not self._terminal_seen:
+                self._put(
+                    _direct_error(
+                        "daemon stream ended without a terminal frame",
+                        code=ErrorCode.PROTOCOL,
+                        retry=RetryHint.NEVER,
+                        details={"endpoint": self._endpoint, "stream_id": self.stream_id},
+                    )
+                )
+        except SDKError as exc:
+            if not self._closed:
+                self._put(exc)
+        except grpc.RpcError as exc:
+            if not self._closed:
+                self._put(_grpc_error(exc, endpoint=self._endpoint))
+        except Exception as exc:
+            if not self._closed:
+                self._put(
+                    _direct_error(
+                        f"daemon stream recv failed: {exc}",
+                        code=ErrorCode.TRANSPORT,
+                        retry=RetryHint.UNKNOWN,
+                        details={"endpoint": self._endpoint, "stream_id": self.stream_id},
+                        cause=exc,
+                    )
+                )
+
+    def _put(self, item: bytes | SDKError) -> bool:
+        while not self._closed:
+            try:
+                self._queue.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _direct_error("stream transport is closed", code=ErrorCode.INVALID_HANDLE)
+
+
+def _cancel_stream_iterator(iterator: Any) -> None:
+    cancel = getattr(iterator, "cancel", None)
+    if cancel is not None:
+        cancel()
+
+
+def _stream_chunk_terminal(chunk: Any) -> bool:
+    return bool(chunk.terminal) or _state_name(chunk.state) in {
+        "Completed",
+        "Failed",
+        "TimedOut",
+        "Cancelled",
+    }
+
+
 def _draft_to_invoke_request(draft: InvocationDraft) -> Any:
+    fields = _invoke_request_fields(draft)
+    return invoke_pb2.InvokeRequest(**fields)
+
+
+def _draft_to_stream_request(draft: InvocationDraft) -> Any:
+    fields = _invoke_request_fields(draft)
+    return invoke_pb2.InvokeServerStreamRequest(**fields)
+
+
+def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
     content_type = draft.content_type
-    return invoke_pb2.InvokeRequest(
-        envelope=types_pb2.Envelope(
+    return {
+        "envelope": types_pb2.Envelope(
             request_id=f"req-{secrets.token_hex(16)}",
             caller=_agent_identity(draft.caller_ura),
             callee=_agent_identity(draft.callee_ura),
@@ -266,15 +437,15 @@ def _draft_to_invoke_request(draft: InvocationDraft) -> Any:
             causal_context=_causal_context(draft.causal_context),
             caller_signature=_caller_signature(draft),
         ),
-        function_name=draft.descriptor_ref,
-        arguments=_arguments(draft),
-        content_type=content_type,
-        metadata=_metadata(draft.metadata),
-        content_envelope=types_pb2.ContentEnvelope(
+        "function_name": draft.descriptor_ref,
+        "arguments": _arguments(draft),
+        "content_type": content_type,
+        "metadata": _metadata(draft.metadata),
+        "content_envelope": types_pb2.ContentEnvelope(
             content_type=content_type,
             encoding="identity",
         ),
-    )
+    }
 
 
 def _invoke_response_json(
@@ -301,6 +472,54 @@ def _invoke_response_json(
         "error": error,
     }
     return _json_bytes(result)
+
+
+def _stream_chunk_json(chunk: Any) -> bytes:
+    content_type = chunk.content_type
+    error = _stream_chunk_error(chunk)
+    event: dict[str, object] = {
+        "sequence": int(chunk.sequence) + 1,
+        "kind": "terminal" if _stream_chunk_terminal(chunk) else "chunk",
+        "state": _state_name(chunk.state),
+        "terminal": _stream_chunk_terminal(chunk),
+        "payload_content_type": content_type,
+        "payload_base64": base64.b64encode(chunk.payload).decode("ascii"),
+        "payload_json": _output_json(chunk.payload, content_type),
+        "error": error,
+    }
+    if chunk.invocation_id:
+        event["invocation_id"] = chunk.invocation_id
+    if chunk.selected_node_id:
+        event["selected_node_id"] = chunk.selected_node_id
+    if chunk.scheduling_reason:
+        event["scheduling_reason"] = chunk.scheduling_reason
+    if chunk.elapsed_ms:
+        event["elapsed_ms"] = chunk.elapsed_ms
+    if chunk.HasField("terminal_receipt"):
+        event["receipt"] = _receipt(chunk.terminal_receipt)
+    return _json_bytes(event)
+
+
+def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
+    if chunk.HasField("error"):
+        error = chunk.error
+        code = _response_error_code(error.code)
+        return {
+            "code": code.value,
+            "stage": _error_stage(error.stage),
+            "message": error.message,
+            "retryable": error.retryable,
+        }
+    state = _state_name(chunk.state)
+    if state in {"Failed", "TimedOut", "Cancelled"}:
+        code = ErrorCode.TIMEOUT if state == "TimedOut" else ErrorCode.ABILITY_FAILED
+        return {
+            "code": code.value,
+            "stage": "direct_runtime.stream",
+            "message": f"daemon stream chunk state is {state}",
+            "retryable": code == ErrorCode.TIMEOUT,
+        }
+    return None
 
 
 def _agent_identity(ura: str) -> Any:

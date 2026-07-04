@@ -15,7 +15,7 @@ process-root factories, direct control-plane UDS boot/status IPC over
 `control.json`/`control.sock`, private C ABI v4 discovery, daemon
 lifecycle/open-runtime, identity projection, runtime
 health/unary/stream/bidi/prepare-submit handle transports, and direct daemon
-Axon gRPC-over-UDS unary transport plus
+Axon gRPC-over-UDS unary/server-stream transport plus
 control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed
 handshake, profile
 carrier/projection transports for Receipt, Directory, Publication, Host
@@ -47,7 +47,7 @@ methods behind narrow transport protocols with timeout-aware stream/bidi receive
 plus public
 DaemonInvocationTransport dict/JSON unary, stream, and bidi facade with
 RuntimeConnection-owned session lifecycle over C ABI v4 plus explicit direct
-daemon Axon gRPC-over-UDS unary connection, DirectoryClient resolve/list read-model pages,
+daemon Axon gRPC-over-UDS unary/server-stream connection, DirectoryClient resolve/list read-model pages,
 C ABI-backed resolve/list read-model execution through Runtime Core invoke,
 list/resolve Invocation carrier builders, directory
 projection helpers, C ABI-backed directory subscription execution through
@@ -136,8 +136,8 @@ record-project execution,
 transport-backed helper close state seams, and record projections. EasyRemote
 signed unary dispatch now flows through Runtime Core
 prepare/sign/submit/await/free when a daemon-authorized SDK signer is supplied.
-Product Invocation direct daemon UDS unary transport is available through the
-SDK facade. Direct stream/bidi and direct prepare/submit adapters,
+Product Invocation direct daemon UDS unary and server-stream transport is available
+through the SDK facade. Direct bidi and direct prepare/submit adapters,
 daemon-owned signer acquisition/keyring policy, Axon-backed receipt verification, receipt URA
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
