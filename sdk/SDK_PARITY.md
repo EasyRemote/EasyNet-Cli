@@ -30,7 +30,7 @@ method spelling.
 | stream | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
 | bidi | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
-| receipt | fetch/projection partial | fetch/projection partial | projection seam partial | projection seam partial | gap | gap | gap |
+| receipt | fetch/projection/ref partial | fetch/projection partial | projection/ref seam partial | projection seam partial | gap | gap | gap |
 | publication | carrier partial | carrier/deploy partial | carrier/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
@@ -204,8 +204,10 @@ method spelling.
   actual EasyRemote repository extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
-  receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
-  through Runtime Core invoke, and close state seams over opaque receipt refs;
+  receipt-derived child `causal_context` adapters, typed `ReceiptRef` and
+  `ReceiptChain` wrappers that delegate causal-context and continuity projection
+  through the client, C ABI-backed fetch execution through Runtime Core invoke,
+  and close state seams over opaque receipt refs;
   Axon-backed cryptographic verification, receipt URI construction after RFC-007,
   and actual EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,

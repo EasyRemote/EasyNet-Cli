@@ -45,7 +45,9 @@ signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
 through Runtime Core invoke, and close state seams
-over opaque receipt refs, plus PublicationClient resource-ref,
+over opaque receipt refs plus typed ReceiptRef/ReceiptChain facades that
+delegate causal-context and continuity projection back through ReceiptClient,
+plus PublicationClient resource-ref,
 package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
 C ABI-backed deploy-result projection,
 published-ability list execution through Runtime Core invoke,

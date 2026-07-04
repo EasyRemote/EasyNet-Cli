@@ -6,9 +6,11 @@ from easynet_sdk import (
     AbilityCallRequest,
     InvocationResult,
     ErrorCode,
+    ReceiptChain,
     ReceiptChainVerificationRequest,
     ReceiptClient,
     ReceiptFetchRequest,
+    ReceiptRef,
     ReceiptSummary,
     SDKError,
     build_receipt_fetch_invocation,
@@ -397,6 +399,131 @@ class ReceiptTests(unittest.TestCase):
             )
 
         self.assertIsNone(transport.seen_chain_request)
+
+    def test_receipt_ref_delegates_causal_context_projection(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+        ref = ReceiptRef(
+            receipt_ura=" easynet:///r/example/receipt/receipt-1 ",
+            receipt_hash_hex=(
+                "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            ),
+            invocation_id="inv-example-1",
+            metadata={"source": "runtime"},
+        )
+
+        causal_context = ref.causal_context(client)
+
+        self.assertEqual(ref.receipt_ura, "easynet:///r/example/receipt/receipt-1")
+        self.assertEqual(
+            ref.receipt_hash_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        self.assertEqual(
+            json.loads(transport.seen_receipt_raw.decode("utf-8")),
+            {
+                "invocation_id": "inv-example-1",
+                "metadata": {"source": "runtime"},
+                "receipt_hash_hex": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+            },
+        )
+        self.assertEqual(causal_context["form"], "scalar")
+
+    def test_receipt_ref_from_runtime_receipt_requires_anchor(self) -> None:
+        anchored = ReceiptRef.from_runtime_receipt(
+            InvocationResult.from_json(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "tuple": build_receipt_fetch_invocation(
+                            fetch_request()
+                        ).to_json_dict(),
+                        "terminal_state": "Completed",
+                        "receipt": {
+                            "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                            "invocation_id": "inv-example-1",
+                            "self_hash_hex": (
+                                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            ),
+                        },
+                        "error": None,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            ).receipt_summary
+        )
+
+        self.assertEqual(anchored.invocation_id, "inv-example-1")
+
+        unanchored = InvocationResult.from_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": build_receipt_fetch_invocation(fetch_request()).to_json_dict(),
+                    "terminal_state": "Completed",
+                    "receipt": {"invocation_id": "inv-example-1"},
+                    "error": None,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        ).receipt_summary
+        assert unanchored is not None
+        with self.assertRaises(SDKError):
+            ReceiptRef.from_runtime_receipt(unanchored)
+
+        with self.assertRaises(SDKError):
+            ReceiptRef.from_mapping(
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                    "receipt_hash_hex": "aa",
+                }
+            )
+
+    def test_receipt_chain_delegates_continuity_projection_to_client(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+        chain = ReceiptChain.from_mappings(
+            (
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                    "receipt_hash": (
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    ),
+                    "index": 0,
+                },
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/receipt-2",
+                    "self_hash_hex": (
+                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    ),
+                    "prev_receipt_hash_hex": (
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    ),
+                    "index": 1,
+                },
+            )
+        )
+
+        verification = chain.verify_continuity(
+            client, metadata={"request_id": "chain-ref-1"}
+        )
+
+        self.assertTrue(verification.continuous)
+        assert transport.seen_chain_request is not None
+        self.assertEqual(
+            transport.seen_chain_request["metadata"]["request_id"], "chain-ref-1"
+        )
+        receipts = transport.seen_chain_request["receipts"]
+        self.assertEqual(receipts[0]["receipt_hash_hex"], "a" * 64)
+        self.assertEqual(receipts[1]["prev_receipt_hash_hex"], "a" * 64)
 
     def test_causal_ref_rejects_empty_projection(self) -> None:
         transport = MemoryReceiptTransport()

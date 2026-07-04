@@ -158,6 +158,135 @@ class ReceiptVerification:
 
 
 @dataclass(frozen=True)
+class ReceiptRef:
+    """Opaque daemon/Axon-returned receipt anchor.
+
+    The SDK validates shape only. It never constructs receipt URAs and never
+    treats a hash pair as cryptographic verification.
+    """
+
+    receipt_ura: str
+    receipt_hash_hex: str
+    invocation_id: Optional[str] = None
+    prev_receipt_hash_hex: Optional[str] = None
+    index: Optional[int] = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        receipt_ura = self.receipt_ura.strip()
+        if not receipt_ura:
+            raise _invalid_receipt("receipt_ura is required")
+        receipt_hash_hex = _normalize_receipt_hash(self.receipt_hash_hex)
+        _validate_receipt_hash_hex(receipt_hash_hex)
+        prev_hash = None
+        if self.prev_receipt_hash_hex:
+            prev_hash = _normalize_receipt_hash(self.prev_receipt_hash_hex)
+            _validate_receipt_hash_hex(prev_hash)
+        if self.index is not None and self.index < 0:
+            raise _invalid_receipt("receipt index must be non-negative")
+        object.__setattr__(self, "receipt_ura", receipt_ura)
+        object.__setattr__(self, "receipt_hash_hex", receipt_hash_hex)
+        object.__setattr__(self, "prev_receipt_hash_hex", prev_hash)
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "ReceiptRef":
+        return cls.from_mapping(_json_object(raw, "receipt ref"))
+
+    @classmethod
+    def from_mapping(cls, decoded: Mapping[str, object]) -> "ReceiptRef":
+        return cls(
+            receipt_ura=_required_string(decoded, "receipt_ura"),
+            receipt_hash_hex=_required_receipt_hash(decoded),
+            invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id"),
+            prev_receipt_hash_hex=_optional_receipt_hash(decoded),
+            index=_optional_int(decoded.get("index"), "index"),
+            metadata=_optional_mapping(decoded.get("metadata"), "metadata") or {},
+        )
+
+    @classmethod
+    def from_runtime_receipt(cls, receipt: RuntimeReceipt) -> "ReceiptRef":
+        if receipt is None:
+            raise _invalid_receipt("runtime receipt summary is required")
+        if not receipt.has_causal_anchor():
+            raise _invalid_receipt("runtime receipt summary is missing causal anchor")
+        return cls.from_mapping(receipt.to_json_dict())
+
+    def to_json_dict(self) -> dict[str, object]:
+        value: dict[str, object] = {
+            "receipt_ura": self.receipt_ura,
+            "receipt_hash_hex": self.receipt_hash_hex,
+        }
+        if self.invocation_id:
+            value["invocation_id"] = self.invocation_id
+        if self.prev_receipt_hash_hex:
+            value["prev_receipt_hash_hex"] = self.prev_receipt_hash_hex
+        if self.index is not None:
+            value["index"] = self.index
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return value
+
+    def to_json_bytes(self) -> bytes:
+        return json.dumps(
+            self.to_json_dict(), separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+
+    def causal_context(self, client: "ReceiptClient") -> Mapping[str, object]:
+        """Delegate receipt-to-causal-context projection through ReceiptClient."""
+
+        if client is None:
+            raise _invalid_receipt("receipt client is required")
+        return client.causal_context(self.to_json_bytes())
+
+
+class ReceiptChain(Sequence[ReceiptRef]):
+    """Ordered receipt anchors whose verification is delegated to ReceiptClient."""
+
+    def __init__(self, receipts: Sequence[ReceiptRef]) -> None:
+        if not receipts:
+            raise _invalid_receipt("at least one receipt ref is required")
+        self._receipts = tuple(receipts)
+
+    @classmethod
+    def from_json_receipts(cls, receipts: Sequence[bytes | str]) -> "ReceiptChain":
+        return cls(tuple(ReceiptRef.from_json(raw) for raw in receipts))
+
+    @classmethod
+    def from_mappings(cls, receipts: Sequence[Mapping[str, object]]) -> "ReceiptChain":
+        return cls(tuple(ReceiptRef.from_mapping(raw) for raw in receipts))
+
+    def __len__(self) -> int:
+        return len(self._receipts)
+
+    def __getitem__(self, index):
+        return self._receipts[index]
+
+    def __iter__(self):
+        return iter(self._receipts)
+
+    def to_json_receipts(self) -> tuple[bytes, ...]:
+        return tuple(receipt.to_json_bytes() for receipt in self._receipts)
+
+    def verify_continuity(
+        self,
+        client: "ReceiptClient",
+        *,
+        metadata: Mapping[str, object] | None = None,
+    ) -> "ReceiptChainVerification":
+        """Project continuity through the daemon Receipt facade."""
+
+        if client is None:
+            raise _invalid_receipt("receipt client is required")
+        return client.verify_chain(
+            ReceiptChainVerificationRequest(
+                receipts=self.to_json_receipts(),
+                metadata=metadata or {},
+            )
+        )
+
+
+@dataclass(frozen=True)
 class ReceiptChainVerification:
     """Daemon/Axon receipt-chain continuity projection."""
 
@@ -499,19 +628,39 @@ def _receipt_hash_field(decoded: Mapping[str, object]) -> str:
     return ""
 
 
+def _optional_receipt_hash(decoded: Mapping[str, object]) -> Optional[str]:
+    for field_name in ("prev_receipt_hash_hex", "parent_receipt_hash_hex"):
+        value = _string_field(decoded, field_name)
+        if not value:
+            continue
+        value = _normalize_receipt_hash(value)
+        _validate_receipt_hash_hex(value)
+        return value
+    return None
+
+
 def _required_receipt_hash(decoded: Mapping[str, object]) -> str:
     receipt_hash = _receipt_hash_field(decoded)
     if not receipt_hash:
         raise _invalid_receipt("receipt_hash_hex is required")
+    receipt_hash = _normalize_receipt_hash(receipt_hash)
+    _validate_receipt_hash_hex(receipt_hash)
+    return receipt_hash
+
+
+def _normalize_receipt_hash(value: str) -> str:
+    return value.removeprefix("sha256:").strip().lower()
+
+
+def _validate_receipt_hash_hex(value: str) -> None:
     try:
-        digest = bytes.fromhex(receipt_hash)
+        digest = bytes.fromhex(value)
     except ValueError as exc:
         raise _invalid_receipt(
             "receipt hash must decode to exactly 32 bytes", exc
         ) from exc
     if len(digest) != 32:
         raise _invalid_receipt("receipt hash must decode to exactly 32 bytes")
-    return receipt_hash
 
 
 def _causal_context_from_projection(
@@ -568,6 +717,14 @@ def _required_int(decoded: Mapping[str, object], field_name: str) -> int:
     value = decoded.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool):
         raise _invalid_receipt(f"{field_name} must be an integer")
+    return value
+
+
+def _optional_int(value: object, field_name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _invalid_receipt(f"{field_name} must be an integer or null")
     return value
 
 
