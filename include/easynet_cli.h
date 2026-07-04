@@ -531,6 +531,12 @@ int32_t easynet_mission_project_status(
     char **out_status_json
 );
 
+int32_t easynet_mission_project_events(
+    EasynetHandle handle,
+    const char *events_json,
+    char **out_page_json
+);
+
 int32_t easynet_events_build_directory_subscription_invocation(
     EasynetHandle handle,
     const char *request_json,

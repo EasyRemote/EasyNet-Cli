@@ -207,6 +207,204 @@ pub(crate) fn project_status(input: &Value) -> Result<Value, MissionError> {
     Ok(status)
 }
 
+pub(crate) fn project_events(input: &Value) -> Result<Value, MissionError> {
+    let obj = object(input, "MissionEventPageInput")?;
+    let meta_value = obj.get("meta").unwrap_or(input);
+    let meta_obj = object(meta_value, "MissionEventPageMeta").unwrap_or(obj);
+    let mission_id = optional_string(obj, "mission_id")
+        .or_else(|| optional_string(obj, "run_id"))
+        .or_else(|| optional_string(obj, "trace_id"))
+        .or_else(|| optional_string(meta_obj, "trace_id"))
+        .ok_or(MissionError::MissingField("mission_id"))?;
+    validate_mission_id(&mission_id)?;
+
+    let cursor_sequence = optional_i64(obj, "cursor_sequence")
+        .or_else(|| optional_i64(obj, "from_sequence"))
+        .unwrap_or(0);
+    if cursor_sequence < 0 {
+        return Err(MissionError::InvalidField(
+            "cursor_sequence",
+            "must be non-negative".to_string(),
+        ));
+    }
+    let raw_events = event_array(obj)
+        .or_else(|| event_array(meta_obj))
+        .ok_or(MissionError::MissingField("events"))?;
+    let mut events = raw_events
+        .iter()
+        .map(|event| project_mission_event(&mission_id, event))
+        .collect::<Result<Vec<_>, _>>()?;
+    events.sort_by_key(|event| event.sequence);
+    reject_duplicate_event_sequences(&events)?;
+    let next_cursor_sequence = events
+        .last()
+        .map(|event| event.sequence + 1)
+        .unwrap_or(cursor_sequence);
+    let has_more = optional_bool(obj, "has_more").unwrap_or(false);
+    let dropped_count = optional_i64(obj, "dropped_count").unwrap_or(0);
+    if dropped_count < 0 {
+        return Err(MissionError::InvalidField(
+            "dropped_count",
+            "must be non-negative".to_string(),
+        ));
+    }
+    let projected = events
+        .into_iter()
+        .map(MissionEventProjection::into_json)
+        .collect::<Vec<_>>();
+    let mut metadata = Map::new();
+    metadata.insert(
+        "profile".to_string(),
+        Value::String(MISSION_PROFILE.to_string()),
+    );
+    metadata.insert(
+        "carrier_owner".to_string(),
+        Value::String("daemon_sdk".to_string()),
+    );
+    metadata.insert(
+        "event_source".to_string(),
+        Value::String("mission_timeline".to_string()),
+    );
+    copy_optional(obj, &mut metadata, "source");
+    copy_optional(meta_obj, &mut metadata, "trace_id");
+
+    Ok(json!({
+        "profile": MISSION_PROFILE,
+        "kind": "mission_event_page",
+        "mission_id": mission_id,
+        "cursor_sequence": cursor_sequence,
+        "next_cursor_sequence": next_cursor_sequence,
+        "has_more": has_more,
+        "dropped_count": dropped_count,
+        "events": projected,
+        "metadata": metadata,
+    }))
+}
+
+#[derive(Debug)]
+struct MissionEventProjection {
+    mission_id: String,
+    sequence: i64,
+    event_type: String,
+    occurred_unix_ms: i64,
+    terminal: bool,
+    payload: Value,
+    receipt: Value,
+    metadata: Map<String, Value>,
+}
+
+impl MissionEventProjection {
+    fn into_json(self) -> Value {
+        json!({
+            "profile": MISSION_PROFILE,
+            "kind": "mission_event",
+            "mission_id": self.mission_id,
+            "sequence": self.sequence,
+            "event_type": self.event_type,
+            "occurred_unix_ms": self.occurred_unix_ms,
+            "terminal": self.terminal,
+            "payload": self.payload,
+            "receipt": self.receipt,
+            "metadata": self.metadata,
+        })
+    }
+}
+
+fn event_array<'a>(obj: &'a Map<String, Value>) -> Option<&'a Vec<Value>> {
+    obj.get("events")
+        .or_else(|| obj.get("timeline_events"))
+        .or_else(|| obj.get("timeline"))
+        .and_then(Value::as_array)
+}
+
+fn project_mission_event(
+    mission_id: &str,
+    event: &Value,
+) -> Result<MissionEventProjection, MissionError> {
+    let obj = object(event, "MissionEvent")?;
+    let sequence = optional_i64(obj, "sequence").ok_or(MissionError::MissingField("sequence"))?;
+    if sequence < 0 {
+        return Err(MissionError::InvalidField(
+            "sequence",
+            "must be non-negative".to_string(),
+        ));
+    }
+    let event_type = optional_string(obj, "event_type")
+        .or_else(|| optional_string(obj, "type"))
+        .ok_or(MissionError::MissingField("event_type"))?;
+    let occurred_unix_ms = optional_i64(obj, "occurred_unix_ms")
+        .or_else(|| optional_i64(obj, "timestamp_unix_ms"))
+        .unwrap_or(0);
+    if occurred_unix_ms < 0 {
+        return Err(MissionError::InvalidField(
+            "occurred_unix_ms",
+            "must be non-negative".to_string(),
+        ));
+    }
+    let payload = obj.get("payload").cloned().unwrap_or(Value::Null);
+    let receipt = event_receipt(obj, &payload);
+    let terminal = optional_bool(obj, "terminal").unwrap_or_else(|| {
+        matches!(
+            event_type.as_str(),
+            "completed" | "failed" | "cancelled" | "canceled"
+        )
+    });
+    if terminal
+        && !matches!(
+            event_type.as_str(),
+            "completed" | "failed" | "cancelled" | "canceled"
+        )
+    {
+        return Err(MissionError::InvalidField(
+            "terminal",
+            "terminal mission events must use a terminal event_type".to_string(),
+        ));
+    }
+    let mut metadata = Map::new();
+    copy_optional(obj, &mut metadata, "step_id");
+    copy_optional(obj, &mut metadata, "request_id");
+    copy_optional(obj, &mut metadata, "trace_id");
+    copy_optional(obj, &mut metadata, "ability");
+    copy_optional(obj, &mut metadata, "invocation_ura");
+    Ok(MissionEventProjection {
+        mission_id: mission_id.to_string(),
+        sequence,
+        event_type,
+        occurred_unix_ms,
+        terminal,
+        payload,
+        receipt,
+        metadata,
+    })
+}
+
+fn event_receipt(obj: &Map<String, Value>, payload: &Value) -> Value {
+    obj.get("receipt")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .or_else(|| {
+            payload
+                .as_object()
+                .and_then(|payload| payload.get("receipt").filter(|value| !value.is_null()))
+                .cloned()
+        })
+        .unwrap_or(Value::Null)
+}
+
+fn reject_duplicate_event_sequences(events: &[MissionEventProjection]) -> Result<(), MissionError> {
+    let mut previous = None;
+    for event in events {
+        if previous == Some(event.sequence) {
+            return Err(MissionError::InvalidField(
+                "sequence",
+                "duplicate mission event sequence".to_string(),
+            ));
+        }
+        previous = Some(event.sequence);
+    }
+    Ok(())
+}
+
 fn required_mission_id(obj: &Map<String, Value>) -> Result<&str, MissionError> {
     let mission_id = required_string(obj, "mission_id")?;
     validate_mission_id(mission_id)?;
@@ -278,6 +476,10 @@ fn optional_usize(obj: &Map<String, Value>, key: &'static str) -> Option<usize> 
     obj.get(key)
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
+}
+
+fn optional_i64(obj: &Map<String, Value>, key: &'static str) -> Option<i64> {
+    obj.get(key).and_then(Value::as_i64)
 }
 
 fn optional_bool(obj: &Map<String, Value>, key: &'static str) -> Option<bool> {
@@ -559,6 +761,81 @@ mod tests {
             "easynet:///r/example/receipt/child"
         );
         assert_eq!(status["output_refs"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn project_events_orders_by_sequence_and_reports_cursor() {
+        let page = project_events(&json!({
+            "run_id": "2026-07-04_010203_demo",
+            "cursor_sequence": 4,
+            "has_more": false,
+            "events": [
+                {
+                    "sequence": 6,
+                    "timestamp_unix_ms": 1006,
+                    "type": "completed",
+                    "payload": {"reply": "done"},
+                    "receipt": {
+                        "receipt_ura": "easynet:///r/example/receipt/terminal",
+                        "receipt_hash": "bbbb"
+                    }
+                },
+                {
+                    "sequence": 4,
+                    "timestamp_unix_ms": 1004,
+                    "type": "progress",
+                    "payload": {"delta": "hello"},
+                    "step_id": "s1",
+                    "invocation_ura": "easynet:///r/example/invocation/req-1"
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(page["profile"], MISSION_PROFILE);
+        assert_eq!(page["kind"], "mission_event_page");
+        assert_eq!(page["cursor_sequence"], 4);
+        assert_eq!(page["next_cursor_sequence"], 7);
+        assert_eq!(page["events"][0]["sequence"], 4);
+        assert_eq!(page["events"][0]["event_type"], "progress");
+        assert_eq!(
+            page["events"][0]["metadata"]["invocation_ura"],
+            "easynet:///r/example/invocation/req-1"
+        );
+        assert_eq!(page["events"][1]["terminal"], true);
+        assert_eq!(
+            page["events"][1]["receipt"]["receipt_ura"],
+            "easynet:///r/example/receipt/terminal"
+        );
+    }
+
+    #[test]
+    fn project_events_rejects_invalid_sequence() {
+        let err = project_events(&json!({
+            "run_id": "2026-07-04_010203_demo",
+            "events": [{
+                "sequence": -1,
+                "type": "progress"
+            }]
+        }))
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("sequence"));
+    }
+
+    #[test]
+    fn project_events_rejects_terminal_non_terminal_type() {
+        let err = project_events(&json!({
+            "run_id": "2026-07-04_010203_demo",
+            "events": [{
+                "sequence": 0,
+                "type": "progress",
+                "terminal": true
+            }]
+        }))
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("terminal"));
     }
 
     #[test]

@@ -6,6 +6,7 @@ from easynet_sdk.mission import (
     MissionCancelRequest,
     MissionCarrierBase,
     MissionClient,
+    MissionEventListRequest,
     MissionRunFileRequest,
     MissionRunRequest,
     MissionTrackRequest,
@@ -84,6 +85,43 @@ MISSION_STATUS_JSON = b"""{
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }"""
 
+MISSION_EVENT_PAGE_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 4,
+  "next_cursor_sequence": 7,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 4,
+      "event_type": "progress",
+      "occurred_unix_ms": 1004,
+      "terminal": false,
+      "payload": {"delta": "hello"},
+      "receipt": {},
+      "metadata": {"step_id": "s1"}
+    },
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 6,
+      "event_type": "completed",
+      "occurred_unix_ms": 1006,
+      "terminal": true,
+      "payload": {"reply": "done"},
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
 
 class MemoryMissionTransport:
     def __init__(self) -> None:
@@ -92,6 +130,7 @@ class MemoryMissionTransport:
         self.track_invocation_json = MISSION_TRACK_INVOCATION_JSON
         self.cancel_invocation_json = MISSION_CANCEL_INVOCATION_JSON
         self.status_json = MISSION_STATUS_JSON
+        self.events_json = MISSION_EVENT_PAGE_JSON
         self.seen_request: dict[str, object] | None = None
 
     def _remember(self, request_json: bytes) -> None:
@@ -128,6 +167,10 @@ class MemoryMissionTransport:
     def cancel(self, request_json: bytes) -> bytes:
         self._remember(request_json)
         return self.status_json
+
+    def events(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.events_json
 
 
 def base() -> MissionCarrierBase:
@@ -196,6 +239,28 @@ class MissionTests(unittest.TestCase):
         self.assertEqual(status.child_receipts[0].receipt_ura, "easynet:///r/example/receipt/child")
         self.assertEqual(status.output_refs[0].kind, "run_dir")
 
+    def test_events_projection(self) -> None:
+        transport = MemoryMissionTransport()
+        client = MissionClient(transport)
+
+        page = client.events(
+            MissionEventListRequest(
+                base=base(),
+                mission_id="2026-07-04_010203_weather",
+                cursor_sequence=4,
+                limit=100,
+            )
+        )
+
+        self.assertEqual(page.kind, "mission_event_page")
+        self.assertEqual(page.next_cursor_sequence, 7)
+        self.assertEqual(len(page.events), 2)
+        self.assertEqual(page.events[0].event_type, "progress")
+        self.assertTrue(page.events[1].terminal)
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["mission_id"], "2026-07-04_010203_weather")
+        self.assertEqual(transport.seen_request["cursor_sequence"], 4)
+
     def test_rejects_incomplete_carrier_and_path_like_mission_id(self) -> None:
         client = MissionClient(MemoryMissionTransport())
         bad_base = MissionCarrierBase(
@@ -211,6 +276,15 @@ class MissionTests(unittest.TestCase):
 
         with self.assertRaises(SDKError):
             client.build_track_invocation(MissionTrackRequest(base=base(), mission_id="/tmp/run"))
+
+        with self.assertRaises(SDKError):
+            client.events(
+                MissionEventListRequest(
+                    base=base(),
+                    mission_id="2026-07-04_010203_weather",
+                    cursor_sequence=-1,
+                )
+            )
 
 
 if __name__ == "__main__":

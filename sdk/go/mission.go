@@ -47,6 +47,14 @@ type MissionCancelRequest struct {
 	MissionID string `json:"mission_id"`
 }
 
+// MissionEventListRequest requests mission timeline events from daemon-owned storage.
+type MissionEventListRequest struct {
+	MissionCarrierBase
+	MissionID      string `json:"mission_id"`
+	CursorSequence int64  `json:"cursor_sequence"`
+	Limit          int    `json:"limit,omitempty"`
+}
+
 type MissionID string
 
 // MissionRun is a Mission run projection. The status carries the durable state.
@@ -102,6 +110,33 @@ type MissionOutputRef struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+// MissionEvent is one daemon Mission timeline event projection.
+type MissionEvent struct {
+	Profile        string         `json:"profile"`
+	Kind           string         `json:"kind"`
+	MissionID      string         `json:"mission_id"`
+	Sequence       int64          `json:"sequence"`
+	EventType      string         `json:"event_type"`
+	OccurredUnixMS int64          `json:"occurred_unix_ms"`
+	Terminal       bool           `json:"terminal"`
+	Payload        any            `json:"payload"`
+	Receipt        map[string]any `json:"receipt"`
+	Metadata       map[string]any `json:"metadata"`
+}
+
+// MissionEventPage is a replay page over daemon Mission timeline events.
+type MissionEventPage struct {
+	Profile            string         `json:"profile"`
+	Kind               string         `json:"kind"`
+	MissionID          string         `json:"mission_id"`
+	CursorSequence     int64          `json:"cursor_sequence"`
+	NextCursorSequence int64          `json:"next_cursor_sequence"`
+	HasMore            bool           `json:"has_more"`
+	DroppedCount       int64          `json:"dropped_count"`
+	Events             []MissionEvent `json:"events"`
+	Metadata           map[string]any `json:"metadata"`
+}
+
 // MissionTransport supplies daemon Mission operations behind the facade.
 type MissionTransport interface {
 	BuildRunEALInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -112,6 +147,7 @@ type MissionTransport interface {
 	RunFile(ctx context.Context, requestJSON []byte) ([]byte, error)
 	Track(ctx context.Context, requestJSON []byte) ([]byte, error)
 	Cancel(ctx context.Context, requestJSON []byte) ([]byte, error)
+	Events(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 // MissionTransportFunc adapts functions into a MissionTransport.
@@ -124,6 +160,7 @@ type MissionTransportFunc struct {
 	RunFileFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	TrackFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CancelFunc                 func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	EventsFunc                 func(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 func (f MissionTransportFunc) BuildRunEALInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -182,6 +219,13 @@ func (f MissionTransportFunc) Cancel(ctx context.Context, requestJSON []byte) ([
 	return f.CancelFunc(ctx, requestJSON)
 }
 
+func (f MissionTransportFunc) Events(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.EventsFunc == nil {
+		return nil, invalidRuntimeClient("mission events transport function is required")
+	}
+	return f.EventsFunc(ctx, requestJSON)
+}
+
 // MissionClient is the Mission profile facade.
 type MissionClient struct {
 	transport MissionTransport
@@ -227,6 +271,21 @@ func (c *MissionClient) Track(ctx context.Context, req MissionTrackRequest) (Mis
 
 func (c *MissionClient) Cancel(ctx context.Context, req MissionCancelRequest) (MissionCancelResult, error) {
 	return c.statusOperation(ctx, req, validateMissionCancelRequest, c.transport.Cancel, "mission cancel failed")
+}
+
+func (c *MissionClient) Events(ctx context.Context, req MissionEventListRequest) (MissionEventPage, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return MissionEventPage{}, err
+	}
+	requestJSON, err := marshalMissionRequest(req, validateMissionEventListRequest)
+	if err != nil {
+		return MissionEventPage{}, err
+	}
+	raw, err := c.transport.Events(ctx, requestJSON)
+	if err != nil {
+		return MissionEventPage{}, wrapMissionTransportError("mission events failed", err)
+	}
+	return NewMissionEventPageFromJSON(raw)
 }
 
 func (c *MissionClient) buildInvocation(ctx context.Context, req any, validate func(any) error, fn func(context.Context, []byte) ([]byte, error), label string) (InvocationDraft, error) {
@@ -332,6 +391,59 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 	}, nil
 }
 
+func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {
+	var dto struct {
+		Profile            string         `json:"profile"`
+		Kind               string         `json:"kind"`
+		MissionID          string         `json:"mission_id"`
+		CursorSequence     int64          `json:"cursor_sequence"`
+		NextCursorSequence int64          `json:"next_cursor_sequence"`
+		HasMore            bool           `json:"has_more"`
+		DroppedCount       int64          `json:"dropped_count"`
+		Events             []MissionEvent `json:"events"`
+		Metadata           map[string]any `json:"metadata"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return MissionEventPage{}, invalidRuntimePayload(fmt.Sprintf("decode mission event page JSON: %v", err), err)
+	}
+	if dto.Profile != missionProfile || dto.Kind != "mission_event_page" || dto.MissionID == "" ||
+		dto.CursorSequence < 0 || dto.NextCursorSequence < dto.CursorSequence || dto.DroppedCount < 0 ||
+		dto.Events == nil || dto.Metadata == nil {
+		return MissionEventPage{}, invalidRuntimePayload("invalid mission event page projection", nil)
+	}
+	var previousSequence int64
+	hasPrevious := false
+	for index := range dto.Events {
+		event := &dto.Events[index]
+		if event.Profile != missionProfile || event.Kind != "mission_event" || event.MissionID != dto.MissionID ||
+			event.Sequence < 0 || event.EventType == "" || event.OccurredUnixMS < 0 || event.Metadata == nil {
+			return MissionEventPage{}, invalidRuntimePayload("invalid mission event projection", nil)
+		}
+		if hasPrevious && event.Sequence <= previousSequence {
+			return MissionEventPage{}, invalidRuntimePayload("mission events must be strictly ordered by sequence", nil)
+		}
+		if event.Terminal && !missionEventTypeIsTerminal(event.EventType) {
+			return MissionEventPage{}, invalidRuntimePayload("terminal mission event has non-terminal event_type", nil)
+		}
+		previousSequence = event.Sequence
+		hasPrevious = true
+		if event.Receipt == nil {
+			event.Receipt = map[string]any{}
+		}
+	}
+	return MissionEventPage{
+		Profile:            dto.Profile,
+		Kind:               dto.Kind,
+		MissionID:          dto.MissionID,
+		CursorSequence:     dto.CursorSequence,
+		NextCursorSequence: dto.NextCursorSequence,
+		HasMore:            dto.HasMore,
+		DroppedCount:       dto.DroppedCount,
+		Events:             dto.Events,
+		Metadata:           dto.Metadata,
+	}, nil
+}
+
 func marshalMissionRequest(req any, validate func(any) error) ([]byte, error) {
 	if err := validate(req); err != nil {
 		return nil, err
@@ -381,6 +493,26 @@ func validateMissionCancelRequest(req any) error {
 	return validateMissionID(value.MissionID)
 }
 
+func validateMissionEventListRequest(req any) error {
+	value := req.(MissionEventListRequest)
+	if err := validateMissionCarrierBase(value.MissionCarrierBase); err != nil {
+		return err
+	}
+	if err := validateMissionID(value.MissionID); err != nil {
+		return err
+	}
+	if value.CursorSequence < 0 {
+		return invalidRuntimePayload("mission event cursor_sequence must be non-negative", nil)
+	}
+	if value.Limit < 0 {
+		return invalidRuntimePayload("mission event limit must be non-negative", nil)
+	}
+	if value.Limit > 1000 {
+		return invalidRuntimePayload("mission event limit exceeds bounds", nil)
+	}
+	return nil
+}
+
 func validateMissionCarrierBase(base MissionCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
@@ -397,6 +529,15 @@ func validateMissionID(missionID string) error {
 		return invalidRuntimePayload("mission_id must not be path-like", nil)
 	}
 	return nil
+}
+
+func missionEventTypeIsTerminal(eventType string) bool {
+	switch eventType {
+	case "completed", "failed", "cancelled", "canceled":
+		return true
+	default:
+		return false
+	}
 }
 
 func wrapMissionTransportError(message string, cause error) error {

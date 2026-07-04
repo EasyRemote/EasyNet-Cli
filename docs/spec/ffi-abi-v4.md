@@ -566,6 +566,12 @@ int32_t easynet_mission_project_status(
     const char* status_json,
     char** out_status_json
 );
+
+int32_t easynet_mission_project_events(
+    EasynetHandle handle,
+    const char* events_json,
+    char** out_page_json
+);
 ```
 
 Mission carrier functions are scoped to a live `EasynetHandle`, matching the
@@ -585,6 +591,10 @@ child invocation refs, child receipt refs, and output artifact refs. It never
 fabricates receipt anchors for receipt-less steps. Bindings submit returned
 Invocation carriers through Runtime Core; these helpers do not execute EAL,
 start a mission runtime, or replace daemon Mission/EAL semantics.
+`easynet_mission_project_events` normalizes daemon mission timeline replay JSON
+into `MissionEventPage` with explicit sequence cursors and terminal event
+state. It does not read mission run directories, infer cursors from timestamps
+or array positions, or create a second event bus.
 
 ### 2.13 Events Directory Stream
 

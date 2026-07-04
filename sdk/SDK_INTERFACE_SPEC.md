@@ -99,11 +99,14 @@ Surface carrier/projection may build complete Invocation carriers for daemon
 page records, and build public page refs from explicit daemon page facts. It
 must not render HTML, own browser auth, call backend product routes, or open
 page folders directly.
-Mission carrier/status projection may build complete Invocation carriers for
-daemon `mission.run`, `mission.track`, and `mission.cancel`, read explicit
-local EAL source files for `RunFile`, and normalize daemon mission results into
-`MissionStatus`. It must not execute EAL, create a second mission runtime, or
-fabricate child receipt refs for receipt-less steps.
+Mission carrier/status/event projection may build complete Invocation carriers
+for daemon `mission.run`, `mission.track`, and `mission.cancel`, read explicit
+local EAL source files for `RunFile`, normalize daemon mission results into
+`MissionStatus`, and project daemon mission timeline replay into
+`MissionEventPage` with explicit sequence cursors. It must not execute EAL,
+create a second mission runtime, read mission run directories from language
+facades, infer cursors from timestamps or array positions, or fabricate child
+receipt refs for receipt-less steps.
 Events directory-stream projection may build complete Invocation carriers for
 daemon `federation.subscribe_directory_v2` and normalize daemon `DirectoryEvent`
 frames into `EventFrame` DTOs with explicit cursor, resume token,

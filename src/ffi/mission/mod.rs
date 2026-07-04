@@ -32,7 +32,7 @@ use std::os::raw::c_char;
 
 use crate::daemon::mission_contract::{
     build_cancel_invocation, build_run_eal_invocation, build_run_file_invocation,
-    build_track_invocation, project_status, MissionError,
+    build_track_invocation, project_events, project_status, MissionError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -147,6 +147,28 @@ pub unsafe extern "C" fn easynet_mission_project_status(
         "out_status_json",
         "status_json",
         project_status,
+    )
+}
+
+/// Project daemon Mission timeline JSON into the SDK MissionEventPage DTO.
+///
+/// # Safety
+/// `events_json` must be a valid UTF-8 C string and `out_page_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_mission_project_events(
+    handle: EasynetHandle,
+    events_json: *const c_char,
+    out_page_json: *mut *mut c_char,
+) -> i32 {
+    project_mission_json(
+        handle,
+        events_json,
+        out_page_json,
+        "easynet_mission_project_events",
+        "out_page_json",
+        "events_json",
+        project_events,
     )
 }
 
@@ -294,6 +316,35 @@ mod tests {
             value["child_receipts"][0]["receipt_ura"],
             "easynet:///r/example/receipt/child"
         );
+        release(handle);
+    }
+
+    #[test]
+    fn mission_project_events_projects_timeline_page() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "run_id": "2026-07-04_010203_demo",
+                "cursor_sequence": 0,
+                "events": [{
+                    "sequence": 0,
+                    "timestamp_unix_ms": 42,
+                    "type": "completed",
+                    "payload": {"ok": true}
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe { easynet_mission_project_events(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "mission_event_page");
+        assert_eq!(value["next_cursor_sequence"], 1);
+        assert_eq!(value["events"][0]["terminal"], true);
         release(handle);
     }
 

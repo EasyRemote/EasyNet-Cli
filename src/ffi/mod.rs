@@ -52,8 +52,9 @@
 //   binding/frame/hash DTO projections.
 // - `easynet_publication_build_resource_ref/validate_package` and
 //   publication Invocation carrier builders for daemon system abilities.
-// - `easynet_mission_build_*_invocation` and
-//   `easynet_mission_project_status`: Mission/EAL carrier and status
+// - `easynet_mission_build_*_invocation`,
+//   `easynet_mission_project_status`, and
+//   `easynet_mission_project_events`: Mission/EAL carrier, status, and event
 //   projection helpers.
 // - `easynet_events_build_directory_subscription_invocation`,
 //   `easynet_events_project_directory_event`,

@@ -12,6 +12,7 @@ type memoryMissionTransport struct {
 	trackInvocationJSON   string
 	cancelInvocationJSON  string
 	statusJSON            string
+	eventsJSON            string
 	seenRequest           map[string]any
 }
 
@@ -59,6 +60,11 @@ func (m *memoryMissionTransport) Cancel(ctx context.Context, requestJSON []byte)
 	return []byte(m.statusJSON), nil
 }
 
+func (m *memoryMissionTransport) Events(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember(requestJSON)
+	return []byte(m.eventsJSON), nil
+}
+
 func newMemoryMissionTransport() *memoryMissionTransport {
 	return &memoryMissionTransport{
 		runInvocationJSON:     missionRunInvocationFixtureJSON,
@@ -66,6 +72,7 @@ func newMemoryMissionTransport() *memoryMissionTransport {
 		trackInvocationJSON:   missionTrackInvocationFixtureJSON,
 		cancelInvocationJSON:  missionCancelInvocationFixtureJSON,
 		statusJSON:            missionStatusFixtureJSON,
+		eventsJSON:            missionEventPageFixtureJSON,
 	}
 }
 
@@ -151,6 +158,34 @@ func TestMissionRunFileAndStatusProjection(t *testing.T) {
 	}
 }
 
+func TestMissionEventsProjection(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+
+	page, err := client.Events(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+		CursorSequence:     4,
+		Limit:              100,
+	})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+
+	if page.Kind != "mission_event_page" || page.NextCursorSequence != 7 || len(page.Events) != 2 {
+		t.Fatalf("unexpected event page: %#v", page)
+	}
+	if page.Events[0].Sequence != 4 || page.Events[0].EventType != "progress" || page.Events[1].Terminal != true {
+		t.Fatalf("unexpected events: %#v", page.Events)
+	}
+	if transport.seenRequest["mission_id"] != "2026-07-04_010203_weather" || transport.seenRequest["cursor_sequence"] != float64(4) {
+		t.Fatalf("events request not forwarded: %#v", transport.seenRequest)
+	}
+}
+
 func TestMissionRejectsIncompleteCarrierAndPathLikeMissionID(t *testing.T) {
 	client, err := NewMissionClient(newMemoryMissionTransport())
 	if err != nil {
@@ -163,6 +198,9 @@ func TestMissionRejectsIncompleteCarrierAndPathLikeMissionID(t *testing.T) {
 	}
 	if _, err := client.BuildTrackInvocation(context.Background(), MissionTrackRequest{MissionCarrierBase: baseMissionCarrier(), MissionID: "/tmp/run"}); err == nil {
 		t.Fatalf("path-like mission id accepted")
+	}
+	if _, err := client.Events(context.Background(), MissionEventListRequest{MissionCarrierBase: baseMissionCarrier(), MissionID: "2026-07-04_010203_weather", CursorSequence: -1}); err == nil {
+		t.Fatalf("negative mission event cursor accepted")
 	}
 }
 
@@ -235,5 +273,42 @@ const missionStatusFixtureJSON = `{
   ],
   "child_receipts": [{"step_id": "s1", "invocation_ura": "easynet:///r/example/invocation/req-1", "receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb"}],
   "output_refs": [{"kind": "run_dir", "path": "/tmp/easynet/missions/runs/2026-07-04_010203_weather"}],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventPageFixtureJSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 4,
+  "next_cursor_sequence": 7,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 4,
+      "event_type": "progress",
+      "occurred_unix_ms": 1004,
+      "terminal": false,
+      "payload": {"delta": "hello"},
+      "receipt": {},
+      "metadata": {"step_id": "s1"}
+    },
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 6,
+      "event_type": "completed",
+      "occurred_unix_ms": 1006,
+      "terminal": true,
+      "payload": {"reply": "done"},
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    }
+  ],
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }`

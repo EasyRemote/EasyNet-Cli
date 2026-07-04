@@ -128,10 +128,10 @@ method spelling.
   cleanup execution, local canonical JSON/hash implementation, EasyRemote host
   process integration, and behavior-executing conformance remain incomplete.
 - Go Mission facade exposes `MissionClient` run/run-file/track/cancel
-  Invocation carrier builders plus daemon `MissionStatus` projection seams;
-  daemon mission execution carriers, live mission events, child Invocation
-  behavior conformance, scheduler/retry policy, and backend automation cutover
-  remain incomplete.
+  Invocation carrier builders plus daemon `MissionStatus` and
+  `MissionEventPage` projection seams; daemon mission execution carriers,
+  concrete live-tail adapters, child Invocation behavior conformance,
+  scheduler/retry policy, and backend automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh
   and session-list Invocation carrier builders plus `GatewayStatus`,
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
@@ -196,10 +196,10 @@ method spelling.
   cleanup execution, local canonical JSON/hash implementation, EasyRemote warm
   host integration, and behavior-executing conformance remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
-  Invocation carrier builders plus daemon `MissionStatus` projection seams;
-  daemon mission execution carriers, live mission events, child Invocation
-  behavior conformance, EasyRemote Pipeline extraction, and scheduler/retry
-  policy remain incomplete.
+  Invocation carrier builders plus daemon `MissionStatus` and
+  `MissionEventPage` projection seams; daemon mission execution carriers,
+  concrete live-tail adapters, child Invocation behavior conformance,
+  EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders plus
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device

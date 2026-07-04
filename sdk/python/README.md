@@ -27,7 +27,8 @@ package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, and published-ability read-model seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
 output-hash folding seams. MissionClient exposes run/run-file/track/cancel
-Invocation carrier builders and MissionStatus projection seams. AdminClient
+Invocation carrier builders plus MissionStatus and MissionEventPage projection
+seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing token,
 device credential, credential verification, and typed device-session projection

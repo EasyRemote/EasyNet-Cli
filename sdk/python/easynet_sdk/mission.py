@@ -99,6 +99,29 @@ class MissionCancelRequest:
         return _json_bytes(value)
 
 
+@dataclass(frozen=True)
+class MissionEventListRequest:
+    base: MissionCarrierBase
+    mission_id: str
+    cursor_sequence: int = 0
+    limit: int = 0
+
+    def to_json_bytes(self) -> bytes:
+        _validate_mission_id(self.mission_id)
+        if self.cursor_sequence < 0:
+            raise _invalid_mission("mission event cursor_sequence must be non-negative")
+        if self.limit < 0:
+            raise _invalid_mission("mission event limit must be non-negative")
+        if self.limit > 1000:
+            raise _invalid_mission("mission event limit exceeds bounds")
+        value = self.base.to_json_dict()
+        value["mission_id"] = self.mission_id
+        value["cursor_sequence"] = self.cursor_sequence
+        if self.limit:
+            value["limit"] = self.limit
+        return _json_bytes(value)
+
+
 MissionID = str
 
 
@@ -130,6 +153,66 @@ class MissionOutputRef:
     kind: str
     path: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MissionEvent:
+    profile: str
+    kind: str
+    mission_id: str
+    sequence: int
+    event_type: str
+    occurred_unix_ms: int
+    terminal: bool
+    payload: Any
+    receipt: Mapping[str, object]
+    metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class MissionEventPage:
+    profile: str
+    kind: str
+    mission_id: str
+    cursor_sequence: int
+    next_cursor_sequence: int
+    has_more: bool
+    dropped_count: int
+    events: tuple[MissionEvent, ...]
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "MissionEventPage":
+        decoded = _json_object(raw, "mission event page")
+        if decoded.get("profile") != _PROFILE or decoded.get("kind") != "mission_event_page":
+            raise _invalid_mission("invalid mission event page projection")
+        cursor_sequence = _required_non_negative_int(decoded, "cursor_sequence")
+        next_cursor_sequence = _required_non_negative_int(decoded, "next_cursor_sequence")
+        if next_cursor_sequence < cursor_sequence:
+            raise _invalid_mission("next_cursor_sequence must not go backwards")
+        raw_events = decoded.get("events")
+        if not isinstance(raw_events, list):
+            raise _invalid_mission("events must be an array")
+        events = tuple(
+            _mission_event(item, _required_string(decoded, "mission_id"))
+            for item in raw_events
+        )
+        previous: Optional[int] = None
+        for event in events:
+            if previous is not None and event.sequence <= previous:
+                raise _invalid_mission("mission events must be strictly ordered by sequence")
+            previous = event.sequence
+        return cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            mission_id=_required_string(decoded, "mission_id"),
+            cursor_sequence=cursor_sequence,
+            next_cursor_sequence=next_cursor_sequence,
+            has_more=_required_bool(decoded, "has_more"),
+            dropped_count=_required_non_negative_int(decoded, "dropped_count"),
+            events=events,
+            metadata=_required_mapping(decoded, "metadata"),
+        )
 
 
 @dataclass(frozen=True)
@@ -228,6 +311,9 @@ class MissionTransport(Protocol):
     def cancel(self, request_json: bytes) -> bytes:
         ...
 
+    def events(self, request_json: bytes) -> bytes:
+        ...
+
 
 @dataclass(frozen=True)
 class MissionClient:
@@ -287,6 +373,15 @@ class MissionClient:
 
     def cancel(self, request: MissionCancelRequest) -> MissionStatus:
         return self._status(request.to_json_bytes(), self.transport.cancel, "mission cancel failed")
+
+    def events(self, request: MissionEventListRequest) -> MissionEventPage:
+        try:
+            raw = self.transport.events(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("mission events failed", exc) from exc
+        return MissionEventPage.from_json(raw)
 
     def _invocation(
         self, request_json: bytes, fn: Callable[[bytes], bytes], label: str
@@ -367,6 +462,36 @@ def _output_ref(value: object) -> MissionOutputRef:
         path=_optional_string(value.get("path"), "path") or "",
         metadata=_optional_mapping(value.get("metadata"), "metadata") or {},
     )
+
+
+def _mission_event(value: object, mission_id: str) -> MissionEvent:
+    if not isinstance(value, dict):
+        raise _invalid_mission("mission event must be an object")
+    event_mission_id = _required_string(value, "mission_id")
+    if event_mission_id != mission_id:
+        raise _invalid_mission("mission event mission_id must match page")
+    if value.get("profile") != _PROFILE or value.get("kind") != "mission_event":
+        raise _invalid_mission("invalid mission event projection")
+    event_type = _required_string(value, "event_type")
+    terminal = _required_bool(value, "terminal")
+    if terminal and not _mission_event_type_is_terminal(event_type):
+        raise _invalid_mission("terminal mission event has non-terminal event_type")
+    return MissionEvent(
+        profile=_required_string(value, "profile"),
+        kind=_required_string(value, "kind"),
+        mission_id=event_mission_id,
+        sequence=_required_non_negative_int(value, "sequence"),
+        event_type=event_type,
+        occurred_unix_ms=_required_non_negative_int(value, "occurred_unix_ms"),
+        terminal=terminal,
+        payload=value.get("payload"),
+        receipt=_optional_mapping(value.get("receipt"), "receipt") or {},
+        metadata=_required_mapping(value, "metadata"),
+    )
+
+
+def _mission_event_type_is_terminal(event_type: str) -> bool:
+    return event_type in {"completed", "failed", "cancelled", "canceled"}
 
 
 def _optional_sdk_error(value: object, field_name: str) -> Optional[SDKError]:
