@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
@@ -12,6 +14,8 @@ from .invocation import InvocationDraft
 
 
 _PROFILE = "mission"
+_EASYREMOTE_FAILURE_POLICIES = frozenset({"abort", "skip", "retry", "continue"})
+_EASYREMOTE_IDENTIFIER = re.compile(r"[^A-Za-z0-9_]")
 
 
 @dataclass(frozen=True)
@@ -455,6 +459,238 @@ class EasyRemoteMissionEventTailer:
         self.close()
 
 
+@dataclass(frozen=True)
+class EasyRemotePipelineStepOutput:
+    """A dataflow reference to one Pipeline step result."""
+
+    alias: str
+
+    def render(self) -> str:
+        return f"{self.alias}.output"
+
+
+@dataclass(frozen=True)
+class EasyRemotePipelineStep:
+    """One SDK-owned EasyRemote Pipeline step plan."""
+
+    alias: str
+    ref: str
+    args: Mapping[str, object]
+    on: str | None = None
+    timeout: int | None = None
+    retries: int | None = None
+    on_failure: str | None = None
+    optional: bool = False
+
+    @property
+    def output(self) -> EasyRemotePipelineStepOutput:
+        return EasyRemotePipelineStepOutput(self.alias)
+
+    def render(self) -> str:
+        parts = [f"let {self.alias} = call {_easyremote_eal_string(self.ref)}"]
+        if self.on:
+            parts.append(f"on {_easyremote_eal_string(self.on)}")
+        if self.args:
+            fields = ", ".join(
+                f"{name} = {_easyremote_eal_field(value)}"
+                for name, value in self.args.items()
+            )
+            parts.append(f"with {{ {fields} }}")
+        if self.timeout is not None:
+            parts.append(f"timeout {self.timeout}")
+        if self.retries is not None:
+            parts.append(f"retries {self.retries}")
+        if self.on_failure is not None:
+            parts.append(f"on_failure {self.on_failure}")
+        if self.optional:
+            parts.append("optional")
+        return " ".join(parts)
+
+
+@dataclass(frozen=True)
+class EasyRemotePipelineChildInvocationIntent:
+    """SDK projection of the child Invocation a Pipeline step expects."""
+
+    step_id: str
+    ability: str
+    on: str | None = None
+    optional: bool = False
+    on_failure: str | None = None
+
+
+@dataclass(frozen=True)
+class EasyRemotePipelineChildInvocationConformance:
+    """Result of matching daemon MissionStatus child facts to a Pipeline plan."""
+
+    mission_id: str
+    expected_steps: tuple[str, ...]
+    observed_steps: tuple[str, ...]
+    missing_steps: tuple[str, ...]
+    unexpected_steps: tuple[str, ...]
+    ability_mismatched_steps: tuple[str, ...]
+    receipt_backed_steps: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        return (
+            not self.missing_steps
+            and not self.unexpected_steps
+            and not self.ability_mismatched_steps
+        )
+
+    def require_passed(self) -> None:
+        if self.passed:
+            return
+        raise SDKError(
+            code=ErrorCode.PROTOCOL,
+            stage="mission",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message="Pipeline child Invocation facts do not match planned steps",
+            details={
+                "reason": "pipeline_child_invocation_mismatch",
+                "mission_id": self.mission_id,
+                "missing_steps": list(self.missing_steps),
+                "unexpected_steps": list(self.unexpected_steps),
+                "ability_mismatched_steps": list(self.ability_mismatched_steps),
+            },
+        )
+
+
+class EasyRemotePipelinePlan:
+    """SDK-owned EasyRemote Pipeline planning and EAL rendering facade."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        created_by: str = "",
+        version: str = "",
+    ) -> None:
+        self.name = _required_clean_mission_string(name, "pipeline name")
+        self.created_by = created_by.strip()
+        self.version = version.strip()
+        self._steps: list[EasyRemotePipelineStep] = []
+        self._aliases: set[str] = set()
+
+    @property
+    def steps(self) -> tuple[EasyRemotePipelineStep, ...]:
+        return tuple(self._steps)
+
+    def step(
+        self,
+        ref: str,
+        *,
+        on: str | None = None,
+        timeout: float | None = None,
+        retries: int | None = None,
+        on_failure: str | None = None,
+        optional: bool = False,
+        args: Mapping[str, object] | None = None,
+    ) -> EasyRemotePipelineStep:
+        target_ref = _required_clean_mission_string(ref, "pipeline step target")
+        if on_failure is not None and on_failure not in _EASYREMOTE_FAILURE_POLICIES:
+            raise _invalid_pipeline(
+                "on_failure must be one of "
+                f"{sorted(_EASYREMOTE_FAILURE_POLICIES)}, got {on_failure!r}",
+                "invalid_failure_policy",
+            )
+        step_args = dict(args or {})
+        for name, value in step_args.items():
+            _easyremote_validate_pipeline_field(name, value, self._aliases)
+        step = EasyRemotePipelineStep(
+            alias=self._fresh_alias(target_ref),
+            ref=target_ref,
+            args=step_args,
+            on=on.strip() if isinstance(on, str) and on.strip() else None,
+            timeout=_easyremote_timeout_seconds(timeout),
+            retries=_easyremote_retries_count(retries),
+            on_failure=on_failure,
+            optional=optional,
+        )
+        self._steps.append(step)
+        self._aliases.add(step.alias)
+        return step
+
+    def to_eal(self) -> str:
+        if not self._steps:
+            raise _invalid_pipeline(f"pipeline '{self.name}' has no steps", "empty_pipeline")
+        lines = []
+        if self.version:
+            lines.append(f"// generated by easyremote {self.version}")
+        else:
+            lines.append("// generated by easyremote")
+        if self.created_by:
+            lines.append(f"// created_by: {self.created_by}")
+        lines.append(f"mission {_easyremote_eal_string(self.name)} {{")
+        lines.extend(f"  {step.render()}" for step in self._steps)
+        lines.append("}")
+        return "\n".join(lines) + "\n"
+
+    def child_invocation_intents(
+        self,
+    ) -> tuple[EasyRemotePipelineChildInvocationIntent, ...]:
+        return tuple(
+            EasyRemotePipelineChildInvocationIntent(
+                step_id=step.alias,
+                ability=step.ref,
+                on=step.on,
+                optional=step.optional,
+                on_failure=step.on_failure,
+            )
+            for step in self._steps
+        )
+
+    def validate_child_invocations(
+        self, status: MissionStatus
+    ) -> EasyRemotePipelineChildInvocationConformance:
+        intents = self.child_invocation_intents()
+        expected_by_step = {intent.step_id: intent for intent in intents}
+        expected = set(expected_by_step)
+        observed_by_step = {
+            child.step_id: child
+            for child in status.child_invocations
+            if child.step_id is not None
+        }
+        observed = {
+            child.step_id
+            for child in status.child_invocations
+            if child.step_id is not None
+        }
+        ability_mismatched = {
+            step_id
+            for step_id, intent in expected_by_step.items()
+            if step_id in observed_by_step
+            and observed_by_step[step_id].ability is not None
+            and observed_by_step[step_id].ability != intent.ability
+        }
+        receipt_backed = {
+            child.step_id
+            for child in status.child_invocations
+            if child.step_id is not None and child.receipt is not None
+        }
+        conformance = EasyRemotePipelineChildInvocationConformance(
+            mission_id=status.mission_id,
+            expected_steps=tuple(sorted(expected)),
+            observed_steps=tuple(sorted(observed)),
+            missing_steps=tuple(sorted(expected - observed)),
+            unexpected_steps=tuple(sorted(observed - expected)),
+            ability_mismatched_steps=tuple(sorted(ability_mismatched)),
+            receipt_backed_steps=tuple(sorted(receipt_backed & expected)),
+        )
+        conformance.require_passed()
+        return conformance
+
+    def _fresh_alias(self, ref: str) -> str:
+        base = _EASYREMOTE_IDENTIFIER.sub("_", ref.rsplit(".", 1)[-1]) or "step"
+        alias = base
+        counter = 2
+        while alias in self._aliases:
+            alias = f"{base}_{counter}"
+            counter += 1
+        return alias
+
+
 class EasyRemoteMissionAdapter:
     """SDK-owned Mission cutover adapter for EasyRemote-like callers."""
 
@@ -893,6 +1129,99 @@ def _validated_easyremote_run_id(value: str) -> str:
     return run_id
 
 
+def _required_clean_mission_string(value: str, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise _invalid_pipeline(
+            f"{field_name} must be a string, got {type(value).__name__}",
+            f"invalid_{field_name.replace(' ', '_')}",
+        )
+    trimmed = value.strip()
+    if not trimmed:
+        raise _invalid_pipeline(
+            f"{field_name} must not be empty",
+            "empty_name" if field_name == "pipeline name" else "invalid_step_target",
+        )
+    return trimmed
+
+
+def _easyremote_validate_pipeline_field(
+    name: str,
+    value: object,
+    aliases: set[str],
+) -> None:
+    _required_clean_mission_string(name, "pipeline field name")
+    if isinstance(value, EasyRemotePipelineStepOutput):
+        if value.alias not in aliases:
+            raise _invalid_pipeline(
+                f"argument '{name}' references step '{value.alias}', which is "
+                "not part of this pipeline",
+                "foreign_step_output",
+            )
+        return
+    if isinstance(value, bool | str | int):
+        return
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return
+        raise _invalid_pipeline(
+            f"argument '{name}' is non-finite ({value!r}); EAL numbers must be finite",
+            "non_finite_field",
+        )
+    raise _invalid_pipeline(
+        f"argument '{name}' is {type(value).__name__}; EAL field values are "
+        "scalars or step outputs; pass structured data through an ability that "
+        "returns it, then reference its .output",
+        "non_scalar_field",
+    )
+
+
+def _easyremote_timeout_seconds(timeout: float | None) -> int | None:
+    if timeout is None:
+        return None
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise _invalid_pipeline(
+            f"timeout must be a positive finite number of seconds, got {timeout!r}",
+            "invalid_timeout",
+        )
+    return max(1, math.ceil(timeout))
+
+
+def _easyremote_retries_count(retries: int | None) -> int | None:
+    if retries is None:
+        return None
+    if not isinstance(retries, int) or isinstance(retries, bool) or retries < 0:
+        raise _invalid_pipeline(
+            f"retries must be a non-negative integer, got {retries!r}",
+            "invalid_retries",
+        )
+    return retries
+
+
+def _easyremote_eal_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _easyremote_eal_field(value: object) -> str:
+    if isinstance(value, EasyRemotePipelineStepOutput):
+        return value.render()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return repr(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise _invalid_pipeline(
+                f"EAL number must be finite, got {value!r}", "non_finite_field"
+            )
+        return repr(value)
+    if isinstance(value, str):
+        return _easyremote_eal_string(value)
+    raise _invalid_pipeline(
+        f"EAL field value must be scalar or step output, got {type(value).__name__}",
+        "non_scalar_field",
+    )
+
+
 def _mission_run_dir(status: MissionStatus) -> str:
     for output in status.output_refs:
         if output.kind == "run_dir" and output.path:
@@ -1008,4 +1337,15 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         retryable=True,
         message=message,
         cause=cause,
+    )
+
+
+def _invalid_pipeline(message: str, reason: str) -> SDKError:
+    return SDKError(
+        code=ErrorCode.INVALID_ARGUMENT,
+        stage="mission",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
+        details={"reason": reason},
     )
