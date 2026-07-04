@@ -1,5 +1,8 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from easynet_sdk import (
     BidiState,
@@ -10,8 +13,14 @@ from easynet_sdk import (
     StreamState,
     is_code,
 )
+from easynet_sdk._cabi import CLILibrary
 
+from test_cabi import FakeRawCABI
 from test_runtime import MemoryRuntimeTransport, complete_draft
+
+
+def _load_patch(raw: FakeRawCABI):
+    return patch("easynet_sdk._cabi.CLILibrary.load", return_value=CLILibrary(raw))
 
 
 class DaemonInvocationTransportTests(unittest.TestCase):
@@ -53,6 +62,37 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["receipt"]["invocation_id"], "inv-1")
         self.assertEqual(result["receipt_summary"]["invocation_id"], "inv-1")
         self.assertTrue(result["receipt_summary"]["has_causal_anchor"])
+
+    def test_connect_owns_runtime_connection_lifecycle(self) -> None:
+        raw = FakeRawCABI()
+        with tempfile.TemporaryDirectory() as tmp:
+            control_path = _write_control_discovery(tmp)
+            with _load_patch(raw):
+                transport = DaemonInvocationTransport.connect(
+                    control_path=str(control_path)
+                )
+                self.assertIsNotNone(transport.connection)
+                result = transport.invoke(complete_draft().to_json_dict())
+                transport.close()
+                transport.close()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(raw.daemon_discovers, [])
+        self.assertEqual(raw.daemon_open_clients, [707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808])
+
+    def test_connect_rejects_control_only_discovery(self) -> None:
+        raw = FakeRawCABI()
+        with tempfile.TemporaryDirectory() as tmp:
+            control_path = _write_control_discovery(tmp, invocation_endpoint="")
+            with _load_patch(raw):
+                with self.assertRaises(SDKError) as caught:
+                    DaemonInvocationTransport.connect(control_path=str(control_path))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.CONTROL_ONLY))
+        self.assertEqual(raw.daemon_attaches, [])
+        self.assertEqual(raw.daemon_open_clients, [])
 
     def test_stream_projects_sdk_events_to_dicts(self) -> None:
         runtime = MemoryRuntimeTransport()
@@ -151,6 +191,25 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(runtime.seen_draft)
+
+def _write_control_discovery(tmp: str, *, invocation_endpoint: str | None = None) -> Path:
+    path = Path(tmp) / "control.json"
+    value = {
+        "socket_path": f"{tmp}/control.sock",
+        "pid": 123,
+        "daemon_version": "1.2.3",
+        "supported_ipc_versions": {"min": 1, "max": 1},
+        "capability_flags": ["runtime"],
+    }
+    if invocation_endpoint is None:
+        value["invocation_endpoint"] = f"{tmp}/daemon.sock"
+    elif invocation_endpoint:
+        value["invocation_endpoint"] = invocation_endpoint
+    path.write_text(
+        json.dumps(value, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
+    return path
 
 
 if __name__ == "__main__":

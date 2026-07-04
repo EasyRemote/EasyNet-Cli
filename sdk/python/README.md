@@ -35,8 +35,8 @@ observation, DaemonHandle-scoped Runtime/Profile client factories, and RuntimeCl
 invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
 methods behind narrow transport protocols with timeout-aware stream/bidi receive,
 plus public
-DaemonInvocationTransport dict/JSON unary, stream, and bidi facade over
-RuntimeClient/C ABI v4, DirectoryClient resolve/list read-model pages,
+DaemonInvocationTransport dict/JSON unary, stream, and bidi facade with
+RuntimeConnection-owned session lifecycle over C ABI v4, DirectoryClient resolve/list read-model pages,
 C ABI-backed resolve/list read-model execution through Runtime Core invoke,
 list/resolve Invocation carrier builders, directory
 projection helpers, C ABI-backed directory subscription execution through

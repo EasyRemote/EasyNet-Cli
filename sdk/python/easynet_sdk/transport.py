@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
+from .connection import (
+    ConnectOptions,
+    ControlDiscoveryRuntimeConnector,
+    RuntimeConnection,
+)
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 from .runtime import InvocationCancel, InvocationFailure, InvocationResult, RuntimeClient
@@ -24,6 +29,7 @@ class DaemonInvocationTransport:
     """JSON-friendly facade over the SDK Runtime Core client."""
 
     runtime: RuntimeClient
+    connection: RuntimeConnection | None = None
     _closed: bool = False
 
     @classmethod
@@ -40,18 +46,32 @@ class DaemonInvocationTransport:
         *,
         control_path: str = "",
         library_path: str | None = None,
+        options: ConnectOptions = ConnectOptions(),
     ) -> "DaemonInvocationTransport":
-        """Open the default C ABI v4 Runtime Core transport."""
+        """Open a stateful SDK-owned Runtime Core session."""
 
         from . import _cabi
 
-        return cls(
-            RuntimeClient(
-                _cabi.open_cabi_runtime_transport(
-                    control_path=control_path,
-                    library_path=library_path,
-                )
+        control_path = options.control_path or control_path
+        connection = RuntimeConnection(
+            ControlDiscoveryRuntimeConnector(
+                _cabi.open_cabi_runtime_connector(library_path=library_path),
+                control_path=control_path,
             )
+        )
+        connection.connect(
+            ConnectOptions(
+                endpoint=options.endpoint,
+                control_path=control_path,
+                dial_timeout_ms=options.dial_timeout_ms,
+                invoke_timeout_ms=options.invoke_timeout_ms,
+                max_message_bytes=options.max_message_bytes,
+                reconnect=options.reconnect,
+            )
+        )
+        return cls(
+            runtime=connection.runtime_client(),
+            connection=connection,
         )
 
     def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> dict[str, object]:
@@ -85,6 +105,9 @@ class DaemonInvocationTransport:
         if self._closed:
             return
         self._closed = True
+        if self.connection is not None:
+            self.connection.close()
+            return
         self.runtime.close()
 
     def __enter__(self) -> "DaemonInvocationTransport":

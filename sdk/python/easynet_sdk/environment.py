@@ -11,6 +11,7 @@ from .admin import AdminClient
 from .compatibility import CompatibilityClient
 from .connection import (
     ConnectOptions,
+    ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
 from .control_ipc import ControlIpcClient
@@ -106,7 +107,10 @@ class SdkEnvironment:
         self._require_open()
         from . import _cabi
 
-        connector = _cabi.open_cabi_runtime_connector(library_path=self.library_path)
+        connector = ControlDiscoveryRuntimeConnector(
+            _cabi.open_cabi_runtime_connector(library_path=self.library_path),
+            control_path=self.control_path,
+        )
         connection = RuntimeConnection(connector)
         control_path = options.control_path or self.control_path
         connection.connect(
@@ -137,13 +141,12 @@ class SdkEnvironment:
         """Open the public JSON-friendly daemon Invocation transport facade."""
 
         self._require_open()
-        from . import _cabi
-
-        transport = _cabi.open_cabi_runtime_transport(
-            control_path=self.control_path,
-            library_path=self.library_path,
+        return self._track(
+            DaemonInvocationTransport.connect(
+                control_path=self.control_path,
+                library_path=self.library_path,
+            )
         )
-        return self._track(DaemonInvocationTransport(RuntimeClient(transport)))
 
     def ability_invocation_client(self) -> AbilityInvocationClient:
         """Open the ability Invocation convenience facade."""

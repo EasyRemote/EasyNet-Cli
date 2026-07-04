@@ -276,30 +276,35 @@ class SdkEnvironmentTests(unittest.TestCase):
 
     def test_invocation_transport_is_environment_owned(self) -> None:
         raw = FakeRawCABI()
-        with _load_patch(raw):
-            env = SdkEnvironment(control_path="/tmp/control.json")
-            transport = env.invocation_transport()
-            self.assertIsInstance(transport, DaemonInvocationTransport)
-            result = transport.invoke(
-                {
-                    "caller_ura": "easynet:///r/example/agent/alice.sdk",
-                    "callee_ura": "easynet:///r/example/device/dev-a",
-                    "descriptor_ref": (
-                        "easynet:///r/example/ability/"
-                        "device.dev-a.observe.health@1.0.0"
-                    ),
-                    "subject_ura": "easynet:///r/example/device/dev-a",
-                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-                    "causal_context": {"form": "none"},
-                    "content_type": "application/json",
-                    "args": {},
-                }
-            )
-            env.close()
+        with tempfile.TemporaryDirectory() as tmp:
+            control_path = _write_control_discovery(tmp)
+            with _load_patch(raw):
+                env = SdkEnvironment(control_path=str(control_path))
+                transport = env.invocation_transport()
+                self.assertIsInstance(transport, DaemonInvocationTransport)
+                result = transport.invoke(
+                    {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": (
+                            "easynet:///r/example/ability/"
+                            "device.dev-a.observe.health@1.0.0"
+                        ),
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "content_type": "application/json",
+                        "args": {},
+                    }
+                )
+                env.close()
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["terminal_state"], "Completed")
-        self.assertEqual(raw.shutdown_handles, [42])
+        self.assertEqual(raw.daemon_discovers, [])
+        self.assertEqual(raw.daemon_open_clients, [707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808])
 
     def test_ability_invocation_client_uses_cabi_runtime_and_identity(self) -> None:
         raw = FakeRawCABI()
