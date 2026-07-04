@@ -91,7 +91,7 @@ class SigningTests(unittest.TestCase):
                 "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                 "descriptor_hash_hex": "aa",
                 "schema_hash_hex": "bb",
-                "canonical_hash_hex": "cc",
+                "canonical_hash_hex": "50d858e0985ecc7f60418aaf0cc5ab587f42c2570a884095a9e8ccacd0f6545c",
                 "expires_at_unix_ms": 1783000000000,
                 "tuple": {
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
@@ -123,6 +123,57 @@ class SigningTests(unittest.TestCase):
         self.assertIsNotNone(prepared.signing_material.signer_policy)
         assert prepared.signing_material.signer_policy is not None
         self.assertEqual(prepared.signing_material.signer_policy.signer_id, "browser-key")
+
+    def test_prepared_invocation_rejects_canonical_hash_mismatch(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            PreparedInvocation.from_json(
+                b"""{
+                    "prepared_id": "prepared-example-1",
+                    "canonical_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "args": {},
+                        "content_type": "application/json"
+                    },
+                    "signing_material": {
+                        "canonical_bytes_base64": "ZXhhbXBsZQ==",
+                        "args_digest_hex": "00",
+                        "expires_at_unix_ms": 1783000000000
+                    }
+                }"""
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_prepared_invocation_rejects_invalid_canonical_base64(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            PreparedInvocation.from_json(
+                b"""{
+                    "prepared_id": "prepared-example-1",
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "args": {},
+                        "content_type": "application/json"
+                    },
+                    "signing_material": {
+                        "canonical_bytes_base64": "not valid base64",
+                        "args_digest_hex": "00",
+                        "expires_at_unix_ms": 1783000000000
+                    }
+                }"""
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_prepared_invocation_rejects_submit_ready_payload(self) -> None:
         with self.assertRaises(SDKError) as caught:

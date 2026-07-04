@@ -2026,7 +2026,7 @@ CURRENT_ABI_PREPARED = b"""{
   "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
   "descriptor_hash_hex": "aa",
   "schema_hash_hex": "bb",
-  "canonical_hash_hex": "cc",
+  "canonical_hash_hex": "50d858e0985ecc7f60418aaf0cc5ab587f42c2570a884095a9e8ccacd0f6545c",
   "expires_at_unix_ms": 1783000000000,
   "tuple": {
     "caller_ura": "easynet:///r/example/agent/alice.sdk",

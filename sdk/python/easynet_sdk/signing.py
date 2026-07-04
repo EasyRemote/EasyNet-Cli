@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Protocol
@@ -75,6 +76,13 @@ class PreparedInvocation:
         expires_at_unix_ms = _optional_int(
             decoded.get("expires_at_unix_ms"), "expires_at_unix_ms"
         ) or material.expires_at_unix_ms
+        canonical_hash_hex = _optional_string(
+            decoded.get("canonical_hash_hex"), "canonical_hash_hex"
+        ) or ""
+        _validate_canonical_material_hash(
+            material.canonical_bytes_base64,
+            canonical_hash_hex,
+        )
         return cls(
             tuple=draft,
             signing_material=material,
@@ -87,10 +95,7 @@ class PreparedInvocation:
             or "",
             schema_hash_hex=_optional_string(decoded.get("schema_hash_hex"), "schema_hash_hex")
             or "",
-            canonical_hash_hex=_optional_string(
-                decoded.get("canonical_hash_hex"), "canonical_hash_hex"
-            )
-            or "",
+            canonical_hash_hex=canonical_hash_hex,
             expires_at_unix_ms=expires_at_unix_ms,
         )
 
@@ -294,6 +299,7 @@ def _signing_material(
     decoded: Mapping[str, object], fallback_descriptor_ref: str
 ) -> SigningMaterial:
     canonical_bytes = _required_string(decoded, "canonical_bytes_base64")
+    _decode_base64_field(canonical_bytes, "canonical_bytes_base64")
     args_digest = _required_string(decoded, "args_digest_hex")
     expires = _required_int(decoded, "expires_at_unix_ms")
     descriptor_ref = (
@@ -436,6 +442,37 @@ def _validate_expected_public_key(
         raise _invalid_prepared(f"{source} must be 32 bytes")
     if expected != actual:
         raise _invalid_prepared(f"{source} does not match private key")
+
+
+def _validate_canonical_material_hash(
+    canonical_bytes_base64: str, canonical_hash_hex: str
+) -> None:
+    if canonical_hash_hex == "":
+        return
+    canonical_hash = _normalize_optional_sha256_hex(
+        canonical_hash_hex,
+        "canonical_hash_hex",
+    )
+    canonical_bytes = _decode_base64_field(
+        canonical_bytes_base64,
+        "canonical_bytes_base64",
+    )
+    actual = hashlib.sha256(canonical_bytes).hexdigest()
+    if actual != canonical_hash:
+        raise _invalid_prepared(
+            "canonical_hash_hex does not match canonical_bytes_base64"
+        )
+
+
+def _normalize_optional_sha256_hex(value: str, field_name: str) -> str:
+    raw = value[7:] if value.startswith("sha256:") else value
+    if len(raw) != 64:
+        raise _invalid_prepared(f"{field_name} must be a sha256 hex digest")
+    try:
+        bytes.fromhex(raw)
+    except ValueError as exc:
+        raise _invalid_prepared(f"{field_name} must be hex", exc) from exc
+    return raw.lower()
 
 
 def _decode_base64_field(value: str, field_name: str) -> bytes:
