@@ -121,9 +121,10 @@ method spelling.
   backend route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
-  and close state seams over opaque receipt refs; Axon-backed cryptographic
-  verification, concrete daemon carrier execution adapter, receipt URI construction
-  after RFC-007, and backend history/metrics cutover remain incomplete.
+  optional C ABI v4 concrete transport for fetch/project/verify/verify-chain/
+  causal-ref over Runtime Core invoke, and close state seams over opaque receipt
+  refs; Axon-backed cryptographic verification, receipt URI construction after
+  RFC-007, and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
   install projection, published-ability read-model seams, and close state seams; concrete daemon

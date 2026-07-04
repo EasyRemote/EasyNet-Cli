@@ -27,7 +27,8 @@ methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
 read-model pages, directory subscription state seams, and close state seams plus
 IdentityClient descriptor/resource projection, Axon-delegated
 URA/DescriptorRef helper seams, signing-key lifecycle, and signer-handle seams.
-It also exposes ReceiptClient fetch/project/verify/causal-ref projection and close state seams
+It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref projection,
+optional C ABI v4 concrete transport over Runtime Core invoke, and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
