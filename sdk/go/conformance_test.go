@@ -2100,6 +2100,25 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			},
 		},
 		{
+			Owner: "compatibility",
+			Type:  reflect.TypeOf((*CompatibilityRuntimeTransport)(nil)),
+			Operations: map[string]string{
+				"BuildChatCompletionInvocation":       "compatibility.chat.build_completion_invocation",
+				"BuildFileDeleteInvocation":           "compatibility.file.build_delete_invocation",
+				"BuildFileRetrieveInvocation":         "compatibility.file.retrieve",
+				"BuildFileUploadInvocation":           "compatibility.file.build_upload_invocation",
+				"BuildListModelsInvocation":           "compatibility.models.build_list_invocation",
+				"BuildStreamChatCompletionInvocation": "compatibility.chat.build_stream_invocation",
+				"Close":                               "compatibility.close",
+				"CreateChatCompletion":                "compatibility.chat.create_completion",
+				"DeleteFile":                          "compatibility.file.delete",
+				"ListModels":                          "compatibility.models.list",
+				"RetrieveFile":                        "compatibility.file.retrieve",
+				"StreamChatCompletion":                "compatibility.chat.stream_completion",
+				"UploadFile":                          "compatibility.file.upload",
+			},
+		},
+		{
 			Owner: "wrappers",
 			Type:  reflect.TypeOf((*WrapperClient)(nil)),
 			Operations: map[string]string{
