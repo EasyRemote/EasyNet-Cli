@@ -11,10 +11,11 @@ Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compat
 OpenAI adapter seam, and Convenience Wrapper execution seam
 partial. The package exposes typed
 feature/version discovery with root client close, private C ABI v4 discovery,
-identity projection, and runtime health/unary/stream/bidi/prepare-submit handle
-transports, runtime connection state, runtime health readiness
-facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
-detach/open-runtime/connect-local state seams, schema-backed SDK error projection, complete
+daemon lifecycle/open-runtime, identity projection, and runtime
+health/unary/stream/bidi/prepare-submit handle transports, runtime connection
+state, runtime health readiness facts, DaemonHandle lifecycle
+status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local
+state seams, schema-backed SDK error projection, complete
 Invocation draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, InvocationHandle
@@ -47,7 +48,7 @@ Invocation carriers plus model, chat, stream, file, and file-delete projection
 seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, transport-backed helper close state seams, and record projections. Concrete daemon
-process spawn/default UDS transport, directory live transport adapters, local signer implementations,
+default UDS transport, directory live transport adapters, local signer implementations,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health

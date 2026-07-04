@@ -3,9 +3,13 @@ import json
 import unittest
 
 from easynet_sdk import (
+    AttachOptions,
     BidiFrame,
     BidiStreamDescriptor,
     Client,
+    ConnectOptions,
+    DaemonControl,
+    DaemonMode,
     ErrorCode,
     HealthClient,
     IdentityClient,
@@ -13,11 +17,13 @@ from easynet_sdk import (
     PrepareOptions,
     RuntimeClient,
     SDKError,
+    StartConfig,
     StreamState,
     is_code,
 )
 from easynet_sdk._cabi import (
     CABIDiscoveryTransport,
+    CABIDaemonTransport,
     CABIIdentityTransport,
     CABIRuntimeTransport,
     CLILibrary,
@@ -55,6 +61,12 @@ class FakeRawCABI:
         self.bidi_closes: list[int] = []
         self.bidi_cancels: list[int] = []
         self.callback_buffers: list[ctypes.Array[ctypes.c_char]] = []
+        self.daemon_starts: list[dict[str, object]] = []
+        self.daemon_attaches: list[dict[str, object]] = []
+        self.daemon_discovers: list[dict[str, object]] = []
+        self.daemon_stops: list[int] = []
+        self.daemon_detaches: list[int] = []
+        self.daemon_open_clients: list[int] = []
         self.stream_events = [
             b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
             b'"payload_json":{"step":1}}',
@@ -71,6 +83,14 @@ class FakeRawCABI:
         self.easynet_error_json = FakeSymbol(self._error_json)
         self.easynet_init = FakeSymbol(self._init)
         self.easynet_shutdown = FakeSymbol(self._shutdown)
+        self.easynet_daemon_start = FakeSymbol(self._daemon_start)
+        self.easynet_daemon_attach = FakeSymbol(self._daemon_attach)
+        self.easynet_daemon_discover = FakeSymbol(self._daemon_discover)
+        self.easynet_daemon_stop = FakeSymbol(self._daemon_stop)
+        self.easynet_daemon_detach = FakeSymbol(self._daemon_detach)
+        self.easynet_daemon_status = FakeSymbol(self._daemon_status)
+        self.easynet_daemon_endpoints = FakeSymbol(self._daemon_endpoints)
+        self.easynet_daemon_open_client = FakeSymbol(self._daemon_open_client)
         self.easynet_identity_project_ura = FakeSymbol(self._identity_project_ura)
         self.easynet_identity_build_ura = FakeSymbol(self._identity_build_ura)
         self.easynet_identity_project_descriptor_ref = FakeSymbol(
@@ -165,6 +185,44 @@ class FakeRawCABI:
 
     def _shutdown(self, handle) -> int:
         self.shutdown_handles.append(int(handle.value))
+        return 0
+
+    def _daemon_start(self, config_json, out_handle) -> int:
+        self.daemon_starts.append(json.loads(config_json.value.decode("utf-8")))
+        out_handle._obj.value = 606
+        return 0
+
+    def _daemon_attach(self, options_json, out_handle) -> int:
+        self.daemon_attaches.append(json.loads(options_json.value.decode("utf-8")))
+        out_handle._obj.value = 707
+        return 0
+
+    def _daemon_discover(self, options_json, out_ptr) -> int:
+        self.daemon_discovers.append(json.loads(options_json.value.decode("utf-8")))
+        return self._write(out_ptr, DAEMON_CABI_STATUS)
+
+    def _daemon_stop(self, daemon_handle) -> int:
+        self.daemon_stops.append(int(daemon_handle.value))
+        return 0
+
+    def _daemon_detach(self, daemon_handle) -> int:
+        self.daemon_detaches.append(int(daemon_handle.value))
+        return 0
+
+    def _daemon_status(self, daemon_handle, out_ptr) -> int:
+        return self._write(out_ptr, DAEMON_CABI_STATUS)
+
+    def _daemon_endpoints(self, daemon_handle, out_ptr) -> int:
+        return self._write(
+            out_ptr,
+            b'{"control_endpoint":"unix:///tmp/control.sock",'
+            b'"invocation_endpoint":"unix:///tmp/daemon.sock",'
+            b'"public_endpoint":null}',
+        )
+
+    def _daemon_open_client(self, daemon_handle, out_handle) -> int:
+        self.daemon_open_clients.append(int(daemon_handle.value))
+        out_handle._obj.value = 808
         return 0
 
     def _identity_project_ura(self, handle, raw, out_ptr) -> int:
@@ -424,6 +482,13 @@ DESCRIPTOR_PROJECTION = (
     b'"metadata":{"grammar_owner":"axon"}}'
 )
 
+DAEMON_CABI_STATUS = (
+    b'{"pid":42,"pid_alive":true,"control_accepting":true,'
+    b'"invocation_accepting":true,'
+    b'"control_endpoint":"unix:///tmp/control.sock",'
+    b'"invocation_endpoint":"unix:///tmp/daemon.sock"}'
+)
+
 CURRENT_ABI_PREPARED = b"""{
   "request_id": "req-current-1",
   "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
@@ -528,6 +593,71 @@ class CABITransportTests(unittest.TestCase):
         transport.close()
 
         self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_daemon_transport_discovers_start_attaches_and_opens_runtime(
+        self,
+    ) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        transport = CABIDaemonTransport(lib)
+        control = DaemonControl(transport)
+
+        endpoints = control.discover()
+        started = control.start(
+            StartConfig(
+                mode=DaemonMode.DEVICE,
+                device_id="dev-a",
+                daemon_bin="/tmp/easynet-daemon",
+                log_path="/tmp/easynet.log",
+                detached=True,
+            )
+        )
+        attached = control.attach(
+            AttachOptions(control_endpoint="unix:///tmp/control.sock")
+        )
+        runtime = started.open_runtime(ConnectOptions(max_message_bytes=4096))
+        started.stop()
+        attached.detach()
+
+        self.assertEqual(endpoints.invocation_endpoint, "unix:///tmp/daemon.sock")
+        self.assertEqual(started.handle_id, "606")
+        self.assertEqual(attached.handle_id, "707")
+        self.assertEqual(raw.daemon_starts[0]["node_id"], "dev-a")
+        self.assertEqual(raw.daemon_starts[0]["detach"], True)
+        self.assertNotIn("device_id", raw.daemon_starts[0])
+        self.assertNotIn("detached", raw.daemon_starts[0])
+        self.assertEqual(raw.daemon_open_clients, [606])
+        self.assertEqual(raw.daemon_stops, [606])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertIsNotNone(runtime)
+
+    def test_daemon_transport_rejects_unsupported_start_fields(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        control = DaemonControl(CABIDaemonTransport(lib))
+
+        with self.assertRaises(SDKError) as caught:
+            control.start(
+                StartConfig(
+                    mode=DaemonMode.HUB,
+                    listen_tcp="127.0.0.1:9443",
+                    tls_cert_path="/tmp/cert.pem",
+                    tls_key_path="/tmp/key.pem",
+                )
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(raw.daemon_starts, [])
+
+    def test_daemon_transport_rejects_unknown_handle(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        transport = CABIDaemonTransport(lib)
+
+        with self.assertRaises(SDKError) as caught:
+            transport.status("missing")
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
 
     def test_runtime_transport_drives_health_and_unary_invoke(self) -> None:
         raw = FakeRawCABI()

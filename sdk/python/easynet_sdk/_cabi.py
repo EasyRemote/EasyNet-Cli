@@ -92,6 +92,62 @@ class CLILibrary:
         code = int(self._raw.easynet_shutdown(ctypes.c_uint64(handle)))
         self._raise_for_code(code)
 
+    def daemon_start(self, config_json: bytes) -> int:
+        out_handle = ctypes.c_uint64(0)
+        code = int(
+            self._raw.easynet_daemon_start(
+                ctypes.c_char_p(config_json), ctypes.byref(out_handle)
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_handle.value)
+
+    def daemon_attach(self, options_json: bytes) -> int:
+        out_handle = ctypes.c_uint64(0)
+        code = int(
+            self._raw.easynet_daemon_attach(
+                ctypes.c_char_p(options_json), ctypes.byref(out_handle)
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_handle.value)
+
+    def daemon_discover(self, options_json: bytes) -> bytes:
+        return self._call_output(
+            self._raw.easynet_daemon_discover,
+            ctypes.c_char_p(options_json),
+        )
+
+    def daemon_stop(self, daemon_handle: int) -> None:
+        code = int(self._raw.easynet_daemon_stop(ctypes.c_uint64(daemon_handle)))
+        self._raise_for_code(code)
+
+    def daemon_detach(self, daemon_handle: int) -> None:
+        code = int(self._raw.easynet_daemon_detach(ctypes.c_uint64(daemon_handle)))
+        self._raise_for_code(code)
+
+    def daemon_status(self, daemon_handle: int) -> bytes:
+        return self._call_output(
+            self._raw.easynet_daemon_status,
+            ctypes.c_uint64(daemon_handle),
+        )
+
+    def daemon_endpoints(self, daemon_handle: int) -> bytes:
+        return self._call_output(
+            self._raw.easynet_daemon_endpoints,
+            ctypes.c_uint64(daemon_handle),
+        )
+
+    def daemon_open_client(self, daemon_handle: int) -> int:
+        out_handle = ctypes.c_uint64(0)
+        code = int(
+            self._raw.easynet_daemon_open_client(
+                ctypes.c_uint64(daemon_handle), ctypes.byref(out_handle)
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_handle.value)
+
     def identity_project_ura(self, handle: int, ura: bytes) -> bytes:
         return self._call_output(
             self._raw.easynet_identity_project_ura,
@@ -304,6 +360,40 @@ class CLILibrary:
         self._raw.easynet_init.restype = ctypes.c_int32
         self._raw.easynet_shutdown.argtypes = [ctypes.c_uint64]
         self._raw.easynet_shutdown.restype = ctypes.c_int32
+        self._raw.easynet_daemon_start.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
+        self._raw.easynet_daemon_start.restype = ctypes.c_int32
+        self._raw.easynet_daemon_attach.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
+        self._raw.easynet_daemon_attach.restype = ctypes.c_int32
+        self._raw.easynet_daemon_discover.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_daemon_discover.restype = ctypes.c_int32
+        self._raw.easynet_daemon_stop.argtypes = [ctypes.c_uint64]
+        self._raw.easynet_daemon_stop.restype = ctypes.c_int32
+        self._raw.easynet_daemon_detach.argtypes = [ctypes.c_uint64]
+        self._raw.easynet_daemon_detach.restype = ctypes.c_int32
+        self._raw.easynet_daemon_status.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_daemon_status.restype = ctypes.c_int32
+        self._raw.easynet_daemon_endpoints.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_daemon_endpoints.restype = ctypes.c_int32
+        self._raw.easynet_daemon_open_client.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
+        self._raw.easynet_daemon_open_client.restype = ctypes.c_int32
         self._raw.easynet_identity_project_ura.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
@@ -546,6 +636,96 @@ class CABIIdentityTransport:
                 message="identity transport handle is invalid",
             )
         return self.handle
+
+
+@dataclass
+class CABIDaemonTransport:
+    """Daemon lifecycle transport backed by C ABI v4."""
+
+    lib: CLILibrary
+    _handles: dict[str, int] = field(default_factory=dict)
+    _status_cache: dict[str, dict[str, object]] = field(default_factory=dict)
+
+    def discover(self, options_json: bytes) -> bytes:
+        raw = self.lib.daemon_discover(options_json)
+        status = _daemon_status_from_cabi("0", raw)
+        return _json_bytes(status["endpoints"])
+
+    def start(self, config_json: bytes) -> bytes:
+        daemon_handle = self.lib.daemon_start(_daemon_start_config_for_cabi(config_json))
+        public_id = str(daemon_handle)
+        self._handles[public_id] = daemon_handle
+        status = _daemon_status_from_cabi(public_id, self.lib.daemon_status(daemon_handle))
+        self._status_cache[public_id] = status
+        return _json_bytes(status)
+
+    def attach(self, options_json: bytes) -> bytes:
+        daemon_handle = self.lib.daemon_attach(options_json)
+        public_id = str(daemon_handle)
+        self._handles[public_id] = daemon_handle
+        status = _daemon_status_from_cabi(public_id, self.lib.daemon_status(daemon_handle))
+        self._status_cache[public_id] = status
+        return _json_bytes(status)
+
+    def status(self, handle_id: str) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        status = _daemon_status_from_cabi(handle_id, self.lib.daemon_status(daemon_handle))
+        self._status_cache[handle_id] = status
+        return _json_bytes(status)
+
+    def open_runtime(
+        self, handle_id: str, options_json: bytes
+    ) -> tuple["CABIRuntimeTransport", bytes]:
+        _ = options_json
+        daemon_handle = self._require_daemon_handle(handle_id)
+        runtime_handle = self.lib.daemon_open_client(daemon_handle)
+        if runtime_handle <= 0:
+            raise SDKError(
+                code=ErrorCode.INVALID_HANDLE,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message="C ABI daemon open client returned an invalid runtime handle",
+            )
+        return (
+            CABIRuntimeTransport(
+                lib=self.lib,
+                handle=runtime_handle,
+                owns_handle=True,
+            ),
+            _json_bytes({"ready": True, "abi_version": EXPECTED_ABI_VERSION}),
+        )
+
+    def stop(self, handle_id: str, options_json: bytes) -> bytes:
+        _ = options_json
+        daemon_handle = self._require_daemon_handle(handle_id)
+        self.lib.daemon_stop(daemon_handle)
+        self._handles.pop(handle_id, None)
+        prior = self._status_cache.pop(handle_id, {})
+        stopped = {
+            "handle_id": handle_id,
+            "state": "Stopped",
+            "mode": prior.get("mode", ""),
+            "endpoints": prior.get("endpoints", {}),
+            "diagnostics": [],
+        }
+        return _json_bytes(stopped)
+
+    def detach(self, handle_id: str) -> None:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        self.lib.daemon_detach(daemon_handle)
+        self._handles.pop(handle_id, None)
+        self._status_cache.pop(handle_id, None)
+
+    def _require_daemon_handle(self, handle_id: str) -> int:
+        daemon_handle = self._handles.get(handle_id)
+        if daemon_handle is None or daemon_handle <= 0:
+            raise SDKError(
+                code=ErrorCode.INVALID_HANDLE,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message="daemon handle is not owned by this transport",
+            )
+        return daemon_handle
 
 
 @dataclass
@@ -959,6 +1139,15 @@ def open_cabi_identity_transport(
     return CABIIdentityTransport(lib=lib, handle=handle, owns_handle=True)
 
 
+def open_cabi_daemon_transport(
+    *,
+    library_path: str | None = None,
+) -> CABIDaemonTransport:
+    """Open a C ABI daemon lifecycle transport."""
+
+    return CABIDaemonTransport(lib=CLILibrary.load(library_path))
+
+
 def open_cabi_runtime_transport(
     *,
     control_path: str = "",
@@ -979,6 +1168,115 @@ def _optional_c_string(value: str) -> bytes | None:
 
 def _json_bytes(value: dict[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _daemon_start_config_for_cabi(config_json: bytes) -> bytes:
+    config = _json_object(config_json, "daemon start config")
+    unsupported = [
+        field_name
+        for field_name in (
+            "uds_path",
+            "listen_tcp",
+            "tls_cert_path",
+            "tls_key_path",
+            "hub_endpoint",
+            "trust_path",
+        )
+        if config.get(field_name)
+    ]
+    if unsupported:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            message=(
+                "C ABI daemon start does not support fields: "
+                + ", ".join(sorted(unsupported))
+            ),
+        )
+    projected: dict[str, object] = {}
+    for field_name in ("mode", "realm", "daemon_bin", "log_path", "env"):
+        value = config.get(field_name)
+        if value not in (None, "", {}, False):
+            projected[field_name] = value
+    if config.get("device_id"):
+        projected["node_id"] = config["device_id"]
+    if config.get("node_id"):
+        projected["node_id"] = config["node_id"]
+    if config.get("detached"):
+        projected["detach"] = True
+    if config.get("detach"):
+        projected["detach"] = True
+    return _json_bytes(projected)
+
+
+def _daemon_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:
+    decoded = _json_object(raw, "daemon status")
+    endpoints = _daemon_endpoints_from_cabi(decoded)
+    state = decoded.get("state")
+    if not isinstance(state, str) or state == "":
+        state = _daemon_state_from_cabi(decoded)
+    status: dict[str, object] = {
+        "state": state,
+        "endpoints": endpoints,
+        "diagnostics": _string_list(decoded.get("diagnostics", [])),
+    }
+    if handle_id != "0":
+        status["handle_id"] = handle_id
+    mode = decoded.get("mode")
+    if isinstance(mode, str) and mode:
+        status["mode"] = mode
+    pid = decoded.get("pid")
+    if isinstance(pid, int) and not isinstance(pid, bool) and pid >= 0:
+        status["pid"] = pid
+    version = decoded.get("version")
+    if isinstance(version, str) and version:
+        status["version"] = version
+    message = decoded.get("message")
+    if isinstance(message, str) and message:
+        status["message"] = message
+    return status
+
+
+def _daemon_endpoints_from_cabi(decoded: dict[str, object]) -> dict[str, object]:
+    raw_endpoints = decoded.get("endpoints")
+    if isinstance(raw_endpoints, dict):
+        return {
+            "control_endpoint": _optional_json_string(raw_endpoints, "control_endpoint"),
+            "invocation_endpoint": _optional_json_string(
+                raw_endpoints, "invocation_endpoint"
+            ),
+            "public_endpoint": _optional_json_string(raw_endpoints, "public_endpoint"),
+        }
+    return {
+        "control_endpoint": _optional_json_string(decoded, "control_endpoint"),
+        "invocation_endpoint": _optional_json_string(decoded, "invocation_endpoint"),
+        "public_endpoint": _optional_json_string(decoded, "public_endpoint"),
+    }
+
+
+def _daemon_state_from_cabi(decoded: dict[str, object]) -> str:
+    invocation_ready = decoded.get("invocation_accepting") is True
+    control_ready = decoded.get("control_accepting") is True
+    pid_alive = decoded.get("pid_alive") is True
+    if invocation_ready:
+        return "Running"
+    if control_ready:
+        return "ControlOnly"
+    if pid_alive:
+        return "ControlReady"
+    return "Stopped"
+
+
+def _optional_json_string(decoded: dict[str, object], field_name: str) -> str:
+    value = decoded.get(field_name)
+    return value if isinstance(value, str) else ""
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _merge_bidi_streams(draft_json: bytes, streams_json: bytes) -> bytes:

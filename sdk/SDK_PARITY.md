@@ -165,7 +165,7 @@ method spelling.
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - Python package exposes Runtime Core feature/version discovery with root client close, private C ABI
-  v4 discovery/runtime health/unary/stream/bidi/prepare-submit handle transport, runtime
+  v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
@@ -174,7 +174,7 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
-  transport protocols; concrete daemon process spawn/default UDS transport,
+  transport protocols; concrete default UDS transport,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
