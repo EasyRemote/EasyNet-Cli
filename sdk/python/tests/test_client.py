@@ -65,12 +65,20 @@ class ClientTests(unittest.TestCase):
         self.assertIsInstance(caught.exception.cause, RuntimeError)
 
     def test_feature_discovery_rejects_malformed_payload(self) -> None:
-        client = Client(StaticTransport(b'{"abi_version": 0}'))
+        client = Client(StaticTransport(b'{"abi_version": true}'))
 
         with self.assertRaises(SDKError) as caught:
             client.feature_discovery()
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_require_abi_maps_zero_daemon_abi_to_version_mismatch(self) -> None:
+        client = Client(StaticTransport(b'{"abi_version": 0, "sdk_version": "0.91.30"}'))
+
+        with self.assertRaises(SDKError) as caught:
+            client.require_abi(4)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_INCOMPATIBLE))
 
     def test_close_delegates_once_and_fails_closed(self) -> None:
         transport = StaticTransport(b'{"abi_version": 4, "sdk_version": "0.91.30"}')

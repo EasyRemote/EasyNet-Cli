@@ -92,9 +92,26 @@ func TestFeatureDiscoveryWrapsTransportFailure(t *testing.T) {
 	}
 }
 
+func TestRequireABIMapsZeroDaemonABIToVersionMismatch(t *testing.T) {
+	client, err := NewClient(DiscoveryTransportFunc(func(ctx context.Context) ([]byte, error) {
+		return []byte(`{"abi_version": 0, "sdk_version": "0.91.30"}`), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	_, err = client.RequireABI(context.Background(), 4)
+	if err == nil {
+		t.Fatalf("RequireABI succeeded, want version error")
+	}
+	if !IsCode(err, ErrorVersionIncompatible) {
+		t.Fatalf("error code = %v, want %s", err, ErrorVersionIncompatible)
+	}
+}
+
 func TestFeatureDiscoveryRejectsMalformedJSON(t *testing.T) {
 	client, err := NewClient(DiscoveryTransportFunc(func(ctx context.Context) ([]byte, error) {
-		return []byte(`{"abi_version": 0}`), nil
+		return []byte(`{"abi_version": true}`), nil
 	}))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)

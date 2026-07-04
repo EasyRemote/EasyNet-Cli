@@ -78,6 +78,96 @@ func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	}
 }
 
+func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *testing.T) {
+	root := repositoryRoot(t)
+
+	compatibleCase := sharedCase(t, root, "version-abi-compatible.yaml")
+	requireCaseID(t, compatibleCase, "version/abi_compatible")
+	requireCaseAction(t, compatibleCase, "feature_discovery")
+	requireCaseExpectation(t, compatibleCase, "result: ok")
+	requireCaseExpectation(t, compatibleCase, "abi_version: 4")
+
+	compatible, err := NewClient(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
+		return sharedFeatureDiscoveryJSON(t, 4), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClient(compatible): %v", err)
+	}
+	features, err := compatible.RequireABI(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("RequireABI(shared compatible case): %v", err)
+	}
+	if features.Version().ABIVersion != 4 {
+		t.Fatalf("unexpected shared compatible ABI version: %#v", features.Version())
+	}
+
+	incompatibleCase := sharedCase(t, root, "version-abi-incompatible.yaml")
+	requireCaseID(t, incompatibleCase, "version/abi_incompatible")
+	requireCaseAction(t, incompatibleCase, "feature_discovery")
+	requireCaseExpectation(t, incompatibleCase, "result: error")
+	requireCaseExpectation(t, incompatibleCase, "error_code: VersionIncompatible")
+
+	incompatible, err := NewClient(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
+		return sharedFeatureDiscoveryJSON(t, 0), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClient(incompatible): %v", err)
+	}
+	if _, err := incompatible.RequireABI(context.Background(), 4); !IsCode(err, ErrorVersionIncompatible) {
+		t.Fatalf("shared incompatible ABI did not produce VersionIncompatible: %v", err)
+	}
+
+	controlOnlyCase := sharedCase(t, root, "daemon-control-only.yaml")
+	requireCaseID(t, controlOnlyCase, "daemon/control_only")
+	requireCaseAction(t, controlOnlyCase, "attach_daemon")
+	requireCaseFixture(t, controlOnlyCase, "health.ready.v4.json")
+	requireCaseExpectation(t, controlOnlyCase, "error_code: ControlOnly")
+
+	health, err := NewRuntimeHealthFromJSON(sharedControlOnlyHealthJSON(t, root))
+	if err != nil {
+		t.Fatalf("NewRuntimeHealthFromJSON(shared control-only health): %v", err)
+	}
+	if !health.APIAlive() || health.Ready() || health.InvocationReady {
+		t.Fatalf("unexpected shared control-only health: %#v", health)
+	}
+	control, err := NewDaemonControl(DaemonTransportFunc{
+		AttachFunc: func(context.Context, []byte) ([]byte, error) {
+			return []byte(`{"handle_id":"daemon-control-only","state":"ControlOnly","mode":"hub","endpoints":{"control_endpoint":"unix:///tmp/easynet-control.sock"},"diagnostics":["invocation endpoint unavailable"]}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDaemonControl: %v", err)
+	}
+	if _, err := control.Attach(context.Background(), AttachOptions{}); !IsCode(err, ErrControlOnly) {
+		t.Fatalf("shared control-only attach did not produce ControlOnly: %v", err)
+	}
+
+	errorCase := sharedCase(t, root, "error-typed-json.yaml")
+	requireCaseID(t, errorCase, "error/typed_json")
+	requireCaseAction(t, errorCase, "trigger_invalid_handle_error")
+	requireCaseAction(t, errorCase, "read_last_error_json")
+	requireCaseAction(t, errorCase, "project_explicit_error_code")
+	requireCaseExpectation(t, errorCase, "schema: error.schema.json")
+	requireCaseExpectation(t, errorCase, "invalid_handle_code: INVALID_HANDLE")
+	requireCaseExpectation(t, errorCase, "explicit_timeout_code: TIMEOUT")
+	requireCaseExpectation(t, errorCase, "human_message_parse_required: false")
+
+	invalidHandle, err := DecodeDaemonErrorJSON([]byte(`{"code":"INVALID_HANDLE","stage":"sdk","message":"invalid handle","retry":"never","source":"sdk","details":{}}`))
+	if err != nil {
+		t.Fatalf("DecodeDaemonErrorJSON(invalid handle): %v", err)
+	}
+	if invalidHandle.Code != ErrInvalidHandle || invalidHandle.Stage != "sdk" || invalidHandle.Retry != RetryNever {
+		t.Fatalf("unexpected shared invalid-handle error: %#v", invalidHandle)
+	}
+	timeout, err := DecodeDaemonErrorJSON([]byte(`{"code":"TIMEOUT","stage":"invoke","message":"deadline exceeded","retry":"safe","source":"daemon","details":{}}`))
+	if err != nil {
+		t.Fatalf("DecodeDaemonErrorJSON(timeout): %v", err)
+	}
+	if timeout.Code != ErrTimeout || timeout.Retry != RetrySafe || !timeout.Retryable {
+		t.Fatalf("unexpected shared timeout error: %#v", timeout)
+	}
+}
+
 func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	hostBindingCase := sharedCase(t, root, "host-binding-codec-hash.yaml")
@@ -2249,6 +2339,41 @@ func sharedCompatibilityStreamRequestJSON(t *testing.T, requestJSON []byte) []by
 	raw, err := json.Marshal(request)
 	if err != nil {
 		t.Fatalf("encode shared compatibility stream request: %v", err)
+	}
+	return raw
+}
+
+func sharedFeatureDiscoveryJSON(t *testing.T, abiVersion uint32) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"abi_version": abiVersion,
+		"sdk_version": "0.91.30",
+		"profiles": map[string]string{
+			"runtime_core": "partial",
+		},
+		"symbols": map[string]bool{
+			"runtime_health": true,
+		},
+		"axon_pb": false,
+	})
+	if err != nil {
+		t.Fatalf("encode shared feature discovery: %v", err)
+	}
+	return raw
+}
+
+func sharedControlOnlyHealthJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	health := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "health.ready.v4.json"), &health); err != nil {
+		t.Fatalf("decode shared health fixture: %v", err)
+	}
+	health["invocation_ready"] = false
+	health["runtime_ready"] = false
+	health["diagnostics"] = []any{"invocation endpoint unavailable"}
+	raw, err := json.Marshal(health)
+	if err != nil {
+		t.Fatalf("encode shared control-only health: %v", err)
 	}
 	return raw
 }

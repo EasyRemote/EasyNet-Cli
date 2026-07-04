@@ -15,6 +15,7 @@ from easynet_sdk import (
     AdminGatewayStatusRequest,
     AdminSessionListRequest,
     AgentQuery,
+    AttachOptions,
     CompatibilityCarrierBase,
     CompatibilityChatCompletionRequest,
     CompatibilityClient,
@@ -23,6 +24,8 @@ from easynet_sdk import (
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     CompatibilityStreamChatCompletionRequest,
+    Client,
+    DaemonControl,
     DescriptorRefRequest,
     DeviceQuery,
     DirectoryClient,
@@ -39,6 +42,7 @@ from easynet_sdk import (
     GatewayStatus,
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
+    HealthClient,
     HostBindingClient,
     HostStreamBindingRequest,
     HostStreamEnvelope,
@@ -874,6 +878,77 @@ class SharedCompatibilityTransport:
         return None
 
 
+class SharedDiscoveryTransport:
+    def __init__(self, abi_version: int) -> None:
+        self.abi_version = abi_version
+
+    def feature_discovery(self) -> bytes:
+        return shared_feature_discovery_json(self.abi_version)
+
+    def close(self) -> None:
+        return None
+
+
+class SharedHealthTransport:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def runtime_health(self) -> bytes:
+        return self.payload
+
+
+class SharedControlOnlyDaemonTransport:
+    def discover(self, options_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared runtime core conformance fixture test",
+        )
+
+    def start(self, config_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared runtime core conformance fixture test",
+        )
+
+    def attach(self, options_json: bytes) -> bytes:
+        return (
+            b'{"handle_id":"daemon-control-only","state":"ControlOnly","mode":"hub",'
+            b'"endpoints":{"control_endpoint":"unix:///tmp/easynet-control.sock"},'
+            b'"diagnostics":["invocation endpoint unavailable"]}'
+        )
+
+    def status(self, handle_id: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared runtime core conformance fixture test",
+        )
+
+    def open_runtime(self, handle_id: str, options_json: bytes) -> tuple[object, bytes]:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared runtime core conformance fixture test",
+        )
+
+    def stop(self, handle_id: str, options_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared runtime core conformance fixture test",
+        )
+
+    def detach(self, handle_id: str) -> None:
+        return None
+
+
 class SharedConformanceFixtureTests(unittest.TestCase):
     def test_python_facade_executes_shared_runtime_core_conformance_cases(self) -> None:
         complete_tuple_case = shared_case("invocation-complete-tuple.yaml")
@@ -915,6 +990,81 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         health = RuntimeHealth.from_json(shared_fixture("health.ready.v4.json"))
         self.assertTrue(health.api_alive())
         self.assertTrue(health.ready())
+
+    def test_python_runtime_core_executes_shared_lifecycle_version_error_conformance_cases(self) -> None:
+        compatible_case = shared_case("version-abi-compatible.yaml")
+        self._require_case_id(compatible_case, "version/abi_compatible")
+        self._require_case_action(compatible_case, "feature_discovery")
+        self._require_case_expectation(compatible_case, "result: ok")
+        self._require_case_expectation(compatible_case, "abi_version: 4")
+
+        compatible = Client(SharedDiscoveryTransport(4))
+        features = compatible.require_abi(4)
+        self.assertEqual(features.version().abi_version, 4)
+
+        incompatible_case = shared_case("version-abi-incompatible.yaml")
+        self._require_case_id(incompatible_case, "version/abi_incompatible")
+        self._require_case_action(incompatible_case, "feature_discovery")
+        self._require_case_expectation(incompatible_case, "result: error")
+        self._require_case_expectation(
+            incompatible_case, "error_code: VersionIncompatible"
+        )
+
+        incompatible = Client(SharedDiscoveryTransport(0))
+        with self.assertRaises(SDKError) as caught:
+            incompatible.require_abi(4)
+        self.assertEqual(caught.exception.code, ErrorCode.VERSION_INCOMPATIBLE)
+
+        control_only_case = shared_case("daemon-control-only.yaml")
+        self._require_case_id(control_only_case, "daemon/control_only")
+        self._require_case_action(control_only_case, "attach_daemon")
+        self._require_case_fixture(control_only_case, "health.ready.v4.json")
+        self._require_case_expectation(control_only_case, "error_code: ControlOnly")
+
+        health_client = HealthClient(
+            SharedHealthTransport(shared_control_only_health_json())
+        )
+        health = health_client.runtime_health()
+        self.assertTrue(health.api_alive())
+        self.assertFalse(health.ready())
+        self.assertFalse(health.invocation_ready)
+
+        control = DaemonControl(SharedControlOnlyDaemonTransport())
+        with self.assertRaises(SDKError) as caught:
+            control.attach(AttachOptions())
+        self.assertEqual(caught.exception.code, ErrorCode.CONTROL_ONLY)
+
+        error_case = shared_case("error-typed-json.yaml")
+        self._require_case_id(error_case, "error/typed_json")
+        self._require_case_action(error_case, "trigger_invalid_handle_error")
+        self._require_case_action(error_case, "read_last_error_json")
+        self._require_case_action(error_case, "project_explicit_error_code")
+        self._require_case_expectation(error_case, "schema: error.schema.json")
+        self._require_case_expectation(error_case, "invalid_handle_code: INVALID_HANDLE")
+        self._require_case_expectation(error_case, "explicit_timeout_code: TIMEOUT")
+        self._require_case_expectation(
+            error_case, "human_message_parse_required: false"
+        )
+
+        invalid_handle = SDKError.from_json(
+            b'{"code":"INVALID_HANDLE","stage":"sdk","message":"invalid handle",'
+            b'"retry":"never","source":"sdk","details":{}}'
+        )
+        self.assertIsNotNone(invalid_handle)
+        assert invalid_handle is not None
+        self.assertEqual(invalid_handle.code, ErrorCode.INVALID_HANDLE)
+        self.assertEqual(invalid_handle.stage, "sdk")
+        self.assertEqual(invalid_handle.retry, RetryHint.NEVER)
+
+        timeout = SDKError.from_json(
+            b'{"code":"TIMEOUT","stage":"invoke","message":"deadline exceeded",'
+            b'"retry":"safe","source":"daemon","details":{}}'
+        )
+        self.assertIsNotNone(timeout)
+        assert timeout is not None
+        self.assertEqual(timeout.code, ErrorCode.TIMEOUT)
+        self.assertEqual(timeout.retry, RetryHint.SAFE)
+        self.assertTrue(timeout.retryable)
 
     def test_python_host_binding_executes_shared_conformance_case(self) -> None:
         host_binding_case = shared_case("host-binding-codec-hash.yaml")
@@ -2490,6 +2640,28 @@ def shared_compatibility_stream_request_json() -> bytes:
     request = json.loads(shared_fixture("compatibility-stream-chat-completion-request.v4.json"))
     request["request"]["stream"] = True
     return json.dumps(request, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_feature_discovery_json(abi_version: int) -> bytes:
+    return json.dumps(
+        {
+            "abi_version": abi_version,
+            "sdk_version": "0.91.30",
+            "profiles": {"runtime_core": "partial"},
+            "symbols": {"runtime_health": True},
+            "axon_pb": False,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def shared_control_only_health_json() -> bytes:
+    health = json.loads(shared_fixture("health.ready.v4.json"))
+    health["invocation_ready"] = False
+    health["runtime_ready"] = False
+    health["diagnostics"] = ["invocation endpoint unavailable"]
+    return json.dumps(health, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def shared_ability_query() -> AbilityQuery:

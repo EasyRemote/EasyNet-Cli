@@ -13,4 +13,4 @@ steps:
       invocation_ready: false
 expect:
   result: error
-  error_code: DaemonDown
+  error_code: ControlOnly

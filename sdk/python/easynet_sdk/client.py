@@ -91,12 +91,16 @@ class Client:
                 message="feature discovery JSON must be an object",
             )
         abi_version = decoded.get("abi_version")
-        if not isinstance(abi_version, int) or abi_version <= 0:
+        if (
+            not isinstance(abi_version, int)
+            or isinstance(abi_version, bool)
+            or abi_version < 0
+        ):
             raise SDKError(
                 code=ErrorCode.INVALID_ARGUMENT,
                 stage="decode",
                 retry=RetryHint.NEVER,
-                message="abi_version must be a positive integer",
+                message="abi_version must be a non-negative integer",
             )
         sdk_version = decoded.get("sdk_version", "")
         if not isinstance(sdk_version, str):

@@ -170,7 +170,8 @@ All languages must branch on typed errors, not human strings:
 - `InvalidArgument`
 - `InvalidHandle`
 - `VersionIncompatible`
-- `DaemonDown`
+- `DaemonOffline`
+- `ControlOnly`
 - `PermissionDenied`
 - `NotFound`
 - `Cancelled`

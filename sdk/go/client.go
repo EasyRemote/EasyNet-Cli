@@ -142,15 +142,6 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 			Cause:     err,
 		}
 	}
-	if features.ABIVersion == 0 {
-		return FeatureSet{}, &SDKError{
-			Code:      ErrorInvalidArgument,
-			Stage:     "decode",
-			Retry:     RetryNever,
-			Retryable: RetryableForHint(RetryNever),
-			Message:   "abi_version must be non-zero",
-		}
-	}
 	if features.Profiles == nil {
 		features.Profiles = map[string]string{}
 	}
