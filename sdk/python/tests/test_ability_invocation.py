@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from easynet_sdk import (
@@ -6,8 +7,10 @@ from easynet_sdk import (
     AbilityTargetRequest,
     BidiStreamDescriptor,
     ErrorCode,
+    InvocationResult,
     InvocationSignature,
     PrepareOptions,
+    ReceiptClient,
     RuntimeClient,
     SDKError,
     Signer,
@@ -447,6 +450,81 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(runtime.seen_draft)
 
+    def test_child_context_anchors_child_invocation_to_parent_receipt(self) -> None:
+        identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
+        receipt_transport = ChildReceiptTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(identity),
+        )
+        parent = _parent_result_with_receipt()
+
+        child = client.child_context(
+            parent,
+            ReceiptClient(receipt_transport),
+            caller_ura="easynet:///r/example/agent/child.sdk",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            metadata={"trace_id": "parent-1"},
+        )
+        request = child.call_request(
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            ability_name="observe.health",
+            args={"child": True},
+            metadata={"attempt": 1},
+        )
+
+        result = child.invoke(
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            ability_name="observe.health",
+            args={"child": True},
+            metadata={"attempt": 1},
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            request.causal_context,
+            {
+                "form": "scalar",
+                "receipt_ura": "easynet:///r/example/receipt/parent-1",
+                "receipt_hash_hex": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+            },
+        )
+        self.assertEqual(request.metadata, {"trace_id": "parent-1", "attempt": 1})
+        self.assertIsNotNone(receipt_transport.seen_receipt)
+        assert runtime.seen_draft is not None
+        self.assertEqual(runtime.seen_draft["caller_ura"], request.caller_ura)
+        self.assertEqual(runtime.seen_draft["causal_context"], request.causal_context)
+        self.assertEqual(runtime.seen_draft["metadata"], request.metadata)
+
+    def test_child_target_request_inherits_causal_context_and_metadata(self) -> None:
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            addressing=AddressingClient(_identity_transport()),
+        )
+        child = client.child_context(
+            _parent_result_with_receipt(),
+            ReceiptClient(ChildReceiptTransport()),
+            caller_ura="easynet:///r/example/agent/child.sdk",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            metadata={"trace_id": "parent-1"},
+        )
+
+        target = child.target_request(
+            owner_ura="easynet:///r/example/device/dev-a",
+            ability_name="observe.health",
+            subject_ura="easynet:///r/example/device/dev-a",
+            metadata={"attempt": 2},
+        )
+
+        self.assertEqual(target.caller_ura, "easynet:///r/example/agent/child.sdk")
+        self.assertEqual(target.metadata, {"trace_id": "parent-1", "attempt": 2})
+        self.assertEqual(target.causal_context["form"], "scalar")
+
     def test_close_delegates_to_owned_clients_once(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()
@@ -462,6 +540,20 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(identity.close_calls, 1)
         with self.assertRaises(SDKError):
             client.invoke(_request(ability_name="observe.health"))
+
+
+class ChildReceiptTransport:
+    def __init__(self) -> None:
+        self.seen_receipt: dict[str, object] | None = None
+
+    def causal_ref(self, receipt_json: bytes) -> bytes:
+        self.seen_receipt = json.loads(receipt_json.decode("utf-8"))
+        return (
+            b'{"form":"scalar",'
+            b'"receipt_ura":"easynet:///r/example/receipt/parent-1",'
+            b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        )
 
 
 def _identity_transport() -> MemoryIdentityTransport:
@@ -541,6 +633,45 @@ def _request_with(
         ability_ura=ability_ura,
         ability_name=ability_name,
         args={"city": "Singapore"},
+    )
+
+
+def _parent_result_with_receipt() -> InvocationResult:
+    return InvocationResult.from_json(
+        json.dumps(
+            {
+                "ok": True,
+                "tuple": {
+                    "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/"
+                        "device.dev-a.observe.health@1.0.0"
+                    ),
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    "causal_context": {"form": "none"},
+                    "content_type": "application/json",
+                    "args": {},
+                },
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_base64": "e30=",
+                "output_json": {},
+                "elapsed_ms": 8,
+                "receipt": {
+                    "receipt_ura": "easynet:///r/example/receipt/parent-1",
+                    "invocation_id": "inv-parent-1",
+                    "self_hash_hex": (
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    ),
+                },
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
     )
 
 

@@ -9,6 +9,7 @@ from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from .identity import AddressingClient, DescriptorRefRequest
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
+from .receipt import ReceiptClient
 from .runtime import (
     InvocationCancel,
     InvocationHandle,
@@ -69,6 +70,103 @@ class ResolvedAbilityTarget:
     callee_ura: str
     subject_ura: str
     descriptor_version: str
+
+
+@dataclass(frozen=True)
+class AbilityChildContext:
+    """Child Invocation context anchored to a daemon/Axon parent receipt."""
+
+    invoker: "AbilityInvocationClient"
+    caller_ura: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def target_request(
+        self,
+        *,
+        descriptor_ref: str = "",
+        ability_ura: str = "",
+        owner_ura: str = "",
+        ability_name: str = "",
+        subject_ura: str = "",
+        descriptor_version: str = "1.0.0",
+        content_type: str = "application/json",
+        args: Any = None,
+        arguments_base64: str | None = None,
+        metadata: Mapping[str, object] | None = None,
+        caller_signature: InvocationSignature | None = None,
+    ) -> AbilityTargetRequest:
+        """Build an EasyRemote-style child target request."""
+
+        return AbilityTargetRequest(
+            caller_ura=_required_string(self.caller_ura, "caller_ura"),
+            nonce_base64=_required_string(self.nonce_base64, "nonce_base64"),
+            causal_context=_required_mapping(self.causal_context, "causal_context"),
+            descriptor_ref=descriptor_ref,
+            ability_ura=ability_ura,
+            owner_ura=owner_ura,
+            ability_name=ability_name,
+            subject_ura=subject_ura,
+            descriptor_version=descriptor_version,
+            content_type=content_type,
+            args={} if args is None else args,
+            arguments_base64=arguments_base64,
+            metadata=_merged_metadata(self.metadata, metadata),
+            caller_signature=caller_signature,
+        )
+
+    def call_request(
+        self,
+        *,
+        callee_ura: str,
+        subject_ura: str,
+        descriptor_ref: str = "",
+        ability_ura: str = "",
+        ability_name: str = "",
+        descriptor_version: str = "1.0.0",
+        content_type: str = "application/json",
+        args: Any = None,
+        arguments_base64: str | None = None,
+        metadata: Mapping[str, object] | None = None,
+        caller_signature: InvocationSignature | None = None,
+    ) -> AbilityCallRequest:
+        """Build a direct child ability request with an inherited causal anchor."""
+
+        return AbilityCallRequest(
+            caller_ura=_required_string(self.caller_ura, "caller_ura"),
+            callee_ura=_required_string(callee_ura, "callee_ura"),
+            subject_ura=_required_string(subject_ura, "subject_ura"),
+            nonce_base64=_required_string(self.nonce_base64, "nonce_base64"),
+            causal_context=_required_mapping(self.causal_context, "causal_context"),
+            descriptor_ref=descriptor_ref,
+            ability_ura=ability_ura,
+            ability_name=ability_name,
+            descriptor_version=descriptor_version,
+            content_type=content_type,
+            args={} if args is None else args,
+            arguments_base64=arguments_base64,
+            metadata=_merged_metadata(self.metadata, metadata),
+            caller_signature=caller_signature,
+        )
+
+    def build_target_invocation(self, **kwargs: object) -> InvocationDraft:
+        return self.invoker.build_target_invocation(self.target_request(**kwargs))
+
+    def invoke_target(self, **kwargs: object) -> InvocationResult:
+        return self.invoker.invoke_target(self.target_request(**kwargs))
+
+    def stream_target(self, **kwargs: object) -> StreamHandle:
+        return self.invoker.stream_target(self.target_request(**kwargs))
+
+    def build_invocation(self, **kwargs: object) -> InvocationDraft:
+        return self.invoker.build_invocation(self.call_request(**kwargs))
+
+    def invoke(self, **kwargs: object) -> InvocationResult:
+        return self.invoker.invoke(self.call_request(**kwargs))
+
+    def stream(self, **kwargs: object) -> StreamHandle:
+        return self.invoker.stream(self.call_request(**kwargs))
 
 
 @dataclass
@@ -220,6 +318,29 @@ class AbilityInvocationClient:
 
         return self._require_open().prepare_and_sign(
             self.build_target_invocation(request), signer, options
+        )
+
+    def child_context(
+        self,
+        parent: InvocationResult,
+        receipts: ReceiptClient,
+        *,
+        caller_ura: str,
+        nonce_base64: str,
+        metadata: Mapping[str, object] | None = None,
+    ) -> AbilityChildContext:
+        """Create a child-call context from a parent Invocation receipt."""
+
+        self._require_open()
+        if receipts is None:
+            raise _invalid_ability_invocation("receipt client is required")
+        causal_context = receipts.causal_context_from_invocation_result(parent)
+        return AbilityChildContext(
+            invoker=self,
+            caller_ura=_required_string(caller_ura, "caller_ura"),
+            nonce_base64=_required_string(nonce_base64, "nonce_base64"),
+            causal_context=causal_context,
+            metadata=dict(metadata or {}),
         )
 
     def invoke(self, request: AbilityCallRequest) -> InvocationResult:
@@ -413,6 +534,16 @@ def _required_mapping(
     if not isinstance(value, Mapping):
         raise _invalid_ability_invocation(f"{field_name} must be an object")
     return dict(value)
+
+
+def _merged_metadata(
+    base: Mapping[str, object],
+    extra: Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    value = dict(base)
+    if extra:
+        value.update(dict(extra))
+    return value
 
 
 def _invalid_ability_invocation(message: str) -> SDKError:

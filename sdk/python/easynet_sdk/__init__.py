@@ -6,6 +6,7 @@ expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 
 from .ability_invocation import (
     AbilityCallRequest,
+    AbilityChildContext,
     AbilityInvocationClient,
     AbilityTargetRequest,
     ResolvedAbilityTarget,
@@ -375,6 +376,7 @@ __all__ = [
     "AbilityDeployResult",
     "AbilityImplID",
     "AbilityCallRequest",
+    "AbilityChildContext",
     "AbilityInvocationClient",
     "AbilityPackageManifest",
     "AdminAgentListRequest",
