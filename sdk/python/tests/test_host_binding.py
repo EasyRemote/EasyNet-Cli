@@ -201,6 +201,61 @@ class HostBindingTests(unittest.TestCase):
                 )
             )
 
+    def test_local_transport_rejects_descriptor_and_endpoint_drift(self) -> None:
+        client = HostBindingClient(LocalHostBindingTransport())
+
+        with self.assertRaises(SDKError):
+            client.build_host_stream_binding(
+                HostStreamBindingRequest(
+                    binding_id="binding-weather-1",
+                    descriptor_ref="easynet:///r/example/ability/device.dev-a.weather.stream",
+                    endpoint="/tmp/easynet-weather.sock",
+                )
+            )
+
+        with self.assertRaises(SDKError):
+            client.build_host_stream_binding(
+                HostStreamBindingRequest(
+                    binding_id="binding-weather-1",
+                    descriptor_ref="easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+                    endpoint="/tmp/../easynet-weather.sock",
+                )
+            )
+
+    def test_local_transport_uses_injected_descriptor_canonicalizer(self) -> None:
+        def canonicalize(value: str) -> str:
+            self.assertEqual(value, "weather.stream@1")
+            return "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0"
+
+        client = HostBindingClient(LocalHostBindingTransport(canonicalize))
+        binding = client.build_host_stream_binding(
+            HostStreamBindingRequest(
+                binding_id="binding-weather-1",
+                descriptor_ref="weather.stream@1",
+                endpoint="/tmp/easynet-weather.sock",
+            )
+        )
+
+        self.assertEqual(
+            binding.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+        )
+
+    def test_local_transport_rejects_incomplete_envelope(self) -> None:
+        client = HostBindingClient(LocalHostBindingTransport())
+
+        with self.assertRaises(SDKError):
+            client.decode_request(
+                HostStreamEnvelope(
+                    HostStreamEnvelopeRequest(
+                        fn="weather.stream",
+                        args={"city": "Singapore"},
+                        call_id="call-weather-1",
+                        caller="",
+                    )
+                )
+            )
+
     def test_binding_request_accepts_typed_lifecycle_dtos(self) -> None:
         transport = MemoryHostBindingTransport()
         client = HostBindingClient(transport)
@@ -307,6 +362,20 @@ class HostBindingTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIn("last_seq must match frames", caught.exception.message)
         self.assertEqual(transport.calls, [])
+
+    def test_local_transport_rejects_non_canonical_previous_hash(self) -> None:
+        client = HostBindingClient(LocalHostBindingTransport())
+        with self.assertRaises(SDKError):
+            client.fold_output_hash(
+                HostStreamHashState(
+                    algorithm=HOST_STREAM_HASH_ALGORITHM,
+                    output_hash="sha256:ABC",
+                    frames=0,
+                    last_seq=None,
+                ),
+                0,
+                {"token": "hello"},
+            )
 
     def test_frame_writer_sequences_items_and_terminal_via_client(self) -> None:
         transport = MemoryHostBindingTransport()

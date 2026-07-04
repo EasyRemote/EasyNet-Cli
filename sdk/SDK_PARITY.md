@@ -60,9 +60,11 @@ method spelling.
 - Publication ResourceRef/package validation/deploy-unpublish carrier guardrails
   exist for Rust/C ABI; daemon list/show/enable/disable read models, execution
   wrappers, and language facades remain incomplete.
-- Host Binding codec/hash guardrails exist for Rust/C ABI; product host
-  lifecycle, language facades, and behavior-executing profile conformance
-  adapters remain incomplete.
+- Host Binding codec/hash guardrails exist for Rust/C ABI, and Python exposes a
+  conformance-pinned `LocalHostBindingTransport` facade plus EasyRemote audit
+  checks against raw host-stream codecs; product host lifecycle, cleanup
+  execution, and behavior-executing profile conformance adapters remain
+  incomplete.
 - Mission carrier/status guardrails exist for Rust/C ABI; live event streams,
   daemon track/cancel convenience methods, language facades, and
   behavior-executing profile conformance adapters remain incomplete.

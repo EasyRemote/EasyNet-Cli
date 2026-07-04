@@ -74,9 +74,12 @@ install projection, published-ability read-model seams, and close state seams. H
 exposes binding DTO, typed cleanup/readiness/lifecycle ownership DTOs, envelope
 decode, item/error/terminal frame encoding, output-hash folding seams, and a
 HostStreamFrameWriter lifecycle helper that delegates frame/hash semantics
-through the client plus per-call HostStreamSession state seams. The package also
-exposes EasyRemote cutover audit helpers that reject raw FFI/Axon imports and raw
-Invocation JSON codecs in consumer code. MissionClient exposes run/run-file/track/cancel
+through the client plus per-call HostStreamSession state seams. Python also
+ships `LocalHostBindingTransport` for product-host frame/hash facade execution
+against the shared Host Binding conformance fixtures. The package also exposes
+EasyRemote cutover audit helpers that reject raw FFI/Axon imports, raw
+Invocation JSON codecs, and raw host-stream frame/hash codecs in consumer code.
+MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient

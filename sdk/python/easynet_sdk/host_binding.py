@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
@@ -210,7 +210,7 @@ class HostStreamEnvelopeRequest:
     caller: str
 
     def to_json_dict(self) -> dict[str, object]:
-        if not self.fn or not self.call_id:
+        if not self.fn or not self.call_id or not self.caller:
             raise _invalid_host_binding("host stream envelope request is incomplete")
         return {
             "fn": self.fn,
@@ -236,9 +236,9 @@ class HostStreamEnvelope:
         return cls(
             HostStreamEnvelopeRequest(
                 fn=_required_string(request, "fn"),
-                args=request.get("args", {}),
+                args=_required_present(request, "args"),
                 call_id=_required_string(request, "call_id"),
-                caller=_required_string(request, "caller", allow_empty=True),
+                caller=_required_string(request, "caller"),
             )
         )
 
@@ -263,7 +263,7 @@ class HostStreamRequest:
             function=_required_string(decoded, "function"),
             args=decoded.get("args"),
             call_id=_required_string(decoded, "call_id"),
-            caller=_required_string(decoded, "caller", allow_empty=True),
+            caller=_required_string(decoded, "caller"),
             metadata=_required_mapping(decoded, "metadata"),
         )
 
@@ -422,11 +422,21 @@ class LocalHostBindingTransport:
     shared host-stream frame and rolling hash fixtures.
     """
 
+    def __init__(
+        self,
+        descriptor_ref_canonicalizer: Optional[Callable[[str], str]] = None,
+    ) -> None:
+        self._descriptor_ref_canonicalizer = descriptor_ref_canonicalizer
+
     def build_host_stream_binding(self, request_json: bytes) -> bytes:
         request = _json_object(request_json, "host stream binding request")
+        descriptor_ref = _canonical_host_binding_descriptor_ref(
+            _required_string(request, "descriptor_ref"),
+            self._descriptor_ref_canonicalizer,
+        )
         binding_request = HostStreamBindingRequest(
             binding_id=_required_string(request, "binding_id"),
-            descriptor_ref=_required_string(request, "descriptor_ref"),
+            descriptor_ref=descriptor_ref,
             endpoint=_required_string(request, "endpoint"),
             frame_schema=_required_string(request, "frame_schema"),
             cleanup=_optional_mapping(request.get("cleanup"), "cleanup"),
@@ -809,7 +819,30 @@ def _validate_binding_request(request: HostStreamBindingRequest) -> None:
 
 
 def _is_absolute_host_endpoint(endpoint: str) -> bool:
-    return endpoint.startswith("/") or endpoint.startswith("unix:///")
+    if not endpoint.startswith("/"):
+        return False
+    return ".." not in endpoint.split("/")
+
+
+def _canonical_host_binding_descriptor_ref(
+    descriptor_ref: str,
+    canonicalizer: Optional[Callable[[str], str]],
+) -> str:
+    if descriptor_ref.strip() != descriptor_ref:
+        raise _invalid_host_binding("descriptor_ref must not contain surrounding whitespace")
+    if canonicalizer is None:
+        if "@" not in descriptor_ref or descriptor_ref.endswith("@"):
+            raise _invalid_host_binding("descriptor_ref must include descriptor version")
+        return descriptor_ref
+    try:
+        canonical = canonicalizer(descriptor_ref)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _invalid_host_binding("descriptor_ref canonicalization failed", exc) from exc
+    if not isinstance(canonical, str) or not canonical:
+        raise _invalid_host_binding("descriptor_ref canonicalizer returned empty value")
+    return canonical
 
 
 def _validate_frame(frame: HostStreamFrame) -> None:
@@ -989,8 +1022,16 @@ def _fold_hash(previous_output_hash: str, seq: int, canonical_json: str) -> str:
     prefix = "sha256:"
     if not previous_output_hash.startswith(prefix):
         raise _invalid_host_binding("previous output_hash must be sha256-prefixed")
+    hex_part = previous_output_hash.removeprefix(prefix)
+    if (
+        len(hex_part) != 64
+        or any(ch not in "0123456789abcdef" for ch in hex_part)
+    ):
+        raise _invalid_host_binding(
+            "previous output_hash must use sha256:<64 lowercase hex> form"
+        )
     try:
-        previous = bytes.fromhex(previous_output_hash.removeprefix(prefix))
+        previous = bytes.fromhex(hex_part)
     except ValueError as exc:
         raise _invalid_host_binding("previous output_hash is not hex", exc) from exc
     hasher = hashlib.sha256()
@@ -1022,6 +1063,12 @@ def _required_string(
     if not isinstance(value, str) or (not allow_empty and value.strip() == ""):
         raise _invalid_host_binding(f"{field_name} is required")
     return value
+
+
+def _required_present(decoded: Mapping[str, object], field_name: str) -> object:
+    if field_name not in decoded:
+        raise _invalid_host_binding(f"{field_name} is required")
+    return decoded[field_name]
 
 
 def _optional_string(value: object, field_name: str) -> Optional[str]:

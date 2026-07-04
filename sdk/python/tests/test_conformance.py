@@ -52,6 +52,7 @@ from easynet_sdk import (
     HOST_STREAM_HASH_ALGORITHM,
     HealthClient,
     HostBindingClient,
+    LocalHostBindingTransport,
     HostStreamBindingRequest,
     HostStreamEnvelope,
     HostStreamEnvelopeRequest,
@@ -1621,6 +1622,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             host_binding_case,
             "hash_state_invariant: frames_zero_requires_null_last_seq_and_frames_positive_requires_last_seq_equal_frames_minus_one",
         )
+        self._require_case_expectation(
+            host_binding_case, "local_transport_matches_shared_hash: true"
+        )
 
         transport = SharedHostBindingTransport()
         client = HostBindingClient(transport)
@@ -1715,6 +1719,20 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             )
         self.assertEqual(corrupted_fold.exception.code, ErrorCode.INVALID_ARGUMENT)
         self.assertEqual(transport.hash_fold_calls, 1)
+
+        local_client = HostBindingClient(LocalHostBindingTransport())
+        local_folded = local_client.fold_output_hash(
+            HostStreamHashState(
+                algorithm=HOST_STREAM_HASH_ALGORITHM,
+                output_hash="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                frames=0,
+                last_seq=None,
+            ),
+            0,
+            {"token": "hello"},
+        )
+        self.assertEqual(local_folded.output_hash, folded.output_hash)
+        self.assertEqual(local_folded.canonical_json, folded.canonical_json)
 
     def test_python_receipt_executes_shared_projection_conformance_case(self) -> None:
         fetch_case = shared_case("receipt-fetch-carrier.yaml")
