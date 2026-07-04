@@ -4,7 +4,7 @@
   "title": "ReceiptFetchRequest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["caller_ura", "callee_ura", "subject_ura", "descriptor_version", "nonce_base64", "causal_context"],
+  "required": ["caller_ura", "callee_ura", "descriptor_ref", "subject_ura", "descriptor_version", "nonce_base64", "causal_context"],
   "oneOf": [
     {"required": ["invocation_ura"]},
     {"required": ["request_id"]},
@@ -13,6 +13,7 @@
   "properties": {
     "caller_ura": {"type": "string", "minLength": 1},
     "callee_ura": {"type": "string", "minLength": 1},
+    "descriptor_ref": {"type": "string", "minLength": 1},
     "subject_ura": {"type": "string", "minLength": 1},
     "descriptor_version": {"type": "string", "minLength": 1},
     "nonce_base64": {"type": "string", "minLength": 1},

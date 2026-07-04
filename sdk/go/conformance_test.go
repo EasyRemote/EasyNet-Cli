@@ -555,8 +555,20 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	requireCaseFixture(t, fetchCase, "receipt-fetch-request.v4.json")
 	requireCaseExpectation(t, fetchCase, "invocation_fixture: receipt-fetch-invocation.v4.json")
 	requireCaseExpectation(t, fetchCase, "daemon_ability: invocation.history.get")
+	requireCaseExpectation(t, fetchCase, "descriptor_ref_source: request")
 	requireCaseExpectation(t, fetchCase, "selector_cardinality: exactly_one")
 	requireCaseExpectation(t, fetchCase, "direct_ledger_read: false")
+
+	descriptorDelegationCase := sharedCase(t, root, "invocation-descriptor-ref-helper-delegation.yaml")
+	requireCaseID(t, descriptorDelegationCase, "invocation/descriptor_ref_helper_delegation")
+	requireCaseAction(t, descriptorDelegationCase, "project_descriptor_ref")
+	requireCaseAction(t, descriptorDelegationCase, "build_receipt_fetch_invocation")
+	requireCaseAction(t, descriptorDelegationCase, "inspect_descriptor_ref_source")
+	requireCaseExpectation(t, descriptorDelegationCase, "canonical_helper_owner: axon")
+	requireCaseExpectation(t, descriptorDelegationCase, "descriptor_ref_source: identity_projection_or_daemon_boundary")
+	requireCaseExpectation(t, descriptorDelegationCase, "receipt_fetch_descriptor_ref_from_request: true")
+	requireCaseExpectation(t, descriptorDelegationCase, "facade_descriptor_concat: false")
+	requireCaseExpectation(t, descriptorDelegationCase, "rejects_missing_descriptor_ref: true")
 
 	var fetchRequest ReceiptFetchRequest
 	if err := json.Unmarshal(sharedFixture(t, root, "receipt-fetch-request.v4.json"), &fetchRequest); err != nil {
@@ -571,6 +583,22 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 		t.Fatalf("marshal shared receipt fetch invocation: %v", err)
 	}
 	assertJSONEquivalent(t, fetchDraftJSON, sharedFixture(t, root, "receipt-fetch-invocation.v4.json"))
+	if fetchDraft.DescriptorRef() != fetchRequest.DescriptorRef {
+		t.Fatalf("receipt fetch descriptor_ref = %q, want request value %q", fetchDraft.DescriptorRef(), fetchRequest.DescriptorRef)
+	}
+	missingDescriptor := fetchRequest
+	missingDescriptor.DescriptorRef = ""
+	if _, err := BuildReceiptFetchInvocation(missingDescriptor); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing descriptor_ref = %v, want %s", err, ErrInvalidArgument)
+	}
+	receiptSource, err := os.ReadFile(filepath.Join(root, "sdk/go/receipt.go"))
+	if err != nil {
+		t.Fatalf("read receipt source: %v", err)
+	}
+	if strings.Contains(string(receiptSource), "receiptAbilityDescriptorParts") ||
+		strings.Contains(string(receiptSource), "%s/ability/%s.%s@%s") {
+		t.Fatalf("receipt facade source reintroduced descriptor_ref synthesis")
+	}
 	ambiguous := fetchRequest
 	ambiguous.TraceID = "trace-1"
 	if _, err := BuildReceiptFetchInvocation(ambiguous); !IsCode(err, ErrInvalidArgument) {

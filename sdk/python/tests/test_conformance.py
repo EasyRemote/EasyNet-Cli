@@ -1523,8 +1523,40 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             fetch_case, "daemon_ability: invocation.history.get"
         )
+        self._require_case_expectation(fetch_case, "descriptor_ref_source: request")
         self._require_case_expectation(fetch_case, "selector_cardinality: exactly_one")
         self._require_case_expectation(fetch_case, "direct_ledger_read: false")
+
+        descriptor_delegation_case = shared_case(
+            "invocation-descriptor-ref-helper-delegation.yaml"
+        )
+        self._require_case_id(
+            descriptor_delegation_case,
+            "invocation/descriptor_ref_helper_delegation",
+        )
+        for action in (
+            "project_descriptor_ref",
+            "build_receipt_fetch_invocation",
+            "inspect_descriptor_ref_source",
+        ):
+            self._require_case_action(descriptor_delegation_case, action)
+        self._require_case_expectation(
+            descriptor_delegation_case, "canonical_helper_owner: axon"
+        )
+        self._require_case_expectation(
+            descriptor_delegation_case,
+            "descriptor_ref_source: identity_projection_or_daemon_boundary",
+        )
+        self._require_case_expectation(
+            descriptor_delegation_case,
+            "receipt_fetch_descriptor_ref_from_request: true",
+        )
+        self._require_case_expectation(
+            descriptor_delegation_case, "facade_descriptor_concat: false"
+        )
+        self._require_case_expectation(
+            descriptor_delegation_case, "rejects_missing_descriptor_ref: true"
+        )
 
         fetch_request = shared_receipt_fetch_request()
         fetch_draft = build_receipt_fetch_invocation(fetch_request)
@@ -1532,11 +1564,35 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             fetch_draft.to_json().encode("utf-8"),
             shared_fixture("receipt-fetch-invocation.v4.json"),
         )
+        self.assertEqual(fetch_draft.descriptor_ref, fetch_request.descriptor_ref)
+        with self.assertRaises(SDKError) as missing_descriptor_caught:
+            build_receipt_fetch_invocation(
+                ReceiptFetchRequest(
+                    caller_ura=fetch_request.caller_ura,
+                    callee_ura=fetch_request.callee_ura,
+                    descriptor_ref="",
+                    subject_ura=fetch_request.subject_ura,
+                    descriptor_version=fetch_request.descriptor_version,
+                    nonce_base64=fetch_request.nonce_base64,
+                    causal_context=fetch_request.causal_context,
+                    request_id=fetch_request.request_id,
+                    metadata=fetch_request.metadata,
+                )
+            )
+        self.assertEqual(
+            missing_descriptor_caught.exception.code, ErrorCode.INVALID_ARGUMENT
+        )
+        receipt_source = (ROOT / "sdk/python/easynet_sdk/receipt.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("_receipt_ability_descriptor_parts", receipt_source)
+        self.assertNotIn('f"{ability_root}/ability/', receipt_source)
         with self.assertRaises(SDKError) as fetch_caught:
             build_receipt_fetch_invocation(
                 ReceiptFetchRequest(
                     caller_ura=fetch_request.caller_ura,
                     callee_ura=fetch_request.callee_ura,
+                    descriptor_ref=fetch_request.descriptor_ref,
                     subject_ura=fetch_request.subject_ura,
                     descriptor_version=fetch_request.descriptor_version,
                     nonce_base64=fetch_request.nonce_base64,
@@ -3687,6 +3743,7 @@ def shared_receipt_fetch_request() -> ReceiptFetchRequest:
     return ReceiptFetchRequest(
         caller_ura=decoded["caller_ura"],
         callee_ura=decoded["callee_ura"],
+        descriptor_ref=decoded["descriptor_ref"],
         subject_ura=decoded["subject_ura"],
         descriptor_version=decoded["descriptor_version"],
         nonce_base64=decoded["nonce_base64"],

@@ -98,6 +98,7 @@ def fetch_request() -> ReceiptFetchRequest:
     return ReceiptFetchRequest(
         caller_ura="easynet:///r/example/agent/alice.sdk",
         callee_ura="easynet:///r/example/device/dev-a",
+        descriptor_ref="easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
         subject_ura="easynet:///r/example/device/dev-a",
         descriptor_version="1.0.0",
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
@@ -130,6 +131,7 @@ class ReceiptTests(unittest.TestCase):
             ReceiptFetchRequest(
                 caller_ura=decoded["caller_ura"],
                 callee_ura=decoded["callee_ura"],
+                descriptor_ref=decoded["descriptor_ref"],
                 subject_ura=decoded["subject_ura"],
                 descriptor_version=decoded["descriptor_version"],
                 nonce_base64=decoded["nonce_base64"],
@@ -164,6 +166,7 @@ class ReceiptTests(unittest.TestCase):
                 ReceiptFetchRequest(
                     caller_ura=request.caller_ura,
                     callee_ura=request.callee_ura,
+                    descriptor_ref=request.descriptor_ref,
                     subject_ura=request.subject_ura,
                     descriptor_version=request.descriptor_version,
                     nonce_base64=request.nonce_base64,
@@ -176,6 +179,7 @@ class ReceiptTests(unittest.TestCase):
                 ReceiptFetchRequest(
                     caller_ura=request.caller_ura,
                     callee_ura=request.callee_ura,
+                    descriptor_ref=request.descriptor_ref,
                     subject_ura=request.subject_ura,
                     descriptor_version=request.descriptor_version,
                     nonce_base64=request.nonce_base64,

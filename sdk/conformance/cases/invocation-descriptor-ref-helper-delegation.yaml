@@ -1,0 +1,21 @@
+id: invocation/descriptor_ref_helper_delegation
+profile: directory_identity
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Invocation carriers consume daemon/Axon-projected DescriptorRef values and do not synthesize ability descriptor grammar inside SDK facades.
+steps:
+  - action: project_descriptor_ref
+    input: easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0
+  - action: build_receipt_fetch_invocation
+    fixture: receipt-fetch-request.v4.json
+  - action: inspect_descriptor_ref_source
+expect:
+  result: descriptor_ref_delegation_observed
+  canonical_helper_owner: axon
+  descriptor_ref_source: identity_projection_or_daemon_boundary
+  receipt_fetch_descriptor_ref_from_request: true
+  facade_descriptor_concat: false
+  rejects_missing_descriptor_ref: true

@@ -14,5 +14,6 @@ expect:
   request_schema: receipt-fetch-request.schema.json
   invocation_fixture: receipt-fetch-invocation.v4.json
   daemon_ability: invocation.history.get
+  descriptor_ref_source: request
   selector_cardinality: exactly_one
   direct_ledger_read: false

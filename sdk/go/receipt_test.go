@@ -56,6 +56,7 @@ func baseReceiptFetchRequest() ReceiptFetchRequest {
 	return ReceiptFetchRequest{
 		CallerURA:         "easynet:///r/example/agent/alice.sdk",
 		CalleeURA:         "easynet:///r/example/device/dev-a",
+		DescriptorRef:     "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
 		SubjectURA:        "easynet:///r/example/device/dev-a",
 		DescriptorVersion: "1.0.0",
 		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",
@@ -80,7 +81,7 @@ func TestReceiptFetchPreservesCarrierAndDecodesSummary(t *testing.T) {
 	if summary.State != "completed" || summary.Verified || summary.InvocationID == nil || *summary.InvocationID != "inv-example-1" {
 		t.Fatalf("unexpected summary: %#v", summary)
 	}
-	if transport.seenRequest["request_id"] != "inv-example-1" || transport.seenRequest["caller_ura"] == "" {
+	if transport.seenRequest["request_id"] != "inv-example-1" || transport.seenRequest["caller_ura"] == "" || transport.seenRequest["descriptor_ref"] == "" {
 		t.Fatalf("fetch request not forwarded: %#v", transport.seenRequest)
 	}
 }

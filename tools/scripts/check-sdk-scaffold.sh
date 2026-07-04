@@ -331,6 +331,7 @@ case_files=(
   invocation-prepared-not-submittable.yaml
   invocation-presigned-submit.yaml
   invocation-local-daemon-signing-boundary.yaml
+  invocation-descriptor-ref-helper-delegation.yaml
   error-typed-json.yaml
   identity-ura-descriptor-projection.yaml
   receipt-fetch-carrier.yaml
@@ -543,6 +544,12 @@ require_literal sdk/python/easynet_sdk/receipt.py "ReceiptSummary"
 require_literal sdk/python/easynet_sdk/receipt.py "ReceiptVerification"
 require_literal sdk/python/easynet_sdk/receipt.py "CausalRef"
 require_literal sdk/python/easynet_sdk/receipt.py "build_receipt_fetch_invocation"
+require_literal sdk/python/easynet_sdk/receipt.py "descriptor_ref"
+require_literal sdk/schemas/receipt-fetch-request.schema.json '"descriptor_ref"'
+require_literal sdk/conformance/fixtures/receipt-fetch-request.v4.json '"descriptor_ref"'
+require_literal sdk/conformance/cases/invocation-descriptor-ref-helper-delegation.yaml "invocation/descriptor_ref_helper_delegation"
+require_literal sdk/conformance/cases/invocation-descriptor-ref-helper-delegation.yaml "canonical_helper_owner: axon"
+require_literal sdk/conformance/cases/invocation-descriptor-ref-helper-delegation.yaml "facade_descriptor_concat: false"
 require_literal sdk/python/easynet_sdk/publication.py "PublicationClient"
 require_literal sdk/python/easynet_sdk/publication.py "PublicationTransport"
 require_literal sdk/python/easynet_sdk/publication.py "AbilityDeployRequest"
@@ -636,11 +643,13 @@ require_literal sdk/go/conformance_test.go "TestGoRuntimeCoreExecutesSharedLifec
 require_literal sdk/go/conformance_test.go "TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases"
 require_literal sdk/go/conformance_test.go "TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase"
 require_literal sdk/go/conformance_test.go "receipt/fetch_carrier"
+require_literal sdk/go/conformance_test.go "invocation/descriptor_ref_helper_delegation"
 require_literal sdk/go/conformance_test.go "TestGoCompatibilityFacadeExecutesSharedOpenAICarrierConformanceCase"
 require_literal sdk/python/tests/test_conformance.py "test_python_runtime_core_executes_shared_lifecycle_version_error_conformance_cases"
 require_literal sdk/python/tests/test_conformance.py "test_python_runtime_core_executes_shared_invocation_signing_conformance_cases"
 require_literal sdk/python/tests/test_conformance.py "test_python_runtime_core_executes_shared_stream_bidi_lifecycle_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "receipt/fetch_carrier"
+require_literal sdk/python/tests/test_conformance.py "invocation/descriptor_ref_helper_delegation"
 require_literal sdk/python/tests/test_conformance.py "test_python_compatibility_executes_shared_openai_carrier_conformance_case"
 require_literal sdk/SDK_INTERFACE_SPEC.md "PreparedInvocation"
 require_literal sdk/SDK_INTERFACE_SPEC.md "SignedInvocation"

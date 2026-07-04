@@ -21,6 +21,7 @@ class ReceiptFetchRequest:
 
     caller_ura: str
     callee_ura: str
+    descriptor_ref: str
     subject_ura: str
     descriptor_version: str
     nonce_base64: str
@@ -35,6 +36,7 @@ class ReceiptFetchRequest:
         value: dict[str, object] = {
             "caller_ura": self.caller_ura,
             "callee_ura": self.callee_ura,
+            "descriptor_ref": self.descriptor_ref,
             "subject_ura": self.subject_ura,
             "descriptor_version": self.descriptor_version,
             "nonce_base64": self.nonce_base64,
@@ -330,7 +332,6 @@ def build_receipt_fetch_invocation(request: ReceiptFetchRequest) -> InvocationDr
     """Build a complete Runtime Core carrier for daemon receipt lookup."""
 
     _validate_fetch_request(request)
-    ability_root, ability_owner = _receipt_ability_descriptor_parts(request.callee_ura)
     metadata = dict(request.metadata)
     metadata["profile"] = _PROFILE
     metadata["system_ability"] = _FETCH_ABILITY
@@ -339,9 +340,7 @@ def build_receipt_fetch_invocation(request: ReceiptFetchRequest) -> InvocationDr
         InvocationBuilder()
         .with_caller_ura(request.caller_ura)
         .with_callee_ura(request.callee_ura)
-        .with_descriptor_ref(
-            f"{ability_root}/ability/{ability_owner}.{_FETCH_ABILITY}@{request.descriptor_version}"
-        )
+        .with_descriptor_ref(request.descriptor_ref)
         .with_subject_ura(request.subject_ura)
         .with_nonce_base64(request.nonce_base64)
         .with_causal_context(request.causal_context)
@@ -356,12 +355,13 @@ def _validate_fetch_request(request: ReceiptFetchRequest) -> None:
     if (
         not request.caller_ura
         or not request.callee_ura
+        or not request.descriptor_ref
         or not request.subject_ura
         or not request.descriptor_version
         or not request.nonce_base64
     ):
         raise _invalid_receipt(
-            "caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required"
+            "caller_ura, callee_ura, descriptor_ref, subject_ura, descriptor_version, and nonce_base64 are required"
         )
     if request.causal_context is None:
         raise _invalid_receipt("causal_context is required")
@@ -382,19 +382,6 @@ def _receipt_fetch_key(request: ReceiptFetchRequest) -> dict[str, object]:
     if request.trace_id:
         return {"trace_id": request.trace_id}
     raise _invalid_receipt("exactly one receipt lookup key is required")
-
-
-def _receipt_ability_descriptor_parts(callee_ura: str) -> tuple[str, str]:
-    marker = "/device/"
-    trimmed = callee_ura.strip()
-    index = trimmed.rfind(marker)
-    if index < 0:
-        raise _invalid_receipt("callee_ura must identify a device")
-    root = trimmed[:index].rstrip("/")
-    device_id = trimmed[index + len(marker) :].strip("/")
-    if not root or not device_id or "/" in device_id:
-        raise _invalid_receipt("callee_ura must identify one device")
-    return root, f"device.{device_id}"
 
 
 def _validate_chain_request(

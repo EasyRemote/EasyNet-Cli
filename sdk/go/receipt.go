@@ -16,6 +16,7 @@ const receiptFetchAbility = "invocation.history.get"
 type ReceiptFetchRequest struct {
 	CallerURA         string         `json:"caller_ura"`
 	CalleeURA         string         `json:"callee_ura"`
+	DescriptorRef     string         `json:"descriptor_ref"`
 	SubjectURA        string         `json:"subject_ura"`
 	DescriptorVersion string         `json:"descriptor_version"`
 	NonceBase64       string         `json:"nonce_base64"`
@@ -188,10 +189,6 @@ func BuildReceiptFetchInvocation(req ReceiptFetchRequest) (InvocationDraft, erro
 	if err := validateReceiptFetchRequest(req); err != nil {
 		return InvocationDraft{}, err
 	}
-	abilityRoot, abilityOwner, err := receiptAbilityDescriptorParts(req.CalleeURA)
-	if err != nil {
-		return InvocationDraft{}, err
-	}
 	args, err := receiptFetchArgs(req)
 	if err != nil {
 		return InvocationDraft{}, err
@@ -207,7 +204,7 @@ func BuildReceiptFetchInvocation(req ReceiptFetchRequest) (InvocationDraft, erro
 	return NewInvocationBuilder().
 		WithCallerURA(req.CallerURA).
 		WithCalleeURA(req.CalleeURA).
-		WithDescriptorRef(fmt.Sprintf("%s/ability/%s.%s@%s", abilityRoot, abilityOwner, receiptFetchAbility, req.DescriptorVersion)).
+		WithDescriptorRef(req.DescriptorRef).
 		WithSubjectURA(req.SubjectURA).
 		WithNonceBase64(req.NonceBase64).
 		WithCausalContext(req.CausalContext).
@@ -396,8 +393,8 @@ func NewCausalRefFromJSON(raw []byte) (CausalRef, error) {
 }
 
 func validateReceiptFetchRequest(req ReceiptFetchRequest) error {
-	if req.CallerURA == "" || req.CalleeURA == "" || req.SubjectURA == "" || req.DescriptorVersion == "" || req.NonceBase64 == "" {
-		return invalidRuntimePayload("caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required", nil)
+	if req.CallerURA == "" || req.CalleeURA == "" || req.DescriptorRef == "" || req.SubjectURA == "" || req.DescriptorVersion == "" || req.NonceBase64 == "" {
+		return invalidRuntimePayload("caller_ura, callee_ura, descriptor_ref, subject_ura, descriptor_version, and nonce_base64 are required", nil)
 	}
 	if req.CausalContext == nil {
 		return invalidRuntimePayload("causal_context is required", nil)
@@ -431,21 +428,6 @@ func receiptFetchArgs(req ReceiptFetchRequest) (map[string]any, error) {
 		return nil, invalidRuntimePayload("exactly one receipt lookup key is required", nil)
 	}
 	return map[string]any{"key": key}, nil
-}
-
-func receiptAbilityDescriptorParts(calleeURA string) (string, string, error) {
-	trimmed := strings.TrimSpace(calleeURA)
-	const marker = "/device/"
-	index := strings.LastIndex(trimmed, marker)
-	if index < 0 {
-		return "", "", invalidRuntimePayload("callee_ura must identify a device", nil)
-	}
-	root := strings.TrimSuffix(trimmed[:index], "/")
-	deviceID := strings.Trim(trimmed[index+len(marker):], "/")
-	if root == "" || deviceID == "" || strings.Contains(deviceID, "/") {
-		return "", "", invalidRuntimePayload("callee_ura must identify one device", nil)
-	}
-	return root, "device." + deviceID, nil
 }
 
 func validateReceiptChainVerificationRequest(req ReceiptChainVerificationRequest) error {

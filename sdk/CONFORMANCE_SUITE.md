@@ -100,6 +100,8 @@ swift test --package-path sdk/swift
 - directory read-model carriers, resolve carrier/projection, page projection,
   pagination, and no-default-fanout
 - identity URA and DescriptorRef projection delegates to Axon helpers
+- invocation carriers consume Axon/daemon-projected DescriptorRef values rather
+  than synthesizing descriptor grammar in SDK facades
 - receipt fetch/project/verify/causal-ref
 - receipt projection never upgrades summary-only data to verified
 - publication ResourceRef, package validation, and complete Invocation carriers
