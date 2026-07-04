@@ -32,6 +32,12 @@ class RuntimeHealth:
     mismatch: Mapping[str, object] | None = None
     diagnostics: tuple[str, ...] = field(default_factory=tuple)
 
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "RuntimeHealth":
+        """Decode the shared health.schema.json DTO."""
+
+        return _decode_runtime_health(raw)
+
     def api_alive(self) -> bool:
         """Return process/API liveness, not full runtime readiness."""
 

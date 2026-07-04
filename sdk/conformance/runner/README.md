@@ -25,3 +25,7 @@ Minimum result record:
 ```
 
 Skipped required cases block a `language-stable` claim.
+
+Go and Python facade tests must consume shared fixtures from
+`sdk/conformance/fixtures` for shipped DTOs. Inline samples may remain as
+focused unit tests, but they do not replace the shared fixture parity gate.

@@ -78,6 +78,7 @@ for path in \
   sdk/go/health_test.go \
   sdk/go/invocation.go \
   sdk/go/invocation_test.go \
+  sdk/go/conformance_test.go \
   sdk/go/runtime.go \
   sdk/go/runtime_test.go \
   sdk/go/bidi.go \
@@ -124,6 +125,7 @@ for path in \
   sdk/python/tests/test_wrappers.py \
   sdk/python/tests/test_connection.py \
   sdk/python/tests/test_invocation.py \
+  sdk/python/tests/test_conformance.py \
   sdk/python/tests/test_runtime.py \
   sdk/python/tests/test_bidi.py \
   sdk/python/tests/test_signing.py \
@@ -362,6 +364,10 @@ done
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
+require_literal sdk/go/conformance_test.go "sdk/conformance/fixtures"
+require_literal sdk/go/conformance_test.go "TestGoFacadeConsumesSharedConformanceFixtures"
+require_literal sdk/python/tests/test_conformance.py "sdk/conformance/fixtures"
+require_literal sdk/python/tests/test_conformance.py "SharedConformanceFixtureTests"
 require_literal sdk/go/client.go "DiscoveryTransport"
 require_literal sdk/go/daemon.go "DaemonHandle"
 require_literal sdk/go/daemon.go "DaemonLifecycleState"
@@ -451,6 +457,7 @@ require_literal sdk/go/errors.go "DecodeDaemonErrorJSON"
 require_literal sdk/go/errors.go "RuntimeError"
 require_literal sdk/go/health.go "HealthClient"
 require_literal sdk/go/health.go "RuntimeHealth"
+require_literal sdk/go/health.go "NewRuntimeHealthFromJSON"
 require_literal sdk/go/invocation.go "InvocationBuilder"
 require_literal sdk/go/invocation.go "InvocationDraft"
 require_literal sdk/go/runtime.go "RuntimeClient"

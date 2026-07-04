@@ -99,6 +99,11 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 	return decodeRuntimeHealth(raw)
 }
 
+// NewRuntimeHealthFromJSON decodes the shared health.schema.json DTO.
+func NewRuntimeHealthFromJSON(raw []byte) (RuntimeHealth, error) {
+	return decodeRuntimeHealth(raw)
+}
+
 func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
