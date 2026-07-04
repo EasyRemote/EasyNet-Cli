@@ -41,8 +41,8 @@ use crate::core::ura::{
 };
 use crate::daemon::identity_contract::{
     build_list_signing_keys_invocation, build_register_signing_key_invocation,
-    build_revoke_signing_key_invocation, project_signing_key_page, project_signing_key_record,
-    project_signing_key_revoke_result, IdentitySdkError,
+    build_revoke_signing_key_invocation, project_signer_handle, project_signing_key_page,
+    project_signing_key_record, project_signing_key_revoke_result, IdentitySdkError,
 };
 use crate::ffi::client::handle::{get, EasynetHandle};
 use crate::ffi::errors::{
@@ -344,6 +344,28 @@ pub unsafe extern "C" fn easynet_identity_project_signing_key_revoke_result(
         "out_result_json",
         "result_json",
         project_signing_key_revoke_result,
+    )
+}
+
+/// Project daemon identity key inventory output into a signer handle DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_signer_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_project_signer_handle(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_signer_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        result_json,
+        out_signer_json,
+        "easynet_identity_project_signer_handle",
+        "out_signer_json",
+        "result_json",
+        project_signer_handle,
     )
 }
 
@@ -1123,6 +1145,45 @@ mod tests {
         assert_eq!(value["profile"], "directory_identity");
         assert_eq!(value["key_id"], "alice-key-1");
         assert_eq!(value["state"], "revoked");
+        release(handle);
+    }
+
+    #[test]
+    fn identity_project_signer_handle_uses_daemon_inventory_output() {
+        let handle = handle();
+        let public_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let signer = CString::new(
+            serde_json::json!({
+                "request": {
+                    "owner_ura": "easynet:///r/example/user/alice",
+                    "key_id": "alice-key-1",
+                    "usage": "invocation.sign"
+                },
+                "result": {
+                    "agent_ura": "easynet:///r/example/user/alice",
+                    "keys": [{
+                        "key_id": "alice-key-1",
+                        "public_key_b64": public_key,
+                        "added_at_unix_ms": 1783100000123u64
+                    }],
+                    "rotation_epoch": 3
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_identity_project_signer_handle(handle, signer.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "directory_identity");
+        assert_eq!(value["signer_id"], "signer-alice-key-1");
+        assert_eq!(value["key_id"], "alice-key-1");
+        assert_eq!(value["policy"]["mode"], "local_daemon_signing");
+        assert_eq!(value["metadata"]["source"], "identity.list_user_pubkeys");
         release(handle);
     }
 

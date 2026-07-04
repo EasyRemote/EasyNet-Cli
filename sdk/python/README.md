@@ -43,7 +43,7 @@ AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ur
 `AbilityAddress` projection for EasyRemote-style callee/subject ownership facts,
 IdentityClient descriptor/resource projection, C ABI-backed signing-key
 register/list/revoke execution through daemon identity abilities, and
-signer-handle seams.
+C ABI-backed signer-handle projection from daemon key inventory.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
 through Runtime Core invoke, and close state seams

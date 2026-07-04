@@ -211,7 +211,8 @@ method spelling.
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, plus C ABI-backed signing-key register/list/revoke
-  execution through daemon identity abilities; directory buffered-event
+  execution through daemon identity abilities and signer-handle projection from
+  daemon key inventory; directory buffered-event
   projection, local signer implementations, and actual EasyRemote repository
   extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref

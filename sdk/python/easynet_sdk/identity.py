@@ -195,6 +195,7 @@ class SignerRequest:
     key_id: str
     usage: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+    base: Optional[IdentityCarrierBase] = None
 
     def to_json_bytes(self) -> bytes:
         owner_ura = _required_clean_string(self.owner_ura, "owner_ura")
@@ -209,6 +210,8 @@ class SignerRequest:
         }
         if self.usage:
             value["usage"] = _required_clean_string(self.usage, "usage")
+        if self.base is not None:
+            value.update(self.base.to_json_dict())
         if self.metadata:
             value["metadata"] = dict(self.metadata)
         return _json_bytes(value)

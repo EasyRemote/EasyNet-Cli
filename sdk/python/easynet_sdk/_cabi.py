@@ -38,6 +38,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_identity_project_signing_key_record",
     "easynet_identity_project_signing_key_page",
     "easynet_identity_project_signing_key_revoke_result",
+    "easynet_identity_project_signer_handle",
     "easynet_directory_build_list_devices_invocation",
     "easynet_directory_build_list_agents_invocation",
     "easynet_directory_build_list_abilities_invocation",
@@ -787,7 +788,12 @@ class CABIIdentityTransport:
         )
 
     def signer(self, request_json: bytes) -> bytes:
-        return self._missing("identity signer")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_identity_build_list_signing_keys_invocation",
+            project_symbol="easynet_identity_project_signer_handle",
+            projection_keys=("owner_ura", "key_id", "usage"),
+        )
 
     def close(self) -> None:
         if self._closed:

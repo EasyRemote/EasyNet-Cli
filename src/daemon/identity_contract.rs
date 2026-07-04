@@ -230,6 +230,73 @@ pub(crate) fn project_signing_key_revoke_result(input: &Value) -> Result<Value, 
     }))
 }
 
+pub(crate) fn project_signer_handle(input: &Value) -> Result<Value, IdentitySdkError> {
+    let projection = SigningKeyProjectionInput::parse(input, "SignerHandle")?;
+    let request = projection.request;
+    let owner_ura = required_string(&request, "owner_ura")?;
+    validate_ura(owner_ura, "owner_ura")?;
+    let requested_key_id = required_string(&request, "key_id")?;
+    let usage =
+        optional_string_field(&request, "usage")?.unwrap_or_else(|| "invocation.sign".to_string());
+    if usage != "invocation.sign" {
+        return Err(IdentitySdkError::InvalidField(
+            "usage",
+            "only invocation.sign signer handles are exposed by the daemon SDK".to_string(),
+        ));
+    }
+
+    let result = object(&projection.result, "SignerHandle.result")?;
+    let result_owner =
+        optional_string_field(result, "agent_ura")?.unwrap_or_else(|| owner_ura.to_string());
+    if result_owner != owner_ura {
+        return Err(IdentitySdkError::InvalidField(
+            "owner_ura",
+            "daemon signer key inventory owner does not match request".to_string(),
+        ));
+    }
+    let keys = result
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or(IdentitySdkError::MissingField("keys"))?;
+
+    for key in keys {
+        let key_obj = object(key, "SignerHandle.keys[]")?;
+        let public_key_base64 = required_string(key_obj, "public_key_b64")?;
+        validate_ed25519_public_key(public_key_base64)?;
+        let derived_key_id = public_key_key_id(public_key_base64)?;
+        let daemon_key_id = optional_string_field(key_obj, "key_id")?;
+        let key_matches = daemon_key_id.as_deref() == Some(requested_key_id)
+            || derived_key_id == requested_key_id;
+        if !key_matches {
+            continue;
+        }
+        let key_id = daemon_key_id.unwrap_or(derived_key_id);
+        let signer_id = format!("signer-{key_id}");
+        return Ok(json!({
+            "profile": IDENTITY_PROFILE,
+            "signer_id": signer_id,
+            "owner_ura": owner_ura,
+            "key_id": key_id,
+            "algorithm": "ed25519",
+            "policy": {
+                "mode": "local_daemon_signing",
+                "usage": usage,
+                "signer_id": signer_id,
+            },
+            "metadata": {
+                "source": "identity.list_user_pubkeys",
+                "public_key_base64": public_key_base64,
+                "rotation_epoch": optional_u64(result, "rotation_epoch")?.unwrap_or(0),
+            },
+        }));
+    }
+
+    Err(IdentitySdkError::InvalidField(
+        "key_id",
+        "signer key was not present in daemon identity inventory".to_string(),
+    ))
+}
+
 struct SigningKeyProjectionInput {
     request: Map<String, Value>,
     result: Value,
@@ -598,6 +665,61 @@ mod tests {
         assert_eq!(result["state"], "not_found");
         assert_eq!(result["metadata"]["removed"], false);
         assert_eq!(result["metadata"]["reason"], "rotation");
+    }
+
+    #[test]
+    fn project_signer_handle_uses_daemon_key_inventory() {
+        let key_id = public_key_key_id(public_key()).unwrap();
+        let input = json!({
+            "request": {
+                "owner_ura": "easynet:///r/example/user/alice",
+                "key_id": key_id,
+                "usage": "invocation.sign"
+            },
+            "result": {
+                "agent_ura": "easynet:///r/example/user/alice",
+                "keys": [
+                    {
+                        "public_key_b64": public_key(),
+                        "added_at_unix_ms": 1783100000123u64
+                    }
+                ],
+                "rotation_epoch": 3
+            }
+        });
+
+        let handle = project_signer_handle(&input).unwrap();
+
+        assert_eq!(handle["profile"], IDENTITY_PROFILE);
+        assert_eq!(handle["key_id"], key_id);
+        assert_eq!(handle["owner_ura"], "easynet:///r/example/user/alice");
+        assert_eq!(handle["algorithm"], "ed25519");
+        assert_eq!(handle["policy"]["mode"], "local_daemon_signing");
+        assert_eq!(handle["policy"]["usage"], "invocation.sign");
+        assert_eq!(handle["metadata"]["source"], "identity.list_user_pubkeys");
+    }
+
+    #[test]
+    fn project_signer_handle_rejects_missing_daemon_key() {
+        let input = json!({
+            "request": {
+                "owner_ura": "easynet:///r/example/user/alice",
+                "key_id": "missing-key",
+                "usage": "invocation.sign"
+            },
+            "result": {
+                "agent_ura": "easynet:///r/example/user/alice",
+                "keys": [
+                    {
+                        "public_key_b64": public_key()
+                    }
+                ]
+            }
+        });
+
+        let err = project_signer_handle(&input).unwrap_err();
+
+        assert!(err.to_string().contains("key_id"));
     }
 
     #[test]

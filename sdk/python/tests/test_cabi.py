@@ -868,6 +868,8 @@ class FakeRawCABI:
             return IDENTITY_SIGNING_KEY_PAGE
         if symbol == "easynet_identity_project_signing_key_revoke_result":
             return IDENTITY_SIGNING_KEY_REVOKE
+        if symbol == "easynet_identity_project_signer_handle":
+            return IDENTITY_SIGNER_HANDLE
         if symbol == "easynet_directory_build_list_devices_invocation":
             return DIRECTORY_LIST_DEVICES_INVOCATION
         if symbol == "easynet_directory_build_list_agents_invocation":
@@ -1419,6 +1421,15 @@ IDENTITY_SIGNING_KEY_REVOKE = (
     b'{"profile":"directory_identity","key_id":"alice-key-1",'
     b'"revoked":true,"state":"revoked",'
     b'"metadata":{"source":"identity.revoke_user_pubkey","removed":true}}'
+)
+
+IDENTITY_SIGNER_HANDLE = (
+    b'{"profile":"directory_identity","signer_id":"signer-ed25519:derived",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"key_id":"ed25519:derived","algorithm":"ed25519",'
+    b'"policy":{"mode":"local_daemon_signing","usage":"invocation.sign",'
+    b'"signer_id":"signer-ed25519:derived"},'
+    b'"metadata":{"source":"identity.list_user_pubkeys"}}'
 )
 
 HOST_BINDING_PROJECTION = (
@@ -2281,15 +2292,32 @@ class CABITransportTests(unittest.TestCase):
             ],
         )
 
-        with self.assertRaises(SDKError) as caught:
-            client.signer(
-                SignerRequest(
-                    owner_ura="easynet:///r/example/agent/alice.sdk",
-                    key_id="alice-key-1",
-                    usage="invocation.sign",
-                )
+        signer = client.signer(
+            SignerRequest(
+                owner_ura="easynet:///r/example/agent/alice.sdk",
+                key_id="ed25519:derived",
+                usage="invocation.sign",
+                base=IdentityCarrierBase(
+                    caller_ura="easynet:///r/example/agent/alice.sdk",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/agent/alice.sdk",
+                    descriptor_version="1.0.0",
+                    nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                    causal_context={"form": "none"},
+                ),
             )
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        )
+
+        self.assertEqual(signer.signer_id, "signer-ed25519:derived")
+        self.assertEqual(signer.key_id, "ed25519:derived")
+        self.assertEqual(signer.algorithm, "ed25519")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests[-2:]],
+            [
+                "easynet_identity_build_list_signing_keys_invocation",
+                "easynet_identity_project_signer_handle",
+            ],
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_owned_identity_transport_closes_handle_once(self) -> None:
