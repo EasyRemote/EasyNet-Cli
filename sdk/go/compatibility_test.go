@@ -278,20 +278,43 @@ func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
 
 	base := compatibilityBaseForTest()
 	base.AuthToken = ""
-	chat, err := client.CreateChatCompletion(context.Background(), CompatibilityChatCompletionRequest{CompatibilityCarrierBase: base, Request: compatibilityChatRequest()})
+	chatReq := CompatibilityChatCompletionRequest{CompatibilityCarrierBase: base, Request: compatibilityChatRequest()}
+	chat, err := client.ChatCompletions(context.Background(), chatReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if chat.Object != "chat.completion" || len(chat.Choices) != 1 {
 		t.Fatalf("unexpected chat completion: %#v", chat)
 	}
+	if transport.seen["create_chat"]["request"] == nil {
+		t.Fatalf("normative chat method did not delegate to transport: %#v", transport.seen["create_chat"])
+	}
 
-	stream, err := client.StreamChatCompletion(context.Background(), CompatibilityStreamChatCompletionRequest{CompatibilityCarrierBase: base, Request: compatibilityChatRequest()})
+	streamReq := CompatibilityStreamChatCompletionRequest{CompatibilityCarrierBase: base, Request: compatibilityChatRequest()}
+	stream, err := client.StreamChatCompletions(context.Background(), streamReq)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !stream.Stream || stream.DoneSentinel != "[DONE]" || len(stream.Items) != 1 {
 		t.Fatalf("unexpected chat stream: %#v", stream)
+	}
+	if request := transport.seen["stream_chat"]["request"].(map[string]any); request["stream"] != true {
+		t.Fatalf("normative stream method did not force stream=true: %#v", request)
+	}
+
+	legacyChat, err := client.CreateChatCompletion(context.Background(), chatReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyChat.ID != chat.ID {
+		t.Fatalf("legacy chat wrapper diverged: %#v vs %#v", legacyChat, chat)
+	}
+	legacyStream, err := client.StreamChatCompletion(context.Background(), streamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyStream.DoneSentinel != stream.DoneSentinel {
+		t.Fatalf("legacy stream wrapper diverged: %#v vs %#v", legacyStream, stream)
 	}
 
 	uploaded, err := client.UploadFile(context.Background(), compatibilityFileUploadRequest(compatibilityBaseForTest()))

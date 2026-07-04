@@ -1707,18 +1707,18 @@ func TestGoCompatibilityFacadeExecutesSharedOpenAICarrierConformanceCase(t *test
 		t.Fatalf("unexpected shared compatibility model page: %#v", models)
 	}
 
-	chat, err := compatibility.CreateChatCompletion(context.Background(), sharedCompatibilityChatCompletionRequest(t, root))
+	chat, err := compatibility.ChatCompletions(context.Background(), sharedCompatibilityChatCompletionRequest(t, root))
 	if err != nil {
-		t.Fatalf("CreateChatCompletion(shared fixture): %v", err)
+		t.Fatalf("ChatCompletions(shared fixture): %v", err)
 	}
 	if chat.Kind != "chat_completion" || chat.Model != "easynet:///r/example/ability/alice.codex.chat" ||
 		len(chat.Choices) != 1 {
 		t.Fatalf("unexpected shared compatibility chat completion: %#v", chat)
 	}
 
-	stream, err := compatibility.StreamChatCompletion(context.Background(), sharedCompatibilityStreamChatCompletionRequest(t, root))
+	stream, err := compatibility.StreamChatCompletions(context.Background(), sharedCompatibilityStreamChatCompletionRequest(t, root))
 	if err != nil {
-		t.Fatalf("StreamChatCompletion(shared fixture): %v", err)
+		t.Fatalf("StreamChatCompletions(shared fixture): %v", err)
 	}
 	if stream.Kind != "chat_completion_stream" || !stream.Stream || stream.DoneSentinel != "[DONE]" ||
 		len(stream.Items) != 1 {
@@ -2084,6 +2084,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"BuildFileUploadInvocation":           "compatibility.file.build_upload_invocation",
 				"BuildListModelsInvocation":           "compatibility.models.build_list_invocation",
 				"BuildStreamChatCompletionInvocation": "compatibility.chat.build_stream_invocation",
+				"ChatCompletions":                     "compatibility.chat.completions",
 				"Close":                               "compatibility.close",
 				"CreateChatCompletion":                "compatibility.chat.create_completion",
 				"DeleteFile":                          "compatibility.file.delete",
@@ -2093,6 +2094,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"ProjectFileDeleteResult":             "compatibility.file.project_delete_result",
 				"ProjectFileUpload":                   "compatibility.file.project_upload",
 				"RetrieveFile":                        "compatibility.file.retrieve",
+				"StreamChatCompletions":               "compatibility.chat.stream_completions",
 				"StreamChatCompletion":                "compatibility.chat.stream_completion",
 				"UploadFile":                          "compatibility.file.upload",
 			},
@@ -2249,7 +2251,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "backend_hub",
 			Profile:  "compatibility",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*CompatibilityClient)(nil)), Methods: []string{"ListModels", "CreateChatCompletion", "StreamChatCompletion", "UploadFile", "RetrieveFile", "DeleteFile"}},
+				{Type: reflect.TypeOf((*CompatibilityClient)(nil)), Methods: []string{"ListModels", "ChatCompletions", "StreamChatCompletions", "UploadFile", "RetrieveFile", "DeleteFile"}},
 			},
 		},
 		{

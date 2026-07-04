@@ -338,7 +338,7 @@ func (c *CompatibilityClient) ListModels(ctx context.Context, req CompatibilityL
 	return NewCompatibilityModelPageFromJSON(raw)
 }
 
-func (c *CompatibilityClient) CreateChatCompletion(ctx context.Context, req CompatibilityChatCompletionRequest) (CompatibilityChatCompletion, error) {
+func (c *CompatibilityClient) ChatCompletions(ctx context.Context, req CompatibilityChatCompletionRequest) (CompatibilityChatCompletion, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return CompatibilityChatCompletion{}, err
 	}
@@ -353,7 +353,11 @@ func (c *CompatibilityClient) CreateChatCompletion(ctx context.Context, req Comp
 	return NewCompatibilityChatCompletionFromJSON(raw)
 }
 
-func (c *CompatibilityClient) StreamChatCompletion(ctx context.Context, req CompatibilityStreamChatCompletionRequest) (CompatibilityChatCompletionStream, error) {
+func (c *CompatibilityClient) CreateChatCompletion(ctx context.Context, req CompatibilityChatCompletionRequest) (CompatibilityChatCompletion, error) {
+	return c.ChatCompletions(ctx, req)
+}
+
+func (c *CompatibilityClient) StreamChatCompletions(ctx context.Context, req CompatibilityStreamChatCompletionRequest) (CompatibilityChatCompletionStream, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return CompatibilityChatCompletionStream{}, err
 	}
@@ -366,6 +370,10 @@ func (c *CompatibilityClient) StreamChatCompletion(ctx context.Context, req Comp
 		return CompatibilityChatCompletionStream{}, wrapCompatibilityTransportError("compatibility stream chat completion failed", err)
 	}
 	return NewCompatibilityChatCompletionStreamFromJSON(raw)
+}
+
+func (c *CompatibilityClient) StreamChatCompletion(ctx context.Context, req CompatibilityStreamChatCompletionRequest) (CompatibilityChatCompletionStream, error) {
+	return c.StreamChatCompletions(ctx, req)
 }
 
 func (c *CompatibilityClient) UploadFile(ctx context.Context, req CompatibilityFileUploadRequest) (CompatibilityFile, error) {
