@@ -6,14 +6,18 @@ from easynet_sdk import (
     AbilityTargetRequest,
     BidiStreamDescriptor,
     ErrorCode,
+    InvocationSignature,
+    PrepareOptions,
     RuntimeClient,
     SDKError,
+    Signer,
     is_code,
 )
 from easynet_sdk.identity import AddressingClient
 
 from test_identity import MemoryIdentityTransport
 from test_runtime import MemoryRuntimeTransport
+from test_signing import signer_handle
 
 
 class AbilityInvocationClientTests(unittest.TestCase):
@@ -246,6 +250,112 @@ class AbilityInvocationClientTests(unittest.TestCase):
                     "owner_ura": "easynet:///r/example/device/dev-a",
                     "ability_name": "observe.health",
                 },
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+                    "descriptor_version": "1.0.0",
+                },
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+            ],
+        )
+
+    def test_prepare_delegates_built_invocation_without_signing_locally(self) -> None:
+        identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(identity),
+        )
+
+        prepared, material = client.prepare(
+            _request(ability_name="observe.health"),
+            PrepareOptions(fill_nonce=True, require_user_sig=True),
+        )
+
+        self.assertEqual(prepared.prepared_id, "prepared-example-1")
+        self.assertTrue(material.canonical_bytes_base64)
+        self.assertIsNone(runtime.seen_signed)
+        self.assertEqual(
+            runtime.seen_options,
+            {"fill_nonce": True, "require_user_sig": True},
+        )
+        assert runtime.seen_draft is not None
+        self.assertEqual(
+            runtime.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            identity.seen_requests,
+            [
+                {
+                    "kind": "ability",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "ability_name": "observe.health",
+                },
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+                    "descriptor_version": "1.0.0",
+                },
+            ],
+        )
+
+    def test_prepare_and_sign_target_keeps_submission_explicit(self) -> None:
+        identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(identity),
+        )
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        signed, material = client.prepare_and_sign_target(
+            _target_request(
+                ability_ura=(
+                    "easynet:///r/example/ability/"
+                    "device.dev-a.observe.health"
+                )
+            ),
+            signer,
+            PrepareOptions(expires_in_ms=60000),
+        )
+
+        self.assertTrue(signed.submit_ready())
+        self.assertTrue(material.canonical_bytes_base64)
+        self.assertIsNone(runtime.seen_signed)
+        self.assertEqual(runtime.seen_options, {"expires_in_ms": 60000})
+        assert runtime.seen_draft is not None
+        self.assertEqual(
+            runtime.seen_draft["callee_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            runtime.seen_draft["subject_ura"],
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+
+        handle = client.submit_signed(signed)
+        result = client.await_result(handle)
+        cancelled = client.cancel(handle, "client stop")
+        events = client.events(handle)
+        client.close_handle(handle)
+
+        self.assertEqual(handle.handle_id, 7)
+        self.assertTrue(result.ok)
+        self.assertTrue(cancelled.cancelled)
+        self.assertTrue(events.terminal)
+        self.assertEqual(runtime.seen_await_id, 7)
+        self.assertEqual(runtime.seen_cancel_reason, "client stop")
+        self.assertEqual(runtime.seen_free_id, 7)
+        assert runtime.seen_signed is not None
+        self.assertEqual(runtime.seen_signed["signer_id"], "signer-alice-key-1")
+        self.assertEqual(
+            identity.seen_requests,
+            [
                 {
                     "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
                     "descriptor_version": "1.0.0",

@@ -9,7 +9,14 @@ from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from .identity import AddressingClient, DescriptorRefRequest
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
-from .runtime import InvocationResult, RuntimeClient
+from .runtime import (
+    InvocationCancel,
+    InvocationHandle,
+    InvocationResult,
+    PrepareOptions,
+    RuntimeClient,
+)
+from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 from .stream import StreamHandle
 
 
@@ -192,6 +199,29 @@ class AbilityInvocationClient:
             self.build_target_invocation(request), streams
         )
 
+    def prepare_target(
+        self,
+        request: AbilityTargetRequest,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> tuple[PreparedInvocation, SigningMaterial]:
+        """Resolve and prepare one target ability Invocation for signing."""
+
+        return self._require_open().prepare(
+            self.build_target_invocation(request), options
+        )
+
+    def prepare_and_sign_target(
+        self,
+        request: AbilityTargetRequest,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> tuple[SignedInvocation, SigningMaterial]:
+        """Resolve, prepare, and sign one target ability Invocation."""
+
+        return self._require_open().prepare_and_sign(
+            self.build_target_invocation(request), signer, options
+        )
+
     def invoke(self, request: AbilityCallRequest) -> InvocationResult:
         """Build and submit one unary ability Invocation."""
 
@@ -210,6 +240,52 @@ class AbilityInvocationClient:
         """Build and open one bidirectional ability Invocation."""
 
         return self._require_open().open_bidi(self.build_invocation(request), streams)
+
+    def prepare(
+        self,
+        request: AbilityCallRequest,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> tuple[PreparedInvocation, SigningMaterial]:
+        """Build and prepare one ability Invocation for signing."""
+
+        return self._require_open().prepare(self.build_invocation(request), options)
+
+    def prepare_and_sign(
+        self,
+        request: AbilityCallRequest,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> tuple[SignedInvocation, SigningMaterial]:
+        """Build, prepare, and sign one ability Invocation."""
+
+        return self._require_open().prepare_and_sign(
+            self.build_invocation(request), signer, options
+        )
+
+    def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
+        """Submit a signed Invocation and return its observation handle."""
+
+        return self._require_open().submit_signed(signed)
+
+    def await_result(self, handle: InvocationHandle) -> InvocationResult:
+        """Await a submitted Invocation handle."""
+
+        return self._require_open().await_result(handle)
+
+    def cancel(self, handle: InvocationHandle, reason: str = "") -> InvocationCancel:
+        """Cancel a submitted Invocation handle."""
+
+        return self._require_open().cancel(handle, reason)
+
+    def events(self, handle: InvocationHandle) -> InvocationHandle:
+        """Fetch the latest submitted Invocation handle events."""
+
+        return self._require_open().events(handle)
+
+    def close_handle(self, handle: InvocationHandle) -> None:
+        """Release a submitted Invocation handle."""
+
+        self._require_open().close_handle(handle)
 
     def close(self) -> None:
         if self._closed:
