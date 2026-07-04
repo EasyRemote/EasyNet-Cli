@@ -47,6 +47,7 @@ from easynet_sdk import (
     EventCursor,
     EventsCarrierBase,
     EventsDirectorySubscriptionRequest,
+    EventsSessionSubscriptionRequest,
     HealthClient,
     IdentityCarrierBase,
     IdentityClient,
@@ -262,7 +263,8 @@ class FakeRawCABI:
             b'{"abi_version":4,"sdk_version":"0.91.30",'
             b'"profiles":{"directory_identity":"read_model_projection_partial"},'
             b'"symbols":{"directory_identity_projection":true,'
-            b'"identity_signing_key_lifecycle":true},"axon_pb":true}',
+            b'"identity_signing_key_lifecycle":true,'
+            b'"events_session_stream":true},"axon_pb":true}',
         )
 
     def _last_error_json(self, out_ptr) -> int:
@@ -878,6 +880,8 @@ class FakeRawCABI:
             return RECEIPT_FETCH_INVOCATION
         if symbol == "easynet_events_build_directory_subscription_invocation":
             return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
+        if symbol == "easynet_events_build_session_subscription_invocation":
+            return EVENTS_SESSION_SUBSCRIPTION_INVOCATION
         if symbol == "easynet_publication_build_deploy_invocation":
             return PUBLICATION_DEPLOY_INVOCATION
         if symbol == "easynet_publication_project_deploy_result":
@@ -1088,6 +1092,21 @@ EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION = (
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"events",'
     b'"system_ability":"federation.subscribe_directory_v2",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+EVENTS_SESSION_SUBSCRIPTION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.session.attach@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"session_id":"run-1","since_seq":4},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"events",'
+    b'"system_ability":"session.attach",'
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
@@ -2035,6 +2054,7 @@ class CABITransportTests(unittest.TestCase):
         self.assertTrue(features.axon_pb)
         self.assertTrue(features.symbols["directory_identity_projection"])
         self.assertTrue(features.symbols["identity_signing_key_lifecycle"])
+        self.assertTrue(features.symbols["events_session_stream"])
 
     def test_identity_transport_drives_addressing_helpers(self) -> None:
         raw = FakeRawCABI()
@@ -2877,6 +2897,63 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.stream_closes, [404])
         self.assertEqual(raw.stream_cancels, [])
         self.assertEqual(raw.buffers, {})
+
+    def test_events_session_subscription_uses_session_attach_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = EventClient(CABIEventTransport(lib, handle=7))
+        base = EventsCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        draft = client.build_session_subscription_invocation(
+            EventsSessionSubscriptionRequest(
+                base,
+                stream="session",
+                session_id="run-1",
+                resume_cursor=EventCursor("session", 4),
+            )
+        )
+        stream = client.subscribe_sessions(
+            EventsSessionSubscriptionRequest(
+                base,
+                stream="session",
+                session_id="run-1",
+                resume_cursor=EventCursor("session", 4),
+            )
+        )
+
+        self.assertEqual(
+            draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0",
+        )
+        self.assertEqual(stream.stream, "session")
+        self.assertEqual(stream.state, "Open")
+        self.assertEqual(stream.resume_token, "session:4")
+        self.assertEqual(stream.metadata["stream_ability"], "session.attach")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_events_build_session_subscription_invocation",
+                "easynet_events_build_session_subscription_invocation",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "stream_open")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "session.attach",
+        )
+        self.assertEqual(raw.runtime_requests[0][1]["args"]["since_seq"], 4)
+
+        client.close()
+
+        self.assertEqual(raw.stream_closes, [404])
 
     def test_events_client_close_closes_directory_runtime_stream(self) -> None:
         raw = FakeRawCABI()

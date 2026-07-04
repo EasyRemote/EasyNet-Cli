@@ -338,6 +338,50 @@ class EventClientTests(unittest.TestCase):
         self.assertTrue(terminal.terminal)
         self.assertEqual(terminal.kind, "directory.terminal")
 
+    def test_directory_projectors_reject_session_cursor(self) -> None:
+        client = EventClient(MemoryEventTransport())
+
+        with self.assertRaises(SDKError) as caught:
+            client.project_directory_event(
+                EventProjectionInput(
+                    EventCursor("session", 8),
+                    {"type": "heartbeat", "unix_ms": 1783100000123},
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("event cursor stream mismatch", caught.exception.message)
+
+        with self.assertRaises(SDKError) as caught:
+            client.project_terminal(
+                EventTerminalInput(
+                    EventCursor("session", 11),
+                    occurred_unix_ms=1783100000123,
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("event cursor stream mismatch", caught.exception.message)
+
+    def test_session_subscription_requires_daemon_session_id(self) -> None:
+        client = EventClient(MemoryEventTransport())
+
+        with self.assertRaises(SDKError) as caught:
+            client.subscribe_sessions(
+                EventsSessionSubscriptionRequest(
+                    events_base(),
+                    session_ura="easynet:///r/example/resource/daemon.browser/run-1",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn(
+            "session_ura cannot be converted into daemon session_id",
+            caught.exception.message,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.subscribe_sessions(EventsSessionSubscriptionRequest(events_base()))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("session_id is required", caught.exception.message)
+
     def test_subscribes_device_session_and_invocation_streams(self) -> None:
         transport = MemoryEventTransport()
         client = EventClient(transport)
@@ -355,13 +399,15 @@ class EventClientTests(unittest.TestCase):
         session_stream = client.subscribe_sessions(
             EventsSessionSubscriptionRequest(
                 events_base(),
-                session_ura="easynet:///r/example/session/sess-1",
+                session_id="run-1",
+                resume_cursor=EventCursor("session", 4),
             )
         )
         self.assertEqual(session_stream.stream, "session")
+        self.assertEqual(transport.seen["subscribe_sessions"]["session_id"], "run-1")
         self.assertEqual(
-            transport.seen["subscribe_sessions"]["session_ura"],
-            "easynet:///r/example/session/sess-1",
+            transport.seen["subscribe_sessions"]["resume_cursor"],
+            {"stream": "session", "sequence": 4},
         )
 
         invocation_stream = client.subscribe_invocations(

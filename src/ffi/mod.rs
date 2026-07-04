@@ -169,7 +169,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "publication": "carrier_partial",
             "host_binding": "codec_partial",
             "mission": "carrier_status_partial",
-            "events": "directory_stream_partial",
+            "events": "directory_session_stream_partial",
             "admin_gateway": "carrier_status_partial",
             "surface": "carrier_projection_partial",
             "compatibility": "carrier_projection_partial",
@@ -190,6 +190,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "mission_carriers": true,
             "mission_status_projection": true,
             "events_directory_stream": true,
+            "events_session_stream": true,
             "admin_gateway_carriers": true,
             "admin_gateway_status_projection": true,
             "admin_device_session_projection": true,
@@ -382,6 +383,7 @@ mod tests {
         assert_eq!(json["symbols"]["mission_carriers"], true);
         assert_eq!(json["symbols"]["mission_status_projection"], true);
         assert_eq!(json["symbols"]["events_directory_stream"], true);
+        assert_eq!(json["symbols"]["events_session_stream"], true);
         assert_eq!(json["symbols"]["admin_gateway_carriers"], true);
         assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
         assert_eq!(json["symbols"]["admin_device_session_projection"], true);
@@ -401,7 +403,10 @@ mod tests {
         assert_eq!(json["profiles"]["host_binding"], "codec_partial");
         assert_eq!(json["profiles"]["publication"], "carrier_partial");
         assert_eq!(json["profiles"]["mission"], "carrier_status_partial");
-        assert_eq!(json["profiles"]["events"], "directory_stream_partial");
+        assert_eq!(
+            json["profiles"]["events"],
+            "directory_session_stream_partial"
+        );
         assert_eq!(json["profiles"]["admin_gateway"], "carrier_status_partial");
         assert_eq!(json["profiles"]["surface"], "carrier_projection_partial");
         assert_eq!(

@@ -31,8 +31,8 @@
 use std::os::raw::c_char;
 
 use crate::daemon::events_contract::{
-    build_directory_subscription_invocation, project_directory_event, project_drop_report,
-    project_terminal, EventsError,
+    build_directory_subscription_invocation, build_session_subscription_invocation,
+    project_directory_event, project_drop_report, project_terminal, EventsError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -57,6 +57,28 @@ pub unsafe extern "C" fn easynet_events_build_directory_subscription_invocation(
         "out_invocation_json",
         "request_json",
         build_directory_subscription_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `session.attach`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_events_build_session_subscription_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_events_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_events_build_session_subscription_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_session_subscription_invocation,
     )
 }
 
@@ -211,6 +233,28 @@ mod tests {
             "federation.subscribe_directory_v2"
         );
         assert_eq!(value["args"]["resume_cursor"], "directory:7");
+        release(handle);
+    }
+
+    #[test]
+    fn events_build_session_subscription_invocation_projects_attach_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "stream": "session",
+            "session_id": "run-1",
+            "resume_cursor": {"stream": "session", "sequence": 4}
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_events_build_session_subscription_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "session.attach");
+        assert_eq!(value["args"]["session_id"], "run-1");
+        assert_eq!(value["args"]["since_seq"], 4);
         release(handle);
     }
 

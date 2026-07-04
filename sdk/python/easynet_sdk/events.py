@@ -83,6 +83,7 @@ class EventsSubscriptionRequest:
     resume_cursor: Optional[EventCursor] = None
     heartbeat_interval_ms: int = 0
     stream: str = ""
+    session_id: str = ""
     session_ura: str = ""
     invocation_id: str = ""
 
@@ -92,6 +93,13 @@ class EventsSubscriptionRequest:
         stream = self.stream or expected_stream
         if stream != expected_stream:
             raise _invalid_events("event subscription stream mismatch")
+        if expected_stream == _SESSION_STREAM:
+            if self.session_ura:
+                raise _invalid_events(
+                    "session_ura cannot be converted into daemon session_id"
+                )
+            if not self.session_id:
+                raise _invalid_events("session_id is required")
         value = self.base.to_json_dict()
         value["stream"] = stream
         for key, raw in (
@@ -99,6 +107,7 @@ class EventsSubscriptionRequest:
             ("owner_ura", self.owner_ura),
             ("device_ura", self.device_ura),
             ("agent_ura", self.agent_ura),
+            ("session_id", self.session_id),
             ("session_ura", self.session_ura),
             ("invocation_id", self.invocation_id),
         ):
@@ -165,6 +174,7 @@ class EventProjectionInput:
 
     def to_json_bytes(self) -> bytes:
         _validate_cursor(self.cursor, require_token=False)
+        _require_cursor_stream(self.cursor, _DIRECTORY_STREAM)
         if self.event is None:
             raise _invalid_events("directory event payload is required")
         value: dict[str, object] = {
@@ -193,6 +203,7 @@ class EventDropReportInput:
 
     def to_json_bytes(self) -> bytes:
         _validate_cursor(self.cursor, require_token=False)
+        _require_cursor_stream(self.cursor, _DIRECTORY_STREAM)
         if self.occurred_unix_ms < 0:
             raise _invalid_events("occurred_unix_ms must be non-negative")
         if self.dropped_count <= 0:
@@ -219,6 +230,7 @@ class EventTerminalInput:
 
     def to_json_bytes(self) -> bytes:
         _validate_cursor(self.cursor, require_token=False)
+        _require_cursor_stream(self.cursor, _DIRECTORY_STREAM)
         if self.occurred_unix_ms < 0:
             raise _invalid_events("occurred_unix_ms must be non-negative")
         _validate_reconnect_after_ms(self.reconnect_after_ms)
@@ -638,6 +650,11 @@ def _validate_cursor(cursor: EventCursor, *, require_token: bool) -> None:
         raise _invalid_events("event cursor must not contain whitespace")
     if token != f"{cursor.stream}:{cursor.sequence}":
         raise _invalid_events("event cursor token must match stream sequence")
+
+
+def _require_cursor_stream(cursor: EventCursor, expected: str) -> None:
+    if cursor.stream != expected:
+        raise _invalid_events("event cursor stream mismatch")
 
 
 def _validate_reconnect_after_ms(value: Optional[int]) -> None:

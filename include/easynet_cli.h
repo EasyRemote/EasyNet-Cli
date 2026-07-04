@@ -615,6 +615,12 @@ int32_t easynet_events_build_directory_subscription_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_events_build_session_subscription_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_events_project_directory_event(
     EasynetHandle handle,
     const char *event_json,

@@ -674,6 +674,12 @@ int32_t easynet_events_build_directory_subscription_invocation(
     char** out_invocation_json
 );
 
+int32_t easynet_events_build_session_subscription_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
 int32_t easynet_events_project_directory_event(
     EasynetHandle handle,
     const char* event_json,
@@ -699,6 +705,10 @@ complete Invocation JSON carrier for daemon `federation.subscribe_directory_v2`.
 It requires explicit caller, callee, subject, descriptor version, nonce, and
 causal context fields. Bindings submit the carrier through Runtime Core stream
 open; this helper does not open the stream itself.
+`build_session_subscription_invocation` returns a complete Invocation JSON
+carrier for daemon `session.attach`. It requires explicit `session_id`; product
+resource/session URAs are not parsed into daemon session ids by the SDK. A
+session resume cursor maps to the daemon `since_seq` argument.
 
 `easynet_events_project_directory_event` accepts a daemon `DirectoryEvent`
 frame plus explicit cursor information, for example

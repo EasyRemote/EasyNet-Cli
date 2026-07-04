@@ -44,8 +44,10 @@ use crate::daemon::sdk_contract::{
 
 const EVENTS_PROFILE: &str = "events";
 const DIRECTORY_STREAM: &str = "directory";
+const SESSION_STREAM: &str = "session";
 const DIRECTORY_ABILITY: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
+const SESSION_ATTACH_ABILITY: &str = crate::daemon::ability::names::device_control::SESSION_ATTACH;
 const DEFAULT_RECONNECT_AFTER_MS: u64 = 1_000;
 const MIN_HEARTBEAT_INTERVAL_MS: u64 = 1_000;
 const MAX_HEARTBEAT_INTERVAL_MS: u64 = 300_000;
@@ -60,11 +62,18 @@ pub(crate) fn build_directory_subscription_invocation(
     build_system_invocation(obj, EVENTS_PROFILE, DIRECTORY_ABILITY, args)
 }
 
+pub(crate) fn build_session_subscription_invocation(request: &Value) -> Result<Value, EventsError> {
+    let obj = object(request, "EventsSessionSubscriptionRequest")?;
+    let args = session_subscription_args(obj)?;
+    build_system_invocation(obj, EVENTS_PROFILE, SESSION_ATTACH_ABILITY, args)
+}
+
 pub(crate) fn project_directory_event(input: &Value) -> Result<Value, EventsError> {
     let obj = object(input, "EventsDirectoryEventInput")?;
     let event = obj.get("event").unwrap_or(input);
     let event_obj = object(event, "DirectoryEvent")?;
     let cursor = EventCursor::from_input(obj)?;
+    cursor.require_stream(DIRECTORY_STREAM, "cursor")?;
     let resume_token =
         optional_string(obj, "resume_token").unwrap_or_else(|| cursor.resume_token());
     let event_id = optional_string(obj, "event_id").unwrap_or_else(|| cursor.event_id());
@@ -83,6 +92,7 @@ pub(crate) fn project_directory_event(input: &Value) -> Result<Value, EventsErro
 pub(crate) fn project_terminal(input: &Value) -> Result<Value, EventsError> {
     let obj = object(input, "EventsTerminalInput")?;
     let cursor = EventCursor::from_input(obj)?;
+    cursor.require_stream(DIRECTORY_STREAM, "cursor")?;
     let occurred_unix_ms = required_nonnegative_i64(obj, "occurred_unix_ms")?;
     let reconnect_after_ms = optional_u64(obj, "reconnect_after_ms")
         .map(|value| validate_reconnect_after_ms(value, "reconnect_after_ms"))
@@ -115,6 +125,7 @@ pub(crate) fn project_terminal(input: &Value) -> Result<Value, EventsError> {
 pub(crate) fn project_drop_report(input: &Value) -> Result<Value, EventsError> {
     let obj = object(input, "EventsDropReportInput")?;
     let cursor = EventCursor::from_input(obj)?;
+    cursor.require_stream(DIRECTORY_STREAM, "cursor")?;
     let occurred_unix_ms = required_nonnegative_i64(obj, "occurred_unix_ms")?;
     let dropped_count = required_u64(obj, "dropped_count")?;
     if dropped_count == 0 {
@@ -155,6 +166,7 @@ pub(crate) fn project_drop_report(input: &Value) -> Result<Value, EventsError> {
 }
 
 fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
+    validate_stream_field(obj, DIRECTORY_STREAM)?;
     let mut args = Map::new();
     args.insert(
         "stream".to_string(),
@@ -177,6 +189,7 @@ fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, Events
     }
     if let Some(value) = obj.get("resume_cursor").filter(|value| !value.is_null()) {
         let cursor = EventCursor::parse(value, "resume_cursor")?;
+        cursor.require_stream(DIRECTORY_STREAM, "resume_cursor")?;
         args.insert(
             "resume_cursor".to_string(),
             Value::String(cursor.resume_token()),
@@ -191,6 +204,50 @@ fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, Events
     }
 
     Ok(Value::Object(args))
+}
+
+fn session_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
+    validate_stream_field(obj, SESSION_STREAM)?;
+    if obj
+        .get("session_ura")
+        .filter(|value| !value.is_null())
+        .is_some()
+    {
+        return Err(EventsError::InvalidField(
+            "session_ura",
+            "session.attach requires explicit daemon session_id".to_string(),
+        ));
+    }
+    let session_id =
+        optional_string(obj, "session_id").ok_or(EventsError::MissingField("session_id"))?;
+    validate_token(&session_id, "session_id")?;
+    let mut args = Map::new();
+    args.insert("session_id".to_string(), Value::String(session_id));
+    if let Some(value) = obj.get("resume_cursor").filter(|value| !value.is_null()) {
+        let cursor = EventCursor::parse(value, "resume_cursor")?;
+        cursor.require_stream(SESSION_STREAM, "resume_cursor")?;
+        args.insert(
+            "since_seq".to_string(),
+            Value::Number(cursor.sequence.into()),
+        );
+    }
+    Ok(Value::Object(args))
+}
+
+fn validate_stream_field(
+    obj: &Map<String, Value>,
+    expected: &'static str,
+) -> Result<(), EventsError> {
+    if let Some(stream) = optional_string(obj, "stream") {
+        validate_token(&stream, "stream")?;
+        if stream != expected {
+            return Err(EventsError::InvalidField(
+                "stream",
+                format!("expected {expected:?}, got {stream:?}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,10 +299,12 @@ impl EventCursor {
 
     fn new(stream: &str, sequence: u64, field: &'static str) -> Result<Self, EventsError> {
         validate_token(stream, field)?;
-        if stream != DIRECTORY_STREAM {
+        if stream != DIRECTORY_STREAM && stream != SESSION_STREAM {
             return Err(EventsError::InvalidField(
                 field,
-                format!("unsupported stream {stream:?}; expected {DIRECTORY_STREAM:?}"),
+                format!(
+                    "unsupported stream {stream:?}; expected {DIRECTORY_STREAM:?} or {SESSION_STREAM:?}"
+                ),
             ));
         }
         Ok(Self {
@@ -256,6 +315,20 @@ impl EventCursor {
 
     fn resume_token(&self) -> String {
         format!("{}:{}", self.stream, self.sequence)
+    }
+
+    fn require_stream(
+        &self,
+        expected: &'static str,
+        field: &'static str,
+    ) -> Result<(), EventsError> {
+        if self.stream == expected {
+            return Ok(());
+        }
+        Err(EventsError::InvalidField(
+            field,
+            format!("expected {expected:?}, got {:?}", self.stream),
+        ))
     }
 
     fn event_id(&self) -> String {
@@ -623,6 +696,72 @@ mod tests {
     }
 
     #[test]
+    fn directory_subscription_rejects_session_resume_cursor() {
+        let request = base_request(json!({
+            "resume_cursor": {"stream": "session", "sequence": 7}
+        }));
+
+        let err = build_directory_subscription_invocation(&request).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field resume_cursor: expected \"directory\", got \"session\""
+        );
+    }
+
+    #[test]
+    fn session_subscription_builds_session_attach_invocation() {
+        let request = base_request(json!({
+            "stream": "session",
+            "session_id": "run-1",
+            "resume_cursor": {"stream": "session", "sequence": 4}
+        }));
+
+        let carrier = build_session_subscription_invocation(&request).unwrap();
+
+        assert_eq!(carrier["metadata"]["system_ability"], "session.attach");
+        assert_eq!(carrier["metadata"]["profile"], "events");
+        assert_eq!(carrier["args"]["session_id"], "run-1");
+        assert_eq!(carrier["args"]["since_seq"], 4);
+        assert_eq!(
+            carrier["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0"
+        );
+    }
+
+    #[test]
+    fn session_subscription_rejects_product_session_ura_facade_parsing() {
+        let request = base_request(json!({
+            "stream": "session",
+            "session_id": "run-1",
+            "session_ura": "easynet:///r/example/resource/daemon.browser/run-1"
+        }));
+
+        let err = build_session_subscription_invocation(&request).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field session_ura: session.attach requires explicit daemon session_id"
+        );
+    }
+
+    #[test]
+    fn session_subscription_rejects_directory_resume_cursor() {
+        let request = base_request(json!({
+            "stream": "session",
+            "session_id": "run-1",
+            "resume_cursor": {"stream": "directory", "sequence": 4}
+        }));
+
+        let err = build_session_subscription_invocation(&request).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field resume_cursor: expected \"session\", got \"directory\""
+        );
+    }
+
+    #[test]
     fn directory_event_projects_agent_delta_with_typed_refs() {
         let input = json!({
             "cursor": {"stream": "directory", "sequence": 8},
@@ -661,6 +800,24 @@ mod tests {
     }
 
     #[test]
+    fn directory_event_rejects_session_cursor() {
+        let input = json!({
+            "cursor": {"stream": "session", "sequence": 8},
+            "event": {
+                "type": "heartbeat",
+                "unix_ms": 1783100000123i64
+            }
+        });
+
+        let err = project_directory_event(&input).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field cursor: expected \"directory\", got \"session\""
+        );
+    }
+
+    #[test]
     fn directory_event_rejects_unknown_variant() {
         let input = json!({
             "cursor": "directory:9",
@@ -694,6 +851,21 @@ mod tests {
     }
 
     #[test]
+    fn drop_report_rejects_session_cursor() {
+        let err = project_drop_report(&json!({
+            "cursor": "session:10",
+            "occurred_unix_ms": 1783100000123i64,
+            "dropped_count": 4
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field cursor: expected \"directory\", got \"session\""
+        );
+    }
+
+    #[test]
     fn terminal_frame_is_explicit_final_state() {
         let frame = project_terminal(&json!({
             "cursor": "directory:11",
@@ -705,5 +877,19 @@ mod tests {
         assert_eq!(frame["kind"], "directory.terminal");
         assert_eq!(frame["terminal"], true);
         assert_eq!(frame["payload"]["reason"], "client_closed");
+    }
+
+    #[test]
+    fn terminal_frame_rejects_session_cursor() {
+        let err = project_terminal(&json!({
+            "cursor": "session:11",
+            "occurred_unix_ms": 1783100000123i64
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field cursor: expected \"directory\", got \"session\""
+        );
     }
 }
