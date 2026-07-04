@@ -32,7 +32,8 @@ C ABI-backed resolve/list read-model execution through Runtime Core invoke,
 list/resolve Invocation carrier builders, directory
 projection helpers, directory subscription state seams, and close state seams plus
 AddressingClient Axon-delegated `parse_ura`, `owner_ability_ura`,
-`owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helpers,
+`owner_ura_for_ability`, `owner_ability_descriptor_ref`, and
+`canonical_ability_descriptor_ref` helpers,
 IdentityClient descriptor/resource projection, signing-key lifecycle, and
 signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
@@ -67,5 +68,6 @@ execution adapters, mission event streams, concrete Admin trust/session carriers
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 live adapters, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-profile-specific stream/bidi execution adapters, and EasyRemote cutover gates remain incomplete. See
+profile-specific stream/bidi execution adapters, and the actual EasyRemote
+repository cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

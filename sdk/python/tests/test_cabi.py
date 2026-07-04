@@ -1029,6 +1029,11 @@ class CABITransportTests(unittest.TestCase):
         )
         owner_ura = client.owner_ura_for_ability(ability_ura)
         descriptor_ref = client.canonical_ability_descriptor_ref(ability_ura, "1.0.0")
+        owner_descriptor_ref = client.owner_ability_descriptor_ref(
+            "easynet:///r/example/device/dev-a",
+            "observe.health",
+            "1.0.0",
+        )
 
         self.assertEqual(
             ability_ura, "easynet:///r/example/ability/device.dev-a.observe.health"
@@ -1038,6 +1043,7 @@ class CABITransportTests(unittest.TestCase):
             descriptor_ref,
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+        self.assertEqual(owner_descriptor_ref, descriptor_ref)
         self.assertEqual(
             raw.identity_requests,
             [
@@ -1052,6 +1058,25 @@ class CABITransportTests(unittest.TestCase):
                 (
                     "project_ura",
                     "easynet:///r/example/ability/device.dev-a.observe.health",
+                ),
+                (
+                    "project_ura",
+                    "easynet:///r/example/ability/device.dev-a.observe.health",
+                ),
+                (
+                    "build_descriptor_ref",
+                    {
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+                        "descriptor_version": "1.0.0",
+                    },
+                ),
+                (
+                    "build_ura",
+                    {
+                        "kind": "ability",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "ability_name": "observe.health",
+                    },
                 ),
                 (
                     "project_ura",

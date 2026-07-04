@@ -449,6 +449,20 @@ class AddressingClient:
             raise _invalid_identity("ability projection missing owner_ura")
         return owner_ura
 
+    def owner_ability_descriptor_ref(
+        self,
+        owner_ura: str,
+        ability_name: str,
+        descriptor_version: str = "1.0.0",
+    ) -> str:
+        """Build a canonical DescriptorRef for an owner ability."""
+
+        ability_ura = self.owner_ability_ura(owner_ura, ability_name)
+        return self.canonical_ability_descriptor_ref(
+            ability_ura,
+            descriptor_version,
+        )
+
     def canonical_ability_descriptor_ref(
         self, value: str, descriptor_version: str = ""
     ) -> str:
@@ -533,6 +547,21 @@ class IdentityClient:
 
         self._require_open()
         return self._addressing.owner_ura_for_ability(ability_ura)
+
+    def owner_ability_descriptor_ref(
+        self,
+        owner_ura: str,
+        ability_name: str,
+        descriptor_version: str = "1.0.0",
+    ) -> str:
+        """Build a canonical DescriptorRef for an owner ability."""
+
+        self._require_open()
+        return self._addressing.owner_ability_descriptor_ref(
+            owner_ura,
+            ability_name,
+            descriptor_version,
+        )
 
     def canonical_ability_descriptor_ref(
         self, value: str, descriptor_version: str = ""

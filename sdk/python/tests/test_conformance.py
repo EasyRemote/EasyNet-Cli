@@ -1910,6 +1910,14 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "easynet:///r/example/device/dev-a",
         )
         self.assertEqual(
+            identity.owner_ability_descriptor_ref(
+                "easynet:///r/example/device/dev-a",
+                "observe.health",
+                "1.0.0",
+            ),
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
             identity.canonical_ability_descriptor_ref(ability_ura, "1.0.0"),
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
@@ -2872,6 +2880,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "canonical_ability_descriptor_ref": "directory_identity.identity.canonical_ability_descriptor_ref",
                     "close": "directory_identity.identity.close",
                     "list_signing_keys": "directory_identity.identity.list_signing_keys",
+                    "owner_ability_descriptor_ref": "directory_identity.identity.owner_ability_descriptor_ref",
                     "owner_ability_ura": "directory_identity.identity.owner_ability_ura",
                     "owner_ura_for_ability": "directory_identity.identity.owner_ura_for_ability",
                     "parse_ura": "directory_identity.identity.parse_ura",

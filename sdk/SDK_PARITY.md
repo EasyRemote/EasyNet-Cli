@@ -177,10 +177,11 @@ method spelling.
   transport protocols; public `DaemonInvocationTransport` dict/JSON unary,
   stream, and bidi facade over RuntimeClient/C ABI v4;
   `SdkEnvironment.addressing_client()` for the
-  Axon-delegated URA/DescriptorRef helper subset; private C ABI v4 profile carrier/projection bridges for
+  Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
+  EasyRemote-style descriptor-ref cutover tests; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; direct UDS transport,
-  live profile execution adapters, EasyRemote extraction tests, per-profile
+  live profile execution adapters, actual EasyRemote repository extraction, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
@@ -188,14 +189,15 @@ method spelling.
   builders, Directory projection helpers, directory subscription state seams,
   and close state seams plus `AddressingClient` and `IdentityClient`
   Axon-delegated `parse_ura`, `owner_ability_ura`,
-  `owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helper
+  `owner_ura_for_ability`, `owner_ability_descriptor_ref`, and
+  `canonical_ability_descriptor_ref` helper
   facades, `IdentityClient` descriptor, identity, ResourceRef,
   signing-key lifecycle, signer-handle projection, and close state
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, while
   directory subscription live adapters, local signer implementations, and
-  EasyRemote extraction remain incomplete.
+  actual EasyRemote repository extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   C ABI-backed fetch execution through Runtime Core invoke, and close state
