@@ -364,6 +364,9 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 			return MissionStatus{}, invalidRuntimePayload("invalid mission child receipt projection", nil)
 		}
 	}
+	if err := validateMissionChildReceiptAnchors(dto.ParentReceiptURA, dto.ChildInvocations, dto.ChildReceipts); err != nil {
+		return MissionStatus{}, err
+	}
 	for _, ref := range dto.OutputRefs {
 		if ref.Kind == "" {
 			return MissionStatus{}, invalidRuntimePayload("invalid mission output ref projection", nil)
@@ -394,6 +397,34 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 		Error:              sdkErr,
 		Metadata:           dto.Metadata,
 	}, nil
+}
+
+func validateMissionChildReceiptAnchors(parentReceiptURA *string, invocations []MissionChildInvocation, receipts []MissionChildReceipt) error {
+	if len(receipts) == 0 {
+		return nil
+	}
+	if parentReceiptURA == nil || *parentReceiptURA == "" {
+		return invalidRuntimePayload("mission child receipts require parent receipt anchor", nil)
+	}
+	byInvocationURA := map[string]MissionChildInvocation{}
+	for _, invocation := range invocations {
+		if invocation.InvocationURA != nil && *invocation.InvocationURA != "" {
+			byInvocationURA[*invocation.InvocationURA] = invocation
+		}
+	}
+	for _, receipt := range receipts {
+		if receipt.InvocationURA == nil || *receipt.InvocationURA == "" {
+			return invalidRuntimePayload("mission child receipt requires invocation_ura", nil)
+		}
+		invocation, ok := byInvocationURA[*receipt.InvocationURA]
+		if !ok || invocation.Receipt == nil {
+			return invalidRuntimePayload("mission child receipt is not anchored to child invocation", nil)
+		}
+		if invocation.Receipt["receipt_ura"] != receipt.ReceiptURA || invocation.Receipt["receipt_hash"] != receipt.ReceiptHash {
+			return invalidRuntimePayload("mission child receipt does not match child invocation receipt", nil)
+		}
+	}
+	return nil
 }
 
 func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {

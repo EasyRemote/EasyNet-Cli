@@ -454,6 +454,113 @@ func TestGoPublicationFacadeExecutesSharedCarrierConformanceCase(t *testing.T) {
 	}
 }
 
+func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	missionCase := sharedCase(t, root, "mission-carrier-status.yaml")
+	requireCaseID(t, missionCase, "mission/carrier_status")
+	for _, action := range []string{
+		"build_run_eal_invocation",
+		"build_run_file_invocation",
+		"build_track_invocation",
+		"build_cancel_invocation",
+		"project_status",
+	} {
+		requireCaseAction(t, missionCase, action)
+	}
+	for _, fixture := range []string{
+		"mission-run-request.v4.json",
+		"mission-run-file-request.v4.json",
+		"mission-track-request.v4.json",
+		"mission-cancel-request.v4.json",
+		"mission-status.v4.json",
+	} {
+		requireCaseFixture(t, missionCase, fixture)
+	}
+	requireCaseExpectation(t, missionCase, "run_invocation_fixture: mission-run-invocation.v4.json")
+	requireCaseExpectation(t, missionCase, "track_invocation_fixture: mission-track-invocation.v4.json")
+	requireCaseExpectation(t, missionCase, "cancel_invocation_fixture: mission-cancel-invocation.v4.json")
+	requireCaseExpectation(t, missionCase, "run_system_ability: mission.run")
+	requireCaseExpectation(t, missionCase, "track_system_ability: mission.track")
+	requireCaseExpectation(t, missionCase, "cancel_system_ability: mission.cancel")
+	requireCaseExpectation(t, missionCase, "rejects_incomplete_invocation_tuple: true")
+	requireCaseExpectation(t, missionCase, "rejects_path_like_mission_id: true")
+	requireCaseExpectation(t, missionCase, "child_receipts_only_when_anchored: true")
+
+	mission, err := NewMissionClient(&sharedMissionTransport{
+		t:                      t,
+		expectedRunRequest:     sharedFixture(t, root, "mission-run-request.v4.json"),
+		expectedRunFileRequest: sharedFixture(t, root, "mission-run-file-request.v4.json"),
+		expectedTrackRequest:   sharedFixture(t, root, "mission-track-request.v4.json"),
+		expectedCancelRequest:  sharedFixture(t, root, "mission-cancel-request.v4.json"),
+		runInvocationJSON:      sharedFixture(t, root, "mission-run-invocation.v4.json"),
+		trackInvocationJSON:    sharedFixture(t, root, "mission-track-invocation.v4.json"),
+		cancelInvocationJSON:   sharedFixture(t, root, "mission-cancel-invocation.v4.json"),
+		statusJSON:             sharedFixture(t, root, "mission-status.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+
+	run, err := mission.BuildRunEALInvocation(context.Background(), sharedMissionRunRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildRunEALInvocation(shared fixture): %v", err)
+	}
+	if run.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0" ||
+		run.Metadata()["system_ability"] != "mission.run" {
+		t.Fatalf("unexpected shared mission run invocation: %#v", run)
+	}
+
+	runFile, err := mission.BuildRunFileInvocation(context.Background(), sharedMissionRunFileRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildRunFileInvocation(shared fixture): %v", err)
+	}
+	if runFile.DescriptorRef() != run.DescriptorRef() || runFile.Metadata()["system_ability"] != "mission.run" {
+		t.Fatalf("unexpected shared mission run-file invocation: %#v", runFile)
+	}
+
+	track, err := mission.BuildTrackInvocation(context.Background(), sharedMissionTrackRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildTrackInvocation(shared fixture): %v", err)
+	}
+	if track.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0" ||
+		track.Metadata()["system_ability"] != "mission.track" {
+		t.Fatalf("unexpected shared mission track invocation: %#v", track)
+	}
+
+	cancel, err := mission.BuildCancelInvocation(context.Background(), sharedMissionCancelRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildCancelInvocation(shared fixture): %v", err)
+	}
+	if cancel.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0" ||
+		cancel.Metadata()["system_ability"] != "mission.cancel" {
+		t.Fatalf("unexpected shared mission cancel invocation: %#v", cancel)
+	}
+
+	status, err := mission.Track(context.Background(), sharedMissionTrackRequest(t, root))
+	if err != nil {
+		t.Fatalf("Track(shared status fixture): %v", err)
+	}
+	if !status.Terminal || status.State != "partial" || status.ParentReceiptURA == nil ||
+		len(status.ChildReceipts) != 1 || len(status.OutputRefs) != 4 {
+		t.Fatalf("unexpected shared mission status: %#v", status)
+	}
+
+	badRun := sharedMissionRunRequest(t, root)
+	badRun.CallerURA = ""
+	if _, err := mission.BuildRunEALInvocation(context.Background(), badRun); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete mission carrier did not produce InvalidArgument: %v", err)
+	}
+	if _, err := mission.BuildTrackInvocation(context.Background(), MissionTrackRequest{
+		MissionCarrierBase: sharedMissionCarrierBase(t, root, "mission-track-request.v4.json"),
+		MissionID:          "/tmp/mission",
+	}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("path-like mission id did not produce InvalidArgument: %v", err)
+	}
+	if _, err := NewMissionStatusFromJSON(sharedMissionStatusWithoutParentAnchor(t, root)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("unanchored mission child receipt did not produce InvalidArgument: %v", err)
+	}
+}
+
 func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
@@ -535,6 +642,64 @@ func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	}); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("missing wrapper session state did not produce InvalidArgument: %v", err)
 	}
+}
+
+type sharedMissionTransport struct {
+	t                      *testing.T
+	expectedRunRequest     []byte
+	expectedRunFileRequest []byte
+	expectedTrackRequest   []byte
+	expectedCancelRequest  []byte
+	runInvocationJSON      []byte
+	trackInvocationJSON    []byte
+	cancelInvocationJSON   []byte
+	statusJSON             []byte
+}
+
+func (t *sharedMissionTransport) BuildRunEALInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedRunRequest)
+	return t.runInvocationJSON, nil
+}
+
+func (t *sharedMissionTransport) BuildRunFileInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedRunFileRequest)
+	return t.runInvocationJSON, nil
+}
+
+func (t *sharedMissionTransport) BuildTrackInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedTrackRequest)
+	return t.trackInvocationJSON, nil
+}
+
+func (t *sharedMissionTransport) BuildCancelInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedCancelRequest)
+	return t.cancelInvocationJSON, nil
+}
+
+func (t *sharedMissionTransport) RunEAL(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedMissionTransport) RunFile(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedMissionTransport) Track(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedTrackRequest)
+	return t.statusJSON, nil
+}
+
+func (t *sharedMissionTransport) Cancel(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedCancelRequest)
+	return t.statusJSON, nil
+}
+
+func (t *sharedMissionTransport) Events(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedMissionTransport) Close(context.Context) error {
+	return nil
 }
 
 type sharedPublicationTransport struct {
@@ -859,6 +1024,65 @@ func sharedUnpublishAbilityRequest(t *testing.T, root string) UnpublishAbilityRe
 		CausalContext:     deploy.CausalContext,
 		AbilityURA:        "easynet:///r/example/ability/device.dev-a.er.weather",
 	}
+}
+
+func sharedMissionCarrierBase(t *testing.T, root string, fixture string) MissionCarrierBase {
+	t.Helper()
+	var base MissionCarrierBase
+	if err := json.Unmarshal(sharedFixture(t, root, fixture), &base); err != nil {
+		t.Fatalf("decode shared mission carrier base fixture %s: %v", fixture, err)
+	}
+	return base
+}
+
+func sharedMissionRunRequest(t *testing.T, root string) MissionRunRequest {
+	t.Helper()
+	var request MissionRunRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "mission-run-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared mission run request: %v", err)
+	}
+	return request
+}
+
+func sharedMissionRunFileRequest(t *testing.T, root string) MissionRunFileRequest {
+	t.Helper()
+	var request MissionRunFileRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "mission-run-file-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared mission run-file request: %v", err)
+	}
+	return request
+}
+
+func sharedMissionTrackRequest(t *testing.T, root string) MissionTrackRequest {
+	t.Helper()
+	var request MissionTrackRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "mission-track-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared mission track request: %v", err)
+	}
+	return request
+}
+
+func sharedMissionCancelRequest(t *testing.T, root string) MissionCancelRequest {
+	t.Helper()
+	var request MissionCancelRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "mission-cancel-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared mission cancel request: %v", err)
+	}
+	return request
+}
+
+func sharedMissionStatusWithoutParentAnchor(t *testing.T, root string) []byte {
+	t.Helper()
+	status := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "mission-status.v4.json"), &status); err != nil {
+		t.Fatalf("decode shared mission status fixture: %v", err)
+	}
+	status["parent_receipt_ura"] = nil
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("encode unanchored mission status: %v", err)
+	}
+	return raw
 }
 
 func sharedDeviceQuery(t *testing.T, root string) DeviceQuery {

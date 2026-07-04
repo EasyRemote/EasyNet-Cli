@@ -251,6 +251,16 @@ class MissionStatus:
             raise _invalid_mission("child_receipts must be an array")
         if not isinstance(output_refs, list):
             raise _invalid_mission("output_refs must be an array")
+        parsed_child_invocations = tuple(
+            _child_invocation(item) for item in child_invocations
+        )
+        parsed_child_receipts = tuple(_child_receipt(item) for item in child_receipts)
+        parent_receipt_ura = _optional_string(
+            decoded.get("parent_receipt_ura"), "parent_receipt_ura"
+        )
+        _validate_child_receipt_anchors(
+            parent_receipt_ura, parsed_child_invocations, parsed_child_receipts
+        )
         return cls(
             profile=_required_string(decoded, "profile"),
             kind=_required_string(decoded, "kind"),
@@ -262,14 +272,12 @@ class MissionStatus:
             parent_invocation_id=_optional_string(
                 decoded.get("parent_invocation_id"), "parent_invocation_id"
             ),
-            parent_receipt_ura=_optional_string(
-                decoded.get("parent_receipt_ura"), "parent_receipt_ura"
-            ),
+            parent_receipt_ura=parent_receipt_ura,
             parent_invocation=_optional_mapping(
                 decoded.get("parent_invocation"), "parent_invocation"
             ),
-            child_invocations=tuple(_child_invocation(item) for item in child_invocations),
-            child_receipts=tuple(_child_receipt(item) for item in child_receipts),
+            child_invocations=parsed_child_invocations,
+            child_receipts=parsed_child_receipts,
             output_refs=tuple(_output_ref(item) for item in output_refs),
             error=_optional_sdk_error(decoded.get("error"), "error"),
             metadata=_required_mapping(decoded, "metadata"),
@@ -441,6 +449,37 @@ def _validate_mission_id(mission_id: str) -> None:
         raise _invalid_mission("mission_id is required")
     if "/" in mission_id or "\\" in mission_id or "://" in mission_id:
         raise _invalid_mission("mission_id must not be path-like")
+
+
+def _validate_child_receipt_anchors(
+    parent_receipt_ura: Optional[str],
+    child_invocations: tuple[MissionChildInvocation, ...],
+    child_receipts: tuple[MissionChildReceipt, ...],
+) -> None:
+    if not child_receipts:
+        return
+    if not parent_receipt_ura:
+        raise _invalid_mission("mission child receipts require parent receipt anchor")
+    by_invocation_ura = {
+        invocation.invocation_ura: invocation
+        for invocation in child_invocations
+        if invocation.invocation_ura
+    }
+    for receipt in child_receipts:
+        if not receipt.invocation_ura:
+            raise _invalid_mission("mission child receipt requires invocation_ura")
+        invocation = by_invocation_ura.get(receipt.invocation_ura)
+        if invocation is None or invocation.receipt is None:
+            raise _invalid_mission(
+                "mission child receipt is not anchored to child invocation"
+            )
+        if (
+            invocation.receipt.get("receipt_ura") != receipt.receipt_ura
+            or invocation.receipt.get("receipt_hash") != receipt.receipt_hash
+        ):
+            raise _invalid_mission(
+                "mission child receipt does not match child invocation receipt"
+            )
 
 
 def _child_invocation(value: object) -> MissionChildInvocation:

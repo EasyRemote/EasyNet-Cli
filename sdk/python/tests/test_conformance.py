@@ -26,6 +26,13 @@ from easynet_sdk import (
     InvocationDraft,
     LocalResourceRefRequest,
     MAX_DIRECTORY_PAGE_SIZE,
+    MissionCancelRequest,
+    MissionCarrierBase,
+    MissionClient,
+    MissionRunFileRequest,
+    MissionRunRequest,
+    MissionStatus,
+    MissionTrackRequest,
     PreparedInvocation,
     PublicationClient,
     ReceiptSummary,
@@ -317,6 +324,69 @@ class SharedPublicationTransport:
             stage="test",
             retry=RetryHint.NEVER,
             message="not used by shared publication conformance fixture test",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class SharedMissionTransport:
+    def __init__(self) -> None:
+        self.expected_run_request = shared_fixture("mission-run-request.v4.json")
+        self.expected_run_file_request = shared_fixture("mission-run-file-request.v4.json")
+        self.expected_track_request = shared_fixture("mission-track-request.v4.json")
+        self.expected_cancel_request = shared_fixture("mission-cancel-request.v4.json")
+        self.run_invocation_json = shared_fixture("mission-run-invocation.v4.json")
+        self.track_invocation_json = shared_fixture("mission-track-invocation.v4.json")
+        self.cancel_invocation_json = shared_fixture("mission-cancel-invocation.v4.json")
+        self.status_json = shared_fixture("mission-status.v4.json")
+
+    def build_run_eal_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_run_request)
+        return self.run_invocation_json
+
+    def build_run_file_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_run_file_request)
+        return self.run_invocation_json
+
+    def build_track_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_track_request)
+        return self.track_invocation_json
+
+    def build_cancel_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_cancel_request)
+        return self.cancel_invocation_json
+
+    def run_eal(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared mission conformance fixture test",
+        )
+
+    def run_file(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared mission conformance fixture test",
+        )
+
+    def track(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_track_request)
+        return self.status_json
+
+    def cancel(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_cancel_request)
+        return self.status_json
+
+    def events(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared mission conformance fixture test",
         )
 
     def close(self) -> None:
@@ -768,6 +838,120 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(unpublish.metadata["system_ability"], "ability.unpublish")
 
+    def test_python_mission_executes_shared_carrier_status_conformance_case(self) -> None:
+        mission_case = shared_case("mission-carrier-status.yaml")
+        self._require_case_id(mission_case, "mission/carrier_status")
+        for action in (
+            "build_run_eal_invocation",
+            "build_run_file_invocation",
+            "build_track_invocation",
+            "build_cancel_invocation",
+            "project_status",
+        ):
+            self._require_case_action(mission_case, action)
+        for fixture in (
+            "mission-run-request.v4.json",
+            "mission-run-file-request.v4.json",
+            "mission-track-request.v4.json",
+            "mission-cancel-request.v4.json",
+            "mission-status.v4.json",
+        ):
+            self._require_case_fixture(mission_case, fixture)
+        self._require_case_expectation(
+            mission_case, "run_invocation_fixture: mission-run-invocation.v4.json"
+        )
+        self._require_case_expectation(
+            mission_case, "track_invocation_fixture: mission-track-invocation.v4.json"
+        )
+        self._require_case_expectation(
+            mission_case,
+            "cancel_invocation_fixture: mission-cancel-invocation.v4.json",
+        )
+        self._require_case_expectation(mission_case, "run_system_ability: mission.run")
+        self._require_case_expectation(
+            mission_case, "track_system_ability: mission.track"
+        )
+        self._require_case_expectation(
+            mission_case, "cancel_system_ability: mission.cancel"
+        )
+        self._require_case_expectation(
+            mission_case, "rejects_incomplete_invocation_tuple: true"
+        )
+        self._require_case_expectation(
+            mission_case, "rejects_path_like_mission_id: true"
+        )
+        self._require_case_expectation(
+            mission_case, "child_receipts_only_when_anchored: true"
+        )
+
+        mission = MissionClient(SharedMissionTransport())
+
+        run = mission.build_run_eal_invocation(shared_mission_run_request())
+        self.assertEqual(
+            run.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0",
+        )
+        self.assertEqual(run.metadata["system_ability"], "mission.run")
+
+        run_file = mission.build_run_file_invocation(shared_mission_run_file_request())
+        self.assertEqual(run_file.descriptor_ref, run.descriptor_ref)
+        self.assertEqual(run_file.metadata["system_ability"], "mission.run")
+
+        track = mission.build_track_invocation(shared_mission_track_request())
+        self.assertEqual(
+            track.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0",
+        )
+        self.assertEqual(track.metadata["system_ability"], "mission.track")
+
+        cancel = mission.build_cancel_invocation(shared_mission_cancel_request())
+        self.assertEqual(
+            cancel.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0",
+        )
+        self.assertEqual(cancel.metadata["system_ability"], "mission.cancel")
+
+        status = mission.track(shared_mission_track_request())
+        self.assertTrue(status.terminal)
+        self.assertEqual(status.state, "partial")
+        self.assertEqual(
+            status.parent_receipt_ura, "easynet:///r/example/receipt/parent"
+        )
+        self.assertEqual(len(status.child_receipts), 1)
+        self.assertEqual(len(status.output_refs), 4)
+
+        run_request = shared_mission_run_request()
+        with self.assertRaises(SDKError) as caught:
+            mission.build_run_eal_invocation(
+                MissionRunRequest(
+                    base=MissionCarrierBase(
+                        caller_ura="",
+                        callee_ura=run_request.base.callee_ura,
+                        subject_ura=run_request.base.subject_ura,
+                        descriptor_version=run_request.base.descriptor_version,
+                        nonce_base64=run_request.base.nonce_base64,
+                        causal_context=run_request.base.causal_context,
+                        metadata=run_request.base.metadata,
+                    ),
+                    source=run_request.source,
+                    label=run_request.label,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            mission.build_track_invocation(
+                MissionTrackRequest(
+                    base=shared_mission_carrier_base("mission-track-request.v4.json"),
+                    mission_id="/tmp/mission",
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            MissionStatus.from_json(shared_mission_status_without_parent_anchor())
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -923,6 +1107,59 @@ def shared_unpublish_ability_request() -> UnpublishAbilityRequest:
         causal_context=deploy.causal_context,
         ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
     )
+
+
+def shared_mission_carrier_base(fixture: str) -> MissionCarrierBase:
+    decoded = json.loads(shared_fixture(fixture))
+    return MissionCarrierBase(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_mission_run_request() -> MissionRunRequest:
+    decoded = json.loads(shared_fixture("mission-run-request.v4.json"))
+    return MissionRunRequest(
+        base=shared_mission_carrier_base("mission-run-request.v4.json"),
+        source=decoded["source"],
+        label=decoded["label"],
+    )
+
+
+def shared_mission_run_file_request() -> MissionRunFileRequest:
+    decoded = json.loads(shared_fixture("mission-run-file-request.v4.json"))
+    return MissionRunFileRequest(
+        base=shared_mission_carrier_base("mission-run-file-request.v4.json"),
+        path=decoded["path"],
+        label=decoded["label"],
+    )
+
+
+def shared_mission_track_request() -> MissionTrackRequest:
+    decoded = json.loads(shared_fixture("mission-track-request.v4.json"))
+    return MissionTrackRequest(
+        base=shared_mission_carrier_base("mission-track-request.v4.json"),
+        mission_id=decoded["mission_id"],
+    )
+
+
+def shared_mission_cancel_request() -> MissionCancelRequest:
+    decoded = json.loads(shared_fixture("mission-cancel-request.v4.json"))
+    return MissionCancelRequest(
+        base=shared_mission_carrier_base("mission-cancel-request.v4.json"),
+        mission_id=decoded["mission_id"],
+    )
+
+
+def shared_mission_status_without_parent_anchor() -> bytes:
+    status = json.loads(shared_fixture("mission-status.v4.json"))
+    status["parent_receipt_ura"] = None
+    return json.dumps(status, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def shared_ability_query() -> AbilityQuery:
