@@ -19,6 +19,7 @@ from easynet_sdk import (
     AdminGatewayStatusRequest,
     AdminSessionListRequest,
     AgentQuery,
+    AddressingClient,
     AttachOptions,
     CompatibilityCarrierBase,
     CompatibilityChatCompletionRequest,
@@ -35,6 +36,7 @@ from easynet_sdk import (
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
+    EasyRemoteInvocationAdapter,
     ErrorCode,
     EventClient,
     EventCursor,
@@ -3543,6 +3545,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_action(no_codec_case, "audit_consumer_source")
         self._require_case_action(no_codec_case, "inspect_sdk_invocation_dto_usage")
         for sdk_type in (
+            "EasyRemoteInvocationAdapter",
             "InvocationDraft",
             "PreparedInvocation",
             "SignedInvocation",
@@ -3583,6 +3586,51 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             )
             result = audit_easyremote_cutover(root)
         self.assertTrue(result.ok)
+
+        identity = _EasyRemoteAdapterIdentityTransport()
+        adapter = EasyRemoteInvocationAdapter(
+            AbilityInvocationClient(
+                runtime=RuntimeClient(_EasyRemoteAdapterRuntimeTransport()),
+                addressing=AddressingClient(identity),
+            )
+        )
+        draft = adapter.build_invocation(
+            {
+                "caller": "easynet:///r/example/agent/alice.sdk",
+                "callee": "easynet:///r/example/device/dev-a",
+                "ability": "er.weather",
+                "subject": "easynet:///r/example/device/dev-a",
+                "nonce": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                "causal": {"form": "none"},
+                "arguments": {
+                    "args": {"city": "Singapore"},
+                    "content_type": "application/json",
+                },
+            }
+        )
+        wire = draft.to_json_dict()
+
+        self.assertIsInstance(draft, InvocationDraft)
+        self.assertNotIn("ability", wire)
+        self.assertEqual(
+            wire["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+        self.assertEqual(
+            identity.seen_requests,
+            [
+                {"descriptor_ref": "er.weather"},
+                {
+                    "kind": "ability",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "ability_name": "er.weather",
+                },
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                    "descriptor_version": "1.0.0",
+                },
+            ],
+        )
 
     def test_python_memc_executes_shared_no_core_bloat_conformance_case(self) -> None:
         no_bloat_case = shared_case("memc-no-core-bloat.yaml")
@@ -4304,6 +4352,91 @@ def shared_resolve_query() -> ResolveQuery:
         ability_name=decoded["ability_name"],
         qtype=decoded["qtype"],
     )
+
+
+class _EasyRemoteAdapterIdentityTransport:
+    def __init__(self) -> None:
+        self.seen_requests: list[dict[str, object]] = []
+
+    def project_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(request)
+        if request.get("descriptor_ref") == "er.weather":
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="directory_identity",
+                retry=RetryHint.NEVER,
+                message="not a descriptor ref",
+            )
+        return self._descriptor_projection()
+
+    def build_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(request)
+        return self._descriptor_projection()
+
+    def build_ura(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(request)
+        return (
+            b'{"kind":"ability","valid":true,'
+            b'"ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"owner_kind":"device","public_name":"er.weather",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:er.weather",'
+            b'"namespace":"er","local_name":"weather"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+
+    def project_identity(self, request_json: bytes) -> bytes:
+        raise AssertionError("identity projection is not part of this conformance path")
+
+    def close(self) -> None:
+        pass
+
+    @staticmethod
+    def _descriptor_projection() -> bytes:
+        return (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+
+
+class _EasyRemoteAdapterRuntimeTransport:
+    def invoke(self, draft_json: bytes) -> bytes:
+        raise AssertionError("runtime dispatch is not part of this conformance path")
+
+    def open_stream(self, draft_json: bytes):
+        raise AssertionError("stream dispatch is not part of this conformance path")
+
+    def open_bidi(self, draft_json: bytes, streams_json: bytes):
+        raise AssertionError("bidi dispatch is not part of this conformance path")
+
+    def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
+        raise AssertionError("prepare is not part of this conformance path")
+
+    def submit_signed(self, signed_json: bytes) -> bytes:
+        raise AssertionError("signed submit is not part of this conformance path")
+
+    def await_handle(self, handle_id: int) -> bytes:
+        raise AssertionError("handle await is not part of this conformance path")
+
+    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+        raise AssertionError("handle cancel is not part of this conformance path")
+
+    def handle_events(self, handle_id: int) -> bytes:
+        raise AssertionError("handle events are not part of this conformance path")
+
+    def free_handle(self, handle_id: int) -> None:
+        raise AssertionError("handle free is not part of this conformance path")
+
+    def close(self) -> None:
+        pass
 
 
 def assert_json_equivalent(actual: bytes, expected: bytes) -> None:

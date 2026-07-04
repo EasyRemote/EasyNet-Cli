@@ -892,4 +892,6 @@ def _has_callable(value: object, name: str) -> bool:
 def _optional_wire_string(value: object) -> str | None:
     if value is None:
         return None
+    if value == "":
+        return ""
     return _required_string(value, "optional string")

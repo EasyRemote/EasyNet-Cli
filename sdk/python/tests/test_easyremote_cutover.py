@@ -150,10 +150,46 @@ class EasyRemoteCutoverTests(unittest.TestCase):
                 }
             ],
         )
+        empty_codec_wire = adapter.to_wire_dict(
+            EasyRemoteTuple(
+                caller="easynet:///r/example/agent/alice.sdk",
+                callee="easynet:///r/example/device/dev-a",
+                ability=(
+                    "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+                ),
+                subject="easynet:///r/example/device/dev-a",
+                nonce=bytes(range(1, 17)),
+                causal=None,
+                arguments=EasyRemoteArguments.from_json({"city": "Singapore"}),
+            ),
+            bidi_streams=(
+                EasyRemoteStreamSpec(
+                    stream_id=8,
+                    content_type="text/pty",
+                    ordering="STRICT",
+                    codec_params="",
+                ),
+            ),
+        )
+        self.assertEqual(
+            empty_codec_wire["bidi_streams"],
+            [
+                {
+                    "stream_id": 8,
+                    "content_type": "text/pty",
+                    "ordering": "STRICT",
+                }
+            ],
+        )
         self.assertNotIn("ability", wire)
         self.assertEqual(
             identity_transport.seen_requests,
             [
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+                    )
+                },
                 {
                     "descriptor_ref": (
                         "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
