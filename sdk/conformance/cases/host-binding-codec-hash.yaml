@@ -54,9 +54,14 @@ expect:
   frame_fixture: host-stream-frame.v4.json
   terminal_fixture: host-stream-terminal.v4.json
   hash_state_fixture: host-stream-hash-state.v4.json
+  corrupted_zero_hash_state_fixture: host-stream-hash-state-corrupted-zero.v4.json
+  corrupted_gap_hash_state_fixture: host-stream-hash-state-corrupted-gap.v4.json
   folded_hash: sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15
   canonical_json: '{"token":"hello"}'
   rejects_relative_endpoint: true
   rejects_frame_schema_drift: true
   rejects_hash_gap_or_reorder: true
+  rejects_corrupted_zero_state: true
+  rejects_corrupted_gap_state: true
+  hash_state_invariant: frames_zero_requires_null_last_seq_and_frames_positive_requires_last_seq_equal_frames_minus_one
   product_host_owns_process_warmth: true

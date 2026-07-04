@@ -110,8 +110,9 @@ method spelling.
   remaining profile conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, directory subscription state seams,
-  and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
-  signing-key lifecycle, signer-handle projection, and close state seams; directory live transport
+  and close state seams plus `IdentityClient` descriptor, identity, Axon-delegated
+  URA/DescriptorRef helper seams, ResourceRef, signing-key lifecycle,
+  signer-handle projection, and close state seams; directory live transport
   adapters, signing-key live execution adapters, local signer implementations,
   concrete daemon carriers, and backend route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
@@ -126,10 +127,12 @@ method spelling.
   plugin/skill lifecycle policy, and backend publication cutover remain
   incomplete.
 - Go Host Binding facade exposes `HostBindingClient` binding DTO, envelope
-  decode, item/error/terminal frame encoding, and output-hash folding seams over
-  schema-backed transport projections plus close state seams; product host readiness execution,
-  cleanup execution, local canonical JSON/hash implementation, EasyRemote host
-  process integration, and behavior-executing conformance remain incomplete.
+  decode, item/error/terminal frame encoding, output-hash folding seams, and
+  shared conformance-pinned hash cursor invariants over schema-backed transport
+  projections plus close state seams; product host readiness execution, cleanup
+  execution, local canonical JSON/hash implementation, EasyRemote host process
+  integration, and behavior-executing host lifecycle conformance remain
+  incomplete.
 - Go Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders plus daemon `MissionStatus` and
   `MissionEventPage` projection seams and close state seams; daemon mission execution carriers,
@@ -228,12 +231,12 @@ method spelling.
   DTOs, and host binding bridge, EasyRemote decorator/package extraction, and
   plugin/skill lifecycle policy remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
-  decode, item/error/terminal frame encoding, output-hash folding seams over
-  schema-backed transport projections, and a `HostStreamFrameWriter` lifecycle
-  helper that delegates all frame/hash semantics through the client plus close
-  state seams; product host readiness execution,
-  cleanup execution, EasyRemote warm
-  host integration, and behavior-executing conformance remain incomplete.
+  decode, item/error/terminal frame encoding, output-hash folding seams with
+  shared conformance-pinned hash cursor invariants over schema-backed transport
+  projections, and a `HostStreamFrameWriter` lifecycle helper that delegates all
+  frame/hash semantics through the client plus close state seams; product host
+  readiness execution, cleanup execution, EasyRemote warm host integration, and
+  behavior-executing host lifecycle conformance remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, plus daemon `MissionStatus` and

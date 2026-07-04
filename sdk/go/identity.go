@@ -26,6 +26,21 @@ type IdentityProjectionRequest struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+// URABuildRequest asks the daemon/Axon boundary to build a canonical URA.
+type URABuildRequest struct {
+	Kind        string         `json:"kind"`
+	OwnerURA    string         `json:"owner_ura,omitempty"`
+	AbilityName string         `json:"ability_name,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+// DescriptorRefBuildRequest asks the daemon/Axon boundary to build a canonical DescriptorRef.
+type DescriptorRefBuildRequest struct {
+	AbilityURA        string         `json:"ability_ura"`
+	DescriptorVersion string         `json:"descriptor_version"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
 // LocalResourceRefRequest asks the daemon to create a local resource ref.
 type LocalResourceRefRequest struct {
 	Path       string `json:"path"`
@@ -132,7 +147,9 @@ type SignerHandle struct {
 // IdentityTransport supplies identity projections behind the SDK facade.
 type IdentityTransport interface {
 	ProjectDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectIdentity(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildURA(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildResourceRef(ctx context.Context, requestJSON []byte) ([]byte, error)
 	RegisterSigningKey(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListSigningKeys(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -143,7 +160,9 @@ type IdentityTransport interface {
 // IdentityTransportFunc adapts functions into an IdentityTransport.
 type IdentityTransportFunc struct {
 	ProjectDescriptorRefFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildDescriptorRefFunc   func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectIdentityFunc      func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildURAFunc             func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildResourceRefFunc     func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	RegisterSigningKeyFunc   func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListSigningKeysFunc      func(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -158,11 +177,25 @@ func (f IdentityTransportFunc) ProjectDescriptorRef(ctx context.Context, request
 	return f.ProjectDescriptorRefFunc(ctx, requestJSON)
 }
 
+func (f IdentityTransportFunc) BuildDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildDescriptorRefFunc == nil {
+		return nil, invalidRuntimeClient("identity descriptor build transport function is required")
+	}
+	return f.BuildDescriptorRefFunc(ctx, requestJSON)
+}
+
 func (f IdentityTransportFunc) ProjectIdentity(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ProjectIdentityFunc == nil {
 		return nil, invalidRuntimeClient("identity projection transport function is required")
 	}
 	return f.ProjectIdentityFunc(ctx, requestJSON)
+}
+
+func (f IdentityTransportFunc) BuildURA(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildURAFunc == nil {
+		return nil, invalidRuntimeClient("identity URA build transport function is required")
+	}
+	return f.BuildURAFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) BuildResourceRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -247,6 +280,112 @@ func (c *IdentityClient) ProjectIdentity(ctx context.Context, req IdentityProjec
 		return IdentityProjection{}, wrapIdentityTransportError("identity projection failed", err)
 	}
 	return NewIdentityProjectionFromJSON(raw)
+}
+
+func (c *IdentityClient) BuildURA(ctx context.Context, req URABuildRequest) (IdentityProjection, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return IdentityProjection{}, err
+	}
+	if req.Kind == "" {
+		return IdentityProjection{}, invalidRuntimePayload("URA build kind is required", nil)
+	}
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("encode URA build request: %v", err), err)
+	}
+	raw, err := c.transport.BuildURA(ctx, requestJSON)
+	if err != nil {
+		return IdentityProjection{}, wrapIdentityTransportError("identity URA build failed", err)
+	}
+	return NewIdentityProjectionFromJSON(raw)
+}
+
+func (c *IdentityClient) BuildDescriptorRef(ctx context.Context, req DescriptorRefBuildRequest) (IdentityProjection, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return IdentityProjection{}, err
+	}
+	if req.AbilityURA == "" || req.DescriptorVersion == "" {
+		return IdentityProjection{}, invalidRuntimePayload("ability_ura and descriptor_version are required", nil)
+	}
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("encode descriptor-ref build request: %v", err), err)
+	}
+	raw, err := c.transport.BuildDescriptorRef(ctx, requestJSON)
+	if err != nil {
+		return IdentityProjection{}, wrapIdentityTransportError("identity descriptor-ref build failed", err)
+	}
+	return NewIdentityProjectionFromJSON(raw)
+}
+
+func (c *IdentityClient) OwnerAbilityURA(ctx context.Context, ownerURA string, abilityName string) (string, error) {
+	projection, err := c.BuildURA(ctx, URABuildRequest{
+		Kind:        "ability",
+		OwnerURA:    ownerURA,
+		AbilityName: abilityName,
+	})
+	if err != nil {
+		return "", err
+	}
+	if projection.Kind != "ability" || projection.URA == "" {
+		return "", invalidRuntimePayload("invalid ability URA projection", nil)
+	}
+	return projection.URA, nil
+}
+
+func (c *IdentityClient) OwnerURAForAbility(ctx context.Context, abilityURA string) (string, error) {
+	projection, err := c.ProjectIdentity(ctx, IdentityProjectionRequest{URA: abilityURA})
+	if err != nil {
+		return "", err
+	}
+	if projection.Kind != "ability" {
+		return "", invalidRuntimePayload("ability_ura must project to an ability", nil)
+	}
+	ownerURA, ok := projection.Components["owner_ura"].(string)
+	if !ok || ownerURA == "" {
+		return "", invalidRuntimePayload("ability projection missing owner_ura", nil)
+	}
+	return ownerURA, nil
+}
+
+func (c *IdentityClient) OwnerAbilityDescriptorRef(ctx context.Context, ownerURA string, abilityName string, descriptorVersion string) (string, error) {
+	abilityURA, err := c.OwnerAbilityURA(ctx, ownerURA, abilityName)
+	if err != nil {
+		return "", err
+	}
+	return c.CanonicalAbilityDescriptorRef(ctx, abilityURA, descriptorVersion)
+}
+
+func (c *IdentityClient) CanonicalAbilityDescriptorRef(ctx context.Context, value string, descriptorVersion string) (string, error) {
+	version := strings.TrimSpace(descriptorVersion)
+	var projection IdentityProjection
+	var err error
+	if version == "" {
+		projection, err = c.ProjectDescriptorRef(ctx, DescriptorRefRequest{DescriptorRef: value})
+	} else {
+		projection, err = c.BuildDescriptorRef(ctx, DescriptorRefBuildRequest{
+			AbilityURA:        value,
+			DescriptorVersion: version,
+		})
+	}
+	if err != nil {
+		return "", err
+	}
+	if projection.Kind != "descriptor_ref" || projection.DescriptorRef == "" {
+		return "", invalidRuntimePayload("invalid descriptor_ref projection", nil)
+	}
+	return projection.DescriptorRef, nil
+}
+
+func (c *IdentityClient) AbilityURAFromDescriptorRef(ctx context.Context, descriptorRef string) (string, error) {
+	projection, err := c.ProjectDescriptorRef(ctx, DescriptorRefRequest{DescriptorRef: descriptorRef})
+	if err != nil {
+		return "", err
+	}
+	if projection.Kind != "descriptor_ref" || projection.AbilityURA == "" {
+		return "", invalidRuntimePayload("invalid descriptor_ref ability projection", nil)
+	}
+	return projection.AbilityURA, nil
 }
 
 func (c *IdentityClient) BuildResourceRef(ctx context.Context, req LocalResourceRefRequest) (ResourceRef, error) {

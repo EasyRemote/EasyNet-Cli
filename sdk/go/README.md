@@ -20,14 +20,16 @@ ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
-read-model pages, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
-signing-key lifecycle, and signer-handle seams.
+read-model pages, directory subscription state seams, and close state seams plus
+IdentityClient descriptor/resource projection, Axon-delegated
+URA/DescriptorRef helper seams, signing-key lifecycle, and signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
-exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
-output-hash folding seams plus close state seams. MissionClient exposes run/run-file/track/cancel
+exposes binding DTO, envelope decode, item/error/terminal frame encoding,
+output-hash folding seams, and hash cursor invariant guardrails plus close state
+seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier

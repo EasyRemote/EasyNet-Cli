@@ -135,6 +135,7 @@ class SharedHostBindingTransport:
         self.item_json = shared_fixture("host-stream-frame.v4.json")
         self.terminal_json = self._terminal_frame_json()
         self.hash_json = shared_fixture("host-stream-hash-state.v4.json")
+        self.hash_fold_calls = 0
 
     def _terminal_frame_json(self) -> bytes:
         summary = json.loads(shared_fixture("host-stream-terminal.v4.json"))
@@ -171,6 +172,7 @@ class SharedHostBindingTransport:
         return self.terminal_json
 
     def fold_output_hash(self, request_json: bytes) -> bytes:
+        self.hash_fold_calls += 1
         return self.hash_json
 
     def close(self) -> None:
@@ -1592,6 +1594,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "host-stream-frame.v4.json",
             "host-stream-terminal.v4.json",
             "host-stream-hash-state.v4.json",
+            "host-stream-hash-state-corrupted-zero.v4.json",
+            "host-stream-hash-state-corrupted-gap.v4.json",
         ):
             self._require_case_fixture(host_binding_case, fixture)
         self._require_case_expectation(
@@ -1600,8 +1604,19 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             host_binding_case, "rejects_hash_gap_or_reorder: true"
         )
+        self._require_case_expectation(
+            host_binding_case, "rejects_corrupted_zero_state: true"
+        )
+        self._require_case_expectation(
+            host_binding_case, "rejects_corrupted_gap_state: true"
+        )
+        self._require_case_expectation(
+            host_binding_case,
+            "hash_state_invariant: frames_zero_requires_null_last_seq_and_frames_positive_requires_last_seq_equal_frames_minus_one",
+        )
 
-        client = HostBindingClient(SharedHostBindingTransport())
+        transport = SharedHostBindingTransport()
+        client = HostBindingClient(transport)
 
         binding = client.build_host_stream_binding(
             HostStreamBindingRequest(
@@ -1653,6 +1668,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(folded.last_seq, 0)
         self.assertEqual(folded.canonical_json, '{"token":"hello"}')
+        self.assertEqual(transport.hash_fold_calls, 1)
 
         with self.assertRaises(SDKError) as caught:
             client.fold_output_hash(
@@ -1666,6 +1682,32 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 {"token": "skip"},
             )
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertEqual(transport.hash_fold_calls, 1)
+
+        for fixture in (
+            "host-stream-hash-state-corrupted-zero.v4.json",
+            "host-stream-hash-state-corrupted-gap.v4.json",
+        ):
+            with self.subTest(fixture=fixture):
+                with self.assertRaises(SDKError) as malformed_state:
+                    HostStreamHashState.from_json(shared_fixture(fixture))
+                self.assertEqual(
+                    malformed_state.exception.code, ErrorCode.INVALID_ARGUMENT
+                )
+
+        with self.assertRaises(SDKError) as corrupted_fold:
+            client.fold_output_hash(
+                HostStreamHashState(
+                    algorithm=HOST_STREAM_HASH_ALGORITHM,
+                    output_hash="sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15",
+                    frames=2,
+                    last_seq=0,
+                ),
+                2,
+                {"token": "skip"},
+            )
+        self.assertEqual(corrupted_fold.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertEqual(transport.hash_fold_calls, 1)
 
     def test_python_receipt_executes_shared_projection_conformance_case(self) -> None:
         fetch_case = shared_case("receipt-fetch-carrier.yaml")

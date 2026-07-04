@@ -9,6 +9,7 @@ import (
 type memoryIdentityTransport struct {
 	descriptorJSON string
 	identityJSON   string
+	buildURAJSON   string
 	resourceJSON   string
 	keyJSON        string
 	keyPageJSON    string
@@ -25,11 +26,25 @@ func (m *memoryIdentityTransport) ProjectDescriptorRef(ctx context.Context, requ
 	return []byte(m.descriptorJSON), nil
 }
 
+func (m *memoryIdentityTransport) BuildDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenRequest); err != nil {
+		return nil, err
+	}
+	return []byte(m.descriptorJSON), nil
+}
+
 func (m *memoryIdentityTransport) ProjectIdentity(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if err := json.Unmarshal(requestJSON, &m.seenRequest); err != nil {
 		return nil, err
 	}
 	return []byte(m.identityJSON), nil
+}
+
+func (m *memoryIdentityTransport) BuildURA(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenRequest); err != nil {
+		return nil, err
+	}
+	return []byte(m.buildURAJSON), nil
 }
 
 func (m *memoryIdentityTransport) BuildResourceRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -100,6 +115,84 @@ func TestIdentityProjectDescriptorRefDelegatesToTransport(t *testing.T) {
 	}
 	if transport.seenRequest["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
 		t.Fatalf("descriptor request not delegated: %#v", transport.seenRequest)
+	}
+}
+
+func TestIdentityAddressingHelpersDelegateToTransport(t *testing.T) {
+	transport := &memoryIdentityTransport{
+		descriptorJSON: identityDescriptorProjectionJSON,
+		identityJSON:   identityAbilityProjectionJSON,
+		buildURAJSON:   identityAbilityProjectionJSON,
+	}
+	client, err := NewIdentityClient(transport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+
+	abilityURA, err := client.OwnerAbilityURA(
+		context.Background(),
+		"easynet:///r/example/device/dev-a",
+		"observe.health",
+	)
+	if err != nil {
+		t.Fatalf("OwnerAbilityURA: %v", err)
+	}
+	if abilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
+		transport.seenRequest["kind"] != "ability" ||
+		transport.seenRequest["owner_ura"] != "easynet:///r/example/device/dev-a" ||
+		transport.seenRequest["ability_name"] != "observe.health" {
+		t.Fatalf("ability URA was not delegated through build_ura: result=%q request=%#v", abilityURA, transport.seenRequest)
+	}
+
+	ownerURA, err := client.OwnerURAForAbility(
+		context.Background(),
+		"easynet:///r/example/ability/device.dev-a.observe.health",
+	)
+	if err != nil {
+		t.Fatalf("OwnerURAForAbility: %v", err)
+	}
+	if ownerURA != "easynet:///r/example/device/dev-a" ||
+		transport.seenRequest["ura"] != "easynet:///r/example/ability/device.dev-a.observe.health" {
+		t.Fatalf("owner URA was not projected through identity transport: result=%q request=%#v", ownerURA, transport.seenRequest)
+	}
+
+	descriptorRef, err := client.OwnerAbilityDescriptorRef(
+		context.Background(),
+		"easynet:///r/example/device/dev-a",
+		"observe.health",
+		"1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("OwnerAbilityDescriptorRef: %v", err)
+	}
+	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" ||
+		transport.seenRequest["ability_ura"] != "easynet:///r/example/ability/device.dev-a.observe.health" ||
+		transport.seenRequest["descriptor_version"] != "1.0.0" {
+		t.Fatalf("descriptor ref was not delegated through build_descriptor_ref: result=%q request=%#v", descriptorRef, transport.seenRequest)
+	}
+
+	canonical, err := client.CanonicalAbilityDescriptorRef(
+		context.Background(),
+		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("CanonicalAbilityDescriptorRef: %v", err)
+	}
+	if canonical != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" ||
+		transport.seenRequest["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		t.Fatalf("descriptor ref canonicalization was not delegated through project_descriptor_ref: result=%q request=%#v", canonical, transport.seenRequest)
+	}
+
+	fromDescriptor, err := client.AbilityURAFromDescriptorRef(
+		context.Background(),
+		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("AbilityURAFromDescriptorRef: %v", err)
+	}
+	if fromDescriptor != "easynet:///r/example/ability/device.dev-a.observe.health" {
+		t.Fatalf("unexpected ability URI from descriptor ref: %q", fromDescriptor)
 	}
 }
 
@@ -270,6 +363,31 @@ func TestIdentityClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }
+
+const identityDescriptorProjectionJSON = `{
+  "kind":"descriptor_ref",
+  "valid":true,
+  "descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+  "ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",
+  "descriptor_version":"1.0.0",
+  "profile":"easynet-strict-v2",
+  "components":{"owner_ura":"easynet:///r/example/device/dev-a"},
+  "metadata":{"grammar_owner":"axon"}
+}`
+
+const identityAbilityProjectionJSON = `{
+  "kind":"ability",
+  "valid":true,
+  "ura":"easynet:///r/example/ability/device.dev-a.observe.health",
+  "realm":"example",
+  "display_id":"device.dev-a.observe.health",
+  "profile":"easynet-strict-v2",
+  "components":{
+    "owner_ura":"easynet:///r/example/device/dev-a",
+    "ability_name":"observe.health"
+  },
+  "metadata":{"grammar_owner":"axon"}
+}`
 
 const signingKeyRecordJSON = `{
   "profile":"directory_identity",

@@ -462,11 +462,16 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 		"host-stream-frame.v4.json",
 		"host-stream-terminal.v4.json",
 		"host-stream-hash-state.v4.json",
+		"host-stream-hash-state-corrupted-zero.v4.json",
+		"host-stream-hash-state-corrupted-gap.v4.json",
 	} {
 		requireCaseFixture(t, hostBindingCase, fixture)
 	}
 	requireCaseExpectation(t, hostBindingCase, `canonical_json: '{"token":"hello"}'`)
 	requireCaseExpectation(t, hostBindingCase, "rejects_hash_gap_or_reorder: true")
+	requireCaseExpectation(t, hostBindingCase, "rejects_corrupted_zero_state: true")
+	requireCaseExpectation(t, hostBindingCase, "rejects_corrupted_gap_state: true")
+	requireCaseExpectation(t, hostBindingCase, "hash_state_invariant: frames_zero_requires_null_last_seq_and_frames_positive_requires_last_seq_equal_frames_minus_one")
 
 	transport := &sharedHostBindingTransport{
 		bindingJSON:  sharedFixture(t, root, "host-stream-binding.v4.json"),
@@ -540,9 +545,38 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	if folded.LastSeq == nil || *folded.LastSeq != 0 || folded.CanonicalJSON != `{"token":"hello"}` {
 		t.Fatalf("unexpected hash state from shared fixture: %#v", folded)
 	}
+	if transport.foldCalls != 1 {
+		t.Fatalf("unexpected hash fold transport call count after valid fold: %d", transport.foldCalls)
+	}
 
 	if _, err := client.FoldOutputHash(context.Background(), state, 2, map[string]any{"token": "skip"}); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("hash gap did not produce InvalidArgument: %v", err)
+	}
+	if transport.foldCalls != 1 {
+		t.Fatalf("hash gap crossed transport boundary: %d fold calls", transport.foldCalls)
+	}
+
+	for _, fixture := range []string{
+		"host-stream-hash-state-corrupted-zero.v4.json",
+		"host-stream-hash-state-corrupted-gap.v4.json",
+	} {
+		if _, err := NewHostStreamHashStateFromJSON(sharedFixture(t, root, fixture)); !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("%s did not produce InvalidArgument: %v", fixture, err)
+		}
+	}
+
+	corruptedLastSeq := uint64(0)
+	corruptedState := HostStreamHashState{
+		Algorithm:  hostStreamHashAlgorithm,
+		OutputHash: "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15",
+		Frames:     2,
+		LastSeq:    &corruptedLastSeq,
+	}
+	if _, err := client.FoldOutputHash(context.Background(), corruptedState, 2, map[string]any{"token": "skip"}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("corrupted hash state reached fold transport boundary: %v", err)
+	}
+	if transport.foldCalls != 1 {
+		t.Fatalf("corrupted hash state crossed transport boundary: %d fold calls", transport.foldCalls)
 	}
 }
 
@@ -747,6 +781,7 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 		"project_ura",
 		"build_ura",
 		"project_descriptor_ref",
+		"ability_ura_from_descriptor_ref",
 		"build_descriptor_ref",
 	} {
 		requireCaseAction(t, identityCase, action)
@@ -757,11 +792,36 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	requireCaseExpectation(t, identityCase, "rejects_hand_built_invalid_ura: true")
 
 	identity, err := NewIdentityClient(&sharedIdentityTransport{
-		t:              t,
-		descriptorJSON: sharedFixture(t, root, "identity.descriptor-ref.v4.json"),
+		t:                                 t,
+		expectedBuildURARequest:           []byte(`{"ability_name":"observe.health","kind":"ability","owner_ura":"easynet:///r/example/device/dev-a"}`),
+		expectedProjectIdentityRequest:    []byte(`{"ura":"easynet:///r/example/ability/device.dev-a.observe.health"}`),
+		expectedDescriptorProjectionInput: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		expectedBuildDescriptorRefRequest: []byte(`{"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health","descriptor_version":"1.0.0"}`),
+		descriptorJSON:                    sharedFixture(t, root, "identity.descriptor-ref.v4.json"),
+		abilityJSON:                       sharedIdentityAbilityProjectionJSON(t, root),
 	})
 	if err != nil {
 		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	parsed, err := identity.ProjectIdentity(context.Background(), IdentityProjectionRequest{
+		URA: "easynet:///r/example/ability/device.dev-a.observe.health",
+	})
+	if err != nil {
+		t.Fatalf("ProjectIdentity(shared ability): %v", err)
+	}
+	if parsed.Kind != "ability" || parsed.Components["owner_ura"] != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("unexpected shared ability projection: %#v", parsed)
+	}
+	abilityURA, err := identity.OwnerAbilityURA(
+		context.Background(),
+		"easynet:///r/example/device/dev-a",
+		"observe.health",
+	)
+	if err != nil {
+		t.Fatalf("OwnerAbilityURA(shared request): %v", err)
+	}
+	if abilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" {
+		t.Fatalf("unexpected shared ability URA: %q", abilityURA)
 	}
 	projection, err := identity.ProjectDescriptorRef(context.Background(), DescriptorRefRequest{
 		DescriptorRef: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
@@ -771,6 +831,28 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	}
 	if !projection.Valid || projection.Metadata["grammar_owner"] != "axon" || projection.DescriptorVersion != "1.0.0" {
 		t.Fatalf("unexpected identity descriptor projection: %#v", projection)
+	}
+	abilityFromDescriptor, err := identity.AbilityURAFromDescriptorRef(
+		context.Background(),
+		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("AbilityURAFromDescriptorRef(shared fixture): %v", err)
+	}
+	if abilityFromDescriptor != "easynet:///r/example/ability/device.dev-a.observe.health" {
+		t.Fatalf("unexpected ability URA from descriptor: %q", abilityFromDescriptor)
+	}
+	ownerDescriptor, err := identity.OwnerAbilityDescriptorRef(
+		context.Background(),
+		"easynet:///r/example/device/dev-a",
+		"observe.health",
+		"1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("OwnerAbilityDescriptorRef(shared request): %v", err)
+	}
+	if ownerDescriptor != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		t.Fatalf("unexpected owner descriptor ref: %q", ownerDescriptor)
 	}
 	if _, err := NewIdentityProjectionFromJSON([]byte(`{"kind":"descriptor_ref","valid":true,"profile":"easynet-strict-v2","components":{},"metadata":{}}`)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("malformed descriptor projection did not produce InvalidArgument: %v", err)
@@ -1705,14 +1787,21 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Owner: "directory_identity",
 			Type:  reflect.TypeOf((*IdentityClient)(nil)),
 			Operations: map[string]string{
-				"BuildResourceRef":     "directory_identity.identity.build_resource_ref",
-				"Close":                "directory_identity.identity.close",
-				"ListSigningKeys":      "directory_identity.identity.list_signing_keys",
-				"ProjectDescriptorRef": "directory_identity.identity.project_descriptor_ref",
-				"ProjectIdentity":      "directory_identity.identity.project_identity",
-				"RegisterSigningKey":   "directory_identity.identity.register_signing_key",
-				"RevokeSigningKey":     "directory_identity.identity.revoke_signing_key",
-				"Signer":               "directory_identity.identity.signer",
+				"AbilityURAFromDescriptorRef":   "directory_identity.identity.ability_ura_from_descriptor_ref",
+				"BuildDescriptorRef":            "directory_identity.identity.build_descriptor_ref",
+				"BuildResourceRef":              "directory_identity.identity.build_resource_ref",
+				"BuildURA":                      "directory_identity.identity.build_ura",
+				"CanonicalAbilityDescriptorRef": "directory_identity.identity.canonical_ability_descriptor_ref",
+				"Close":                         "directory_identity.identity.close",
+				"ListSigningKeys":               "directory_identity.identity.list_signing_keys",
+				"OwnerAbilityDescriptorRef":     "directory_identity.identity.owner_ability_descriptor_ref",
+				"OwnerAbilityURA":               "directory_identity.identity.owner_ability_ura",
+				"OwnerURAForAbility":            "directory_identity.identity.owner_ura_for_ability",
+				"ProjectDescriptorRef":          "directory_identity.identity.project_descriptor_ref",
+				"ProjectIdentity":               "directory_identity.identity.project_identity",
+				"RegisterSigningKey":            "directory_identity.identity.register_signing_key",
+				"RevokeSigningKey":              "directory_identity.identity.revoke_signing_key",
+				"Signer":                        "directory_identity.identity.signer",
 			},
 		},
 		{
@@ -2854,8 +2943,13 @@ func (t *sharedDirectoryTransport) Close(context.Context) error {
 }
 
 type sharedIdentityTransport struct {
-	t              *testing.T
-	descriptorJSON []byte
+	t                                 *testing.T
+	expectedBuildURARequest           []byte
+	expectedProjectIdentityRequest    []byte
+	expectedDescriptorProjectionInput string
+	expectedBuildDescriptorRefRequest []byte
+	descriptorJSON                    []byte
+	abilityJSON                       []byte
 }
 
 func (t *sharedIdentityTransport) ProjectDescriptorRef(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -2863,14 +2957,25 @@ func (t *sharedIdentityTransport) ProjectDescriptorRef(_ context.Context, reques
 	if err := json.Unmarshal(requestJSON, &request); err != nil {
 		t.t.Fatalf("decode descriptor projection request: %v", err)
 	}
-	if request.DescriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+	if request.DescriptorRef != t.expectedDescriptorProjectionInput {
 		t.t.Fatalf("unexpected descriptor projection request: %#v", request)
 	}
 	return t.descriptorJSON, nil
 }
 
-func (t *sharedIdentityTransport) ProjectIdentity(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedIdentityTransport) BuildDescriptorRef(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedBuildDescriptorRefRequest)
+	return t.descriptorJSON, nil
+}
+
+func (t *sharedIdentityTransport) ProjectIdentity(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedProjectIdentityRequest)
+	return t.abilityJSON, nil
+}
+
+func (t *sharedIdentityTransport) BuildURA(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedBuildURARequest)
+	return t.abilityJSON, nil
 }
 
 func (t *sharedIdentityTransport) BuildResourceRef(context.Context, []byte) ([]byte, error) {
@@ -2903,6 +3008,7 @@ type sharedHostBindingTransport struct {
 	itemJSON     []byte
 	terminalJSON []byte
 	hashJSON     []byte
+	foldCalls    int
 }
 
 func (t *sharedHostBindingTransport) BuildHostStreamBinding(context.Context, []byte) ([]byte, error) {
@@ -2926,6 +3032,7 @@ func (t *sharedHostBindingTransport) EncodeTerminal(context.Context, []byte) ([]
 }
 
 func (t *sharedHostBindingTransport) FoldOutputHash(context.Context, []byte) ([]byte, error) {
+	t.foldCalls++
 	return t.hashJSON, nil
 }
 
@@ -3203,6 +3310,36 @@ func sharedEventsDirectorySubscriptionRequestJSON(t *testing.T, root string) []b
 	raw, err := marshalEventsSubscriptionRequest(sharedEventsDirectorySubscriptionRequest(t, root), EventStreamDirectory)
 	if err != nil {
 		t.Fatalf("marshal shared events directory subscription request: %v", err)
+	}
+	return raw
+}
+
+func sharedIdentityAbilityProjectionJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	var descriptor IdentityProjection
+	if err := json.Unmarshal(sharedFixture(t, root, "identity.descriptor-ref.v4.json"), &descriptor); err != nil {
+		t.Fatalf("decode shared descriptor projection: %v", err)
+	}
+	abilityName, _ := descriptor.Components["ability_name"].(string)
+	if abilityName == "" {
+		abilityName = "observe.health"
+	}
+	projection := map[string]any{
+		"kind":       "ability",
+		"valid":      true,
+		"ura":        descriptor.AbilityURA,
+		"realm":      "example",
+		"display_id": "device.dev-a.observe.health",
+		"profile":    descriptor.Profile,
+		"components": map[string]any{
+			"owner_ura":    descriptor.Components["owner_ura"],
+			"ability_name": abilityName,
+		},
+		"metadata": descriptor.Metadata,
+	}
+	raw, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatalf("encode shared ability projection: %v", err)
 	}
 	return raw
 }
