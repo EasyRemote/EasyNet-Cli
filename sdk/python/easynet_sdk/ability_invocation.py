@@ -164,6 +164,10 @@ class AbilityInvocationClient:
 def _required_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or value.strip() == "":
         raise _invalid_ability_invocation(f"{field_name} is required")
+    if value.strip() != value:
+        raise _invalid_ability_invocation(
+            f"{field_name} must not contain surrounding whitespace"
+        )
     return value
 
 

@@ -171,6 +171,27 @@ class AbilityInvocationClientTests(unittest.TestCase):
                 )
             )
 
+    def test_rejects_surrounding_whitespace_before_dispatch(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(_identity_transport()),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.invoke(_request(ability_name=" observe.health"))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as caught:
+            client.invoke(
+                _request_with(
+                    caller_ura=" easynet:///r/example/agent/alice.sdk",
+                    ability_name="observe.health",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(runtime.seen_draft)
+
     def test_close_delegates_to_owned_clients_once(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()
@@ -215,12 +236,31 @@ def _request(
     ability_ura: str = "",
     ability_name: str = "",
 ) -> AbilityCallRequest:
+    return _request_with(
+        descriptor_ref=descriptor_ref,
+        ability_ura=ability_ura,
+        ability_name=ability_name,
+    )
+
+
+def _request_with(
+    *,
+    caller_ura: str = "easynet:///r/example/agent/alice.sdk",
+    callee_ura: str = "easynet:///r/example/device/dev-a",
+    subject_ura: str = "easynet:///r/example/device/dev-a",
+    nonce_base64: str = "AQIDBAUGBwgJCgsMDQ4PEA==",
+    content_type: str = "application/json",
+    descriptor_ref: str = "",
+    ability_ura: str = "",
+    ability_name: str = "",
+) -> AbilityCallRequest:
     return AbilityCallRequest(
-        caller_ura="easynet:///r/example/agent/alice.sdk",
-        callee_ura="easynet:///r/example/device/dev-a",
-        subject_ura="easynet:///r/example/device/dev-a",
-        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        caller_ura=caller_ura,
+        callee_ura=callee_ura,
+        subject_ura=subject_ura,
+        nonce_base64=nonce_base64,
         causal_context={"form": "none"},
+        content_type=content_type,
         descriptor_ref=descriptor_ref,
         ability_ura=ability_ura,
         ability_name=ability_name,
