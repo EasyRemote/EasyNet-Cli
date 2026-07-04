@@ -8,11 +8,15 @@ import (
 
 type memoryReceiptTransport struct {
 	fetchJSON        string
+	listHistoryJSON  string
+	getHistoryJSON   string
+	traceJSON        string
 	projectJSON      string
 	verifyJSON       string
 	verifyChainJSON  string
 	causalRefJSON    string
 	seenRequest      map[string]any
+	seenHistoryRead  map[string]any
 	seenChainRequest map[string]any
 	seenReceiptRaw   string
 	closeCalls       int
@@ -23,6 +27,46 @@ func (m *memoryReceiptTransport) Fetch(ctx context.Context, requestJSON []byte) 
 		return nil, err
 	}
 	return []byte(m.fetchJSON), nil
+}
+
+func (m *memoryReceiptTransport) BuildListHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return m.captureHistoryRead(requestJSON, `{"caller_ura":"easynet:///r/example/agent/backend","callee_ura":"easynet:///r/example/device/dev-a","descriptor_ref":"easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0","subject_ura":"easynet:///r/example/device/dev-a","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"args":{},"content_type":"application/json","metadata":{}}`)
+}
+
+func (m *memoryReceiptTransport) BuildGetHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return m.BuildListHistoryInvocation(ctx, requestJSON)
+}
+
+func (m *memoryReceiptTransport) BuildTraceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return m.BuildListHistoryInvocation(ctx, requestJSON)
+}
+
+func (m *memoryReceiptTransport) ListHistory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if _, err := m.captureHistoryRead(requestJSON, m.listHistoryJSON); err != nil {
+		return nil, err
+	}
+	return []byte(m.listHistoryJSON), nil
+}
+
+func (m *memoryReceiptTransport) GetHistory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if _, err := m.captureHistoryRead(requestJSON, m.getHistoryJSON); err != nil {
+		return nil, err
+	}
+	return []byte(m.getHistoryJSON), nil
+}
+
+func (m *memoryReceiptTransport) GetTrace(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if _, err := m.captureHistoryRead(requestJSON, m.traceJSON); err != nil {
+		return nil, err
+	}
+	return []byte(m.traceJSON), nil
+}
+
+func (m *memoryReceiptTransport) captureHistoryRead(requestJSON []byte, responseJSON string) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenHistoryRead); err != nil {
+		return nil, err
+	}
+	return []byte(responseJSON), nil
 }
 
 func (m *memoryReceiptTransport) Project(ctx context.Context, receiptJSON []byte) ([]byte, error) {
@@ -63,6 +107,19 @@ func baseReceiptFetchRequest() ReceiptFetchRequest {
 		CausalContext:     map[string]any{"form": "none"},
 		RequestID:         "inv-example-1",
 		Metadata:          map[string]any{"request_id": "receipt-fetch-1"},
+	}
+}
+
+func receiptHistoryBaseForTest() ReceiptCarrierBase {
+	return ReceiptCarrierBase{
+		CallerURA:         "easynet:///r/example/agent/backend",
+		CalleeURA:         "easynet:///r/example/device/dev-a",
+		SubjectURA:        "easynet:///r/example/device/dev-a",
+		DescriptorVersion: "1.0.0",
+		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext:     map[string]any{"form": "none"},
+		TimeoutMS:         2500,
+		Metadata:          map[string]any{"request_id": "history-1"},
 	}
 }
 
@@ -114,6 +171,54 @@ func TestReceiptClientBuildFetchInvocationHonorsLifecycle(t *testing.T) {
 	}
 	if _, err := client.BuildFetchInvocation(context.Background(), baseReceiptFetchRequest()); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("BuildFetchInvocation after close = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestReceiptHistoryReadPreservesCarrierAndDecodesReadModel(t *testing.T) {
+	transport := &memoryReceiptTransport{
+		listHistoryJSON: `{"ledger_ura":"easynet:///r/example/resource/invocations","ledger_path":"/tmp/ledger.redb","records":[{"request_id":"req-1"}]}`,
+		getHistoryJSON:  `{"ledger_ura":"easynet:///r/example/resource/invocations","ledger_path":"/tmp/ledger.redb","record":{"request_id":"req-1"}}`,
+		traceJSON:       `{"ledger_ura":"easynet:///r/example/resource/invocations","ledger_path":"/tmp/ledger.redb","trace_id":"trace-1","nodes":[],"edges":[],"edge_semantics":"Axon causal links"}`,
+	}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+	req := ReceiptHistoryReadRequest{
+		ReceiptCarrierBase: receiptHistoryBaseForTest(),
+		Arguments:          map[string]any{"limit": 1, "compact": true},
+	}
+
+	list, err := client.ListHistory(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if list["ledger_path"] != "/tmp/ledger.redb" {
+		t.Fatalf("unexpected list read-model: %#v", list)
+	}
+	if transport.seenHistoryRead["caller_ura"] == "" || transport.seenHistoryRead["arguments"] == nil {
+		t.Fatalf("history request not forwarded: %#v", transport.seenHistoryRead)
+	}
+
+	draft, err := client.BuildListHistoryInvocation(context.Background(), req)
+	if err != nil {
+		t.Fatalf("BuildListHistoryInvocation: %v", err)
+	}
+	if draft.DescriptorRef() == "" || !draft.HasJSONArgs() {
+		t.Fatalf("unexpected history draft: %#v", draft)
+	}
+
+	if _, err := client.GetHistory(context.Background(), ReceiptHistoryReadRequest{
+		ReceiptCarrierBase: receiptHistoryBaseForTest(),
+		Arguments:          map[string]any{"key": map[string]any{"request_id": "req-1"}},
+	}); err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if _, err := client.GetTrace(context.Background(), ReceiptHistoryReadRequest{
+		ReceiptCarrierBase: receiptHistoryBaseForTest(),
+		Arguments:          map[string]any{"key": map[string]any{"trace_id": "trace-1"}},
+	}); err != nil {
+		t.Fatalf("GetTrace: %v", err)
 	}
 }
 

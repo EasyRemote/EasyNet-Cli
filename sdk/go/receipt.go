@@ -12,6 +12,32 @@ import (
 const receiptProfile = "receipt"
 const receiptFetchAbility = "invocation.history.get"
 
+const (
+	receiptHistoryListAbility = "invocation.history.list"
+	receiptHistoryGetAbility  = "invocation.history.get"
+	receiptTraceGetAbility    = "invocation.trace.get"
+)
+
+// ReceiptCarrierBase is the complete carrier context shared by daemon receipt
+// and invocation-ledger read-model operations.
+type ReceiptCarrierBase struct {
+	CallerURA         string         `json:"caller_ura"`
+	CalleeURA         string         `json:"callee_ura"`
+	SubjectURA        string         `json:"subject_ura"`
+	DescriptorVersion string         `json:"descriptor_version"`
+	NonceBase64       string         `json:"nonce_base64"`
+	CausalContext     map[string]any `json:"causal_context"`
+	TimeoutMS         int            `json:"timeout_ms,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
+// ReceiptHistoryReadRequest preserves the daemon-owned invocation-ledger query
+// arguments while keeping Invocation carrier fields out of backend handlers.
+type ReceiptHistoryReadRequest struct {
+	ReceiptCarrierBase
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
 // ReceiptFetchRequest preserves the complete carrier context for receipt fetch.
 type ReceiptFetchRequest struct {
 	CallerURA         string         `json:"caller_ura"`
@@ -93,6 +119,12 @@ type CausalRef struct {
 // ReceiptTransport supplies receipt operations behind the SDK facade.
 type ReceiptTransport interface {
 	Fetch(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildListHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildGetHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildTraceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListHistory(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GetHistory(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GetTrace(ctx context.Context, requestJSON []byte) ([]byte, error)
 	Project(ctx context.Context, receiptJSON []byte) ([]byte, error)
 	Verify(ctx context.Context, receiptJSON []byte) ([]byte, error)
 	VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -101,11 +133,17 @@ type ReceiptTransport interface {
 
 // ReceiptTransportFunc adapts functions into a ReceiptTransport.
 type ReceiptTransportFunc struct {
-	FetchFunc       func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	ProjectFunc     func(ctx context.Context, receiptJSON []byte) ([]byte, error)
-	VerifyFunc      func(ctx context.Context, receiptJSON []byte) ([]byte, error)
-	VerifyChainFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	CausalRefFunc   func(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	FetchFunc                      func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildListHistoryInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildGetHistoryInvocationFunc  func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildTraceInvocationFunc       func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListHistoryFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GetHistoryFunc                 func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GetTraceFunc                   func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ProjectFunc                    func(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	VerifyFunc                     func(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	VerifyChainFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	CausalRefFunc                  func(ctx context.Context, receiptJSON []byte) ([]byte, error)
 }
 
 func (f ReceiptTransportFunc) Fetch(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -113,6 +151,48 @@ func (f ReceiptTransportFunc) Fetch(ctx context.Context, requestJSON []byte) ([]
 		return nil, invalidProfileClient(receiptProfile, "receipt fetch transport function is required")
 	}
 	return f.FetchFunc(ctx, requestJSON)
+}
+
+func (f ReceiptTransportFunc) BuildListHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildListHistoryInvocationFunc == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt list-history invocation transport function is required")
+	}
+	return f.BuildListHistoryInvocationFunc(ctx, requestJSON)
+}
+
+func (f ReceiptTransportFunc) BuildGetHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildGetHistoryInvocationFunc == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt get-history invocation transport function is required")
+	}
+	return f.BuildGetHistoryInvocationFunc(ctx, requestJSON)
+}
+
+func (f ReceiptTransportFunc) BuildTraceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildTraceInvocationFunc == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt trace invocation transport function is required")
+	}
+	return f.BuildTraceInvocationFunc(ctx, requestJSON)
+}
+
+func (f ReceiptTransportFunc) ListHistory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.ListHistoryFunc == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt list-history transport function is required")
+	}
+	return f.ListHistoryFunc(ctx, requestJSON)
+}
+
+func (f ReceiptTransportFunc) GetHistory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.GetHistoryFunc == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt get-history transport function is required")
+	}
+	return f.GetHistoryFunc(ctx, requestJSON)
+}
+
+func (f ReceiptTransportFunc) GetTrace(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.GetTraceFunc == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt trace transport function is required")
+	}
+	return f.GetTraceFunc(ctx, requestJSON)
 }
 
 func (f ReceiptTransportFunc) Project(ctx context.Context, receiptJSON []byte) ([]byte, error) {
@@ -181,6 +261,70 @@ func (c *ReceiptClient) BuildFetchInvocation(ctx context.Context, req ReceiptFet
 		return InvocationDraft{}, err
 	}
 	return BuildReceiptFetchInvocation(req)
+}
+
+func (c *ReceiptClient) BuildListHistoryInvocation(ctx context.Context, req ReceiptHistoryReadRequest) (InvocationDraft, error) {
+	return c.buildHistoryInvocation(ctx, req, c.transport.BuildListHistoryInvocation, "receipt list-history invocation failed")
+}
+
+func (c *ReceiptClient) BuildGetHistoryInvocation(ctx context.Context, req ReceiptHistoryReadRequest) (InvocationDraft, error) {
+	return c.buildHistoryInvocation(ctx, req, c.transport.BuildGetHistoryInvocation, "receipt get-history invocation failed")
+}
+
+func (c *ReceiptClient) BuildTraceInvocation(ctx context.Context, req ReceiptHistoryReadRequest) (InvocationDraft, error) {
+	return c.buildHistoryInvocation(ctx, req, c.transport.BuildTraceInvocation, "receipt trace invocation failed")
+}
+
+func (c *ReceiptClient) ListHistory(ctx context.Context, req ReceiptHistoryReadRequest) (map[string]any, error) {
+	return c.readHistory(ctx, req, c.transport.ListHistory, "receipt list-history failed")
+}
+
+func (c *ReceiptClient) GetHistory(ctx context.Context, req ReceiptHistoryReadRequest) (map[string]any, error) {
+	return c.readHistory(ctx, req, c.transport.GetHistory, "receipt get-history failed")
+}
+
+func (c *ReceiptClient) GetTrace(ctx context.Context, req ReceiptHistoryReadRequest) (map[string]any, error) {
+	return c.readHistory(ctx, req, c.transport.GetTrace, "receipt trace failed")
+}
+
+func (c *ReceiptClient) buildHistoryInvocation(
+	ctx context.Context,
+	req ReceiptHistoryReadRequest,
+	build func(context.Context, []byte) ([]byte, error),
+	message string,
+) (InvocationDraft, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return InvocationDraft{}, err
+	}
+	requestJSON, err := marshalReceiptHistoryReadRequest(req)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	raw, err := build(ctx, requestJSON)
+	if err != nil {
+		return InvocationDraft{}, wrapReceiptTransportError(message, err)
+	}
+	return NewInvocationDraftFromJSON(raw)
+}
+
+func (c *ReceiptClient) readHistory(
+	ctx context.Context,
+	req ReceiptHistoryReadRequest,
+	read func(context.Context, []byte) ([]byte, error),
+	message string,
+) (map[string]any, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return nil, err
+	}
+	requestJSON, err := marshalReceiptHistoryReadRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := read(ctx, requestJSON)
+	if err != nil {
+		return nil, wrapReceiptTransportError(message, err)
+	}
+	return NewReceiptReadModelFromJSON(raw)
 }
 
 // BuildReceiptFetchInvocation projects a receipt fetch request into a complete
@@ -332,6 +476,20 @@ func NewReceiptSummaryFromJSON(raw []byte) (ReceiptSummary, error) {
 	}, nil
 }
 
+func NewReceiptReadModelFromJSON(raw []byte) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, invalidProfilePayload(receiptProfile, "receipt read-model JSON is required", nil)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt read-model JSON: %v", err), err)
+	}
+	if result == nil {
+		return nil, invalidProfilePayload(receiptProfile, "receipt read-model must be an object", nil)
+	}
+	return result, nil
+}
+
 func NewReceiptVerificationFromJSON(raw []byte) (ReceiptVerification, error) {
 	var result ReceiptVerification
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -413,6 +571,30 @@ func validateReceiptFetchRequest(req ReceiptFetchRequest) error {
 		return invalidProfilePayload(receiptProfile, "exactly one receipt lookup key is required", nil)
 	}
 	return nil
+}
+
+func validateReceiptCarrierBase(base ReceiptCarrierBase) error {
+	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" || base.DescriptorVersion == "" || base.NonceBase64 == "" {
+		return invalidProfilePayload(receiptProfile, "caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required", nil)
+	}
+	if base.CausalContext == nil {
+		return invalidProfilePayload(receiptProfile, "causal_context is required", nil)
+	}
+	return nil
+}
+
+func marshalReceiptHistoryReadRequest(req ReceiptHistoryReadRequest) ([]byte, error) {
+	if err := validateReceiptCarrierBase(req.ReceiptCarrierBase); err != nil {
+		return nil, err
+	}
+	if req.Arguments == nil {
+		req.Arguments = map[string]any{}
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, invalidProfilePayload(receiptProfile, fmt.Sprintf("encode receipt history request: %v", err), err)
+	}
+	return raw, nil
 }
 
 func receiptFetchArgs(req ReceiptFetchRequest) (map[string]any, error) {
