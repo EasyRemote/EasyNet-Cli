@@ -3,6 +3,12 @@ import pathlib
 import unittest
 
 from easynet_sdk import (
+    AbilityQuery,
+    AgentQuery,
+    DescriptorRefRequest,
+    DeviceQuery,
+    DirectoryClient,
+    DirectoryQueryBase,
     ErrorCode,
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
@@ -12,10 +18,15 @@ from easynet_sdk import (
     HostStreamEnvelopeRequest,
     HostStreamHashState,
     HostStreamTerminalSummary,
+    IdentityClient,
+    IdentityProjection,
+    IdentityProjectionRequest,
     InvocationDraft,
+    MAX_DIRECTORY_PAGE_SIZE,
     PreparedInvocation,
     ReceiptSummary,
     ReceiptVerification,
+    ResolveQuery,
     RuntimeHealth,
     RetryHint,
     SDKError,
@@ -90,6 +101,124 @@ class SharedHostBindingTransport:
 
     def fold_output_hash(self, request_json: bytes) -> bytes:
         return self.hash_json
+
+    def close(self) -> None:
+        return None
+
+
+class SharedDirectoryTransport:
+    def __init__(self) -> None:
+        self.expected_devices_request = shared_fixture(
+            "directory-list-devices-request.v4.json"
+        )
+        self.expected_agents_request = shared_fixture(
+            "directory-list-agents-request.v4.json"
+        )
+        self.expected_ability_request = shared_fixture(
+            "directory-list-abilities-request.v4.json"
+        )
+        self.expected_resolve_request = shared_fixture("directory-resolve-request.v4.json")
+        self.devices_json = shared_fixture("directory-device-page.v4.json")
+        self.agents_json = shared_fixture("directory-agent-page.v4.json")
+        self.abilities_json = shared_fixture("directory-ability-page.v4.json")
+        self.resolve_json = shared_fixture("directory-resolved-ref.v4.json")
+
+    def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared directory conformance fixture test",
+        )
+
+    def resolve(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_resolve_request)
+        return self.resolve_json
+
+    def list_devices(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_devices_request)
+        return self.devices_json
+
+    def list_agents(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agents_request)
+        return self.agents_json
+
+    def list_abilities(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_ability_request)
+        return self.abilities_json
+
+    def subscribe_directory(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared directory conformance fixture test",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class SharedIdentityTransport:
+    def __init__(self) -> None:
+        self.descriptor_json = shared_fixture("identity.descriptor-ref.v4.json")
+
+    def project_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        if (
+            request.get("descriptor_ref")
+            != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+        ):
+            raise AssertionError(f"unexpected descriptor projection request: {request}")
+        return self.descriptor_json
+
+    def project_identity(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def build_resource_ref(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def register_signing_key(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def list_signing_keys(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def revoke_signing_key(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def signer(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
 
     def close(self) -> None:
         return None
@@ -264,6 +393,157 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             CausalRef.from_json(b'{"metadata":{}}')
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_directory_identity_execute_shared_projection_cases(self) -> None:
+        list_case = shared_case("directory-list-pagination.yaml")
+        self._require_case_id(list_case, "directory/list_pagination")
+        for action in (
+            "build_list_devices_invocation",
+            "build_list_agents_invocation",
+            "project_device_page",
+            "project_agent_page",
+            "list_devices",
+        ):
+            self._require_case_action(list_case, action)
+        for fixture in (
+            "directory-list-devices-request.v4.json",
+            "directory-list-agents-request.v4.json",
+            "directory-device-page.v4.json",
+            "directory-agent-page.v4.json",
+        ):
+            self._require_case_fixture(list_case, fixture)
+        self._require_case_expectation(list_case, "max_page_size: 500")
+        self._require_case_expectation(
+            list_case,
+            "device_invocation_fixture: directory-list-devices-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            list_case,
+            "agent_invocation_fixture: directory-list-agents-invocation.v4.json",
+        )
+        self._require_case_expectation(list_case, "error_code: InvalidArgument")
+
+        directory = DirectoryClient(SharedDirectoryTransport())
+
+        device_page = directory.list_devices(DeviceQuery(shared_directory_query_base(
+            "directory-list-devices-request.v4.json"
+        )))
+        self.assertEqual(device_page.limit, 2)
+        self.assertEqual(len(device_page.items), 1)
+        self.assertEqual(device_page.metadata["source_ability"], "node.list")
+
+        agent_page = directory.list_agents(AgentQuery(shared_directory_query_base(
+            "directory-list-agents-request.v4.json"
+        )))
+        self.assertEqual(agent_page.limit, 2)
+        self.assertEqual(len(agent_page.items), 1)
+        self.assertEqual(agent_page.metadata["source_ability"], "agent.list")
+
+        oversized_base = shared_directory_query_base(
+            "directory-list-devices-request.v4.json"
+        )
+        oversized_base = DirectoryQueryBase(
+            caller_ura=oversized_base.caller_ura,
+            callee_ura=oversized_base.callee_ura,
+            subject_ura=oversized_base.subject_ura,
+            descriptor_version=oversized_base.descriptor_version,
+            nonce_base64=oversized_base.nonce_base64,
+            causal_context=oversized_base.causal_context,
+            cursor=oversized_base.cursor,
+            limit=MAX_DIRECTORY_PAGE_SIZE + 1,
+            metadata=oversized_base.metadata,
+        )
+        with self.assertRaises(SDKError) as caught:
+            directory.list_devices(DeviceQuery(oversized_base))
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        fanout_case = shared_case("directory-no-default-fanout.yaml")
+        self._require_case_id(fanout_case, "directory/no_default_fanout")
+        self._require_case_action(fanout_case, "build_list_abilities_invocation")
+        self._require_case_action(fanout_case, "project_ability_page")
+        self._require_case_fixture(
+            fanout_case, "directory-list-abilities-request.v4.json"
+        )
+        self._require_case_fixture(fanout_case, "directory-ability-page.v4.json")
+        self._require_case_expectation(
+            fanout_case, "daemon_ability: meta.list_abilities"
+        )
+        self._require_case_expectation(
+            fanout_case,
+            "invocation_fixture: directory-list-abilities-invocation.v4.json",
+        )
+        self._require_case_expectation(fanout_case, "fanout: none")
+
+        ability_page = directory.list_abilities(shared_ability_query())
+        self.assertEqual(ability_page.limit, 2)
+        self.assertEqual(len(ability_page.items), 1)
+        self.assertEqual(
+            ability_page.metadata["source_ability"], "meta.list_abilities"
+        )
+
+        resolve_case = shared_case("directory-resolve.yaml")
+        self._require_case_id(resolve_case, "directory/resolve")
+        self._require_case_action(resolve_case, "build_resolve_invocation")
+        self._require_case_action(resolve_case, "project_resolved_ref")
+        self._require_case_fixture(resolve_case, "directory-resolve-request.v4.json")
+        self._require_case_fixture(resolve_case, "directory-resolved-ref.v4.json")
+        self._require_case_expectation(resolve_case, "daemon_ability: namespace.resolve")
+        self._require_case_expectation(
+            resolve_case, "invocation_fixture: directory-resolve-invocation.v4.json"
+        )
+        self._require_case_expectation(resolve_case, "fanout: none")
+        self._require_case_expectation(
+            resolve_case, "route_selection_owner: daemon"
+        )
+
+        resolved = directory.resolve(shared_resolve_query())
+        self.assertEqual(resolved.kind, "resolved_ref")
+        self.assertEqual(
+            resolved.ability_ura,
+            "easynet:///r/example/ability/device.dev-a.agent.list",
+        )
+
+        identity_case = shared_case("identity-ura-descriptor-projection.yaml")
+        self._require_case_id(identity_case, "identity/ura_descriptor_projection")
+        for action in (
+            "project_ura",
+            "build_ura",
+            "project_descriptor_ref",
+            "build_descriptor_ref",
+        ):
+            self._require_case_action(identity_case, action)
+        self._require_case_expectation(identity_case, "grammar_owner: axon")
+        self._require_case_expectation(
+            identity_case, "fixture: identity.descriptor-ref.v4.json"
+        )
+        self._require_case_expectation(
+            identity_case, "rejects_malformed_descriptor_ref: true"
+        )
+        self._require_case_expectation(
+            identity_case, "rejects_hand_built_invalid_ura: true"
+        )
+
+        identity = IdentityClient(SharedIdentityTransport())
+        projection = identity.project_descriptor_ref(
+            DescriptorRefRequest(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+        )
+        self.assertTrue(projection.valid)
+        self.assertEqual(projection.metadata["grammar_owner"], "axon")
+        self.assertEqual(projection.descriptor_version, "1.0.0")
+
+        with self.assertRaises(SDKError) as caught:
+            IdentityProjection.from_json(
+                b'{"kind":"descriptor_ref","valid":true,'
+                b'"profile":"easynet-strict-v2","components":{},'
+                b'"metadata":{}}'
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            identity.project_identity(IdentityProjectionRequest())
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -352,6 +632,50 @@ class SharedConformanceFixtureTests(unittest.TestCase):
 
     def _require_case_literal(self, raw: str, expected: str) -> None:
         self.assertIn(expected, raw)
+
+
+def shared_directory_query_base(fixture: str) -> DirectoryQueryBase:
+    decoded = json.loads(shared_fixture(fixture))
+    return DirectoryQueryBase(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        cursor=decoded.get("cursor", ""),
+        limit=decoded.get("limit", 0),
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_ability_query() -> AbilityQuery:
+    decoded = json.loads(shared_fixture("directory-list-abilities-request.v4.json"))
+    return AbilityQuery(
+        base=shared_directory_query_base("directory-list-abilities-request.v4.json"),
+        scope=decoded["scope"],
+        owner_ura=decoded["owner_ura"],
+        ability_ura=decoded["ability_ura"],
+    )
+
+
+def shared_resolve_query() -> ResolveQuery:
+    decoded = json.loads(shared_fixture("directory-resolve-request.v4.json"))
+    return ResolveQuery(
+        base=shared_directory_query_base("directory-resolve-request.v4.json"),
+        query_name=decoded["query_name"],
+        ability_name=decoded["ability_name"],
+        qtype=decoded["qtype"],
+    )
+
+
+def assert_json_equivalent(actual: bytes, expected: bytes) -> None:
+    if json.loads(actual.decode("utf-8")) != json.loads(expected.decode("utf-8")):
+        raise AssertionError(
+            "JSON mismatch\n"
+            f"actual: {actual.decode('utf-8')}\n"
+            f"expected: {expected.decode('utf-8')}"
+        )
 
 
 if __name__ == "__main__":
