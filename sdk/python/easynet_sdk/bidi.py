@@ -54,7 +54,7 @@ class BidiTransport(Protocol):
     def send(self, frame_json: bytes) -> bytes:
         ...
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         ...
 
     def close_send(self) -> bytes:
@@ -236,13 +236,15 @@ class BidiSession:
         self._record_sent(ack)
         return ack
 
-    def receive(self) -> BidiFrame:
+    def receive(self, timeout: float | None = None) -> BidiFrame:
         if self._is_terminal() or self.state == BidiState.TERMINAL:
             raise _invalid_bidi("bidi session is terminal")
         try:
-            raw = self.transport.recv()
+            raw = self.transport.recv(timeout)
         except SDKError:
             self.state = BidiState.FAILED
+            raise
+        except TimeoutError:
             raise
         except Exception as exc:
             self.state = BidiState.FAILED

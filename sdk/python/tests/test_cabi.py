@@ -5,6 +5,7 @@ import unittest
 from easynet_sdk import (
     AttachOptions,
     BidiFrame,
+    BidiState,
     BidiStreamDescriptor,
     Client,
     ConnectOptions,
@@ -1408,6 +1409,22 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.stream_closes, [404])
         self.assertEqual(raw.stream_cancels, [])
 
+    def test_runtime_transport_stream_timeout_keeps_inbox_open(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        stream = client.invoke_stream(complete_draft())
+        with self.assertRaises(TimeoutError):
+            stream.next(timeout=0.001)
+
+        self.assertEqual(stream.state, StreamState.OPEN)
+        self.assertEqual(raw.stream_closes, [])
+        self.assertEqual(raw.stream_cancels, [])
+        stream.close()
+        self.assertEqual(raw.stream_closes, [404])
+
     def test_runtime_transport_stream_cancel_is_terminal(self) -> None:
         raw = FakeRawCABI()
         raw.stream_events = []
@@ -1480,6 +1497,25 @@ class CABITransportTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_runtime_transport_bidi_timeout_keeps_inbox_open(self) -> None:
+        raw = FakeRawCABI()
+        raw.bidi_frames = []
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        session = client.open_bidi(
+            complete_draft(),
+            (BidiStreamDescriptor(stream_id=1, content_type="application/json"),),
+        )
+        with self.assertRaises(TimeoutError):
+            session.receive(timeout=0.001)
+
+        self.assertEqual(session.state, BidiState.OPEN)
+        self.assertEqual(raw.bidi_closes, [])
+        self.assertEqual(raw.bidi_cancels, [])
+        session.cancel("client stop")
+        self.assertEqual(raw.bidi_cancels, [505])
 
     def test_runtime_transport_bidi_cancel_is_terminal(self) -> None:
         raw = FakeRawCABI()

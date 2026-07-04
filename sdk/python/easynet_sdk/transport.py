@@ -106,8 +106,8 @@ class DaemonFrameStream:
 
     handle: StreamHandle
 
-    def recv(self) -> dict[str, object]:
-        return _stream_event_dict(self.handle.next())
+    def recv(self, timeout: float | None = None) -> dict[str, object]:
+        return _stream_event_dict(self.handle.next(timeout))
 
     def cancel(self, reason: str = "") -> dict[str, object]:
         return _stream_cancel_dict(self.handle.cancel(reason))
@@ -138,11 +138,11 @@ class DaemonBidiChannel:
     def send(self, frame: Mapping[str, object] | BidiFrame) -> dict[str, object]:
         return _bidi_frame_dict(self.session.send(_coerce_bidi_frame(frame)))
 
-    def recv(self) -> dict[str, object]:
-        return _bidi_frame_dict(self.session.receive())
+    def recv(self, timeout: float | None = None) -> dict[str, object]:
+        return _bidi_frame_dict(self.session.receive(timeout))
 
-    def receive(self) -> dict[str, object]:
-        return self.recv()
+    def receive(self, timeout: float | None = None) -> dict[str, object]:
+        return self.recv(timeout)
 
     def close_send(self) -> dict[str, object]:
         return _bidi_outcome_dict(self.session.close_send())

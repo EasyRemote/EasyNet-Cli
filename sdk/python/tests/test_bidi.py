@@ -22,7 +22,7 @@ class MemoryBidiTransport:
         self.sent_frames.append(json.loads(frame_json.decode("utf-8")))
         return frame_json
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         if not self.recv_frames:
             raise RuntimeError("no frame")
         return self.recv_frames.pop(0)
@@ -46,6 +46,21 @@ def new_session(transport: MemoryBidiTransport) -> BidiSession:
 
 
 class BidiTests(unittest.TestCase):
+    def test_bidi_receive_timeout_does_not_change_state(self) -> None:
+        class TimeoutBidiTransport(MemoryBidiTransport):
+            def recv(self, timeout: float | None = None) -> bytes:
+                self.timeout = timeout
+                raise TimeoutError("no frame")
+
+        transport = TimeoutBidiTransport()
+        session = new_session(transport)
+
+        with self.assertRaises(TimeoutError):
+            session.receive(timeout=0.01)
+
+        self.assertEqual(transport.timeout, 0.01)
+        self.assertEqual(session.state, BidiState.OPEN)
+
     def test_bidi_sends_and_receives_ordered_frames(self) -> None:
         transport = MemoryBidiTransport(
             [b'{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"ready":true}}']

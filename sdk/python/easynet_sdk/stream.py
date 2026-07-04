@@ -29,7 +29,7 @@ class StreamState(StrEnum):
 class StreamTransport(Protocol):
     """Concrete stream frame transport supplied by the integration layer."""
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         ...
 
     def cancel(self, reason: str) -> bytes:
@@ -152,15 +152,17 @@ class StreamHandle:
             max_buffered_events=max_buffered,
         )
 
-    def next(self) -> StreamEvent:
+    def next(self, timeout: float | None = None) -> StreamEvent:
         if self._is_terminal():
             raise _invalid_stream("stream is terminal")
         if self.state in {StreamState.TERMINAL_FRAME_SEEN, StreamState.DRAINING}:
             raise _invalid_stream("stream terminal event already seen")
         try:
-            raw = self.transport.recv()
+            raw = self.transport.recv(timeout)
         except SDKError:
             self.state = StreamState.FAILED
+            raise
+        except TimeoutError:
             raise
         except Exception as exc:
             self.state = StreamState.FAILED

@@ -9,7 +9,7 @@ class MemoryStreamTransport:
         self.closed = False
         self.cancel_reason = ""
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         if not self.events:
             raise RuntimeError("no event")
         return self.events.pop(0)
@@ -23,6 +23,24 @@ class MemoryStreamTransport:
 
 
 class StreamTests(unittest.TestCase):
+    def test_stream_timeout_does_not_change_state(self) -> None:
+        class TimeoutStreamTransport(MemoryStreamTransport):
+            def recv(self, timeout: float | None = None) -> bytes:
+                self.timeout = timeout
+                raise TimeoutError("no frame")
+
+        transport = TimeoutStreamTransport()
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        with self.assertRaises(TimeoutError):
+            stream.next(timeout=0.01)
+
+        self.assertEqual(transport.timeout, 0.01)
+        self.assertEqual(stream.state, StreamState.OPEN)
+
     def test_stream_orders_events_and_closes_after_terminal(self) -> None:
         transport = MemoryStreamTransport(
             [
@@ -101,4 +119,3 @@ class StreamTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

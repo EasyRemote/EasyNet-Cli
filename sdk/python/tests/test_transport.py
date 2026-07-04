@@ -6,6 +6,7 @@ from easynet_sdk import (
     ErrorCode,
     RuntimeClient,
     SDKError,
+    StreamState,
     is_code,
 )
 
@@ -39,6 +40,32 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(event["terminal"])
         self.assertEqual(event["kind"], "terminal")
 
+    def test_stream_timeout_is_forwarded_without_state_mutation(self) -> None:
+        class TimeoutRuntimeTransport(MemoryRuntimeTransport):
+            def open_stream(self, draft_json: bytes):
+                from test_stream import MemoryStreamTransport
+
+                class TimeoutStreamTransport(MemoryStreamTransport):
+                    def recv(self, timeout: float | None = None) -> bytes:
+                        self.timeout = timeout
+                        raise TimeoutError("no frame")
+
+                self.stream_transport = TimeoutStreamTransport()
+                return (
+                    self.stream_transport,
+                    b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+                )
+
+        runtime = TimeoutRuntimeTransport()
+        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+
+        stream = transport.stream(complete_draft())
+        with self.assertRaises(TimeoutError):
+            stream.recv(timeout=0.01)
+
+        self.assertEqual(runtime.stream_transport.timeout, 0.01)
+        self.assertEqual(stream.handle.state, StreamState.OPEN)
+
     def test_bidi_keeps_half_close_cancel_and_close_distinct(self) -> None:
         runtime = MemoryRuntimeTransport()
         transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
@@ -60,6 +87,35 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(cancelled["state"], "Cancelled")
         self.assertEqual(channel.session.state, BidiState.CLOSED)
+
+    def test_bidi_timeout_is_forwarded_without_state_mutation(self) -> None:
+        class TimeoutRuntimeTransport(MemoryRuntimeTransport):
+            def open_bidi(self, draft_json: bytes, streams_json: bytes):
+                from test_bidi import MemoryBidiTransport
+
+                class TimeoutBidiTransport(MemoryBidiTransport):
+                    def recv(self, timeout: float | None = None) -> bytes:
+                        self.timeout = timeout
+                        raise TimeoutError("no frame")
+
+                self.bidi_transport = TimeoutBidiTransport()
+                return (
+                    self.bidi_transport,
+                    b'{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}',
+                )
+
+        runtime = TimeoutRuntimeTransport()
+        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+
+        channel = transport.bidi(
+            complete_draft().to_json_dict(),
+            [{"stream_id": 1, "content_type": "application/json"}],
+        )
+        with self.assertRaises(TimeoutError):
+            channel.recv(timeout=0.01)
+
+        self.assertEqual(runtime.bidi_transport.timeout, 0.01)
+        self.assertEqual(channel.session.state, BidiState.OPEN)
 
     def test_rejects_incomplete_invocation_mapping_before_dispatch(self) -> None:
         runtime = MemoryRuntimeTransport()

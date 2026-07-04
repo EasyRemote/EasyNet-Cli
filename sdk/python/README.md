@@ -25,7 +25,8 @@ InvocationResult projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
-methods behind narrow transport protocols, plus public
+methods behind narrow transport protocols with timeout-aware stream/bidi receive,
+plus public
 DaemonInvocationTransport dict/JSON unary, stream, and bidi facade over
 RuntimeClient/C ABI v4, DirectoryClient resolve/list read-model pages,
 C ABI-backed resolve/list read-model execution through Runtime Core invoke,

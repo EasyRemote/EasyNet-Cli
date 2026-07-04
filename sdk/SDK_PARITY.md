@@ -174,7 +174,7 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
-  transport protocols; public `DaemonInvocationTransport` dict/JSON unary,
+  transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
   stream, and bidi facade over RuntimeClient/C ABI v4;
   `SdkEnvironment.addressing_client()` for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned

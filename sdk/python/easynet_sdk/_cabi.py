@@ -1617,10 +1617,10 @@ class _CABIStreamTransport:
     inbox: "_CallbackInbox"
     _terminal_action_done: bool = False
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         if self._terminal_action_done:
             raise _closed_error("stream transport is closed")
-        return self.inbox.recv()
+        return self.inbox.recv(timeout)
 
     def cancel(self, reason: str) -> bytes:
         if not self._terminal_action_done:
@@ -1664,10 +1664,10 @@ class _CABIBidiTransport:
         )
         return frame_json
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         if self._terminal_action_done:
             raise _closed_error("bidi transport is closed")
-        return self.inbox.recv()
+        return self.inbox.recv(timeout)
 
     def close_send(self) -> bytes:
         if self._terminal_action_done:
@@ -1732,12 +1732,15 @@ class _CallbackInbox:
                     message="C ABI callback queue limit exceeded",
                 )
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         with self._lock:
             failure = self._failure
         if failure is not None:
             raise failure
-        item = self._queue.get()
+        try:
+            item = self._queue.get(timeout=timeout)
+        except queue_module.Empty:
+            raise TimeoutError("no C ABI callback frame within timeout") from None
         with self._lock:
             failure = self._failure
         if failure is not None:

@@ -1051,7 +1051,7 @@ class SharedBidiLifecycleTransport:
             message="not used by shared stream-bidi lifecycle conformance test",
         )
 
-    def recv(self) -> bytes:
+    def recv(self, timeout: float | None = None) -> bytes:
         if not self.recv_frames:
             raise SDKError(
                 code=ErrorCode.INVALID_ARGUMENT,
@@ -1402,7 +1402,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.close_calls = 0
 
-            def recv(self) -> bytes:
+            def recv(self, timeout: float | None = None) -> bytes:
                 raise SDKError(
                     code=ErrorCode.NOT_IMPLEMENTED,
                     stage="test",
