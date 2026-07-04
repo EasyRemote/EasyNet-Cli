@@ -52,9 +52,10 @@ A language runner must:
 - Emit machine-readable results with `case_id`, `language`, `profile`,
   `status`, and `error_code`.
 
-Go and Python facade tests must consume shared fixtures from
-`sdk/conformance/fixtures` for shipped DTOs. Inline samples may remain as
-focused unit tests, but they do not replace the shared fixture parity gate.
+Go and Python facade tests must consume shared cases from
+`sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
+shipped local DTO/actions. Inline samples may remain as focused unit tests, but
+they do not replace the shared case-aware parity gate.
 
 ## Minimum Commands
 

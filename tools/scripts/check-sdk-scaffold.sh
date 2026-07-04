@@ -364,8 +364,10 @@ done
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
+require_literal sdk/go/conformance_test.go "sdk/conformance/cases"
 require_literal sdk/go/conformance_test.go "sdk/conformance/fixtures"
-require_literal sdk/go/conformance_test.go "TestGoFacadeConsumesSharedConformanceFixtures"
+require_literal sdk/go/conformance_test.go "TestGoFacadeExecutesSharedRuntimeCoreConformanceCases"
+require_literal sdk/python/tests/test_conformance.py "sdk/conformance/cases"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/fixtures"
 require_literal sdk/python/tests/test_conformance.py "SharedConformanceFixtureTests"
 require_literal sdk/go/client.go "DiscoveryTransport"

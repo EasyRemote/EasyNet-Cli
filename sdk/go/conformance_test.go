@@ -6,13 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
+const sharedConformanceCaseRoot = "sdk/conformance/cases"
 const sharedConformanceFixtureRoot = "sdk/conformance/fixtures"
 
-func TestGoFacadeConsumesSharedConformanceFixtures(t *testing.T) {
+func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	root := repositoryRoot(t)
+
+	completeTupleCase := sharedCase(t, root, "invocation-complete-tuple.yaml")
+	requireCaseID(t, completeTupleCase, "invocation/complete_tuple")
+	requireCaseAction(t, completeTupleCase, "build_invocation")
+	requireCaseAction(t, completeTupleCase, "remove_field")
+	requireCaseAction(t, completeTupleCase, "prepare")
+	requireCaseFixture(t, completeTupleCase, "invocation.complete.v4.json")
+	requireCaseExpectation(t, completeTupleCase, "error_code: InvalidArgument")
 
 	draft, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json"))
 	if err != nil {
@@ -20,6 +30,19 @@ func TestGoFacadeConsumesSharedConformanceFixtures(t *testing.T) {
 	}
 	if draft.CallerURA() != "easynet:///r/example/agent/alice.sdk" || !draft.HasJSONArgs() {
 		t.Fatalf("unexpected invocation draft from shared fixture: %#v", draft)
+	}
+
+	missingCaller := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "invocation.complete.v4.json"), &missingCaller); err != nil {
+		t.Fatalf("decode invocation fixture for remove_field action: %v", err)
+	}
+	delete(missingCaller, "caller_ura")
+	missingCallerRaw, err := json.Marshal(missingCaller)
+	if err != nil {
+		t.Fatalf("encode invocation fixture after remove_field action: %v", err)
+	}
+	if _, err := NewInvocationDraftFromJSON(missingCallerRaw); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("remove_field caller_ura did not produce InvalidArgument: %v", err)
 	}
 
 	prepared, err := NewPreparedInvocationFromJSON(sharedFixture(t, root, "prepared.signing-material.v4.json"))
@@ -38,6 +61,13 @@ func TestGoFacadeConsumesSharedConformanceFixtures(t *testing.T) {
 		t.Fatalf("unexpected runtime error from shared fixture: %#v", runtimeErr)
 	}
 
+	healthCase := sharedCase(t, root, "health-api-vs-runtime.yaml")
+	requireCaseID(t, healthCase, "health/api_vs_runtime")
+	requireCaseAction(t, healthCase, "read_health")
+	requireCaseFixture(t, healthCase, "health.ready.v4.json")
+	requireCaseExpectation(t, healthCase, "api_ready_field: api_ready")
+	requireCaseExpectation(t, healthCase, "runtime_ready_field: runtime_ready")
+
 	health, err := NewRuntimeHealthFromJSON(sharedFixture(t, root, "health.ready.v4.json"))
 	if err != nil {
 		t.Fatalf("NewRuntimeHealthFromJSON(shared fixture): %v", err)
@@ -47,8 +77,31 @@ func TestGoFacadeConsumesSharedConformanceFixtures(t *testing.T) {
 	}
 }
 
-func TestGoHostBindingFacadeConsumesSharedConformanceFixtures(t *testing.T) {
+func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
+	hostBindingCase := sharedCase(t, root, "host-binding-codec-hash.yaml")
+	requireCaseID(t, hostBindingCase, "host_binding/codec_hash")
+	for _, action := range []string{
+		"build_host_stream_binding",
+		"decode_request",
+		"encode_item",
+		"fold_output_hash",
+		"encode_terminal",
+	} {
+		requireCaseAction(t, hostBindingCase, action)
+	}
+	for _, fixture := range []string{
+		"host-stream-binding.v4.json",
+		"host-stream-request.v4.json",
+		"host-stream-frame.v4.json",
+		"host-stream-terminal.v4.json",
+		"host-stream-hash-state.v4.json",
+	} {
+		requireCaseFixture(t, hostBindingCase, fixture)
+	}
+	requireCaseExpectation(t, hostBindingCase, `canonical_json: '{"token":"hello"}'`)
+	requireCaseExpectation(t, hostBindingCase, "rejects_hash_gap_or_reorder: true")
+
 	transport := &sharedHostBindingTransport{
 		bindingJSON:  sharedFixture(t, root, "host-stream-binding.v4.json"),
 		requestJSON:  sharedFixture(t, root, "host-stream-request.v4.json"),
@@ -121,6 +174,10 @@ func TestGoHostBindingFacadeConsumesSharedConformanceFixtures(t *testing.T) {
 	if folded.LastSeq == nil || *folded.LastSeq != 0 || folded.CanonicalJSON != `{"token":"hello"}` {
 		t.Fatalf("unexpected hash state from shared fixture: %#v", folded)
 	}
+
+	if _, err := client.FoldOutputHash(context.Background(), state, 2, map[string]any{"token": "skip"}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("hash gap did not produce InvalidArgument: %v", err)
+	}
 }
 
 type sharedHostBindingTransport struct {
@@ -176,6 +233,43 @@ func sharedFixture(t *testing.T, root, name string) []byte {
 		t.Fatalf("read shared fixture %s: %v", path, err)
 	}
 	return raw
+}
+
+func sharedCase(t *testing.T, root, name string) string {
+	t.Helper()
+	path := filepath.Join(root, sharedConformanceCaseRoot, name)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read shared case %s: %v", path, err)
+	}
+	return string(raw)
+}
+
+func requireCaseID(t *testing.T, raw, id string) {
+	t.Helper()
+	requireCaseLiteral(t, raw, "id: "+id)
+}
+
+func requireCaseAction(t *testing.T, raw, action string) {
+	t.Helper()
+	requireCaseLiteral(t, raw, "action: "+action)
+}
+
+func requireCaseFixture(t *testing.T, raw, fixture string) {
+	t.Helper()
+	requireCaseLiteral(t, raw, "fixture: "+fixture)
+}
+
+func requireCaseExpectation(t *testing.T, raw, expected string) {
+	t.Helper()
+	requireCaseLiteral(t, raw, expected)
+}
+
+func requireCaseLiteral(t *testing.T, raw, expected string) {
+	t.Helper()
+	if !strings.Contains(raw, expected) {
+		t.Fatalf("shared conformance case is missing %q", expected)
+	}
 }
 
 func sharedTerminalFrameFixture(t *testing.T, root string) []byte {

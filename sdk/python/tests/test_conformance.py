@@ -21,8 +21,14 @@ from easynet_sdk import (
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
+SHARED_CONFORMANCE_CASE_ROOT = "sdk/conformance/cases"
 SHARED_CONFORMANCE_FIXTURE_ROOT = "sdk/conformance/fixtures"
+CASES = ROOT / SHARED_CONFORMANCE_CASE_ROOT
 FIXTURES = ROOT / SHARED_CONFORMANCE_FIXTURE_ROOT
+
+
+def shared_case(name: str) -> str:
+    return (CASES / name).read_text(encoding="utf-8")
 
 
 def shared_fixture(name: str) -> bytes:
@@ -79,10 +85,24 @@ class SharedHostBindingTransport:
 
 
 class SharedConformanceFixtureTests(unittest.TestCase):
-    def test_python_facade_consumes_shared_runtime_core_fixtures(self) -> None:
+    def test_python_facade_executes_shared_runtime_core_conformance_cases(self) -> None:
+        complete_tuple_case = shared_case("invocation-complete-tuple.yaml")
+        self._require_case_id(complete_tuple_case, "invocation/complete_tuple")
+        self._require_case_action(complete_tuple_case, "build_invocation")
+        self._require_case_action(complete_tuple_case, "remove_field")
+        self._require_case_action(complete_tuple_case, "prepare")
+        self._require_case_fixture(complete_tuple_case, "invocation.complete.v4.json")
+        self._require_case_expectation(complete_tuple_case, "error_code: InvalidArgument")
+
         draft = InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
         self.assertEqual(draft.caller_ura, "easynet:///r/example/agent/alice.sdk")
         self.assertIn("args", json.loads(draft.to_json()))
+
+        missing_caller = json.loads(shared_fixture("invocation.complete.v4.json"))
+        del missing_caller["caller_ura"]
+        with self.assertRaises(SDKError) as caught:
+            InvocationDraft.from_json(json.dumps(missing_caller))
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
         prepared = PreparedInvocation.from_json(
             shared_fixture("prepared.signing-material.v4.json")
@@ -95,11 +115,43 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(runtime_error.code, ErrorCode.INVALID_ARGUMENT)
         self.assertEqual(runtime_error.retry, RetryHint.NEVER)
 
+        health_case = shared_case("health-api-vs-runtime.yaml")
+        self._require_case_id(health_case, "health/api_vs_runtime")
+        self._require_case_action(health_case, "read_health")
+        self._require_case_fixture(health_case, "health.ready.v4.json")
+        self._require_case_expectation(health_case, "api_ready_field: api_ready")
+        self._require_case_expectation(health_case, "runtime_ready_field: runtime_ready")
+
         health = RuntimeHealth.from_json(shared_fixture("health.ready.v4.json"))
         self.assertTrue(health.api_alive())
         self.assertTrue(health.ready())
 
-    def test_python_host_binding_consumes_shared_conformance_fixtures(self) -> None:
+    def test_python_host_binding_executes_shared_conformance_case(self) -> None:
+        host_binding_case = shared_case("host-binding-codec-hash.yaml")
+        self._require_case_id(host_binding_case, "host_binding/codec_hash")
+        for action in (
+            "build_host_stream_binding",
+            "decode_request",
+            "encode_item",
+            "fold_output_hash",
+            "encode_terminal",
+        ):
+            self._require_case_action(host_binding_case, action)
+        for fixture in (
+            "host-stream-binding.v4.json",
+            "host-stream-request.v4.json",
+            "host-stream-frame.v4.json",
+            "host-stream-terminal.v4.json",
+            "host-stream-hash-state.v4.json",
+        ):
+            self._require_case_fixture(host_binding_case, fixture)
+        self._require_case_expectation(
+            host_binding_case, """canonical_json: '{"token":"hello"}'"""
+        )
+        self._require_case_expectation(
+            host_binding_case, "rejects_hash_gap_or_reorder: true"
+        )
+
         client = HostBindingClient(SharedHostBindingTransport())
 
         binding = client.build_host_stream_binding(
@@ -152,6 +204,34 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(folded.last_seq, 0)
         self.assertEqual(folded.canonical_json, '{"token":"hello"}')
+
+        with self.assertRaises(SDKError) as caught:
+            client.fold_output_hash(
+                HostStreamHashState(
+                    algorithm=HOST_STREAM_HASH_ALGORITHM,
+                    output_hash="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    frames=0,
+                    last_seq=None,
+                ),
+                2,
+                {"token": "skip"},
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def _require_case_id(self, raw: str, case_id: str) -> None:
+        self._require_case_literal(raw, f"id: {case_id}")
+
+    def _require_case_action(self, raw: str, action: str) -> None:
+        self._require_case_literal(raw, f"action: {action}")
+
+    def _require_case_fixture(self, raw: str, fixture: str) -> None:
+        self._require_case_literal(raw, f"fixture: {fixture}")
+
+    def _require_case_expectation(self, raw: str, expected: str) -> None:
+        self._require_case_literal(raw, expected)
+
+    def _require_case_literal(self, raw: str, expected: str) -> None:
+        self.assertIn(expected, raw)
 
 
 if __name__ == "__main__":
