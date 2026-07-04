@@ -24,6 +24,7 @@ from easynet_sdk import (
     ReceiptClient,
     ReceiptFetchRequest,
     ResolveQuery,
+    RetryHint,
     RuntimeClient,
     SDKError,
     StartConfig,
@@ -36,6 +37,7 @@ from easynet_sdk._cabi import (
     CABIDaemonTransport,
     CABIIdentityTransport,
     CABIReceiptTransport,
+    CABIRuntimeConnector,
     CABIRuntimeTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
@@ -1141,6 +1143,86 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.daemon_stops, [606])
         self.assertEqual(raw.daemon_detaches, [707])
         self.assertIsNotNone(runtime)
+
+    def test_runtime_connector_resolves_handshakes_detaches_and_closes(
+        self,
+    ) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        connector = CABIRuntimeConnector(lib)
+
+        endpoint_json = connector.resolve(
+            ConnectOptions(control_path="/tmp/control.json").to_json_bytes()
+        )
+        endpoint = json.loads(endpoint_json.decode("utf-8"))
+        runtime, facts_json = connector.handshake(endpoint_json)
+        facts = json.loads(facts_json.decode("utf-8"))
+        connector.close()
+        connector.close()
+
+        self.assertIsInstance(runtime, CABIRuntimeTransport)
+        self.assertEqual(endpoint["endpoint"], "unix:///tmp/daemon.sock")
+        self.assertEqual(endpoint["control_path"], "/tmp/control.json")
+        self.assertEqual(facts["transport"], "c_abi")
+        self.assertTrue(facts["ready"])
+        self.assertEqual(raw.daemon_discovers, [{"control_path": "/tmp/control.json"}])
+        self.assertEqual(
+            raw.daemon_attaches,
+            [
+                {
+                    "control_endpoint": "unix:///tmp/control.sock",
+                    "control_path": "/tmp/control.json",
+                    "invocation_endpoint": "unix:///tmp/daemon.sock",
+                }
+            ],
+        )
+        self.assertEqual(raw.daemon_open_clients, [707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808])
+
+    def test_runtime_connector_preserves_explicit_endpoint_override(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        connector = CABIRuntimeConnector(lib)
+
+        endpoint_json = connector.resolve(
+            ConnectOptions(
+                endpoint="unix:///tmp/explicit-daemon.sock",
+                control_path="/tmp/control.json",
+            ).to_json_bytes()
+        )
+        connector.handshake(endpoint_json)
+        connector.close()
+
+        self.assertEqual(
+            raw.daemon_attaches[0]["invocation_endpoint"],
+            "unix:///tmp/explicit-daemon.sock",
+        )
+
+    def test_runtime_connector_detaches_after_open_runtime_failure(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+
+        def fail_open_client(_daemon_handle):
+            raise SDKError(
+                code=ErrorCode.DAEMON_OFFLINE,
+                stage="cabi",
+                retry=RetryHint.SAFE,
+                message="daemon open client failed",
+            )
+
+        lib.daemon_open_client = fail_open_client
+        connector = CABIRuntimeConnector(lib)
+        endpoint_json = connector.resolve(
+            ConnectOptions(control_path="/tmp/control.json").to_json_bytes()
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            connector.handshake(endpoint_json)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertEqual(raw.daemon_attaches[0]["control_path"], "/tmp/control.json")
+        self.assertEqual(raw.daemon_detaches, [707])
 
     def test_daemon_transport_rejects_unsupported_start_fields(self) -> None:
         raw = FakeRawCABI()

@@ -8,7 +8,7 @@ from typing import Protocol, TypeVar
 from .client import Client, FeatureSet
 from .admin import AdminClient
 from .compatibility import CompatibilityClient
-from .connection import ConnectOptions
+from .connection import ConnectOptions, RuntimeConnection
 from .daemon import DaemonControl
 from .directory import DirectoryClient
 from .errors import ErrorCode, RetryHint, SDKError
@@ -81,6 +81,29 @@ class SdkEnvironment:
 
         client = self.daemon_control().connect_local(options)
         return self._track(client)
+
+    def runtime_connection(
+        self, options: ConnectOptions = ConnectOptions()
+    ) -> RuntimeConnection:
+        """Open a stateful RuntimeConnection over the SDK default connector."""
+
+        self._require_open()
+        from . import _cabi
+
+        connector = _cabi.open_cabi_runtime_connector(library_path=self.library_path)
+        connection = RuntimeConnection(connector)
+        control_path = options.control_path or self.control_path
+        connection.connect(
+            ConnectOptions(
+                endpoint=options.endpoint,
+                control_path=control_path,
+                dial_timeout_ms=options.dial_timeout_ms,
+                invoke_timeout_ms=options.invoke_timeout_ms,
+                max_message_bytes=options.max_message_bytes,
+                reconnect=options.reconnect,
+            )
+        )
+        return self._track(connection)
 
     def runtime_client(self) -> RuntimeClient:
         """Open a direct runtime client for the configured control path."""

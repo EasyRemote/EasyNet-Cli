@@ -1610,6 +1610,118 @@ class CABIRuntimeTransport:
 
 
 @dataclass
+class CABIRuntimeConnector:
+    """RuntimeConnection connector backed by C ABI daemon lifecycle calls."""
+
+    lib: CLILibrary
+    _daemon: CABIDaemonTransport = field(init=False)
+    _runtime: CABIRuntimeTransport | None = None
+    _closed: bool = False
+
+    def __post_init__(self) -> None:
+        self._daemon = CABIDaemonTransport(self.lib)
+
+    def resolve(self, options_json: bytes) -> bytes:
+        self._require_open()
+        options = _json_object(options_json or b"{}", "runtime connect options")
+        control_path = _optional_json_string(options, "control_path")
+        endpoints = _json_object(
+            self._daemon.discover(_json_bytes({"control_path": control_path})),
+            "daemon endpoints",
+        )
+        endpoint = _optional_json_string(options, "endpoint") or _optional_json_string(
+            endpoints, "invocation_endpoint"
+        )
+        if not endpoint:
+            raise SDKError(
+                code=ErrorCode.CONTROL_ONLY,
+                stage="cabi",
+                retry=RetryHint.SAFE,
+                message="daemon discovery did not advertise invocation_endpoint",
+            )
+        return _json_bytes(
+            {
+                "endpoint": endpoint,
+                "control_path": control_path,
+                "control_endpoint": _optional_json_string(
+                    endpoints, "control_endpoint"
+                ),
+                "protocol_version": "cabi-v4",
+                "abi_version": EXPECTED_ABI_VERSION,
+            }
+        )
+
+    def handshake(self, endpoint_json: bytes) -> tuple[CABIRuntimeTransport, bytes]:
+        self._require_open()
+        endpoint = _json_object(endpoint_json, "runtime endpoint")
+        invocation_endpoint = _required_json_string(endpoint, "endpoint")
+        control_path = _optional_json_string(endpoint, "control_path")
+        control_endpoint = _optional_json_string(endpoint, "control_endpoint")
+        status_raw = self._daemon.attach(
+            _json_bytes(
+                {
+                    "control_endpoint": control_endpoint,
+                    "invocation_endpoint": invocation_endpoint,
+                    "control_path": control_path,
+                }
+            )
+        )
+        status = _json_object(status_raw, "daemon status")
+        handle_id = _required_json_string(status, "handle_id")
+        try:
+            runtime, _ = self._daemon.open_runtime(
+                handle_id,
+                _json_bytes(
+                    {
+                        "endpoint": invocation_endpoint,
+                        "control_path": control_path,
+                    }
+                ),
+            )
+        except BaseException:
+            self._daemon.detach(handle_id)
+            raise
+        try:
+            self._daemon.detach(handle_id)
+        except BaseException:
+            runtime.close()
+            raise
+        self._runtime = runtime
+        return runtime, _json_bytes(
+            {
+                "ready": True,
+                "transport": "c_abi",
+                "endpoint": invocation_endpoint,
+                "abi_version": EXPECTED_ABI_VERSION,
+            }
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        if self._runtime is not None:
+            try:
+                self._runtime.close()
+            except SDKError as exc:
+                first_error = exc
+            finally:
+                self._runtime = None
+        try:
+            self._daemon.close()
+        except SDKError as exc:
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _closed_error("runtime connector is closed")
+
+
+@dataclass
 class _CABIStreamTransport:
     owner: CABIRuntimeTransport
     stream_id: int
@@ -1978,6 +2090,15 @@ def open_cabi_runtime_transport(
     return CABIRuntimeTransport(lib=lib, handle=handle, owns_handle=True)
 
 
+def open_cabi_runtime_connector(
+    *,
+    library_path: str | None = None,
+) -> CABIRuntimeConnector:
+    """Open a C ABI-backed RuntimeConnection connector."""
+
+    return CABIRuntimeConnector(lib=CLILibrary.load(library_path))
+
+
 def _open_cabi_profile_transport(
     transport_type: type[_CABIProfileTransport],
     *,
@@ -2100,6 +2221,18 @@ def _daemon_state_from_cabi(decoded: dict[str, object]) -> str:
 def _optional_json_string(decoded: dict[str, object], field_name: str) -> str:
     value = decoded.get(field_name)
     return value if isinstance(value, str) else ""
+
+
+def _required_json_string(decoded: dict[str, object], field_name: str) -> str:
+    value = decoded.get(field_name)
+    if not isinstance(value, str) or value.strip() == "":
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="decode",
+            retry=RetryHint.NEVER,
+            message=f"{field_name} is required",
+        )
+    return value
 
 
 def _string_list(value: object) -> list[str]:

@@ -12,6 +12,7 @@ from easynet_sdk import (
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     ConnectOptions,
+    ConnectionState,
     DaemonInvocationTransport,
     DeviceQuery,
     DirectoryQueryBase,
@@ -26,6 +27,7 @@ from easynet_sdk import (
     MissionRunRequest,
     ReceiptFetchRequest,
     RuntimeClient,
+    RuntimeConnection,
     SDKError,
     SdkEnvironment,
     SurfaceCarrierBase,
@@ -85,6 +87,24 @@ class SdkEnvironmentTests(unittest.TestCase):
                 }
             ],
         )
+        self.assertEqual(raw.daemon_open_clients, [707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808])
+
+    def test_runtime_connection_uses_cabi_connector_and_closes_runtime(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            connection = env.runtime_connection()
+            self.assertIsInstance(connection, RuntimeConnection)
+            self.assertEqual(connection.state, ConnectionState.READY)
+            assert connection.endpoint is not None
+            self.assertEqual(connection.endpoint.endpoint, "unix:///tmp/daemon.sock")
+            client = connection.runtime_client()
+            self.assertIsInstance(client, RuntimeClient)
+            env.close()
+
+        self.assertEqual(raw.daemon_discovers, [{"control_path": "/tmp/control.json"}])
         self.assertEqual(raw.daemon_open_clients, [707])
         self.assertEqual(raw.daemon_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])

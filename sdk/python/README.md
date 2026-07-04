@@ -13,7 +13,8 @@ partial. The package exposes typed
 feature/version discovery with root client close, public `SdkEnvironment`
 process-root factories, private C ABI v4 discovery, daemon
 lifecycle/open-runtime, identity projection, and runtime
-health/unary/stream/bidi/prepare-submit handle transports, profile
+health/unary/stream/bidi/prepare-submit handle transports plus C ABI-backed
+RuntimeConnection connector, profile
 carrier/projection transports for Receipt, Directory, Publication, Host
 Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
 Wrapper carrier/projection records, runtime connection
