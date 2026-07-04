@@ -26,7 +26,8 @@ ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow transport protocols, plus DirectoryClient resolve/list
-read-model pages, list/resolve Invocation carrier builders, directory
+read-model pages, C ABI-backed resolve/list read-model execution through Runtime
+Core invoke, list/resolve Invocation carrier builders, directory
 projection helpers, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
 Axon-delegated addressing helper facade, signing-key lifecycle, and
 signer-handle seams.
@@ -56,7 +57,7 @@ seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed concrete carrier builders,
 transport-backed helper close state seams, and record projections. Concrete daemon
-default UDS transport, directory live transport adapters, local signer implementations,
+default UDS transport, directory subscription live adapters, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, live publication/host-binding/mission
 execution adapters, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health

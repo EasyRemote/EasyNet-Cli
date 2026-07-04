@@ -10,6 +10,11 @@ from easynet_sdk import (
     ConnectOptions,
     DaemonControl,
     DaemonMode,
+    AbilityQuery,
+    AgentQuery,
+    DeviceQuery,
+    DirectoryClient,
+    DirectoryQueryBase,
     ErrorCode,
     HealthClient,
     IdentityClient,
@@ -17,6 +22,7 @@ from easynet_sdk import (
     PrepareOptions,
     ReceiptClient,
     ReceiptFetchRequest,
+    ResolveQuery,
     RuntimeClient,
     SDKError,
     StartConfig,
@@ -24,6 +30,7 @@ from easynet_sdk import (
     is_code,
 )
 from easynet_sdk._cabi import (
+    CABIDirectoryTransport,
     CABIDiscoveryTransport,
     CABIDaemonTransport,
     CABIIdentityTransport,
@@ -284,6 +291,7 @@ class FakeRawCABI:
     def _invocation_invoke(self, handle, raw, out_ptr) -> int:
         draft = json.loads(raw.value.decode("utf-8"))
         self.runtime_requests.append(("invoke", draft))
+        output_json = self._invocation_output_json(draft)
         return self._write(
             out_ptr,
             json.dumps(
@@ -293,7 +301,7 @@ class FakeRawCABI:
                     "terminal_state": "Completed",
                     "output_content_type": "application/json",
                     "output_base64": "e30=",
-                    "output_json": {},
+                    "output_json": output_json,
                     "elapsed_ms": 7,
                     "receipt": None,
                     "error": None,
@@ -302,6 +310,44 @@ class FakeRawCABI:
                 sort_keys=True,
             ).encode("utf-8"),
         )
+
+    def _invocation_output_json(self, draft: dict[str, object]) -> dict[str, object]:
+        metadata = draft.get("metadata")
+        system_ability = (
+            metadata.get("system_ability") if isinstance(metadata, dict) else None
+        )
+        if system_ability == "node.list":
+            return {"nodes": [{"node_id": "dev-a", "state": "online"}]}
+        if system_ability == "agent.list":
+            return {
+                "agents": [
+                    {
+                        "name": "codex",
+                        "ura": "easynet:///r/example/agent/alice.codex",
+                        "runtime": "codex",
+                        "root_exists": True,
+                    }
+                ]
+            }
+        if system_ability == "meta.list_abilities":
+            return {
+                "abilities": [
+                    {
+                        "name": "fs.read",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.fs.read",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                    }
+                ]
+            }
+        if system_ability == "namespace.resolve":
+            return {
+                "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+                "canonicalName": "easynet:///r/example/device/dev-a",
+                "ownerUra": "easynet:///r/example/device/dev-a",
+                "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "records": [],
+            }
+        return {}
 
     def _invocation_prepare(
         self, handle, raw, options, out_prepared_id, out_ptr
@@ -493,6 +539,14 @@ class FakeRawCABI:
         return self._write(out_ptr, self._profile_payload(symbol))
 
     def _profile_payload(self, symbol: str) -> bytes:
+        if symbol == "easynet_directory_build_list_devices_invocation":
+            return DIRECTORY_LIST_DEVICES_INVOCATION
+        if symbol == "easynet_directory_build_list_agents_invocation":
+            return DIRECTORY_LIST_AGENTS_INVOCATION
+        if symbol == "easynet_directory_build_list_abilities_invocation":
+            return DIRECTORY_LIST_ABILITIES_INVOCATION
+        if symbol == "easynet_directory_build_resolve_invocation":
+            return DIRECTORY_RESOLVE_INVOCATION
         if symbol == "easynet_receipt_build_fetch_invocation":
             return RECEIPT_FETCH_INVOCATION
         if symbol.endswith("_invocation"):
@@ -507,6 +561,14 @@ class FakeRawCABI:
             return PACKAGE_VALIDATION_PROJECTION
         if symbol == "easynet_receipt_project":
             return RECEIPT_SUMMARY_PROJECTION
+        if symbol == "easynet_directory_project_device_page":
+            return DIRECTORY_DEVICE_PAGE_PROJECTION
+        if symbol == "easynet_directory_project_agent_page":
+            return DIRECTORY_AGENT_PAGE_PROJECTION
+        if symbol == "easynet_directory_project_ability_page":
+            return DIRECTORY_ABILITY_PAGE_PROJECTION
+        if symbol == "easynet_directory_project_resolved_ref":
+            return DIRECTORY_RESOLVED_REF_PROJECTION
         if symbol == "easynet_receipt_verify":
             return RECEIPT_VERIFICATION_PROJECTION
         if symbol == "easynet_receipt_verify_chain":
@@ -654,6 +716,91 @@ RECEIPT_FETCH_INVOCATION = (
     b'"metadata":{"profile":"receipt",'
     b'"system_ability":"invocation.history.get",'
     b'"carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_LIST_DEVICES_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.node.list@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},"args":{},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity","system_ability":"node.list",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_LIST_AGENTS_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.agent.list@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},"args":{},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity","system_ability":"agent.list",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_LIST_ABILITIES_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},"args":{"scope":"local"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity",'
+    b'"system_ability":"meta.list_abilities","carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_RESOLVE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.namespace.resolve@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"queryName":"easynet:///r/example/device/dev-a",'
+    b'"qtype":"RESOLVE_TYPE_ROUTE"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity",'
+    b'"system_ability":"namespace.resolve","carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_DEVICE_PAGE_PROJECTION = (
+    b'{"profile":"directory_identity","kind":"device_page",'
+    b'"item_kind":"device","items":[{"node_id":"dev-a","state":"online",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","metadata":{}}],'
+    b'"next_cursor":null,"limit":50,"source":"read_model","metadata":{}}'
+)
+
+DIRECTORY_AGENT_PAGE_PROJECTION = (
+    b'{"profile":"directory_identity","kind":"agent_page",'
+    b'"item_kind":"agent","items":[{"name":"codex",'
+    b'"agent_ura":"easynet:///r/example/agent/alice.codex","metadata":{}}],'
+    b'"next_cursor":null,"limit":50,"source":"read_model","metadata":{}}'
+)
+
+DIRECTORY_ABILITY_PAGE_PROJECTION = (
+    b'{"profile":"directory_identity","kind":"ability_page",'
+    b'"item_kind":"ability","items":[{"name":"fs.read",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.fs.read",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a","metadata":{}}],'
+    b'"next_cursor":null,"limit":50,"source":"read_model","metadata":{}}'
+)
+
+DIRECTORY_RESOLVED_REF_PROJECTION = (
+    b'{"profile":"directory_identity","kind":"resolved_ref",'
+    b'"answer_kind":"RESOLVE_ANSWER_KIND_FINAL_ROUTE",'
+    b'"query_name":"easynet:///r/example/device/dev-a",'
+    b'"canonical_name":"easynet:///r/example/device/dev-a",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.agent.list",'
+    b'"route_ura":null,"next_hop":null,"selected_route":null,'
+    b'"route_candidates":[],"records":[],"negative":null,'
+    b'"release_profile":null,"authority":null,"cache_policy":null,'
+    b'"metadata":{"source":"namespace.resolve"}}'
 )
 
 HOST_BINDING_PROJECTION = (
@@ -1076,6 +1223,72 @@ class CABITransportTests(unittest.TestCase):
             "invocation.history.get",
         )
         self.assertEqual(raw.profile_requests[1][2]["terminal_state"], "Completed")
+        self.assertEqual(raw.buffers, {})
+
+    def test_directory_live_methods_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = DirectoryClient(CABIDirectoryTransport(lib, handle=7))
+        base = DirectoryQueryBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        devices = client.list_devices(DeviceQuery(base))
+        agents = client.list_agents(AgentQuery(base))
+        abilities = client.list_abilities(AbilityQuery(base, scope="local"))
+        resolved = client.resolve(
+            ResolveQuery(
+                base=base,
+                query_name="easynet:///r/example/device/dev-a",
+                qtype="route",
+            )
+        )
+
+        self.assertEqual(devices.items[0]["node_id"], "dev-a")
+        self.assertEqual(agents.items[0]["name"], "codex")
+        self.assertEqual(abilities.items[0]["name"], "fs.read")
+        self.assertEqual(
+            resolved.ability_ura,
+            "easynet:///r/example/ability/device.dev-a.agent.list",
+        )
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_directory_build_list_devices_invocation",
+                "easynet_directory_project_device_page",
+                "easynet_directory_build_list_agents_invocation",
+                "easynet_directory_project_agent_page",
+                "easynet_directory_build_list_abilities_invocation",
+                "easynet_directory_project_ability_page",
+                "easynet_directory_build_resolve_invocation",
+                "easynet_directory_project_resolved_ref",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            ["node.list", "agent.list", "meta.list_abilities", "namespace.resolve"],
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["output_json"]["nodes"][0]["node_id"],
+            "dev-a",
+        )
+        self.assertEqual(
+            raw.profile_requests[3][2]["output_json"]["agents"][0]["name"],
+            "codex",
+        )
+        self.assertEqual(
+            raw.profile_requests[5][2]["output_json"]["abilities"][0]["name"],
+            "fs.read",
+        )
+        self.assertEqual(
+            raw.profile_requests[7][2]["output_json"]["answerKind"],
+            "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_runtime_transport_prepare_sign_submit_choreography(self) -> None:

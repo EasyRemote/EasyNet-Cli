@@ -747,6 +747,18 @@ class _CABIProfileTransport:
     def _call(self, symbol: str, request_json: bytes) -> bytes:
         return self.lib.json_handle_output(symbol, self._require_open(), request_json)
 
+    def _invoke_projected(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+        project_symbol: str,
+    ) -> bytes:
+        handle = self._require_open()
+        draft_json = self.lib.json_handle_output(build_symbol, handle, request_json)
+        result_json = self.lib.invocation_invoke(handle, draft_json)
+        return self.lib.json_handle_output(project_symbol, handle, result_json)
+
     def _missing(self, method: str) -> bytes:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,
@@ -774,9 +786,11 @@ class CABIReceiptTransport(_CABIProfileTransport):
     """Receipt carrier/projection transport backed by C ABI v4."""
 
     def fetch(self, request_json: bytes) -> bytes:
-        draft_json = self.build_fetch_invocation(request_json)
-        result_json = self.lib.invocation_invoke(self._require_open(), draft_json)
-        return self.project(result_json)
+        return self._invoke_projected(
+            request_json,
+            build_symbol="easynet_receipt_build_fetch_invocation",
+            project_symbol="easynet_receipt_project",
+        )
 
     def build_fetch_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_receipt_build_fetch_invocation", request_json)
@@ -804,16 +818,32 @@ class CABIDirectoryTransport(_CABIProfileTransport):
         )
 
     def resolve(self, request_json: bytes) -> bytes:
-        return self._missing("directory resolve")
+        return self._invoke_projected(
+            request_json,
+            build_symbol="easynet_directory_build_resolve_invocation",
+            project_symbol="easynet_directory_project_resolved_ref",
+        )
 
     def list_devices(self, request_json: bytes) -> bytes:
-        return self._missing("directory list devices")
+        return self._invoke_projected(
+            request_json,
+            build_symbol="easynet_directory_build_list_devices_invocation",
+            project_symbol="easynet_directory_project_device_page",
+        )
 
     def list_agents(self, request_json: bytes) -> bytes:
-        return self._missing("directory list agents")
+        return self._invoke_projected(
+            request_json,
+            build_symbol="easynet_directory_build_list_agents_invocation",
+            project_symbol="easynet_directory_project_agent_page",
+        )
 
     def list_abilities(self, request_json: bytes) -> bytes:
-        return self._missing("directory list abilities")
+        return self._invoke_projected(
+            request_json,
+            build_symbol="easynet_directory_build_list_abilities_invocation",
+            project_symbol="easynet_directory_project_ability_page",
+        )
 
     def subscribe_directory(self, request_json: bytes) -> bytes:
         return self._missing("directory subscribe")

@@ -187,10 +187,11 @@ method spelling.
   Axon-delegated `parse_ura`, `owner_ability_ura`,
   `owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helper
   facade, signing-key lifecycle, signer-handle projection, and close state
-  seams; Python now has private C ABI v4 identity projection and profile carrier
-  transports, while
-  directory live transport adapters, local signer implementations, concrete daemon carriers,
-  and EasyRemote extraction remain incomplete.
+  seams; Python now has private C ABI v4 identity projection, profile carrier
+  transports, and C ABI-backed resolve/list read-model execution through
+  Runtime Core invoke, while
+  directory subscription live adapters, local signer implementations, and
+  EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   C ABI-backed fetch execution through Runtime Core invoke, and close state

@@ -85,6 +85,7 @@ pub(crate) fn build_list_abilities_invocation(request: &Value) -> Result<Value, 
 }
 
 pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryError> {
+    let input = projection_payload(input);
     let answer = input
         .as_object()
         .and_then(|obj| obj.get("answer").filter(|value| !value.is_null()))
@@ -410,6 +411,7 @@ struct PageInput<'a> {
 
 impl<'a> PageInput<'a> {
     fn parse(input: &'a Value) -> Result<Self, DirectoryError> {
+        let input = projection_payload(input);
         let Some(obj) = input.as_object() else {
             return Ok(Self {
                 result: input,
@@ -430,6 +432,13 @@ impl<'a> PageInput<'a> {
             controls: PageControls::from_request(obj)?,
         })
     }
+}
+
+fn projection_payload(input: &Value) -> &Value {
+    input
+        .as_object()
+        .and_then(|obj| obj.get("output_json").filter(|value| !value.is_null()))
+        .unwrap_or(input)
 }
 
 fn validate_limit(limit: usize) -> Result<(), DirectoryError> {
@@ -852,6 +861,25 @@ mod tests {
     }
 
     #[test]
+    fn project_device_page_accepts_runtime_output_json_envelope() {
+        let input = json!({
+            "ok": true,
+            "terminal_state": "Completed",
+            "output_json": {
+                "nodes": [
+                    {"node_id": "dev-a", "state": "online"}
+                ]
+            }
+        });
+
+        let page = project_device_page(&input).unwrap();
+
+        assert_eq!(page["kind"], "device_page");
+        assert_eq!(page["items"][0]["node_id"], "dev-a");
+        assert_eq!(page["metadata"]["total_available"], 1);
+    }
+
+    #[test]
     fn project_agent_page_reuses_shared_agent_record_projection() {
         let input = json!({
             "result": {
@@ -910,6 +938,30 @@ mod tests {
             resolved["metadata"]["raw_answer"]["nextHop"]["localDeviceAbility"]["dispatchName"],
             "agent.list"
         );
+    }
+
+    #[test]
+    fn project_resolved_ref_accepts_runtime_output_json_envelope() {
+        let result = json!({
+            "ok": true,
+            "terminal_state": "Completed",
+            "output_json": {
+                "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+                "canonicalName": "easynet:///r/example/device/dev-a",
+                "ownerUra": "easynet:///r/example/device/dev-a",
+                "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "records": []
+            }
+        });
+
+        let resolved = project_resolved_ref(&result).unwrap();
+
+        assert_eq!(resolved["kind"], "resolved_ref");
+        assert_eq!(
+            resolved["ability_ura"],
+            "easynet:///r/example/ability/device.dev-a.agent.list"
+        );
+        assert_eq!(resolved["metadata"]["raw_answer"]["records"], json!([]));
     }
 
     #[test]
