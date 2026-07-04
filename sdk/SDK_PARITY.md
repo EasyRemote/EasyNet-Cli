@@ -199,7 +199,8 @@ method spelling.
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
   stream, and bidi facade with RuntimeConnection-owned session lifecycle over C ABI v4, plus
   SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state and
-  EasyRemote stream value projection for terminal/timeout/error/payload frames;
+  EasyRemote stream value projection for terminal/timeout/error/payload frames plus
+  EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   EasyRemote-style descriptor-ref and target-dispatch cutover tests; private C ABI v4 profile carrier/projection bridges for
@@ -275,6 +276,7 @@ method spelling.
   host-stream-codec ownership, receipt-continuity ownership, context-causal
   gates, and admin/mission carrier gates; EasyRemote transport, unary
   wait/retire lifecycle, stream value projection, invocation,
+  bidi session lifecycle,
   addressing helpers, warm host frame/hash substrate, receipt continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based

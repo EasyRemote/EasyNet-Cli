@@ -34,7 +34,8 @@ ordering, half-close, cancel, and terminal-close observation, object-bound
 Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
 observation, SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state
-and stream value projection for terminal/timeout/error/payload frames,
+and stream value projection for terminal/timeout/error/payload frames plus
+EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection,
 DaemonHandle-scoped Runtime/Profile client factories, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
 methods behind narrow transport protocols with timeout-aware stream/bidi receive,
@@ -128,7 +129,7 @@ require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-profile-specific stream/bidi execution adapters, EasyRemote Pipeline live-tail/
+profile-specific stream execution adapters, EasyRemote Pipeline live-tail/
 conformance cutover, and full
 EasyRemote AgentControl/Server product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

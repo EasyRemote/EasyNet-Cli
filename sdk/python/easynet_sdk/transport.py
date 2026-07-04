@@ -459,6 +459,116 @@ class EasyRemoteFrameStream(Protocol):
         ...
 
 
+class EasyRemoteBidiChannel(Protocol):
+    """Bidi channel shape consumed by `EasyRemoteBidiSessionAdapter`."""
+
+    def send(self, frame: Mapping[str, object]) -> object:
+        ...
+
+    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+    def cancel(self, reason: str = "") -> object:
+        ...
+
+
+class EasyRemoteBidiSessionAdapter:
+    """SDK-owned EasyRemote bidi session facade.
+
+    EasyRemote's public session API is intentionally small, but the lifecycle
+    rules are Runtime Core concerns: an open session cannot be simply dropped,
+    timeout is a typed client wait expiry, and remote wire errors must not leak
+    as ordinary frames.
+    """
+
+    def __init__(
+        self,
+        channel: EasyRemoteBidiChannel,
+        *,
+        close_reason: str = "client close",
+    ) -> None:
+        self._channel = channel
+        self._close_reason = close_reason
+        self._terminal = False
+        self._closed = False
+
+    def send(self, frame: Mapping[str, object]) -> None:
+        self._require_not_closed()
+        self._channel.send(frame)
+
+    def recv(self, timeout: float | None = None) -> dict[str, object] | None:
+        self._require_not_closed()
+        try:
+            frame = self._channel.recv(timeout=timeout)
+        except StopIteration:
+            self._terminal = True
+            return None
+        except TimeoutError:
+            raise SDKError(
+                code=ErrorCode.TIMEOUT,
+                stage="easyremote_bidi",
+                retry=RetryHint.SAFE,
+                retryable=True,
+                message=(
+                    f"no bidi frame within {timeout}s - the server-side session "
+                    "is still governed by daemon/ability policy"
+                ),
+                details={
+                    "reason": "client_wait_timeout",
+                    "timeout_seconds": timeout,
+                },
+            ) from None
+        if frame is None:
+            self._terminal = True
+            return None
+        projected = dict(frame)
+        error = projected.get("error")
+        if error:
+            raise _easyremote_wire_error(error, stage="easyremote_bidi")
+        if projected.get("terminal") is True:
+            self._terminal = True
+        return projected
+
+    def cancel(self, reason: str = "client cancel") -> None:
+        if self._closed or self._terminal:
+            return
+        self._channel.cancel(reason)
+        self._terminal = True
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            self._channel.close()
+        except SDKError as exc:
+            if self._terminal or not _is_open_bidi_close_error(exc):
+                raise
+            self._channel.cancel(self._close_reason)
+            self._terminal = True
+            self._channel.close()
+        self._closed = True
+
+    def __enter__(self) -> "EasyRemoteBidiSessionAdapter":
+        self._require_not_closed()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def _require_not_closed(self) -> None:
+        if self._closed:
+            raise SDKError(
+                code=ErrorCode.CANCELLED,
+                stage="easyremote_bidi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="bidi session is closed",
+            )
+
+
 @dataclass
 class DaemonFrameStream:
     """JSON-friendly server-stream wrapper over `StreamHandle`."""
@@ -728,15 +838,17 @@ _EASYREMOTE_ERROR_CODES = {
 }
 
 
-def _easyremote_wire_error(error: object) -> SDKError:
+def _easyremote_wire_error(
+    error: object, *, stage: str = "easyremote_stream"
+) -> SDKError:
     if not isinstance(error, Mapping):
         return SDKError(
             code=ErrorCode.ABILITY_FAILED,
-            stage="easyremote_stream",
+            stage=stage,
             retry=RetryHint.UNKNOWN,
             retryable=False,
-            message="remote stream error",
-            details={"reason": "remote_stream_error", "wire_error": error},
+            message="remote frame error",
+            details={"reason": "remote_frame_error", "wire_error": error},
         )
     kind = error.get("kind")
     reason = error.get("reason")
@@ -747,16 +859,29 @@ def _easyremote_wire_error(error: object) -> SDKError:
     code = _EASYREMOTE_ERROR_CODES.get(kind_text, ErrorCode.ABILITY_FAILED)
     return SDKError(
         code=code,
-        stage="easyremote_stream",
+        stage=stage,
         retry=RetryHint.UNKNOWN,
         retryable=False,
-        message=message_text or reason_text or kind_text or "remote stream error",
+        message=message_text or reason_text or kind_text or "remote frame error",
         details={
             "kind": kind_text,
             "reason": reason_text,
             "wire_error": dict(error),
         },
     )
+
+
+def _is_open_bidi_close_error(error: SDKError) -> bool:
+    if error.code is not ErrorCode.INVALID_ARGUMENT:
+        return False
+    reason = error.details.get("reason")
+    if isinstance(reason, str) and reason in {
+        "bidi_session_not_terminal",
+        "session_not_terminal",
+        "not_terminal",
+    }:
+        return True
+    return "must be terminal before close" in error.message
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

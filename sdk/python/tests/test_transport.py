@@ -3,16 +3,19 @@ import tempfile
 import threading
 import time
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
 
 from easynet_sdk import (
     BidiState,
     DaemonInvocationTransport,
+    EasyRemoteBidiSessionAdapter,
     EasyRemoteStreamAdapter,
     EasyRemoteTransportAdapter,
     EasyRemoteUnaryDispatchPool,
     ErrorCode,
+    RetryHint,
     RuntimeClient,
     SDKError,
     StreamState,
@@ -278,6 +281,84 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(runtime.bidi_transport.timeout, 0.01)
         self.assertEqual(channel.session.state, BidiState.OPEN)
 
+    def test_easyremote_bidi_close_cancels_open_session_before_release(self) -> None:
+        channel = _EasyRemoteMemoryBidiChannel(close_requires_terminal=True)
+        session = EasyRemoteBidiSessionAdapter(channel)
+
+        session.close()
+        session.close()
+
+        self.assertEqual(channel.cancel_reasons, ["client close"])
+        self.assertEqual(channel.close_calls, 2)
+        self.assertTrue(channel.closed)
+
+    def test_easyremote_bidi_close_preserves_unrelated_invalid_argument(self) -> None:
+        channel = _EasyRemoteMemoryBidiChannel(close_error="invalid frame state")
+        session = EasyRemoteBidiSessionAdapter(channel)
+
+        with self.assertRaises(SDKError) as caught:
+            session.close()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(channel.cancel_reasons, [])
+        self.assertEqual(channel.close_calls, 1)
+
+    def test_easyremote_bidi_cancel_does_not_close_transport(self) -> None:
+        channel = _EasyRemoteMemoryBidiChannel()
+        session = EasyRemoteBidiSessionAdapter(channel)
+
+        session.cancel("user stop")
+
+        self.assertEqual(channel.cancel_reasons, ["user stop"])
+        self.assertEqual(channel.close_calls, 0)
+        self.assertFalse(channel.closed)
+
+    def test_easyremote_bidi_recv_timeout_is_typed_client_wait(self) -> None:
+        channel = _EasyRemoteMemoryBidiChannel(timeout=True)
+        session = EasyRemoteBidiSessionAdapter(channel)
+
+        with self.assertRaises(SDKError) as caught:
+            session.recv(timeout=0.01)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(caught.exception.stage, "easyremote_bidi")
+        self.assertEqual(caught.exception.details["reason"], "client_wait_timeout")
+
+    def test_easyremote_bidi_recv_remote_error_is_typed(self) -> None:
+        channel = _EasyRemoteMemoryBidiChannel(
+            frames=[
+                {
+                    "sequence": 1,
+                    "kind": "data",
+                    "stream_id": 1,
+                    "error": {
+                        "kind": "UNAVAILABLE",
+                        "reason": "host_gone",
+                        "message": "host went away",
+                    },
+                }
+            ]
+        )
+        session = EasyRemoteBidiSessionAdapter(channel)
+
+        with self.assertRaises(SDKError) as caught:
+            session.recv()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertEqual(caught.exception.stage, "easyremote_bidi")
+        self.assertEqual(caught.exception.details["reason"], "host_gone")
+
+    def test_easyremote_bidi_rejects_send_after_close(self) -> None:
+        channel = _EasyRemoteMemoryBidiChannel()
+        session = EasyRemoteBidiSessionAdapter(channel)
+
+        session.close()
+        with self.assertRaises(SDKError) as caught:
+            session.send({"sequence": 1, "kind": "data", "stream_id": 1})
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.CANCELLED))
+        self.assertEqual(caught.exception.stage, "easyremote_bidi")
+
     def test_rejects_incomplete_invocation_mapping_before_dispatch(self) -> None:
         runtime = MemoryRuntimeTransport()
         transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
@@ -527,6 +608,66 @@ class _SlowUnaryTransport:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _EasyRemoteMemoryBidiChannel:
+    def __init__(
+        self,
+        *,
+        frames: list[dict[str, object]] | None = None,
+        close_requires_terminal: bool = False,
+        close_error: str = "",
+        timeout: bool = False,
+    ) -> None:
+        self.frames = list(frames or [])
+        self.close_requires_terminal = close_requires_terminal
+        self.close_error = close_error
+        self.timeout = timeout
+        self.sent: list[dict[str, object]] = []
+        self.cancel_reasons: list[str] = []
+        self.close_calls = 0
+        self.closed = False
+        self.terminal = False
+
+    def send(self, frame: Mapping[str, object]) -> object:
+        self.sent.append(dict(frame))
+        return None
+
+    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None:
+        if self.timeout:
+            raise TimeoutError("no frame")
+        if not self.frames:
+            self.terminal = True
+            return None
+        frame = self.frames.pop(0)
+        if frame.get("terminal") is True:
+            self.terminal = True
+        return frame
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_error:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="bidi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=self.close_error,
+            )
+        if self.close_requires_terminal and not self.terminal:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="bidi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="bidi session must be terminal before close",
+            )
+        self.closed = True
+
+    def cancel(self, reason: str = "") -> object:
+        self.cancel_reasons.append(reason)
+        self.terminal = True
+        return None
 
 
 class _FixedFrameStream:
