@@ -204,6 +204,7 @@ from .runtime import (
     RuntimeTransport,
 )
 from .receipt import (
+    build_receipt_fetch_invocation,
     CausalRef,
     ReceiptChainItemVerification,
     ReceiptChainVerification,

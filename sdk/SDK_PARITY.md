@@ -113,8 +113,9 @@ method spelling.
   adapters, local signer implementations, concrete daemon carriers, and backend
   route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
-  projection and close state seams over opaque receipt refs; Axon-backed cryptographic
-  verification, concrete daemon carrier execution, receipt URI construction
+  projection, `invocation.history.get` fetch Invocation carrier construction,
+  and close state seams over opaque receipt refs; Axon-backed cryptographic
+  verification, concrete daemon carrier execution adapter, receipt URI construction
   after RFC-007, and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
@@ -183,8 +184,9 @@ method spelling.
   adapters, local signer implementations, concrete daemon carriers, and
   EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
-  projection and close state seams over opaque receipt refs; Axon-backed cryptographic
-  verification, concrete daemon carrier execution, receipt URI construction
+  projection, `invocation.history.get` fetch Invocation carrier construction,
+  and close state seams over opaque receipt refs; Axon-backed cryptographic
+  verification, concrete daemon carrier execution adapter, receipt URI construction
   after RFC-007, and EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin

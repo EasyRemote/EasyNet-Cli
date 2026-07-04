@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+const receiptProfile = "receipt"
+const receiptFetchAbility = "invocation.history.get"
+
 // ReceiptFetchRequest preserves the complete carrier context for receipt fetch.
 type ReceiptFetchRequest struct {
 	CallerURA         string         `json:"caller_ura"`
@@ -168,6 +171,50 @@ func (c *ReceiptClient) Fetch(ctx context.Context, req ReceiptFetchRequest) (Rec
 		return ReceiptSummary{}, wrapReceiptTransportError("receipt fetch failed", err)
 	}
 	return NewReceiptSummaryFromJSON(raw)
+}
+
+// BuildFetchInvocation projects a receipt fetch request into the daemon-owned
+// invocation.history.get carrier without opening the receipt ledger.
+func (c *ReceiptClient) BuildFetchInvocation(ctx context.Context, req ReceiptFetchRequest) (InvocationDraft, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return InvocationDraft{}, err
+	}
+	return BuildReceiptFetchInvocation(req)
+}
+
+// BuildReceiptFetchInvocation projects a receipt fetch request into a complete
+// Runtime Core InvocationDraft carrier.
+func BuildReceiptFetchInvocation(req ReceiptFetchRequest) (InvocationDraft, error) {
+	if err := validateReceiptFetchRequest(req); err != nil {
+		return InvocationDraft{}, err
+	}
+	abilityRoot, abilityOwner, err := receiptAbilityDescriptorParts(req.CalleeURA)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	args, err := receiptFetchArgs(req)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	metadata := copyMap(req.Metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["profile"] = receiptProfile
+	metadata["system_ability"] = receiptFetchAbility
+	metadata["carrier_owner"] = "daemon_sdk"
+
+	return NewInvocationBuilder().
+		WithCallerURA(req.CallerURA).
+		WithCalleeURA(req.CalleeURA).
+		WithDescriptorRef(fmt.Sprintf("%s/ability/%s.%s@%s", abilityRoot, abilityOwner, receiptFetchAbility, req.DescriptorVersion)).
+		WithSubjectURA(req.SubjectURA).
+		WithNonceBase64(req.NonceBase64).
+		WithCausalContext(req.CausalContext).
+		WithJSONArgs(args).
+		WithContentType("application/json").
+		WithMetadata(metadata).
+		Build()
 }
 
 func (c *ReceiptClient) Project(ctx context.Context, receiptJSON []byte) (ReceiptSummary, error) {
@@ -369,6 +416,36 @@ func validateReceiptFetchRequest(req ReceiptFetchRequest) error {
 		return invalidRuntimePayload("exactly one receipt lookup key is required", nil)
 	}
 	return nil
+}
+
+func receiptFetchArgs(req ReceiptFetchRequest) (map[string]any, error) {
+	key := map[string]any{}
+	switch {
+	case req.InvocationURA != "":
+		key["invocation_ura"] = req.InvocationURA
+	case req.RequestID != "":
+		key["request_id"] = req.RequestID
+	case req.TraceID != "":
+		key["trace_id"] = req.TraceID
+	default:
+		return nil, invalidRuntimePayload("exactly one receipt lookup key is required", nil)
+	}
+	return map[string]any{"key": key}, nil
+}
+
+func receiptAbilityDescriptorParts(calleeURA string) (string, string, error) {
+	trimmed := strings.TrimSpace(calleeURA)
+	const marker = "/device/"
+	index := strings.LastIndex(trimmed, marker)
+	if index < 0 {
+		return "", "", invalidRuntimePayload("callee_ura must identify a device", nil)
+	}
+	root := strings.TrimSuffix(trimmed[:index], "/")
+	deviceID := strings.Trim(trimmed[index+len(marker):], "/")
+	if root == "" || deviceID == "" || strings.Contains(deviceID, "/") {
+		return "", "", invalidRuntimePayload("callee_ura must identify one device", nil)
+	}
+	return root, "device." + deviceID, nil
 }
 
 func validateReceiptChainVerificationRequest(req ReceiptChainVerificationRequest) error {

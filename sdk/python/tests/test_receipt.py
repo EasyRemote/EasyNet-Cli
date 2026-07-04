@@ -1,5 +1,6 @@
 import json
 import unittest
+from pathlib import Path
 
 from easynet_sdk import (
     ErrorCode,
@@ -8,8 +9,25 @@ from easynet_sdk import (
     ReceiptFetchRequest,
     ReceiptSummary,
     SDKError,
+    build_receipt_fetch_invocation,
     is_code,
 )
+
+ROOT = Path(__file__).resolve().parents[3]
+FIXTURES = ROOT / "sdk/conformance/fixtures"
+
+
+def shared_fixture(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
+
+
+def assert_json_equivalent(actual: bytes, expected: bytes) -> None:
+    if json.loads(actual.decode("utf-8")) != json.loads(expected.decode("utf-8")):
+        raise AssertionError(
+            "JSON mismatch\n"
+            f"actual: {actual.decode('utf-8')}\n"
+            f"expected: {expected.decode('utf-8')}"
+        )
 
 
 class MemoryReceiptTransport:
@@ -105,6 +123,36 @@ class ReceiptTests(unittest.TestCase):
             transport.seen_request["caller_ura"],
             "easynet:///r/example/agent/alice.sdk",
         )
+
+    def test_build_fetch_invocation_matches_shared_carrier(self) -> None:
+        decoded = json.loads(shared_fixture("receipt-fetch-request.v4.json"))
+        draft = build_receipt_fetch_invocation(
+            ReceiptFetchRequest(
+                caller_ura=decoded["caller_ura"],
+                callee_ura=decoded["callee_ura"],
+                subject_ura=decoded["subject_ura"],
+                descriptor_version=decoded["descriptor_version"],
+                nonce_base64=decoded["nonce_base64"],
+                causal_context=decoded["causal_context"],
+                request_id=decoded["request_id"],
+                metadata=decoded["metadata"],
+            )
+        )
+
+        assert_json_equivalent(
+            draft.to_json().encode("utf-8"),
+            shared_fixture("receipt-fetch-invocation.v4.json"),
+        )
+
+    def test_client_build_fetch_invocation_honors_lifecycle(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+
+        client.close()
+
+        with self.assertRaises(SDKError) as caught:
+            client.build_fetch_invocation(fetch_request())
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_fetch_rejects_missing_or_ambiguous_lookup_key(self) -> None:
         transport = MemoryReceiptTransport()

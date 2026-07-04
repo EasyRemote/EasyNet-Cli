@@ -547,6 +547,35 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 
 func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
+
+	fetchCase := sharedCase(t, root, "receipt-fetch-carrier.yaml")
+	requireCaseID(t, fetchCase, "receipt/fetch_carrier")
+	requireCaseAction(t, fetchCase, "build_receipt_fetch_invocation")
+	requireCaseFixture(t, fetchCase, "receipt-fetch-request.v4.json")
+	requireCaseExpectation(t, fetchCase, "invocation_fixture: receipt-fetch-invocation.v4.json")
+	requireCaseExpectation(t, fetchCase, "daemon_ability: invocation.history.get")
+	requireCaseExpectation(t, fetchCase, "selector_cardinality: exactly_one")
+	requireCaseExpectation(t, fetchCase, "direct_ledger_read: false")
+
+	var fetchRequest ReceiptFetchRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "receipt-fetch-request.v4.json"), &fetchRequest); err != nil {
+		t.Fatalf("decode shared receipt fetch request: %v", err)
+	}
+	fetchDraft, err := BuildReceiptFetchInvocation(fetchRequest)
+	if err != nil {
+		t.Fatalf("BuildReceiptFetchInvocation(shared): %v", err)
+	}
+	fetchDraftJSON, err := json.Marshal(fetchDraft)
+	if err != nil {
+		t.Fatalf("marshal shared receipt fetch invocation: %v", err)
+	}
+	assertJSONEquivalent(t, fetchDraftJSON, sharedFixture(t, root, "receipt-fetch-invocation.v4.json"))
+	ambiguous := fetchRequest
+	ambiguous.TraceID = "trace-1"
+	if _, err := BuildReceiptFetchInvocation(ambiguous); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ambiguous receipt selector = %v, want %s", err, ErrInvalidArgument)
+	}
+
 	receiptCase := sharedCase(t, root, "receipt-projection-causal-ref.yaml")
 	requireCaseID(t, receiptCase, "receipt/projection_causal_ref")
 	for _, action := range []string{

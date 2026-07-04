@@ -85,6 +85,37 @@ func TestReceiptFetchPreservesCarrierAndDecodesSummary(t *testing.T) {
 	}
 }
 
+func TestReceiptBuildFetchInvocationMatchesSharedCarrier(t *testing.T) {
+	root := repositoryRoot(t)
+	var req ReceiptFetchRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "receipt-fetch-request.v4.json"), &req); err != nil {
+		t.Fatalf("decode shared receipt fetch request: %v", err)
+	}
+	draft, err := BuildReceiptFetchInvocation(req)
+	if err != nil {
+		t.Fatalf("BuildReceiptFetchInvocation: %v", err)
+	}
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatalf("marshal receipt fetch invocation: %v", err)
+	}
+	assertJSONEquivalent(t, raw, sharedFixture(t, root, "receipt-fetch-invocation.v4.json"))
+}
+
+func TestReceiptClientBuildFetchInvocationHonorsLifecycle(t *testing.T) {
+	transport := &memoryReceiptTransport{}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := client.BuildFetchInvocation(context.Background(), baseReceiptFetchRequest()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("BuildFetchInvocation after close = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestReceiptFetchRejectsMissingOrAmbiguousLookupKey(t *testing.T) {
 	transport := &memoryReceiptTransport{}
 	client, err := NewReceiptClient(transport)

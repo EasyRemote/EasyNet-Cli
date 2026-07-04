@@ -8,6 +8,11 @@ from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from ._lifecycle import ClientLifecycle
+from .invocation import InvocationBuilder, InvocationDraft
+
+
+_PROFILE = "receipt"
+_FETCH_ABILITY = "invocation.history.get"
 
 
 @dataclass(frozen=True)
@@ -260,6 +265,12 @@ class ReceiptClient:
             raise _transport_error("receipt fetch failed", exc) from exc
         return ReceiptSummary.from_json(raw)
 
+    def build_fetch_invocation(self, request: ReceiptFetchRequest) -> InvocationDraft:
+        """Project receipt fetch into the daemon invocation.history.get carrier."""
+
+        self._require_open()
+        return build_receipt_fetch_invocation(request)
+
     def project(self, receipt_json: bytes) -> ReceiptSummary:
         self._require_open()
         if not receipt_json:
@@ -315,6 +326,32 @@ class ReceiptClient:
         self._lifecycle.require_open()
 
 
+def build_receipt_fetch_invocation(request: ReceiptFetchRequest) -> InvocationDraft:
+    """Build a complete Runtime Core carrier for daemon receipt lookup."""
+
+    _validate_fetch_request(request)
+    ability_root, ability_owner = _receipt_ability_descriptor_parts(request.callee_ura)
+    metadata = dict(request.metadata)
+    metadata["profile"] = _PROFILE
+    metadata["system_ability"] = _FETCH_ABILITY
+    metadata["carrier_owner"] = "daemon_sdk"
+    return (
+        InvocationBuilder()
+        .with_caller_ura(request.caller_ura)
+        .with_callee_ura(request.callee_ura)
+        .with_descriptor_ref(
+            f"{ability_root}/ability/{ability_owner}.{_FETCH_ABILITY}@{request.descriptor_version}"
+        )
+        .with_subject_ura(request.subject_ura)
+        .with_nonce_base64(request.nonce_base64)
+        .with_causal_context(request.causal_context)
+        .with_json_args({"key": _receipt_fetch_key(request)})
+        .with_content_type("application/json")
+        .with_metadata(metadata)
+        .build()
+    )
+
+
 def _validate_fetch_request(request: ReceiptFetchRequest) -> None:
     if (
         not request.caller_ura
@@ -335,6 +372,29 @@ def _validate_fetch_request(request: ReceiptFetchRequest) -> None:
     )
     if keys != 1:
         raise _invalid_receipt("exactly one receipt lookup key is required")
+
+
+def _receipt_fetch_key(request: ReceiptFetchRequest) -> dict[str, object]:
+    if request.invocation_ura:
+        return {"invocation_ura": request.invocation_ura}
+    if request.request_id:
+        return {"request_id": request.request_id}
+    if request.trace_id:
+        return {"trace_id": request.trace_id}
+    raise _invalid_receipt("exactly one receipt lookup key is required")
+
+
+def _receipt_ability_descriptor_parts(callee_ura: str) -> tuple[str, str]:
+    marker = "/device/"
+    trimmed = callee_ura.strip()
+    index = trimmed.rfind(marker)
+    if index < 0:
+        raise _invalid_receipt("callee_ura must identify a device")
+    root = trimmed[:index].rstrip("/")
+    device_id = trimmed[index + len(marker) :].strip("/")
+    if not root or not device_id or "/" in device_id:
+        raise _invalid_receipt("callee_ura must identify one device")
+    return root, f"device.{device_id}"
 
 
 def _validate_chain_request(
