@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper record seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper record seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -38,7 +38,7 @@ method spelling.
 | events | directory stream partial | directory stream partial | directory stream seam partial | directory stream seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
-| wrappers | record projection partial | record projection partial | record projection seam partial | record projection seam partial | gap | gap | gap |
+| wrappers | record projection partial | record projection partial | execution carrier seam partial | execution carrier seam partial | gap | gap | gap |
 | conformance runner | manifest partial | manifest partial | gap | gap | gap | gap | gap |
 
 ## Known Gaps
@@ -157,9 +157,10 @@ method spelling.
   storage execution, SSE/WebSocket fanout, and backend compatibility-route
   cutover remain incomplete.
 - Go Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
-  browser, and media session record projection seams; execution helpers,
-  backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers
-  remain incomplete.
+  browser, and media session Invocation carrier builders, transport-backed
+  helper seams, and record projections; backend HTTP/WebSocket bridges, storage
+  policy, concrete stream/bidi adapters, and product wrapper cutovers remain
+  incomplete.
 - Python package exposes Runtime Core feature/version discovery, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
@@ -223,9 +224,10 @@ method spelling.
   storage execution, SSE/WebSocket fanout, and EasyRemote/Hub compatibility
   cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
-  browser, and media session record projection seams; execution helpers,
-  backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers
-  remain incomplete.
+  browser, and media session Invocation carrier builders, transport-backed
+  helper seams, and record projections; backend HTTP/WebSocket bridges, storage
+  policy, concrete stream/bidi adapters, and product wrapper cutovers remain
+  incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.

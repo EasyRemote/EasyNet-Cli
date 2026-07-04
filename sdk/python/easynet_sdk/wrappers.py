@@ -4,12 +4,45 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+from .invocation import InvocationDraft
 
 
 _PROFILE = "wrappers"
+_FILE = "file"
+_TERMINAL = "terminal"
+_REMOTE_DESKTOP = "remote_desktop"
+_BROWSER = "browser"
+_MEDIA = "media"
+
+
+@dataclass(frozen=True)
+class WrapperCarrierBase:
+    """Complete carrier context shared by wrapper execution helpers."""
+
+    caller_ura: str
+    callee_ura: str
+    subject_ura: str
+    descriptor_version: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_dict(self) -> dict[str, object]:
+        _validate_carrier_base(self)
+        value: dict[str, object] = {
+            "caller_ura": self.caller_ura,
+            "callee_ura": self.callee_ura,
+            "subject_ura": self.subject_ura,
+            "descriptor_version": self.descriptor_version,
+            "nonce_base64": self.nonce_base64,
+            "causal_context": dict(self.causal_context),
+        }
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return value
 
 
 @dataclass(frozen=True)
@@ -39,6 +72,21 @@ class WrapperFileRecordRequest:
 
 
 @dataclass(frozen=True)
+class WrapperFileTransferRequest:
+    base: WrapperCarrierBase
+    file: WrapperFileRecordRequest
+    operation: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        _validate_file_transfer_request(self)
+        value = self.base.to_json_dict()
+        value["wrapper_kind"] = _FILE
+        value["operation"] = self.operation or "transfer"
+        _put_file_request(value, self.file)
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
 class WrapperTerminalSessionRecord:
     profile: str
     kind: str
@@ -60,6 +108,25 @@ class WrapperTerminalSessionRequest:
     state: str
     terminal_ref: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WrapperTerminalStartRequest:
+    base: WrapperCarrierBase
+    session: WrapperTerminalSessionRequest
+    command: tuple[str, ...] = ()
+    cwd: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        _validate_terminal_start_request(self)
+        value = self.base.to_json_dict()
+        value["wrapper_kind"] = _TERMINAL
+        _put_terminal_request(value, self.session)
+        if self.command:
+            value["command"] = list(self.command)
+        if self.cwd:
+            value["cwd"] = self.cwd
+        return _json_bytes(value)
 
 
 @dataclass(frozen=True)
@@ -87,6 +154,22 @@ class WrapperRemoteDesktopSessionRequest:
 
 
 @dataclass(frozen=True)
+class WrapperRemoteDesktopStartRequest:
+    base: WrapperCarrierBase
+    session: WrapperRemoteDesktopSessionRequest
+    display: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        _validate_remote_desktop_start_request(self)
+        value = self.base.to_json_dict()
+        value["wrapper_kind"] = _REMOTE_DESKTOP
+        _put_remote_desktop_request(value, self.session)
+        if self.display:
+            value["display"] = self.display
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
 class WrapperBrowserSessionRecord:
     profile: str
     kind: str
@@ -108,6 +191,22 @@ class WrapperBrowserSessionRequest:
     state: str
     browser_ref: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class WrapperBrowserStartRequest:
+    base: WrapperCarrierBase
+    session: WrapperBrowserSessionRequest
+    url: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        _validate_browser_start_request(self)
+        value = self.base.to_json_dict()
+        value["wrapper_kind"] = _BROWSER
+        _put_browser_request(value, self.session)
+        if self.url:
+            value["url"] = self.url
+        return _json_bytes(value)
 
 
 @dataclass(frozen=True)
@@ -136,6 +235,22 @@ class WrapperMediaSessionRequest:
     metadata: Mapping[str, object] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class WrapperMediaStartRequest:
+    base: WrapperCarrierBase
+    session: WrapperMediaSessionRequest
+    codec: str = ""
+
+    def to_json_bytes(self) -> bytes:
+        _validate_media_start_request(self)
+        value = self.base.to_json_dict()
+        value["wrapper_kind"] = _MEDIA
+        _put_media_request(value, self.session)
+        if self.codec:
+            value["codec"] = self.codec
+        return _json_bytes(value)
+
+
 FileRecord = WrapperFileRecord
 TerminalSessionRecord = WrapperTerminalSessionRecord
 RemoteDesktopSessionRecord = WrapperRemoteDesktopSessionRecord
@@ -143,9 +258,130 @@ BrowserSessionRecord = WrapperBrowserSessionRecord
 MediaSessionRecord = WrapperMediaSessionRecord
 
 
+@runtime_checkable
+class WrapperTransport(Protocol):
+    """Concrete wrapper operations supplied by the integration layer."""
+
+    def build_file_transfer_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_terminal_session_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_remote_desktop_session_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_browser_session_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_media_session_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def transfer_file(self, request_json: bytes) -> bytes:
+        ...
+
+    def start_terminal_session(self, request_json: bytes) -> bytes:
+        ...
+
+    def start_remote_desktop_session(self, request_json: bytes) -> bytes:
+        ...
+
+    def start_browser_session(self, request_json: bytes) -> bytes:
+        ...
+
+    def start_media_session(self, request_json: bytes) -> bytes:
+        ...
+
+
 @dataclass(frozen=True)
 class WrapperClient:
-    """Projection-only facade for SDK wrapper DTO records."""
+    """Facade for SDK wrapper DTO records and optional daemon execution helpers."""
+
+    transport: Optional[WrapperTransport] = None
+
+    def build_file_transfer_invocation(self, request: WrapperFileTransferRequest) -> InvocationDraft:
+        return self._invocation(
+            request.to_json_bytes(),
+            self._transport().build_file_transfer_invocation,
+            "wrapper file-transfer invocation failed",
+        )
+
+    def build_terminal_session_invocation(self, request: WrapperTerminalStartRequest) -> InvocationDraft:
+        return self._invocation(
+            request.to_json_bytes(),
+            self._transport().build_terminal_session_invocation,
+            "wrapper terminal-session invocation failed",
+        )
+
+    def build_remote_desktop_session_invocation(
+        self, request: WrapperRemoteDesktopStartRequest
+    ) -> InvocationDraft:
+        return self._invocation(
+            request.to_json_bytes(),
+            self._transport().build_remote_desktop_session_invocation,
+            "wrapper remote-desktop-session invocation failed",
+        )
+
+    def build_browser_session_invocation(self, request: WrapperBrowserStartRequest) -> InvocationDraft:
+        return self._invocation(
+            request.to_json_bytes(),
+            self._transport().build_browser_session_invocation,
+            "wrapper browser-session invocation failed",
+        )
+
+    def build_media_session_invocation(self, request: WrapperMediaStartRequest) -> InvocationDraft:
+        return self._invocation(
+            request.to_json_bytes(),
+            self._transport().build_media_session_invocation,
+            "wrapper media-session invocation failed",
+        )
+
+    def transfer_file(self, request: WrapperFileTransferRequest) -> WrapperFileRecord:
+        return WrapperFileRecord.from_json(
+            self._execute(
+                request.to_json_bytes(),
+                self._transport().transfer_file,
+                "wrapper file transfer failed",
+            )
+        )
+
+    def start_terminal_session(self, request: WrapperTerminalStartRequest) -> WrapperTerminalSessionRecord:
+        return WrapperTerminalSessionRecord.from_json(
+            self._execute(
+                request.to_json_bytes(),
+                self._transport().start_terminal_session,
+                "wrapper terminal session failed",
+            )
+        )
+
+    def start_remote_desktop_session(
+        self, request: WrapperRemoteDesktopStartRequest
+    ) -> WrapperRemoteDesktopSessionRecord:
+        return WrapperRemoteDesktopSessionRecord.from_json(
+            self._execute(
+                request.to_json_bytes(),
+                self._transport().start_remote_desktop_session,
+                "wrapper remote desktop session failed",
+            )
+        )
+
+    def start_browser_session(self, request: WrapperBrowserStartRequest) -> WrapperBrowserSessionRecord:
+        return WrapperBrowserSessionRecord.from_json(
+            self._execute(
+                request.to_json_bytes(),
+                self._transport().start_browser_session,
+                "wrapper browser session failed",
+            )
+        )
+
+    def start_media_session(self, request: WrapperMediaStartRequest) -> WrapperMediaSessionRecord:
+        return WrapperMediaSessionRecord.from_json(
+            self._execute(
+                request.to_json_bytes(),
+                self._transport().start_media_session,
+                "wrapper media session failed",
+            )
+        )
 
     def project_file_record(self, request: WrapperFileRecordRequest) -> WrapperFileRecord:
         _validate_file_request(request)
@@ -226,6 +462,24 @@ class WrapperClient:
                 "metadata": _metadata(request.metadata, "wrappers.media_session"),
             }
         )
+
+    def _transport(self) -> WrapperTransport:
+        if self.transport is None:
+            raise _invalid_wrappers("wrapper transport is required")
+        return self.transport
+
+    def _invocation(
+        self, request_json: bytes, fn: Callable[[bytes], bytes], label: str
+    ) -> InvocationDraft:
+        return InvocationDraft.from_json(self._execute(request_json, fn, label))
+
+    def _execute(self, request_json: bytes, fn: Callable[[bytes], bytes], label: str) -> bytes:
+        try:
+            return fn(request_json)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
 
 
 def _file_record(decoded: Mapping[str, object]) -> WrapperFileRecord:
@@ -313,6 +567,72 @@ def _validate_file_request(request: WrapperFileRecordRequest) -> None:
         raise _invalid_wrappers("wrapper size_bytes must be non-negative")
 
 
+def _validate_file_transfer_request(request: WrapperFileTransferRequest) -> None:
+    _validate_carrier_base(request.base)
+    if request.operation and request.operation.strip() != request.operation:
+        raise _invalid_wrappers("wrapper operation must not contain surrounding whitespace")
+    _validate_file_request(request.file)
+
+
+def _validate_terminal_start_request(request: WrapperTerminalStartRequest) -> None:
+    _validate_carrier_base(request.base)
+    _validate_session_facts(
+        request.session.session_id,
+        request.session.owner_ura,
+        request.session.state,
+    )
+    _validate_command(request.command)
+
+
+def _validate_remote_desktop_start_request(request: WrapperRemoteDesktopStartRequest) -> None:
+    _validate_carrier_base(request.base)
+    _validate_session_facts(
+        request.session.session_id,
+        request.session.owner_ura,
+        request.session.state,
+    )
+
+
+def _validate_browser_start_request(request: WrapperBrowserStartRequest) -> None:
+    _validate_carrier_base(request.base)
+    _validate_session_facts(
+        request.session.session_id,
+        request.session.owner_ura,
+        request.session.state,
+    )
+    if request.url and request.url.strip() != request.url:
+        raise _invalid_wrappers("wrapper url must not contain surrounding whitespace")
+
+
+def _validate_media_start_request(request: WrapperMediaStartRequest) -> None:
+    _validate_carrier_base(request.base)
+    _validate_session_facts(
+        request.session.session_id,
+        request.session.owner_ura,
+        request.session.state,
+    )
+    if not request.session.media_kind:
+        raise _invalid_wrappers("wrapper media_kind is required")
+
+
+def _validate_carrier_base(base: WrapperCarrierBase) -> None:
+    if (
+        not base.caller_ura
+        or not base.callee_ura
+        or not base.subject_ura
+        or not base.descriptor_version
+        or not base.nonce_base64
+        or base.causal_context is None
+    ):
+        raise _invalid_wrappers("complete wrapper invocation carrier is required")
+
+
+def _validate_command(command: tuple[str, ...]) -> None:
+    for part in command:
+        if not part or part.strip() != part:
+            raise _invalid_wrappers("wrapper command parts must be non-empty without surrounding whitespace")
+
+
 def _validate_session_facts(session_id: str, owner_ura: str, state: str) -> None:
     if not session_id or not state:
         raise _invalid_wrappers("wrapper session_id and state are required")
@@ -379,6 +699,69 @@ def _json_object(raw: bytes | str, label: str) -> Mapping[str, object]:
     return decoded
 
 
+def _json_bytes(value: Mapping[str, object]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _put_file_request(value: dict[str, object], request: WrapperFileRecordRequest) -> None:
+    value["file_ref"] = request.file_ref
+    value["owner_ura"] = request.owner_ura
+    value["content_type"] = request.content_type
+    if request.size_bytes is not None:
+        value["size_bytes"] = request.size_bytes
+    if request.content_hash:
+        value["content_hash"] = request.content_hash
+    _merge_execution_metadata(value, request.metadata)
+
+
+def _put_terminal_request(value: dict[str, object], request: WrapperTerminalSessionRequest) -> None:
+    value["session_id"] = request.session_id
+    value["owner_ura"] = request.owner_ura
+    value["state"] = request.state
+    if request.terminal_ref:
+        value["terminal_ref"] = request.terminal_ref
+    _merge_execution_metadata(value, request.metadata)
+
+
+def _put_remote_desktop_request(value: dict[str, object], request: WrapperRemoteDesktopSessionRequest) -> None:
+    value["session_id"] = request.session_id
+    value["owner_ura"] = request.owner_ura
+    value["state"] = request.state
+    if request.display_ref:
+        value["display_ref"] = request.display_ref
+    _merge_execution_metadata(value, request.metadata)
+
+
+def _put_browser_request(value: dict[str, object], request: WrapperBrowserSessionRequest) -> None:
+    value["session_id"] = request.session_id
+    value["owner_ura"] = request.owner_ura
+    value["state"] = request.state
+    if request.browser_ref:
+        value["browser_ref"] = request.browser_ref
+    _merge_execution_metadata(value, request.metadata)
+
+
+def _put_media_request(value: dict[str, object], request: WrapperMediaSessionRequest) -> None:
+    value["session_id"] = request.session_id
+    value["owner_ura"] = request.owner_ura
+    value["state"] = request.state
+    value["media_kind"] = request.media_kind
+    if request.stream_ref:
+        value["stream_ref"] = request.stream_ref
+    _merge_execution_metadata(value, request.metadata)
+
+
+def _merge_execution_metadata(value: dict[str, object], metadata: Mapping[str, object]) -> None:
+    if not metadata:
+        return
+    base = value.get("metadata")
+    merged: dict[str, object] = {}
+    if isinstance(base, dict):
+        merged.update(base)
+    merged.update(metadata)
+    value["metadata"] = merged
+
+
 def _metadata(metadata: Mapping[str, object], source: str) -> dict[str, object]:
     value = dict(metadata)
     value["profile"] = _PROFILE
@@ -395,3 +778,13 @@ def _invalid_wrappers(message: str) -> SDKError:
         message=message,
     )
 
+
+def _transport_error(message: str, cause: BaseException) -> SDKError:
+    return SDKError(
+        code=ErrorCode.TRANSPORT,
+        stage="transport",
+        retry=RetryHint.UNKNOWN,
+        retryable=False,
+        message=message,
+        cause=cause,
+    )
