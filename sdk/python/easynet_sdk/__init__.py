@@ -9,6 +9,7 @@ from .ability_invocation import (
     AbilityChildContext,
     AbilityInvocationClient,
     AbilityTargetRequest,
+    EasyRemoteInvocationAdapter,
     ResolvedAbilityTarget,
 )
 from .client import Client, DiscoveryTransport, FeatureSet, Version
@@ -224,7 +225,13 @@ from .host_binding import (
     HostStreamSessionState,
     HostStreamTerminalSummary,
 )
-from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
+from .invocation import (
+    EasyRemoteInvocationRequest,
+    InvocationBuilder,
+    InvocationDraft,
+    InvocationSignature,
+    encode_easyremote_invocation,
+)
 from .mission import (
     MissionCancelRequest,
     MissionCarrierBase,
@@ -401,6 +408,8 @@ __all__ = [
     "AbilityChildContext",
     "AbilityInvocationClient",
     "AbilityPackageManifest",
+    "EasyRemoteInvocationAdapter",
+    "EasyRemoteInvocationRequest",
     "AdminAgentListRequest",
     "AdminAgentPage",
     "AdminAgentRecord",
@@ -668,6 +677,7 @@ __all__ = [
     "device_agent_ura",
     "device_ura",
     "discover_daemon",
+    "encode_easyremote_invocation",
     "hub_ura",
     "is_code",
     "owner_ability_descriptor_ref",
