@@ -8,6 +8,7 @@ from easynet_sdk import (
     LocalResourceRefRequest,
     PublicationClient,
     PublishedAbilityQuery,
+    PublishedAbilityShowRequest,
     ResourceRef,
     RuntimeClient,
     RuntimePublicationTransport,
@@ -95,6 +96,24 @@ LIST_INVOCATION_JSON = b"""{
   }
 }"""
 
+SHOW_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {
+    "subject_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "profile": "publication",
+    "system_ability": "meta.list_abilities",
+    "carrier_owner": "daemon_sdk"
+  }
+}"""
+
 UNPUBLISH_INVOCATION_JSON = b"""{
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
   "callee_ura": "easynet:///r/example/device/dev-a",
@@ -146,6 +165,7 @@ class MemoryPublicationTransport:
             b'"implementation":{"impl_id":"impl-1","impl_hash":"sha256:def",'
             b'"runtime_env":"python","enabled":true},"metadata":{}}'
         )
+        self.show_invocation_json = SHOW_INVOCATION_JSON
         self.enable_json = b'{"profile":"publication","kind":"ability_impl_enabled","metadata":{}}'
         self.disable_json = b'{"profile":"publication","kind":"ability_impl_disabled","metadata":{}}'
         self.unpublish_invocation_json = UNPUBLISH_INVOCATION_JSON
@@ -196,6 +216,14 @@ class MemoryPublicationTransport:
     def project_ability_page(self, page_json: bytes) -> bytes:
         self.seen_projection = json.loads(page_json.decode("utf-8"))
         return self.list_json
+
+    def build_show_ability_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.show_invocation_json
+
+    def project_ability_record(self, record_json: bytes) -> bytes:
+        self.seen_projection = json.loads(record_json.decode("utf-8"))
+        return self.show_json
 
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         self.seen_projection = json.loads(result_json.decode("utf-8"))
@@ -288,6 +316,18 @@ def ability_query() -> PublishedAbilityQuery:
         descriptor_version="1.0.0",
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
+    )
+
+
+def show_request() -> PublishedAbilityShowRequest:
+    return PublishedAbilityShowRequest(
+        caller_ura="easynet:///r/example/agent/alice.sdk",
+        callee_ura="easynet:///r/example/device/dev-a",
+        subject_ura="easynet:///r/example/device/dev-a",
+        descriptor_version="1.0.0",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        descriptor_ref="easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
     )
 
 
@@ -453,6 +493,45 @@ class PublicationTests(unittest.TestCase):
             "sha256:abc",
         )
 
+    def test_runtime_publication_transport_executes_show_via_runtime_core(self) -> None:
+        carrier = MemoryPublicationTransport()
+        runtime_transport = DeployRuntimeTransport(
+            output_json={
+                "abilities": [
+                    {
+                        "name": "weather",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "1.0.0",
+                    }
+                ]
+            }
+        )
+        client = PublicationClient(
+            RuntimePublicationTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        ability = client.show_ability(show_request())
+
+        self.assertEqual(
+            ability.descriptor["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "meta.list_abilities",
+        )
+        assert carrier.seen_projection is not None
+        self.assertEqual(
+            carrier.seen_projection["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+        self.assertIn("abilities", carrier.seen_projection["result"])
+
     def test_rejects_incomplete_deploy_carrier(self) -> None:
         client = PublicationClient(MemoryPublicationTransport())
         request = deploy_request()
@@ -519,6 +598,33 @@ class PublicationTests(unittest.TestCase):
                     nonce_base64=request.nonce_base64,
                     causal_context=request.causal_context,
                     ability_ura="",
+                )
+            )
+
+    def test_build_show_invocation(self) -> None:
+        client = PublicationClient(MemoryPublicationTransport())
+
+        draft = client.build_show_ability_invocation(show_request())
+        self.assertEqual(
+            draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",
+        )
+        self.assertEqual(
+            draft.args["subject_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather",
+        )
+
+        request = show_request()
+        with self.assertRaises(SDKError):
+            client.build_show_ability_invocation(
+                PublishedAbilityShowRequest(
+                    caller_ura=request.caller_ura,
+                    callee_ura=request.callee_ura,
+                    subject_ura=request.subject_ura,
+                    descriptor_version=request.descriptor_version,
+                    nonce_base64=request.nonce_base64,
+                    causal_context=request.causal_context,
+                    descriptor_ref="",
                 )
             )
 

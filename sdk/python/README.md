@@ -48,8 +48,9 @@ over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
 C ABI-backed deploy-result projection,
 published-ability list execution through Runtime Core invoke,
+published-ability show execution through Runtime Core invoke,
 complete unpublish execution through Runtime Core invoke,
-deploy/unpublish Invocation carrier, deploy/unpublish result, plugin
+deploy/show/unpublish Invocation carrier, deploy/show/unpublish result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
 output-hash folding seams plus close state seams. MissionClient exposes run/run-file/track/cancel
@@ -79,7 +80,7 @@ browser, and media helper execution through Runtime Core invoke,
 transport-backed helper close state seams, and record projections. Direct daemon
 UDS transport, directory subscription live adapters, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication
-show/enable/disable and plugin lifecycle live adapters, host-binding execution
+enable/disable and plugin lifecycle live adapters, host-binding execution
 adapters, mission event streams, Admin gateway live status carriers, concrete
 Admin trust/session carriers, certificate policy, Events daemon filtering/live adapters, concrete surface health
 carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,

@@ -510,6 +510,18 @@ int32_t easynet_publication_build_deploy_invocation(
     char** out_invocation_json
 );
 
+int32_t easynet_publication_build_show_ability_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_publication_project_ability_record(
+    EasynetHandle handle,
+    const char* record_json,
+    char** out_ability_json
+);
+
 int32_t easynet_publication_build_unpublish_invocation(
     EasynetHandle handle,
     const char* request_json,
@@ -532,16 +544,18 @@ it through the daemon `AbilityManifest` validator, and returns deterministic
 package facts including namespace, wire key, descriptor version, exec kind, and
 manifest hash.
 
-`build_deploy_invocation` and `build_unpublish_invocation` return complete
-Invocation JSON carriers for existing daemon system abilities (`ability.deploy`
-and `ability.unpublish`). They require explicit caller, callee, subject,
-descriptor version, nonce, and causal context fields. Bindings submit the
-returned Invocation through Runtime Core; these helpers do not execute
-publication, claim terminal receipts, scan package directories for list/show,
-or fake enable/disable state. `project_unpublish_result` projects the daemon
-`ability.unpublish` output plus the original request descriptor version into
-the SDK `ability_unpublished` mutation DTO; descriptor-ref canonicalization
-remains delegated to the CLI/Axon contract.
+`build_deploy_invocation`, `build_show_ability_invocation`, and
+`build_unpublish_invocation` return complete Invocation JSON carriers for
+existing daemon system abilities (`ability.deploy`, `meta.list_abilities`, and
+`ability.unpublish`). They require explicit caller, callee, subject, descriptor
+version, nonce, and causal context fields. Bindings submit the returned
+Invocation through Runtime Core; these helpers do not execute publication,
+claim terminal receipts, scan package directories for install, or fake
+enable/disable state. `project_ability_record` projects one exact DescriptorRef
+match from daemon `meta.list_abilities` output. `project_unpublish_result`
+projects the daemon `ability.unpublish` output plus the original request
+descriptor version into the SDK `ability_unpublished` mutation DTO;
+descriptor-ref canonicalization remains delegated to the CLI/Axon contract.
 
 ### 2.12 Mission Carriers And Status
 

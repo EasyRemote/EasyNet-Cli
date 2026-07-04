@@ -33,7 +33,7 @@
 
 use std::path::{Component, Path};
 
-use easynet_axon::invocation::canonical_ability_descriptor_ref;
+use easynet_axon::invocation::{ability_ura_from_descriptor_ref, canonical_ability_descriptor_ref};
 use serde_json::{json, Map, Value};
 
 use crate::core::ability::spec::{AbilityExec, AbilityManifest};
@@ -143,6 +143,28 @@ pub(crate) fn build_list_abilities_invocation(request: &Value) -> Result<Value, 
     build_system_invocation(obj, PUBLICATION_PROFILE, SYSTEM_ABILITY_LIST, args)
 }
 
+pub(crate) fn build_show_ability_invocation(request: &Value) -> Result<Value, PublicationError> {
+    let obj = object(request, "PublishedAbilityShowRequest")?;
+    let descriptor_ref = canonical_descriptor_ref(required_string(obj, "descriptor_ref")?)?;
+    let ability_ura = ability_ura_from_descriptor_ref(&descriptor_ref)
+        .map_err(|err| PublicationError::InvalidField("descriptor_ref", err.to_string()))?;
+    let mut args = Map::new();
+    if let Some(owner_ura) = optional_string_field(obj, "owner_ura")? {
+        validate_ura(&owner_ura, "owner_ura")?;
+        args.insert("agent_ura".to_string(), Value::String(owner_ura));
+    }
+    args.insert(
+        "subject_ura".to_string(),
+        Value::String(ability_ura.to_string()),
+    );
+    build_system_invocation(
+        obj,
+        PUBLICATION_PROFILE,
+        SYSTEM_ABILITY_LIST,
+        Value::Object(args),
+    )
+}
+
 pub(crate) fn project_published_ability_page(input: &Value) -> Result<Value, PublicationError> {
     let page_input = PageInput::parse(input)?;
     let rows = rows_from_value(
@@ -170,6 +192,36 @@ pub(crate) fn project_published_ability_page(input: &Value) -> Result<Value, Pub
             "total_items": rows.len(),
         },
     }))
+}
+
+pub(crate) fn project_published_ability_record(input: &Value) -> Result<Value, PublicationError> {
+    let obj = object(input, "PublishedAbilityProjection")?;
+    let descriptor_ref = canonical_descriptor_ref(required_string(obj, "descriptor_ref")?)?;
+    let payload = mutation_projection_payload(input);
+    let rows = rows_from_value(payload, "abilities", "items", "PublishedAbilityRows")?;
+    let mut matched = Vec::new();
+    for row in rows {
+        let projected = project_published_ability(row)?;
+        if projected
+            .get("descriptor")
+            .and_then(Value::as_object)
+            .and_then(|descriptor| descriptor.get("descriptor_ref"))
+            .and_then(Value::as_str)
+            == Some(descriptor_ref.as_str())
+        {
+            matched.push(projected);
+        }
+    }
+    match matched.len() {
+        1 => Ok(matched.remove(0)),
+        0 => Err(PublicationError::InvalidField(
+            "descriptor_ref",
+            format!("published ability {descriptor_ref:?} was not found"),
+        )),
+        _ => Err(PublicationError::Contract(format!(
+            "published ability {descriptor_ref:?} is ambiguous"
+        ))),
+    }
 }
 
 pub(crate) fn build_unpublish_invocation(request: &Value) -> Result<Value, PublicationError> {
@@ -325,6 +377,11 @@ impl<'a> PageInput<'a> {
             controls: PageControls::from_request(obj)?,
         })
     }
+}
+
+fn canonical_descriptor_ref(raw: &str) -> Result<String, PublicationError> {
+    canonical_ability_descriptor_ref(raw)
+        .map_err(|err| PublicationError::InvalidField("descriptor_ref", err.to_string()))
 }
 
 fn projection_payload(input: &Value) -> &Value {
@@ -845,6 +902,35 @@ mod tests {
     }
 
     #[test]
+    fn build_show_ability_invocation_uses_descriptor_ref_projection() {
+        let request = json!({
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_version": "1.0.0",
+            "nonce_base64": nonce(),
+            "causal_context": {"form": "none"},
+            "descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@2.0.0",
+            "owner_ura": "easynet:///r/example/device/dev-a"
+        });
+
+        let invocation = build_show_ability_invocation(&request).unwrap();
+
+        assert_eq!(
+            invocation["metadata"]["system_ability"],
+            SYSTEM_ABILITY_LIST
+        );
+        assert_eq!(
+            invocation["args"]["subject_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather"
+        );
+        assert_eq!(
+            invocation["args"]["agent_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+    }
+
+    #[test]
     fn project_published_ability_page_bounds_and_stamps_descriptor_ref() {
         let page = project_published_ability_page(&json!({
             "result": {
@@ -877,6 +963,58 @@ mod tests {
             "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
         );
         assert_eq!(page["items"][0]["implementation"], json!({}));
+    }
+
+    #[test]
+    fn project_published_ability_record_selects_exact_descriptor_ref() {
+        let ability = project_published_ability_record(&json!({
+            "descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@2.0.0",
+            "result": {
+                "abilities": [
+                    {
+                        "name": "weather",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "1.0.0",
+                        "schema_hash": "sha256:old"
+                    },
+                    {
+                        "name": "weather",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "2.0.0",
+                        "schema_hash": "sha256:new",
+                        "implementation": {"impl_id": "impl-2"}
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            ability["descriptor"]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@2.0.0"
+        );
+        assert_eq!(ability["implementation"]["impl_id"], "impl-2");
+        assert_eq!(ability["metadata"]["source_ability"], SYSTEM_ABILITY_LIST);
+    }
+
+    #[test]
+    fn project_published_ability_record_rejects_missing_match() {
+        let err = project_published_ability_record(&json!({
+            "descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@2.0.0",
+            "result": {
+                "abilities": [{
+                    "name": "weather",
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "version": "1.0.0"
+                }]
+            }
+        }))
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("not found"));
     }
 
     #[test]

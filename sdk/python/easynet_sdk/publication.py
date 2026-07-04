@@ -306,6 +306,38 @@ class PublishedAbilityPage:
 
 
 @dataclass(frozen=True)
+class PublishedAbilityShowRequest:
+    """Complete carrier for reading one published AbilityDescriptor."""
+
+    caller_ura: str
+    callee_ura: str
+    subject_ura: str
+    descriptor_version: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    descriptor_ref: str
+    owner_ura: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_bytes(self) -> bytes:
+        _validate_show_request(self)
+        value: dict[str, object] = {
+            "caller_ura": self.caller_ura,
+            "callee_ura": self.callee_ura,
+            "subject_ura": self.subject_ura,
+            "descriptor_version": self.descriptor_version,
+            "nonce_base64": self.nonce_base64,
+            "causal_context": dict(self.causal_context),
+            "descriptor_ref": self.descriptor_ref,
+        }
+        if self.owner_ura:
+            value["owner_ura"] = self.owner_ura
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
 class UnpublishAbilityRequest:
     """Complete carrier for daemon ability unpublish."""
 
@@ -423,6 +455,12 @@ class PublicationTransport(Protocol):
     def project_ability_page(self, page_json: bytes) -> bytes:
         ...
 
+    def build_show_ability_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def project_ability_record(self, record_json: bytes) -> bytes:
+        ...
+
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         ...
 
@@ -495,11 +533,24 @@ class RuntimePublicationTransport:
     def project_ability_page(self, page_json: bytes) -> bytes:
         return self._delegate("project_ability_page", page_json)
 
+    def build_show_ability_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_show_ability_invocation", request_json)
+
+    def project_ability_record(self, record_json: bytes) -> bytes:
+        return self._delegate("project_ability_record", record_json)
+
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         return self._delegate("project_unpublish_result", result_json)
 
     def show_ability(self, request_json: bytes) -> bytes:
-        return self._delegate("show_ability", request_json)
+        return self._invoke_projected(
+            request_json,
+            build_method="build_show_ability_invocation",
+            project_method="project_ability_record",
+            projection_keys=("descriptor_ref",),
+            failure_message="publication show invocation failed",
+            output_message="publication show output must be an object",
+        )
 
     def enable_ability_impl(self, request_json: bytes) -> bytes:
         return self._delegate("enable_ability_impl", request_json)
@@ -675,17 +726,33 @@ class PublicationClient:
             raise _transport_error("publication list abilities failed", exc) from exc
         return PublishedAbilityPage.from_json(raw)
 
-    def show_ability(self, descriptor_ref: str) -> PublishedAbility:
+    def show_ability(self, target: str | PublishedAbilityShowRequest) -> PublishedAbility:
         self._require_open()
-        if not descriptor_ref:
-            raise _invalid_publication("descriptor_ref is required")
+        if isinstance(target, PublishedAbilityShowRequest):
+            request_json = target.to_json_bytes()
+        else:
+            if not target:
+                raise _invalid_publication("descriptor_ref is required")
+            request_json = _json_bytes({"descriptor_ref": target})
         try:
-            raw = self.transport.show_ability(_json_bytes({"descriptor_ref": descriptor_ref}))
+            raw = self.transport.show_ability(request_json)
         except SDKError:
             raise
         except Exception as exc:
             raise _transport_error("publication show ability failed", exc) from exc
         return PublishedAbility.from_json(raw)
+
+    def build_show_ability_invocation(
+        self, request: PublishedAbilityShowRequest
+    ) -> InvocationDraft:
+        self._require_open()
+        try:
+            raw = self.transport.build_show_ability_invocation(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("publication show invocation failed", exc) from exc
+        return InvocationDraft.from_json(raw)
 
     def enable_ability_impl(self, impl_id: AbilityImplID) -> None:
         self._require_open()
@@ -781,6 +848,19 @@ def _validate_unpublish_request(request: UnpublishAbilityRequest) -> None:
         or not request.ability_ura
     ):
         raise _invalid_publication("complete unpublish invocation carrier is required")
+
+
+def _validate_show_request(request: PublishedAbilityShowRequest) -> None:
+    if (
+        not request.caller_ura
+        or not request.callee_ura
+        or not request.subject_ura
+        or not request.descriptor_version
+        or not request.nonce_base64
+        or request.causal_context is None
+        or not request.descriptor_ref
+    ):
+        raise _invalid_publication("complete show invocation carrier is required")
 
 
 def _validate_publication_query(query: PublishedAbilityQuery) -> None:

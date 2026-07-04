@@ -58,6 +58,8 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_publication_project_deploy_result",
     "easynet_publication_build_list_abilities_invocation",
     "easynet_publication_project_ability_page",
+    "easynet_publication_build_show_ability_invocation",
+    "easynet_publication_project_ability_record",
     "easynet_publication_build_unpublish_invocation",
     "easynet_publication_project_unpublish_result",
     "easynet_mission_build_run_eal_invocation",
@@ -1051,11 +1053,24 @@ class CABIPublicationTransport(_CABIProfileTransport):
     def project_ability_page(self, page_json: bytes) -> bytes:
         return self._call("easynet_publication_project_ability_page", page_json)
 
+    def build_show_ability_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_build_show_ability_invocation", request_json
+        )
+
+    def project_ability_record(self, record_json: bytes) -> bytes:
+        return self._call("easynet_publication_project_ability_record", record_json)
+
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         return self._call("easynet_publication_project_unpublish_result", result_json)
 
     def show_ability(self, request_json: bytes) -> bytes:
-        return self._missing("publication show ability")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_publication_build_show_ability_invocation",
+            project_symbol="easynet_publication_project_ability_record",
+            projection_keys=("descriptor_ref",),
+        )
 
     def enable_ability_impl(self, request_json: bytes) -> bytes:
         return self._missing("publication enable ability impl")

@@ -47,6 +47,7 @@ from easynet_sdk import (
     PrepareOptions,
     PublicationClient,
     PublishedAbilityQuery,
+    PublishedAbilityShowRequest,
     ReceiptClient,
     ReceiptFetchRequest,
     ResolveQuery,
@@ -415,6 +416,22 @@ class FakeRawCABI:
                 "runtime_failed": 0,
             }
         if system_ability == "meta.list_abilities":
+            args = draft.get("args")
+            if (
+                isinstance(args, dict)
+                and args.get("subject_ura")
+                == "easynet:///r/example/ability/device.dev-a.er.weather"
+            ):
+                return {
+                    "abilities": [
+                        {
+                            "name": "weather",
+                            "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                            "owner_ura": "easynet:///r/example/device/dev-a",
+                            "version": "1.0.0",
+                        }
+                    ]
+                }
             return {
                 "abilities": [
                     {
@@ -789,6 +806,10 @@ class FakeRawCABI:
             return PUBLICATION_LIST_INVOCATION
         if symbol == "easynet_publication_project_ability_page":
             return PUBLICATION_ABILITY_PAGE
+        if symbol == "easynet_publication_build_show_ability_invocation":
+            return PUBLICATION_SHOW_INVOCATION
+        if symbol == "easynet_publication_project_ability_record":
+            return PUBLICATION_ABILITY_RECORD
         if symbol == "easynet_publication_build_unpublish_invocation":
             return PUBLICATION_UNPUBLISH_INVOCATION
         if symbol == "easynet_publication_project_unpublish_result":
@@ -1018,6 +1039,29 @@ PUBLICATION_ABILITY_PAGE = (
     b'"implementation":{},"metadata":{"source_ability":"meta.list_abilities"}}],'
     b'"next_cursor":null,"limit":50,"source":"read_model",'
     b'"metadata":{"profile":"publication","source_ability":"meta.list_abilities"}}'
+)
+
+PUBLICATION_SHOW_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.meta.list_abilities@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"subject_ura":"easynet:///r/example/ability/device.dev-a.er.weather"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"publication","system_ability":"meta.list_abilities",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_ABILITY_RECORD = (
+    b'{"descriptor":{"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.er.weather@1.0.0","descriptor_version":"1.0.0",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a"},'
+    b'"implementation":{},"metadata":{"profile":"publication",'
+    b'"source_ability":"meta.list_abilities"}}'
 )
 
 PUBLICATION_UNPUBLISH_INVOCATION = (
@@ -2363,6 +2407,45 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertIn("result", raw.profile_requests[1][2])
         self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_show_uses_carrier_invoke_and_record_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
+
+        ability = client.show_ability(
+            PublishedAbilityShowRequest(
+                caller_ura="easynet:///r/example/agent/alice.sdk",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/device/dev-a",
+                descriptor_version="1.0.0",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                descriptor_ref="easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+            )
+        )
+
+        self.assertEqual(
+            ability.descriptor["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_publication_build_show_ability_invocation",
+                "easynet_publication_project_ability_record",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "meta.list_abilities",
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_publication_deploy_uses_carrier_invoke(self) -> None:
