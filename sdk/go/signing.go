@@ -1,6 +1,8 @@
 package easynet
 
 import (
+	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -218,6 +220,162 @@ func (p PreparedInvocation) SignWithCallerSignature(signature InvocationSignatur
 	}, nil
 }
 
+// SignatureProvider produces caller signatures over daemon/Axon signing material.
+type SignatureProvider interface {
+	Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error)
+}
+
+// Ed25519SignatureProvider signs daemon/Axon-provided canonical bytes.
+type Ed25519SignatureProvider struct {
+	privateKeySeed  []byte
+	publicKeyBase64 string
+}
+
+func NewEd25519SignatureProvider(privateKeySeed []byte, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
+	if len(privateKeySeed) != ed25519.SeedSize {
+		return Ed25519SignatureProvider{}, invalidInvocation("private_key_seed must be 32 bytes", nil)
+	}
+	seed := append([]byte(nil), privateKeySeed...)
+	return Ed25519SignatureProvider{
+		privateKeySeed:  seed,
+		publicKeyBase64: publicKeyBase64,
+	}, nil
+}
+
+func NewEd25519SignatureProviderFromSeedBase64(seedBase64 string, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
+	seed, err := decodeBase64Field(seedBase64, "private_key_seed")
+	if err != nil {
+		return Ed25519SignatureProvider{}, err
+	}
+	return NewEd25519SignatureProvider(seed, publicKeyBase64)
+}
+
+func NewEd25519SignatureProviderFromSeedHex(seedHex string, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
+	if strings.TrimSpace(seedHex) == "" {
+		return Ed25519SignatureProvider{}, invalidInvocation("private_key_seed is required", nil)
+	}
+	seed, err := hex.DecodeString(seedHex)
+	if err != nil {
+		return Ed25519SignatureProvider{}, invalidInvocation("private_key_seed must be hex", err)
+	}
+	return NewEd25519SignatureProvider(seed, publicKeyBase64)
+}
+
+func (p Ed25519SignatureProvider) Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error) {
+	if err := validateEd25519Algorithm(material.Algorithm(), "signing material"); err != nil {
+		return InvocationSignature{}, err
+	}
+	if err := validateEd25519Algorithm(handle.Algorithm, "signer handle"); err != nil {
+		return InvocationSignature{}, err
+	}
+	if len(p.privateKeySeed) != ed25519.SeedSize {
+		return InvocationSignature{}, invalidInvocation("private_key_seed must be 32 bytes", nil)
+	}
+	canonicalBytes, err := decodeCanonicalBytesBase64(material.CanonicalBytesBase64())
+	if err != nil {
+		return InvocationSignature{}, err
+	}
+	privateKey := ed25519.NewKeyFromSeed(p.privateKeySeed)
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
+	if err := validateExpectedPublicKey(publicKeyBase64, p.publicKeyBase64, "provider public key"); err != nil {
+		return InvocationSignature{}, err
+	}
+	if metadataPublicKey, ok := handle.Metadata["public_key_base64"]; ok {
+		raw, ok := metadataPublicKey.(string)
+		if !ok {
+			return InvocationSignature{}, invalidInvocation("signer handle public_key_base64 must be a string", nil)
+		}
+		if err := validateExpectedPublicKey(publicKeyBase64, raw, "signer handle public key"); err != nil {
+			return InvocationSignature{}, err
+		}
+	}
+	signature := ed25519.Sign(privateKey, canonicalBytes)
+	if len(signature) != ed25519.SignatureSize {
+		return InvocationSignature{}, invalidInvocation("ed25519 signature length is invalid", nil)
+	}
+	return InvocationSignature{
+		Algorithm:             "ed25519",
+		SignatureBase64:       base64.StdEncoding.EncodeToString(signature),
+		KeyIDHint:             handle.SignerID,
+		SignerPublicKeyBase64: publicKeyBase64,
+	}, nil
+}
+
+// StaticSignatureProvider adapts already-produced signatures.
+type StaticSignatureProvider struct {
+	signature InvocationSignature
+}
+
+func NewStaticSignatureProvider(signature InvocationSignature) StaticSignatureProvider {
+	return StaticSignatureProvider{signature: signature}
+}
+
+func (p StaticSignatureProvider) Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error) {
+	_ = material
+	_ = handle
+	return p.signature, nil
+}
+
+// Signer binds a daemon-authorized handle to a concrete signature provider.
+type Signer struct {
+	handle   SignerHandle
+	provider SignatureProvider
+}
+
+func NewSigner(handle SignerHandle, provider SignatureProvider) (Signer, error) {
+	if provider == nil {
+		return Signer{}, invalidInvocation("signature provider is required", nil)
+	}
+	if err := validateSignerHandle(handle); err != nil {
+		return Signer{}, err
+	}
+	return Signer{handle: handle, provider: provider}, nil
+}
+
+func NewSignerFromSignature(handle SignerHandle, signature InvocationSignature) (Signer, error) {
+	return NewSigner(handle, NewStaticSignatureProvider(signature))
+}
+
+func (s Signer) Handle() SignerHandle {
+	return s.handle
+}
+
+func (s Signer) Sign(prepared PreparedInvocation) (SignedInvocation, error) {
+	if err := validateSignerHandle(s.handle); err != nil {
+		return SignedInvocation{}, err
+	}
+	if s.provider == nil {
+		return SignedInvocation{}, invalidInvocation("signature provider is required", nil)
+	}
+	signature, err := s.provider.Sign(prepared.SigningMaterial(), s.handle)
+	if err != nil {
+		return SignedInvocation{}, err
+	}
+	return s.SignWithSignature(prepared, signature)
+}
+
+func (s Signer) SignWithSignature(prepared PreparedInvocation, signature InvocationSignature) (SignedInvocation, error) {
+	if err := validateSignerHandle(s.handle); err != nil {
+		return SignedInvocation{}, err
+	}
+	if err := validatePreparedPolicy(prepared, s.handle); err != nil {
+		return SignedInvocation{}, err
+	}
+	normalized, err := normalizeSignature(s.handle, signature)
+	if err != nil {
+		return SignedInvocation{}, err
+	}
+	signed, err := prepared.SignWithCallerSignature(normalized)
+	if err != nil {
+		return SignedInvocation{}, err
+	}
+	if signed.SignerID() != s.handle.SignerID {
+		return SignedInvocation{}, invalidInvocation("signed invocation signer does not match handle", nil)
+	}
+	return signed, nil
+}
+
 // SignedInvocation is the immutable submit-ready pre-runtime envelope.
 type SignedInvocation struct {
 	prepared  PreparedInvocation
@@ -375,11 +533,110 @@ func normalizeSHA256Hex(value string, fieldName string) (string, error) {
 }
 
 func decodeCanonicalBytesBase64(value string) ([]byte, error) {
+	return decodeBase64Field(value, "canonical_bytes_base64")
+}
+
+func decodeBase64Field(value string, fieldName string) ([]byte, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, invalidInvocation(fmt.Sprintf("%s is required", fieldName), nil)
+	}
 	decoded, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
-		return nil, invalidInvocation("canonical_bytes_base64 must be base64", err)
+		return nil, invalidInvocation(fmt.Sprintf("%s must be base64", fieldName), err)
 	}
 	return decoded, nil
+}
+
+func validateEd25519Algorithm(value string, source string) error {
+	if strings.TrimSpace(value) != "" && strings.ToLower(strings.TrimSpace(value)) != "ed25519" {
+		return invalidInvocation(fmt.Sprintf("%s algorithm must be ed25519", source), nil)
+	}
+	return nil
+}
+
+func validateExpectedPublicKey(actualBase64 string, expectedBase64 string, source string) error {
+	if expectedBase64 == "" {
+		return nil
+	}
+	actual, err := decodeBase64Field(actualBase64, "derived public key")
+	if err != nil {
+		return err
+	}
+	expected, err := decodeBase64Field(expectedBase64, source)
+	if err != nil {
+		return err
+	}
+	if len(expected) != ed25519.PublicKeySize {
+		return invalidInvocation(fmt.Sprintf("%s must be 32 bytes", source), nil)
+	}
+	if !bytes.Equal(actual, expected) {
+		return invalidInvocation(fmt.Sprintf("%s does not match private key", source), nil)
+	}
+	return nil
+}
+
+func validateSignerHandle(handle SignerHandle) error {
+	if strings.TrimSpace(handle.SignerID) == "" {
+		return invalidInvocation("signer handle signer_id is required", nil)
+	}
+	if strings.TrimSpace(handle.KeyID) == "" {
+		return invalidInvocation("signer handle key_id is required", nil)
+	}
+	if strings.TrimSpace(handle.OwnerURA) == "" {
+		return invalidInvocation("signer handle owner_ura is required", nil)
+	}
+	if handle.Policy == nil {
+		return invalidInvocation("signer handle policy is required", nil)
+	}
+	if handle.Metadata == nil {
+		return invalidInvocation("signer handle metadata is required", nil)
+	}
+	return nil
+}
+
+func validatePreparedPolicy(prepared PreparedInvocation, handle SignerHandle) error {
+	policy := prepared.SigningMaterial().SignerPolicy()
+	if policy == nil {
+		return nil
+	}
+	if policy.SignerID() != "" && policy.SignerID() != handle.SignerID {
+		return invalidInvocation("prepared signer policy does not match signer handle", nil)
+	}
+	if policy.Mode() == "" {
+		return nil
+	}
+	handleMode, ok := handle.Policy["mode"].(string)
+	if ok && handleMode != "" && policy.Mode() != handleMode {
+		return invalidInvocation("prepared signer policy mode does not match handle", nil)
+	}
+	return nil
+}
+
+func normalizeSignature(handle SignerHandle, signature InvocationSignature) (InvocationSignature, error) {
+	handleAlgorithm := strings.ToLower(strings.TrimSpace(handle.Algorithm))
+	algorithm := strings.ToLower(strings.TrimSpace(signature.Algorithm))
+	if algorithm == "" {
+		algorithm = handleAlgorithm
+	}
+	if algorithm == "" {
+		return InvocationSignature{}, invalidInvocation("signature.algorithm is required", nil)
+	}
+	if handleAlgorithm != "" && algorithm != handleAlgorithm {
+		return InvocationSignature{}, invalidInvocation("signature algorithm does not match signer handle", nil)
+	}
+	keyIDHint := signature.KeyIDHint
+	if keyIDHint == "" {
+		keyIDHint = handle.SignerID
+	}
+	if keyIDHint != handle.SignerID && keyIDHint != handle.KeyID {
+		return InvocationSignature{}, invalidInvocation("signature key_id_hint does not match signer handle", nil)
+	}
+	return InvocationSignature{
+		Algorithm:             algorithm,
+		SignatureBase64:       signature.SignatureBase64,
+		KeyIDHint:             handle.SignerID,
+		SignerPublicKeyBase64: signature.SignerPublicKeyBase64,
+	}, nil
 }
 
 func optionalPreparedString(fields map[string]json.RawMessage, name string) string {

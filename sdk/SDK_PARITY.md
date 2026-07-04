@@ -103,7 +103,8 @@ method spelling.
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
   detach/open-runtime/connect-local state seams, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
-  construction with inspect/build handle consumption, prepared/signed Invocation DTOs, unary InvocationResult
+  construction with inspect/build handle consumption, prepared/signed Invocation DTOs,
+  local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
@@ -116,8 +117,8 @@ method spelling.
   and close state seams plus `IdentityClient` descriptor, identity, Axon-delegated
   URA/DescriptorRef helper seams, ResourceRef, signing-key lifecycle,
   signer-handle projection, and close state seams; directory live transport
-  adapters, signing-key live execution adapters, local signer implementations,
-  concrete daemon carriers, and backend route cutover remain incomplete.
+  adapters, signing-key live execution adapters, concrete daemon carriers, and
+  backend route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   and close state seams over opaque receipt refs; Axon-backed cryptographic

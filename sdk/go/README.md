@@ -18,7 +18,8 @@ await/cancel/events/free-handle adapters, runtime connection state, runtime heal
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
 detach/open-runtime/connect-local state seams, schema-backed SDK error projection, complete
 Invocation draft construction, prepared/signed Invocation DTOs, unary
-InvocationResult projection, StreamHandle state observation, BidiSession frame
+InvocationResult projection, local Ed25519 signer provider over daemon/Axon
+canonical signing material, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
@@ -50,8 +51,8 @@ Invocation carriers plus model, chat, stream, file, and file-delete projection
 seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, transport-backed helper close state seams, and record projections. Direct UDS transport,
-directory live transport adapters, local signer implementations,
-Axon-backed receipt verification, concrete publication/host-binding/mission
+directory live transport adapters, Axon-backed receipt verification,
+concrete publication/host-binding/mission
 carriers, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
