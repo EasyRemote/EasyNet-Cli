@@ -73,6 +73,7 @@ bench = false
 # canonical proto carrier before T2.1 unifies them.
 [[bench]]
 name = "session_frame_carrier"
+path = "tools/benches/session_frame_carrier.rs"
 harness = false
 
 [[bin]]
@@ -406,7 +407,7 @@ objc2-video-toolbox = { version = "0.3", features = [
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.
 tokio = { version = "1", features = ["test-util"] }
-# T0.4 carrier baseline harness (benches/session_frame_carrier.rs).
+# T0.4 carrier baseline harness (tools/benches/session_frame_carrier.rs).
 criterion = "0.5"
 # prost::Message in the bench encodes the pb frames the same way the
 # tonic wire does; version pinned to easynet-axon's prost.

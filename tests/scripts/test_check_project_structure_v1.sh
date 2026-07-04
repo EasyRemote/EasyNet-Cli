@@ -105,7 +105,7 @@ mkfinal() {
     "$dir/schemas/descriptor" "$dir/schemas/receipt" \
     "$dir/plugins" "$dir/skills" "$dir/examples" "$dir/gallery" "$dir/docs" \
     "$dir/tests/e2e" "$dir/tests/conformance" "$dir/tests/fixtures" "$dir/tests/scripts" "$dir/tests/support" \
-    "$dir/benches" "$dir/tools" "$dir/packaging/docker" "$dir/packaging/release" \
+    "$dir/tools/benches" "$dir/packaging/docker" "$dir/packaging/release" \
     "$dir/platforms/macos" "$dir/platforms/windows" "$dir/.github/workflows"
   touch "$dir/schemas/control_plane.proto" "$dir/schemas/common.proto"
 }

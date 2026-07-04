@@ -149,8 +149,9 @@ EasyNet-Cli/
 │  ├─ fixtures/
 │  ├─ scripts/
 │  └─ support/
-├─ benches/
 ├─ tools/
+│  ├─ benches/
+│  └─ scripts/
 ├─ packaging/
 │  ├─ docker/
 │  └─ release/
@@ -203,8 +204,7 @@ EasyNet-Cli/
 | `gallery/` | showcase cases and authored assets | executable source ownership |
 | `docs/` | human-readable architecture, specs, runbooks | generated build artifacts |
 | `tests/` | Cargo integration tests, e2e, conformance, fixtures, test scripts/support | product modules |
-| `benches/` | benchmark entry points | non-benchmark tooling |
-| `tools/` | maintainer tools, descriptor generation wrappers, audits, repo checks | product runtime modules |
+| `tools/` | maintainer tools, benchmark entry points, descriptor generation wrappers, audits, repo checks | product runtime modules |
 | `packaging/` | docker and release packaging | platform app source |
 | `platforms/` | OS-specific app/tray/launcher source | release packaging |
 | `.github/workflows/` | GitHub Actions workflow entry points | non-GitHub CI implementation roots |

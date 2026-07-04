@@ -1,7 +1,7 @@
 // EasyNet Daemon — Session Frame Carrier Baseline (T0.4)
 // ========================================================
 //
-// File: benches/session_frame_carrier.rs
+// File: tools/benches/session_frame_carrier.rs
 // Description: Quantifies the cost of today's second invocation
 //              carrier (to-be-fix.spec §A2 / F-004): session business
 //              frames travel as serde-JSON `SessionDispatch` inside a

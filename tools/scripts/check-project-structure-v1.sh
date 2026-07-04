@@ -51,7 +51,6 @@ check_root_contract() {
   local allowed_dirs=(
     .github
     ability-descriptors
-    benches
     docs
     examples
     gallery
@@ -220,8 +219,8 @@ require_dir skills
 require_dir examples
 require_dir gallery
 require_dir docs
-require_dir benches
 require_dir tools
+require_dir tools/benches
 require_dir packaging/docker
 require_dir packaging/release
 require_dir platforms/macos
@@ -236,6 +235,7 @@ require_dir tests/support
 
 for forbidden in \
   engineering \
+  benches \
   scripts \
   demos \
   crates \
