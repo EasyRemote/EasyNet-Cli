@@ -1,0 +1,21 @@
+id: python/easyremote_no_raw_receipt_continuity
+profile: receipt
+required_for:
+  - python
+description: EasyRemote delegates receipt summary projection and hash-chain continuity checks to SDK Receipt instead of comparing receipt hashes locally.
+steps:
+  - action: audit_consumer_source
+    consumer: easyremote
+  - action: inspect_sdk_receipt_usage
+expect:
+  result: ok
+  required_sdk_types:
+    - ReceiptClient
+    - LocalReceiptTransport
+    - ReceiptChain
+    - ReceiptVerification
+  forbidden_semantic_markers:
+    - raw_receipt_chain_semantics
+    - prev_receipt_hash_self_hash_compare
+  cryptographic_verification_claim: false
+  raw_lower_layer_dependency: false

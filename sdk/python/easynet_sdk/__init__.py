@@ -262,6 +262,7 @@ from .runtime import (
 from .receipt import (
     build_receipt_fetch_invocation,
     CausalRef,
+    LocalReceiptTransport,
     ReceiptChainItemVerification,
     ReceiptChain,
     ReceiptChainVerification,
@@ -571,6 +572,7 @@ __all__ = [
     "RuntimePublicationTransport",
     "CausalRef",
     "ReceiptChainItemVerification",
+    "LocalReceiptTransport",
     "ReceiptChainVerification",
     "ReceiptChainVerificationRequest",
     "ReceiptClient",

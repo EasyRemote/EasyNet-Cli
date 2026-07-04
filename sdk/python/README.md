@@ -78,7 +78,8 @@ through the client plus per-call HostStreamSession state seams. Python also
 ships `LocalHostBindingTransport` for product-host frame/hash facade execution
 against the shared Host Binding conformance fixtures. The package also exposes
 EasyRemote cutover audit helpers that reject raw FFI/Axon imports, raw
-Invocation JSON codecs, and raw host-stream frame/hash codecs in consumer code.
+Invocation JSON codecs, raw host-stream frame/hash codecs, and raw lower-layer
+Axon/ABI dependencies in consumer manifests.
 MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection

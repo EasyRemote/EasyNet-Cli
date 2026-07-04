@@ -232,10 +232,13 @@ method spelling.
   child-context helpers for EasyRemote-style nested calls, typed `ReceiptRef` and
   `ReceiptChain` wrappers that delegate causal-context and continuity projection
   through the client, `ReceiptVerification` cryptographic-assurance guardrails
-  that reject summary-only projections as verifier evidence, C ABI-backed fetch
-  execution through Runtime Core invoke, and close state seams over opaque receipt refs;
-  Axon-backed cryptographic verification, receipt URI construction after RFC-007,
-  and actual EasyRemote context/receipt extraction remain incomplete.
+  that reject summary-only projections as verifier evidence, local SDK
+  receipt-summary projection/continuity/causal-ref guardrails, C ABI-backed fetch
+  execution through Runtime Core invoke, and close state seams over opaque receipt refs.
+  EasyRemote receipt summary verification and hash-chain continuity now delegate
+  to SDK Receipt. Axon-backed cryptographic verification, receipt URI
+  construction after RFC-007, and EasyRemote Context child dispatch remain
+  incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   C ABI-backed deploy-result projection,
@@ -260,11 +263,13 @@ method spelling.
   conformance remain incomplete.
 - Python EasyRemote cutover audit helpers expose source-tree checks for raw
   FFI/Axon imports, raw C ABI symbols, raw Invocation JSON codecs, and raw
-  host-stream frame/hash codecs, with shared conformance cases for no-raw-FFI,
-  no-raw-invocation-codec, host-stream-codec ownership, and context-causal
-  gates; EasyRemote transport, invocation, and warm host frame/hash substrate
-  extraction now pass static gates, while receipt/context/publication/mission/
-  admin product extraction remains incomplete.
+  host-stream frame/hash codecs, raw receipt-chain continuity checks, plus
+  manifest checks for raw Axon/ABI package dependencies, with shared conformance
+  cases for no-raw-FFI, no-raw-invocation-codec, host-stream-codec ownership,
+  receipt-continuity ownership, and context-causal gates; EasyRemote transport,
+  invocation, warm host frame/hash substrate, and receipt continuity extraction
+  now pass static gates, while Context child dispatch, publication/mission/admin
+  product extraction, and full receipt verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, plus daemon `MissionStatus` and

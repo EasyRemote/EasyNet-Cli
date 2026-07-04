@@ -6,6 +6,7 @@ from easynet_sdk import (
     AbilityCallRequest,
     InvocationResult,
     ErrorCode,
+    LocalReceiptTransport,
     ReceiptChain,
     ReceiptChainVerificationRequest,
     ReceiptClient,
@@ -527,6 +528,78 @@ class ReceiptTests(unittest.TestCase):
         receipts = transport.seen_chain_request["receipts"]
         self.assertEqual(receipts[0]["receipt_hash_hex"], "a" * 64)
         self.assertEqual(receipts[1]["prev_receipt_hash_hex"], "a" * 64)
+
+    def test_local_receipt_transport_projects_summary_continuity(self) -> None:
+        client = ReceiptClient(LocalReceiptTransport())
+        chain = ReceiptChainVerificationRequest(
+            receipts=(
+                b'{"invocation_id":"inv-1","self_hash_hex":"'
+                + b"a" * 64
+                + b'"}',
+                b'{"invocation_id":"inv-2","self_hash_hex":"'
+                + b"b" * 64
+                + b'","prev_receipt_hash_hex":"'
+                + b"a" * 64
+                + b'"}',
+            )
+        )
+
+        verification = client.verify_chain(chain)
+        summary = client.project(
+            b'{"invocation_id":"inv-1","state":"completed","self_hash_hex":"'
+            + b"a" * 64
+            + b'"}'
+        )
+        check = client.verify(
+            b'{"invocation_id":"inv-1","self_hash_hex":"' + b"a" * 64 + b'"}'
+        )
+
+        self.assertTrue(verification.continuous)
+        self.assertFalse(verification.verified)
+        self.assertTrue(verification.requires_full_receipt)
+        self.assertEqual(verification.items[0].receipt_ura, "summary:inv-1:0")
+        self.assertEqual(summary.metadata["source"], "sdk_local_receipt")
+        self.assertFalse(check.verified)
+        self.assertEqual(check.method, "summary-only")
+
+    def test_local_receipt_transport_reports_broken_summary_chain(self) -> None:
+        client = ReceiptClient(LocalReceiptTransport())
+
+        verification = client.verify_chain(
+            ReceiptChainVerificationRequest(
+                receipts=(
+                    b'{"invocation_id":"inv-1","self_hash_hex":"'
+                    + b"a" * 64
+                    + b'"}',
+                    b'{"invocation_id":"inv-2","self_hash_hex":"'
+                    + b"b" * 64
+                    + b'","prev_receipt_hash_hex":"'
+                    + b"c" * 64
+                    + b'"}',
+                )
+            )
+        )
+
+        self.assertFalse(verification.continuous)
+        self.assertFalse(verification.verified)
+        self.assertIn("index 1", verification.reason)
+        self.assertFalse(verification.items[1].continuous)
+
+    def test_local_receipt_transport_requires_receipt_ura_for_causal_ref(self) -> None:
+        client = ReceiptClient(LocalReceiptTransport())
+
+        with self.assertRaises(SDKError):
+            client.causal_ref(
+                b'{"invocation_id":"inv-1","self_hash_hex":"' + b"a" * 64 + b'"}'
+            )
+
+        causal = client.causal_ref(
+            b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'"invocation_id":"inv-1","self_hash_hex":"'
+            + b"a" * 64
+            + b'"}'
+        )
+        self.assertEqual(causal.causal_context["form"], "scalar")
 
     def test_causal_ref_rejects_empty_projection(self) -> None:
         transport = MemoryReceiptTransport()

@@ -425,6 +425,123 @@ class ReceiptTransport(Protocol):
         ...
 
 
+class LocalReceiptTransport:
+    """Pure SDK receipt-summary projection transport.
+
+    This transport owns local checks that can be performed on daemon receipt
+    summaries. It never upgrades summaries into cryptographic verification and
+    refuses causal refs unless the daemon/Axon receipt URA anchor is present.
+    """
+
+    def fetch(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt("local receipt transport cannot fetch receipts")
+
+    def build_fetch_invocation(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt(
+            "local receipt transport cannot build daemon fetch invocations"
+        )
+
+    def project(self, receipt_json: bytes) -> bytes:
+        receipt = _json_object(receipt_json, "receipt summary")
+        return _json_bytes(_summary_projection(receipt))
+
+    def verify(self, receipt_json: bytes) -> bytes:
+        receipt = _json_object(receipt_json, "receipt summary")
+        return _json_bytes(
+            {
+                "verified": False,
+                "method": "summary-only",
+                "receipt_ura": _optional_string(
+                    receipt.get("receipt_ura"), "receipt_ura"
+                ),
+                "invocation_id": _optional_string(
+                    receipt.get("invocation_id"), "invocation_id"
+                ),
+                "reason": "full receipt required",
+                "metadata": {"source": "sdk_local_receipt"},
+            }
+        )
+
+    def verify_chain(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "receipt chain request")
+        raw_receipts = request.get("receipts")
+        if not isinstance(raw_receipts, list) or not raw_receipts:
+            raise _invalid_receipt("at least one receipt is required")
+        receipts = [
+            _json_object(
+                raw if isinstance(raw, (bytes, str)) else json.dumps(raw),
+                f"receipt[{index}]",
+            )
+            for index, raw in enumerate(raw_receipts)
+        ]
+        items: list[dict[str, object]] = []
+        continuous = True
+        reason = ""
+        for index, receipt in enumerate(receipts):
+            receipt_hash = _required_receipt_hash(receipt)
+            prev_hash = _optional_receipt_hash(receipt)
+            item_continuous = True
+            if index > 0:
+                previous_hash = _required_receipt_hash(receipts[index - 1])
+                item_continuous = prev_hash == previous_hash
+                if not item_continuous and not reason:
+                    reason = f"receipt chain broken at index {index}"
+                    continuous = False
+            item: dict[str, object] = {
+                "index": index,
+                "receipt_ura": _receipt_ura_or_summary_anchor(receipt, index),
+                "invocation_id": _optional_string(
+                    receipt.get("invocation_id"), "invocation_id"
+                ),
+                "receipt_hash_hex": receipt_hash,
+                "prev_receipt_hash_hex": prev_hash,
+                "continuous": item_continuous,
+                "reason": "" if item_continuous else reason,
+                "metadata": {"source": "sdk_local_receipt"},
+            }
+            items.append(item)
+        return _json_bytes(
+            {
+                "verified": False,
+                "continuous": continuous,
+                "method": "daemon_receipt_chain_continuity",
+                "requires_full_receipt": True,
+                "root_receipt_ura": items[0]["receipt_ura"],
+                "terminal_receipt_ura": items[-1]["receipt_ura"],
+                "receipt_count": len(items),
+                "items": items,
+                "reason": reason,
+                "metadata": {"source": "sdk_local_receipt"},
+            }
+        )
+
+    def causal_ref(self, receipt_json: bytes) -> bytes:
+        receipt = _json_object(receipt_json, "receipt summary")
+        receipt_ura = _required_string(receipt, "receipt_ura")
+        receipt_hash = _required_receipt_hash(receipt)
+        return _json_bytes(
+            {
+                "receipt_ura": receipt_ura,
+                "receipt_hash_hex": receipt_hash,
+                "verified": False,
+                "causal_context": {
+                    "form": "scalar",
+                    "receipt_ura": receipt_ura,
+                    "receipt_hash_hex": receipt_hash,
+                },
+                "causal_ref": f"receipt:{receipt_ura}",
+                "invocation_id": _optional_string(
+                    receipt.get("invocation_id"), "invocation_id"
+                ),
+                "form": "scalar",
+                "metadata": {"source": "sdk_local_receipt"},
+            }
+        )
+
+    def close(self) -> None:
+        return None
+
+
 @dataclass(frozen=True)
 class ReceiptClient:
     """Receipt profile facade."""
@@ -641,6 +758,39 @@ def _json_object(raw: bytes | str, label: str) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise _invalid_receipt(f"{label} JSON must be an object")
     return decoded
+
+
+def _json_bytes(value: Mapping[str, object]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _summary_projection(receipt: Mapping[str, object]) -> dict[str, object]:
+    state = receipt.get("state")
+    return {
+        "receipt_ura": _optional_string(receipt.get("receipt_ura"), "receipt_ura"),
+        "invocation_id": _optional_string(receipt.get("invocation_id"), "invocation_id"),
+        "state": str(state).lower() if state is not None else "unspecified",
+        "verified": False,
+        "output": receipt.get("output"),
+        "error": None,
+        "causal_ref": None,
+        "metadata": {
+            "source": "sdk_local_receipt",
+            "receipt_hash_hex": _receipt_hash_field(receipt),
+        },
+    }
+
+
+def _receipt_ura_or_summary_anchor(
+    receipt: Mapping[str, object], index: int
+) -> str:
+    receipt_ura = _optional_string(receipt.get("receipt_ura"), "receipt_ura")
+    if receipt_ura:
+        return receipt_ura
+    invocation_id = _optional_string(receipt.get("invocation_id"), "invocation_id")
+    if invocation_id:
+        return f"summary:{invocation_id}:{index}"
+    return f"summary:index:{index}"
 
 
 def _string_field(decoded: Mapping[str, object], field_name: str) -> str:

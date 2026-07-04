@@ -251,6 +251,25 @@ class _RollingHash:
         self.assertFalse(result.ok)
         self.assertIn("raw_host_stream_codec", {item.rule for item in result.violations})
 
+    def test_cutover_audit_rejects_raw_receipt_chain_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "receipts.py").write_text(
+                """
+def verify_continuity(previous, current):
+    if current.prev_receipt_hash != previous.self_hash:
+        raise RuntimeError("broken")
+""",
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "raw_receipt_chain_semantics", {item.rule for item in result.violations}
+        )
+
     def test_easyremote_style_unary_invoke_uses_sdk_addressing_and_transport(
         self,
     ) -> None:

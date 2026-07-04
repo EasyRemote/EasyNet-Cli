@@ -52,6 +52,117 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertIn("raw_ffi_loader", _rules(result))
         self.assertIn("raw_c_abi_symbol", _rules(result))
 
+    def test_accepts_sdk_only_pyproject_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "consumer"
+                    dependencies = ["easynet-sdk>=0.91.30"]
+
+                    [project.optional-dependencies]
+                    dev = ["pytest>=8"]
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
+
+    def test_flags_raw_lower_layer_pyproject_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pyproject.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [project]
+                    name = "consumer"
+                    dependencies = [
+                        "easynet-sdk>=0.91.30",
+                        "easynet-run-axon>=0.4",
+                    ]
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_lower_layer_dependency", _rules(result))
+
+    def test_flags_raw_lower_layer_requirements_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "requirements.txt").write_text(
+                "easynet-sdk>=0.91\n# easynet-run-axon in comment\naxon==1.0\n",
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_lower_layer_dependency", _rules(result))
+
+    def test_flags_raw_lower_layer_setup_py_dependency_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "setup.py").write_text(
+                textwrap.dedent(
+                    '''
+                    """Docstring mention: easynet-run-axon."""
+                    from setuptools import setup
+
+                    setup(
+                        name="consumer",
+                        install_requires=["easynet_axon>=1"],
+                    )
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_lower_layer_dependency", _rules(result))
+
+    def test_ignores_consumer_test_fixtures_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "easyremote").mkdir()
+            (root / "easyremote" / "client.py").write_text(
+                "from easynet_sdk import DaemonInvocationTransport\n",
+                encoding="utf-8",
+            )
+            (root / "tests").mkdir()
+            (root / "tests" / "test_legacy.py").write_text(
+                textwrap.dedent(
+                    """
+                    import json
+
+                    raw = json.dumps({
+                        "caller_ura": "a",
+                        "callee_ura": "b",
+                        "descriptor_ref": "c",
+                        "subject_ura": "d",
+                        "nonce_base64": "e",
+                        "causal_context": {},
+                    })
+                    symbol = "easynet_invocation_invoke"
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
+
     def test_ignores_docstrings_and_comments_about_old_raw_symbols(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

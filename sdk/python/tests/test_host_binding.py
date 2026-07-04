@@ -246,13 +246,9 @@ class HostBindingTests(unittest.TestCase):
 
         with self.assertRaises(SDKError):
             client.decode_request(
-                HostStreamEnvelope(
-                    HostStreamEnvelopeRequest(
-                        fn="weather.stream",
-                        args={"city": "Singapore"},
-                        call_id="call-weather-1",
-                        caller="",
-                    )
+                HostStreamEnvelope.from_json(
+                    b'{"request":{"fn":"weather.stream",'
+                    b'"args":{"city":"Singapore"},"call_id":"call-weather-1"}}'
                 )
             )
 

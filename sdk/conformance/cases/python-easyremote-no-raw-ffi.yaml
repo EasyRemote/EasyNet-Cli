@@ -6,9 +6,17 @@ description: EasyRemote production code does not own raw libeasynet_cli FFI load
 steps:
   - action: audit_consumer_source
     consumer: easyremote
+  - action: audit_consumer_manifest
+    consumer: easyremote
 expect:
   result: ok
   allowed_dependency: easynet_sdk
+  forbidden_dependencies:
+    - easynet-run-axon
+    - easynet-axon
+    - axon
+    - axon-pb2
+    - libeasynet-cli
   forbidden_imports:
     - ctypes
     - easynet_axon
@@ -21,4 +29,5 @@ expect:
     - easynet_last_error
     - easynet_daemon_start
     - easynet_runtime_invoke
+  forbidden_manifest_marker: raw_lower_layer_dependency
   raw_lower_layer_dependency: false

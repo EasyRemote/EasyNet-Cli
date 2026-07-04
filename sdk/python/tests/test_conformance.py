@@ -3552,9 +3552,18 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         raw_ffi_case = shared_case("python-easyremote-no-raw-ffi.yaml")
         self._require_case_id(raw_ffi_case, "python/easyremote_no_raw_ffi")
         self._require_case_action(raw_ffi_case, "audit_consumer_source")
+        self._require_case_action(raw_ffi_case, "audit_consumer_manifest")
         self._require_case_expectation(raw_ffi_case, "allowed_dependency: easynet_sdk")
+        self._require_case_expectation(
+            raw_ffi_case, "forbidden_manifest_marker: raw_lower_layer_dependency"
+        )
         self._require_case_expectation(raw_ffi_case, "raw_lower_layer_dependency: false")
         for forbidden in (
+            "easynet-run-axon",
+            "easynet-axon",
+            "axon",
+            "axon-pb2",
+            "libeasynet-cli",
             "ctypes",
             "easynet_axon",
             "axon_pb2",
@@ -3580,6 +3589,28 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "ReceiptSummary",
         ):
             self._require_case_literal(no_codec_case, f"- {sdk_type}")
+
+        receipt_case = shared_case("python-easyremote-no-raw-receipt-continuity.yaml")
+        self._require_case_id(
+            receipt_case, "python/easyremote_no_raw_receipt_continuity"
+        )
+        self._require_case_action(receipt_case, "audit_consumer_source")
+        self._require_case_action(receipt_case, "inspect_sdk_receipt_usage")
+        self._require_case_expectation(
+            receipt_case, "cryptographic_verification_claim: false"
+        )
+        for sdk_type in (
+            "ReceiptClient",
+            "LocalReceiptTransport",
+            "ReceiptChain",
+            "ReceiptVerification",
+        ):
+            self._require_case_literal(receipt_case, f"- {sdk_type}")
+        for forbidden in (
+            "raw_receipt_chain_semantics",
+            "prev_receipt_hash_self_hash_compare",
+        ):
+            self._require_case_literal(receipt_case, f"- {forbidden}")
         self._require_case_literal(no_codec_case, "- raw_invocation_json_codec")
 
         causal_case = shared_case("python-easyremote-context-causal.yaml")
