@@ -33,7 +33,8 @@ InvocationResult and non-verifying terminal receipt projection, StreamHandle sta
 ordering, half-close, cancel, and terminal-close observation, object-bound
 Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
-observation, SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state,
+observation, SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state
+and stream value projection for terminal/timeout/error/payload frames,
 DaemonHandle-scoped Runtime/Profile client factories, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
 methods behind narrow transport protocols with timeout-aware stream/bidi receive,

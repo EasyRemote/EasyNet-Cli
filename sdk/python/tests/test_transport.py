@@ -9,6 +9,7 @@ from unittest.mock import patch
 from easynet_sdk import (
     BidiState,
     DaemonInvocationTransport,
+    EasyRemoteStreamAdapter,
     EasyRemoteTransportAdapter,
     EasyRemoteUnaryDispatchPool,
     ErrorCode,
@@ -390,6 +391,105 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertFalse(transport.closed)
 
+    def test_easyremote_stream_adapter_yields_values_until_terminal(self) -> None:
+        stream = _FixedFrameStream(
+            [_chunk("a"), _chunk("b"), _chunk("c"), _chunk(None, terminal=True)]
+        )
+
+        values = [item.value for item in EasyRemoteStreamAdapter(stream)]
+
+        self.assertEqual(values, ["a", "b", "c"])
+        self.assertTrue(stream.closed)
+
+    def test_easyremote_stream_adapter_handles_empty_and_null_payloads(self) -> None:
+        empty = _FixedFrameStream([_chunk(None, terminal=True)])
+        null_value = _FixedFrameStream([_chunk(None), _chunk(None, terminal=True)])
+
+        self.assertEqual([item.value for item in EasyRemoteStreamAdapter(empty)], [])
+        self.assertEqual(
+            [item.value for item in EasyRemoteStreamAdapter(null_value)],
+            [None],
+        )
+
+    def test_easyremote_stream_adapter_decodes_non_json_payload_bytes(self) -> None:
+        stream = _FixedFrameStream(
+            [
+                {
+                    "payload_json": None,
+                    "payload_base64": "AAE=",
+                    "content_type": "application/octet-stream",
+                    "terminal": False,
+                    "error": None,
+                },
+                _chunk(None, terminal=True),
+            ]
+        )
+
+        values = [item.value for item in EasyRemoteStreamAdapter(stream)]
+
+        self.assertEqual(values, [b"\x00\x01"])
+
+    def test_easyremote_stream_adapter_idle_timeout_is_sdk_timeout(self) -> None:
+        stream = _TimeoutFrameStream()
+
+        with self.assertRaises(SDKError) as caught:
+            list(EasyRemoteStreamAdapter(stream, timeout=0.01))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(caught.exception.details["reason"], "client_wait_timeout")
+        self.assertTrue(stream.closed)
+
+    def test_easyremote_stream_adapter_projects_envelope_errors(self) -> None:
+        stream = _FixedFrameStream(
+            [
+                _chunk("a"),
+                _chunk(None, error={"kind": "UNAVAILABLE", "message": "down"}),
+            ]
+        )
+        values: list[object] = []
+
+        with self.assertRaises(SDKError) as caught:
+            for item in EasyRemoteStreamAdapter(stream):
+                values.append(item.value)
+
+        self.assertEqual(values, ["a"])
+        self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertEqual(caught.exception.message, "down")
+
+    def test_easyremote_stream_adapter_projects_host_error_payloads(self) -> None:
+        stream = _FixedFrameStream(
+            [
+                _chunk(0),
+                _chunk(1),
+                _chunk(
+                    {
+                        "error": {
+                            "kind": "INTERNAL",
+                            "reason": "function_raised",
+                            "message": "boom",
+                        }
+                    }
+                ),
+            ]
+        )
+        values: list[object] = []
+
+        with self.assertRaises(SDKError) as caught:
+            for item in EasyRemoteStreamAdapter(stream):
+                values.append(item.value)
+
+        self.assertEqual(values, [0, 1])
+        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
+        self.assertEqual(caught.exception.details["reason"], "function_raised")
+
+    def test_easyremote_stream_adapter_preserves_error_shaped_user_data(self) -> None:
+        payload = {"error": {"detail": "data only"}, "ok": True}
+        stream = _FixedFrameStream([_chunk(payload), _chunk(None, terminal=True)])
+
+        values = [item.value for item in EasyRemoteStreamAdapter(stream)]
+
+        self.assertEqual(values, [payload])
+
 
 def _write_control_discovery(tmp: str, *, invocation_endpoint: str | None = None) -> Path:
     path = Path(tmp) / "control.json"
@@ -427,6 +527,46 @@ class _SlowUnaryTransport:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _FixedFrameStream:
+    def __init__(self, frames: list[dict[str, object]]) -> None:
+        self._frames = frames
+        self.closed = False
+
+    def __iter__(self):
+        return iter(self._frames)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _TimeoutFrameStream:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def recv(self, timeout: float | None = None):
+        raise TimeoutError("blocked")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _chunk(
+    payload_json: object = None,
+    *,
+    terminal: bool = False,
+    error: object = None,
+) -> dict[str, object]:
+    return {
+        "payload_json": payload_json,
+        "payload_base64": (
+            "bnVsbA==" if payload_json is None and not terminal else None
+        ),
+        "content_type": "application/json",
+        "terminal": terminal,
+        "error": error,
+    }
 
 
 def _wait_until(predicate) -> None:

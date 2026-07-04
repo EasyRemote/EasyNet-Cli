@@ -9,11 +9,12 @@ semantics itself.
 from __future__ import annotations
 
 import contextlib
+import base64
 import json
 import queue
 import threading
 from dataclasses import dataclass
-from typing import Callable, Iterable, Mapping, Protocol, cast
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, cast
 
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
 from .connection import (
@@ -349,6 +350,115 @@ class EasyRemoteUnaryDispatchPool:
             return True
 
 
+@dataclass(frozen=True)
+class EasyRemoteStreamItem:
+    """One SDK-projected EasyRemote stream item."""
+
+    value: Any
+
+
+class EasyRemoteStreamAdapter:
+    """SDK-owned EasyRemote stream frame projection.
+
+    The adapter consumes EasyRemote-compatible daemon stream frames and yields
+    ability values. It keeps terminal-frame, timeout, wire-error, and payload
+    projection rules out of product facades.
+    """
+
+    _NO_VALUE = object()
+
+    def __init__(self, frames: "EasyRemoteFrameStream", *, timeout: float | None = None) -> None:
+        self._frames = frames
+        self._timeout = timeout
+
+    def __iter__(self) -> Iterator[EasyRemoteStreamItem]:
+        try:
+            for frame in self._raw_frames():
+                error = frame.get("error")
+                if error:
+                    raise _easyremote_wire_error(error)
+                value = self._frame_value(frame)
+                stream_error = _easyremote_stream_error_payload(value)
+                if stream_error is not None:
+                    raise _easyremote_wire_error(stream_error)
+                if value is not self._NO_VALUE:
+                    yield EasyRemoteStreamItem(value)
+                if frame.get("terminal") is True:
+                    return
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        self._frames.close()
+
+    def _raw_frames(self) -> Iterator[Mapping[str, object]]:
+        recv = getattr(self._frames, "recv", None)
+        if not callable(recv):
+            yield from self._frames
+            return
+        while True:
+            try:
+                frame = recv(timeout=self._timeout)
+            except TimeoutError:
+                raise SDKError(
+                    code=ErrorCode.TIMEOUT,
+                    stage="easyremote_stream",
+                    retry=RetryHint.SAFE,
+                    retryable=True,
+                    message=(
+                        f"no stream frame within {self._timeout}s — the server-side "
+                        "execution is still governed by the ability's timeout_seconds"
+                    ),
+                    details={
+                        "reason": "client_wait_timeout",
+                        "timeout_seconds": self._timeout,
+                    },
+                ) from None
+            if frame is None:
+                return
+            yield frame
+
+    def _frame_value(self, frame: Mapping[str, object]) -> Any:
+        if (
+            frame.get("terminal") is True
+            and frame.get("payload_json") is None
+            and not frame.get("payload_base64")
+        ):
+            return self._NO_VALUE
+        if "payload_json" in frame and (
+            frame.get("payload_json") is not None
+            or frame.get("content_type") == "application/json"
+        ):
+            return frame["payload_json"]
+        encoded = frame.get("payload_base64")
+        if isinstance(encoded, str) and encoded:
+            try:
+                return base64.b64decode(encoded)
+            except Exception as exc:
+                raise SDKError(
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    stage="easyremote_stream",
+                    retry=RetryHint.NEVER,
+                    retryable=False,
+                    message=f"decode stream payload_base64: {exc}",
+                    cause=exc,
+                ) from exc
+        return self._NO_VALUE
+
+
+class EasyRemoteFrameStream(Protocol):
+    """Frame stream shape consumed by `EasyRemoteStreamAdapter`."""
+
+    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+    def __iter__(self) -> Iterator[Mapping[str, object]]:
+        ...
+
+
 @dataclass
 class DaemonFrameStream:
     """JSON-friendly server-stream wrapper over `StreamHandle`."""
@@ -594,6 +704,59 @@ def _bidi_outcome_dict(outcome: BidiOutcome) -> dict[str, object]:
         "terminal": outcome.terminal,
         "reason": outcome.reason,
     }
+
+
+def _easyremote_stream_error_payload(value: Any) -> Mapping[str, object] | None:
+    if (
+        isinstance(value, Mapping)
+        and set(value) == {"error"}
+        and isinstance(value["error"], Mapping)
+        and "kind" in value["error"]
+    ):
+        return value["error"]
+    return None
+
+
+_EASYREMOTE_ERROR_CODES = {
+    "CANCELLED": ErrorCode.CANCELLED,
+    "DEADLINE_EXCEEDED": ErrorCode.TIMEOUT,
+    "UNAVAILABLE": ErrorCode.DAEMON_OFFLINE,
+    "INVALID_ARGUMENT": ErrorCode.INVALID_ARGUMENT,
+    "RESOURCE_EXHAUSTED": ErrorCode.TRANSPORT,
+    "PERMISSION_DENIED": ErrorCode.PERMISSION_DENIED,
+    "INTERNAL": ErrorCode.ABILITY_FAILED,
+}
+
+
+def _easyremote_wire_error(error: object) -> SDKError:
+    if not isinstance(error, Mapping):
+        return SDKError(
+            code=ErrorCode.ABILITY_FAILED,
+            stage="easyremote_stream",
+            retry=RetryHint.UNKNOWN,
+            retryable=False,
+            message="remote stream error",
+            details={"reason": "remote_stream_error", "wire_error": error},
+        )
+    kind = error.get("kind")
+    reason = error.get("reason")
+    message = error.get("message")
+    kind_text = kind if isinstance(kind, str) else ""
+    reason_text = reason if isinstance(reason, str) else ""
+    message_text = message if isinstance(message, str) else ""
+    code = _EASYREMOTE_ERROR_CODES.get(kind_text, ErrorCode.ABILITY_FAILED)
+    return SDKError(
+        code=code,
+        stage="easyremote_stream",
+        retry=RetryHint.UNKNOWN,
+        retryable=False,
+        message=message_text or reason_text or kind_text or "remote stream error",
+        details={
+            "kind": kind_text,
+            "reason": reason_text,
+            "wire_error": dict(error),
+        },
+    )
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
