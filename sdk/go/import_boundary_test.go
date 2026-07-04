@@ -30,6 +30,9 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 		text := string(body)
 		for _, needle := range forbidden {
 			if strings.Contains(text, needle) {
+				if needle == `import "C"` && allowedPrivateCABIAdapter(path, text) {
+					continue
+				}
 				t.Fatalf("%s contains forbidden dependency marker %q", path, needle)
 			}
 		}
@@ -38,4 +41,11 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk SDK package: %v", err)
 	}
+}
+
+func allowedPrivateCABIAdapter(path, text string) bool {
+	return filepath.Base(path) == "cabi_dynamic.go" &&
+		strings.Contains(text, "easynet_cabi") &&
+		strings.Contains(text, "cgo") &&
+		strings.Contains(text, "type CABIDiscoveryTransport struct")
 }

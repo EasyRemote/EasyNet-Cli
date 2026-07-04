@@ -9,7 +9,7 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery adapter, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
@@ -19,7 +19,7 @@ method spelling.
 
 | Capability | Rust | C ABI | Go | Python | Node | Java | Swift |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ABI/version discovery | partial | partial | partial | partial | gap | gap | gap |
+| ABI/version discovery | partial | partial | partial + optional C ABI discovery adapter | partial | gap | gap | gap |
 | daemon start/attach/discover/stop/detach | partial | partial | state/connect-local seam partial | state/connect-local seam partial | gap | gap | gap |
 | runtime connection state | partial | partial | transport seam partial | transport seam partial | gap | gap | gap |
 | runtime health | partial | partial | partial | partial | gap | gap | gap |
@@ -96,7 +96,8 @@ method spelling.
   file, terminal, remote desktop, browser, and media session DTOs; execution
   helpers, backend HTTP/WebSocket bridges, storage policy, and product cutovers
   remain incomplete.
-- Go package exposes Runtime Core feature/version discovery with root client close, runtime connection
+- Go package exposes Runtime Core feature/version discovery with root client close and optional
+  `easynet_cabi,cgo` C ABI v4 feature-discovery adapter, runtime connection
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
   detach/open-runtime/connect-local state seams, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
@@ -105,7 +106,7 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
-  transport seams; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters, profile
+  transport seams; concrete daemon lifecycle/runtime process spawn, default C ABI or UDS transport beyond feature discovery, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
   remaining profile conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
