@@ -105,6 +105,10 @@ from .cutover_audit import (
     EasyRemoteCutoverAuditor,
     audit_easyremote_cutover,
 )
+from .easyremote_profiles import (
+    EasyRemoteProfileBridge,
+    EasyRemoteProfileDispatcher,
+)
 from .daemon import (
     AttachOptions,
     DaemonControl,
@@ -448,6 +452,8 @@ __all__ = [
     "EasyRemoteAgentRecord",
     "EasyRemoteAgentStartProjection",
     "EasyRemoteFrameStream",
+    "EasyRemoteProfileBridge",
+    "EasyRemoteProfileDispatcher",
     "EasyRemoteStreamAdapter",
     "EasyRemoteStreamItem",
     "EasyRemoteUnaryDispatchPool",

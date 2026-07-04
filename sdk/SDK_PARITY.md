@@ -276,14 +276,16 @@ method spelling.
   wait/retire lifecycle, stream value projection, invocation,
   addressing helpers, warm host frame/hash substrate, receipt continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
-  extraction, and page-based Pipeline event access now pass static gates, while
-  publication product extraction, Pipeline live-tail/conformance cutover, full
-  AgentControl/Server cutover, and full receipt verification remain incomplete.
+  extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
+  Pipeline event access now pass static gates, while publication product
+  extraction, Pipeline live-tail/conformance cutover, full AgentControl/Server
+  cutover, and full receipt verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
   projection seams, an SDK-owned EasyRemote Mission cutover adapter with
-  event-page projection, EasyRemote `MissionControl`/`MissionRun` page-based
+  event-page projection, SDK-owned EasyRemote profile bridge dispatch/projection
+  glue, EasyRemote `MissionControl`/`MissionRun` page-based
   event access, raw mission carrier audit gate for
   `mission.run/track/cancel/events`, and close state seams;
   concrete live-tail adapters, child Invocation behavior conformance, Pipeline
@@ -294,7 +296,8 @@ method spelling.
   C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, and C ABI-backed typed device-session page projection plus close
-  state seams, with an SDK-owned EasyRemote hosted-agent Admin adapter and raw
+  state seams, with an SDK-owned EasyRemote hosted-agent Admin adapter,
+  SDK-owned EasyRemote profile bridge dispatch/projection glue, and raw
   admin carrier cutover audit gate for `agent.start/list/refresh`; C ABI
   transport reports explicit semantic-boundary errors for hub
   join/leave, pairing/credential trust lifecycle, and device-session

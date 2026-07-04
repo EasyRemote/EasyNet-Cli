@@ -87,7 +87,8 @@ MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams, an EasyRemote Mission cutover adapter over typed Mission profile
-requests, EasyRemote page-based Mission event access, and close state seams. AdminClient
+requests, SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue,
+EasyRemote page-based Mission event access, and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
 Core invoke, C ABI-backed session-list execution through Runtime Core invoke,
@@ -95,7 +96,7 @@ C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page projection plus close state seams,
 with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
-requests.
+requests and SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue.
 EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, C ABI-backed directory and session subscription execution
 through Runtime Core open_stream, device event history pages, and EventFrame
@@ -125,6 +126,7 @@ require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-profile-specific stream/bidi execution adapters, and the actual EasyRemote
-repository cutover remain incomplete. See
+profile-specific stream/bidi execution adapters, EasyRemote publication product
+extraction, EasyRemote Pipeline live-tail/conformance cutover, and full
+EasyRemote AgentControl/Server product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.
