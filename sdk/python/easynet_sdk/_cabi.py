@@ -1870,15 +1870,7 @@ class CABIDaemonTransport:
         self, handle_id: str, options_json: bytes
     ) -> tuple["CABIRuntimeTransport", bytes]:
         _ = options_json
-        daemon_handle = self._require_daemon_handle(handle_id)
-        runtime_handle = self.lib.daemon_open_client(daemon_handle)
-        if runtime_handle <= 0:
-            raise SDKError(
-                code=ErrorCode.INVALID_HANDLE,
-                stage="cabi",
-                retry=RetryHint.NEVER,
-                message="C ABI daemon open client returned an invalid runtime handle",
-            )
+        runtime_handle = self._open_client_handle(handle_id, "runtime")
         return (
             CABIRuntimeTransport(
                 lib=self.lib,
@@ -1887,6 +1879,99 @@ class CABIDaemonTransport:
             ),
             _json_bytes({"ready": True, "abi_version": EXPECTED_ABI_VERSION}),
         )
+
+    def open_runtime_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return CABIRuntimeTransport(
+            self.lib,
+            self._open_client_handle(handle_id, "runtime"),
+            owns_handle=True,
+        )
+
+    def open_directory_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(handle_id, "directory", CABIDirectoryTransport)
+
+    def open_identity_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return CABIIdentityTransport(
+            self.lib,
+            self._open_client_handle(handle_id, "identity"),
+            owns_handle=True,
+        )
+
+    def open_receipt_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(handle_id, "receipt", CABIReceiptTransport)
+
+    def open_publication_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(
+            handle_id, "publication", CABIPublicationTransport
+        )
+
+    def open_host_binding_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(
+            handle_id, "host_binding", CABIHostBindingTransport
+        )
+
+    def open_mission_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(handle_id, "mission", CABIMissionTransport)
+
+    def open_admin_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return CABIAdminTransport(
+            self.lib,
+            self._open_client_handle(handle_id, "admin"),
+            owns_handle=True,
+            daemon_handle=daemon_handle,
+            owns_daemon_handle=False,
+        )
+
+    def open_events_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(handle_id, "events", CABIEventTransport)
+
+    def open_surface_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(handle_id, "surface", CABISurfaceTransport)
+
+    def open_compatibility_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(
+            handle_id, "compatibility", CABICompatibilityTransport
+        )
+
+    def open_wrapper_transport(self, handle_id: str, options_json: bytes) -> object:
+        _ = options_json
+        return self._open_profile_transport(handle_id, "wrapper", CABIWrapperTransport)
+
+    def _open_profile_transport(
+        self,
+        handle_id: str,
+        profile: str,
+        transport_type: type[_CABIProfileTransport],
+    ) -> _CABIProfileTransport:
+        return transport_type(
+            self.lib,
+            self._open_client_handle(handle_id, profile),
+            owns_handle=True,
+        )
+
+    def _open_client_handle(self, handle_id: str, profile: str) -> int:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        client_handle = self.lib.daemon_open_client(daemon_handle)
+        if client_handle <= 0:
+            raise SDKError(
+                code=ErrorCode.INVALID_HANDLE,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message=f"C ABI daemon open {profile} returned an invalid client handle",
+            )
+        return client_handle
 
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
         _ = options_json

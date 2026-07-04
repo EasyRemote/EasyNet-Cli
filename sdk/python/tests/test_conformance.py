@@ -2990,10 +2990,25 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "runtime_core",
                 DaemonHandle,
                 {
+                    "ability_invocation": "runtime_core.daemon_handle.ability_invocation",
+                    "addressing": "directory_identity.daemon_handle.addressing",
+                    "admin": "admin_gateway.daemon_handle.admin",
+                    "compatibility": "compatibility.daemon_handle.compatibility",
                     "detach": "runtime_core.daemon_handle.detach",
+                    "directory": "directory_identity.daemon_handle.directory",
+                    "events": "events.daemon_handle.events",
+                    "health": "runtime_core.daemon_handle.health",
+                    "host_binding": "host_binding.daemon_handle.host_binding",
+                    "identity": "directory_identity.daemon_handle.identity",
+                    "missions": "mission.daemon_handle.missions",
                     "open_runtime": "runtime_core.daemon_handle.open_runtime",
+                    "publication": "publication.daemon_handle.publication",
+                    "receipts": "receipt.daemon_handle.receipts",
+                    "runtime": "runtime_core.daemon_handle.runtime",
                     "status": "runtime_core.daemon_handle.status",
                     "stop": "runtime_core.daemon_handle.stop",
+                    "surfaces": "surface.daemon_handle.surfaces",
+                    "wrappers": "wrappers.daemon_handle.wrappers",
                 },
             ),
             (
@@ -3020,6 +3035,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "runtime_core",
                 HealthClient,
                 {
+                    "close": "runtime_core.health.close",
                     "runtime_health": "runtime_core.health.runtime_health",
                 },
             ),
@@ -3292,7 +3308,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 (
                     (Client, ("require_abi", "feature_discovery")),
                     (RuntimeClient, ("invoke", "invoke_stream", "open_bidi", "await_result", "cancel")),
-                    (HealthClient, ("runtime_health",)),
+                    (HealthClient, ("runtime_health", "close")),
                 ),
             ),
             (
@@ -3423,7 +3439,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 (
                     (DaemonControl, ("start", "attach", "connect_local")),
                     (RuntimeClient, ("invoke", "invoke_stream", "open_bidi")),
-                    (HealthClient, ("runtime_health",)),
+                    (HealthClient, ("runtime_health", "close")),
                 ),
             ),
             (

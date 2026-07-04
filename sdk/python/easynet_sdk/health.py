@@ -59,12 +59,14 @@ class HealthClient:
                 stage="sdk",
                 retry=RetryHint.NEVER,
                 message="health transport is required",
-            )
+        )
         self._transport = transport
+        self._closed = False
 
     def runtime_health(self) -> RuntimeHealth:
         """Read and decode daemon runtime health."""
 
+        self._require_open()
         try:
             raw = self._transport.runtime_health()
         except SDKError:
@@ -79,6 +81,26 @@ class HealthClient:
                 cause=exc,
             ) from exc
         return _decode_runtime_health(raw)
+
+    def close(self) -> None:
+        """Close the underlying health transport when it owns resources."""
+
+        if self._closed:
+            return
+        self._closed = True
+        close = getattr(self._transport, "close", None)
+        if close is not None:
+            close()
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="health client is closed",
+            )
 
 
 def _decode_runtime_health(raw: bytes) -> RuntimeHealth:

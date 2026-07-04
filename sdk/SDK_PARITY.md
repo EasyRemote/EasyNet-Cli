@@ -189,7 +189,7 @@ method spelling.
   objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
   receipt projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
-  await/cancel/events/close observation, and
+  await/cancel/events/close observation, DaemonHandle-scoped Runtime/Profile client factories, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
   stream, and bidi facade over RuntimeClient/C ABI v4;

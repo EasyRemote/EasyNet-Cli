@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from .connection import ConnectOptions
+from .daemon_profiles import DaemonHandleProfiles
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
 
@@ -246,6 +247,47 @@ class DaemonTransport(Protocol):
         ...
 
 
+
+@runtime_checkable
+class DaemonProfileFactory(Protocol):
+    """Optional typed profile transport opener capability."""
+
+    def open_runtime_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_directory_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_identity_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_receipt_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_publication_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_host_binding_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_mission_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_admin_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_events_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_surface_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_compatibility_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
+    def open_wrapper_transport(self, handle_id: str, options_json: bytes) -> object:
+        ...
+
 @dataclass(frozen=True)
 class DaemonControl:
     """Daemon lifecycle facade root over an integration transport."""
@@ -275,7 +317,9 @@ class DaemonControl:
             raise _transport_error("daemon start failed", exc) from exc
         status = DaemonStatus.from_json(raw)
         _require_runtime_ready(status)
-        return DaemonHandle(self.transport, status)
+        return DaemonHandle(
+            self.transport, status, _daemon_profile_factory(self.transport)
+        )
 
     def attach(self, options: AttachOptions = AttachOptions()) -> "DaemonHandle":
         try:
@@ -286,7 +330,9 @@ class DaemonControl:
             raise _transport_error("daemon attach failed", exc) from exc
         status = DaemonStatus.from_json(raw)
         _require_runtime_ready(status)
-        return DaemonHandle(self.transport, status)
+        return DaemonHandle(
+            self.transport, status, _daemon_profile_factory(self.transport)
+        )
 
     def connect_local(self, options: ConnectOptions = ConnectOptions()) -> RuntimeClient:
         endpoints = self.discover(DiscoverOptions(control_path=options.control_path))
@@ -318,11 +364,12 @@ class DaemonControl:
 
 
 @dataclass
-class DaemonHandle:
+class DaemonHandle(DaemonHandleProfiles):
     """Local daemon lifecycle handle state."""
 
     transport: DaemonTransport
     _status: DaemonStatus
+    profile_factory: DaemonProfileFactory | None = None
     _detached: bool = False
 
     def __post_init__(self) -> None:
@@ -370,6 +417,11 @@ class DaemonHandle:
             raise _invalid_daemon("runtime transport is required")
         return RuntimeClient(transport)
 
+    def runtime(self, options: ConnectOptions = ConnectOptions()) -> RuntimeClient:
+        """Open a Runtime Core client from this daemon handle."""
+
+        return self.open_runtime(options)
+
     def stop(self, options: StopOptions = StopOptions()) -> None:
         self._require_attached()
         if self.state == DaemonLifecycleState.STOPPED:
@@ -406,6 +458,39 @@ class DaemonHandle:
                 retryable=False,
                 message="daemon handle is detached",
             )
+
+    def _open_profile(
+        self,
+        profile: str,
+        opener: Callable[[str, bytes], object],
+        options: ConnectOptions,
+    ) -> object:
+        self._require_attached()
+        if not _runtime_ready(self.state):
+            raise _invalid_daemon("daemon invocation endpoint is not ready")
+        try:
+            transport = opener(self.handle_id, options.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(f"daemon open {profile} profile failed", exc) from exc
+        if transport is None:
+            raise _invalid_daemon(f"{profile} profile transport is required")
+        return transport
+
+    def _require_profile_factory(self) -> DaemonProfileFactory:
+        self._require_attached()
+        if not _runtime_ready(self.state):
+            raise _invalid_daemon("daemon invocation endpoint is not ready")
+        if self.profile_factory is None:
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="daemon transport does not support profile clients",
+            )
+        return self.profile_factory
 
 
 def start_daemon(transport: DaemonTransport, config: StartConfig) -> DaemonHandle:
@@ -471,6 +556,12 @@ def _runtime_ready(state: DaemonLifecycleState) -> bool:
         DaemonLifecycleState.INVOCATION_READY,
         DaemonLifecycleState.RUNNING,
     }
+
+
+def _daemon_profile_factory(transport: object) -> DaemonProfileFactory | None:
+    if isinstance(transport, DaemonProfileFactory):
+        return transport
+    return None
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

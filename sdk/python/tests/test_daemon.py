@@ -3,14 +3,27 @@ import unittest
 
 from easynet_sdk import (
     AttachOptions,
+    AbilityInvocationClient,
+    AdminClient,
+    CompatibilityClient,
     ConnectOptions,
     DaemonLifecycleState,
     DaemonMode,
     DiscoverOptions,
+    DirectoryClient,
     ErrorCode,
+    EventClient,
+    HealthClient,
+    HostBindingClient,
+    IdentityClient,
+    MissionClient,
+    PublicationClient,
+    ReceiptClient,
     SDKError,
     StartConfig,
     StopOptions,
+    SurfaceClient,
+    WrapperClient,
     attach_daemon,
     connect_local,
     discover_daemon,
@@ -20,8 +33,20 @@ from easynet_sdk import (
 
 
 class MemoryRuntimeTransport:
+    def close(self) -> None:
+        pass
+
     def invoke(self, draft_json: bytes) -> bytes:
         raise RuntimeError("not used")
+
+
+class MemoryProfileTransport:
+    def __init__(self, profile: str) -> None:
+        self.profile = profile
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class MemoryDaemonTransport:
@@ -38,6 +63,7 @@ class MemoryDaemonTransport:
         self.stop_calls = 0
         self.detach_calls = 0
         self.open_calls = 0
+        self.profile_opens: list[tuple[str, dict[str, object]]] = []
         self.open_error: Exception | None = None
         self.seen_start: dict[str, object] | None = None
         self.seen_options: dict[str, object] | None = None
@@ -65,12 +91,80 @@ class MemoryDaemonTransport:
             raise self.open_error
         return MemoryRuntimeTransport(), b'{"ready":true}'
 
+    def open_runtime_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("runtime", options_json)
+
+    def open_directory_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("directory", options_json)
+
+    def open_identity_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("identity", options_json)
+
+    def open_receipt_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("receipt", options_json)
+
+    def open_publication_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("publication", options_json)
+
+    def open_host_binding_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("host_binding", options_json)
+
+    def open_mission_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("mission", options_json)
+
+    def open_admin_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("admin", options_json)
+
+    def open_events_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("events", options_json)
+
+    def open_surface_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("surface", options_json)
+
+    def open_compatibility_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("compatibility", options_json)
+
+    def open_wrapper_transport(self, handle_id: str, options_json: bytes):
+        return self._open_profile_transport("wrapper", options_json)
+
+    def _open_profile_transport(self, profile: str, options_json: bytes):
+        self.profile_opens.append((profile, json.loads(options_json.decode("utf-8"))))
+        if profile == "runtime":
+            return MemoryRuntimeTransport()
+        return MemoryProfileTransport(profile)
+
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
         self.stop_calls += 1
         return self.stop_json
 
     def detach(self, handle_id: str) -> None:
         self.detach_calls += 1
+
+
+class LifecycleOnlyDaemonTransport:
+    def __init__(self) -> None:
+        self.inner = MemoryDaemonTransport()
+
+    def discover(self, options_json: bytes) -> bytes:
+        return self.inner.discover(options_json)
+
+    def start(self, config_json: bytes) -> bytes:
+        return self.inner.start(config_json)
+
+    def attach(self, options_json: bytes) -> bytes:
+        return self.inner.attach(options_json)
+
+    def status(self, handle_id: str) -> bytes:
+        return self.inner.status(handle_id)
+
+    def open_runtime(self, handle_id: str, options_json: bytes):
+        return self.inner.open_runtime(handle_id, options_json)
+
+    def stop(self, handle_id: str, options_json: bytes) -> bytes:
+        return self.inner.stop(handle_id, options_json)
+
+    def detach(self, handle_id: str) -> None:
+        self.inner.detach(handle_id)
 
 
 def ready_status() -> bytes:
@@ -165,6 +259,78 @@ class DaemonTests(unittest.TestCase):
         )
         with self.assertRaises(SDKError):
             handle.open_runtime()
+
+    def test_profile_factories_return_public_clients_from_daemon_handle(self) -> None:
+        transport = MemoryDaemonTransport()
+        handle = start_daemon(transport, StartConfig(mode=DaemonMode.HUB))
+        options = ConnectOptions(max_message_bytes=4096)
+
+        clients = (
+            handle.directory(options),
+            handle.identity(options),
+            handle.receipts(options),
+            handle.publication(options),
+            handle.host_binding(options),
+            handle.missions(options),
+            handle.admin(options),
+            handle.events(options),
+            handle.surfaces(options),
+            handle.compatibility(options),
+            handle.wrappers(options),
+            handle.health(options),
+            handle.ability_invocation(options),
+        )
+
+        self.assertIsInstance(clients[0], DirectoryClient)
+        self.assertIsInstance(clients[1], IdentityClient)
+        self.assertIsInstance(clients[2], ReceiptClient)
+        self.assertIsInstance(clients[3], PublicationClient)
+        self.assertIsInstance(clients[4], HostBindingClient)
+        self.assertIsInstance(clients[5], MissionClient)
+        self.assertIsInstance(clients[6], AdminClient)
+        self.assertIsInstance(clients[7], EventClient)
+        self.assertIsInstance(clients[8], SurfaceClient)
+        self.assertIsInstance(clients[9], CompatibilityClient)
+        self.assertIsInstance(clients[10], WrapperClient)
+        self.assertIsInstance(clients[11], HealthClient)
+        self.assertIsInstance(clients[12], AbilityInvocationClient)
+        self.assertEqual(
+            [profile for profile, _ in transport.profile_opens],
+            [
+                "directory",
+                "identity",
+                "receipt",
+                "publication",
+                "runtime",
+                "host_binding",
+                "mission",
+                "admin",
+                "events",
+                "surface",
+                "compatibility",
+                "wrapper",
+                "runtime",
+                "runtime",
+                "identity",
+            ],
+        )
+        self.assertTrue(
+            all(options["max_message_bytes"] == 4096 for _, options in transport.profile_opens)
+        )
+
+        handle.detach()
+        with self.assertRaises(SDKError) as caught:
+            handle.directory()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
+
+    def test_profile_factories_require_typed_transport_capability(self) -> None:
+        transport = LifecycleOnlyDaemonTransport()
+        handle = start_daemon(transport, StartConfig(mode=DaemonMode.HUB))
+
+        with self.assertRaises(SDKError) as caught:
+            handle.directory()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
 
     def test_connect_local_discovers_attaches_opens_and_detaches(self) -> None:
         transport = MemoryDaemonTransport()

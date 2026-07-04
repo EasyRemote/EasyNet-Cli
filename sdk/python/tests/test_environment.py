@@ -5,6 +5,7 @@ from easynet_sdk import (
     AbilityDeployRequest,
     AbilityCallRequest,
     AbilityInvocationClient,
+    AdminClient,
     AddressingClient,
     AdminAgentListRequest,
     AdminAgentStartRequest,
@@ -19,6 +20,7 @@ from easynet_sdk import (
     ConnectionState,
     DaemonInvocationTransport,
     DeviceQuery,
+    DirectoryClient,
     DirectoryQueryBase,
     ErrorCode,
     EventsCarrierBase,
@@ -30,6 +32,7 @@ from easynet_sdk import (
     MissionCarrierBase,
     MissionRunRequest,
     PublishedAbilityQuery,
+    ReceiptClient,
     ReceiptFetchRequest,
     RuntimeClient,
     RuntimeConnection,
@@ -50,6 +53,7 @@ from easynet_sdk import (
     WrapperRemoteDesktopStartRequest,
     WrapperTerminalSessionRequest,
     WrapperTerminalStartRequest,
+    AttachOptions,
     ability_ura_from_descriptor_ref,
     canonical_ability_descriptor_ref,
     default_environment,
@@ -318,6 +322,39 @@ class SdkEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(raw.runtime_requests[0][0], "invoke")
         self.assertEqual(raw.shutdown_handles, [42, 42])
+
+    def test_daemon_handle_profile_factories_use_attached_cabi_handle(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            handle = env.daemon_control().attach(
+                AttachOptions(control_path="/tmp/control.json")
+            )
+            directory = handle.directory(ConnectOptions(max_message_bytes=4096))
+            receipt = handle.receipts()
+            admin = handle.admin()
+            health = handle.health()
+
+            self.assertIsInstance(directory, DirectoryClient)
+            self.assertIsInstance(receipt, ReceiptClient)
+            self.assertIsInstance(admin, AdminClient)
+            self.assertIsInstance(health, HealthClient)
+            self.assertTrue(health.runtime_health().ready())
+
+            directory.close()
+            receipt.close()
+            admin.close()
+            health.close()
+            handle.detach()
+            env.close()
+
+        self.assertEqual(
+            raw.daemon_attaches,
+            [{"control_path": "/tmp/control.json"}],
+        )
+        self.assertEqual(raw.daemon_open_clients, [707, 707, 707, 707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808, 808, 808, 808])
 
     def test_profile_factories_delegate_carriers_to_private_cabi(self) -> None:
         raw = FakeRawCABI()
