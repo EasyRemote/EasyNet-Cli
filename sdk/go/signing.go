@@ -1,6 +1,9 @@
 package easynet
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -130,6 +133,12 @@ func NewPreparedInvocationFromJSON(raw []byte) (PreparedInvocation, error) {
 	}
 	if prepared.descriptorRef == "" {
 		return PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)
+	}
+	if err := validateCanonicalMaterialHash(
+		prepared.signingMaterial.CanonicalBytesBase64(),
+		prepared.canonicalHashHex,
+	); err != nil {
+		return PreparedInvocation{}, err
 	}
 	return prepared, nil
 }
@@ -306,6 +315,9 @@ func requiredSigningMaterial(fields map[string]json.RawMessage, name string, fal
 	if strings.TrimSpace(material.canonicalBytesBase64) == "" {
 		return SigningMaterial{}, invalidInvocation("signing_material.canonical_bytes_base64 is required", nil)
 	}
+	if _, err := decodeCanonicalBytesBase64(material.canonicalBytesBase64); err != nil {
+		return SigningMaterial{}, err
+	}
 	if strings.TrimSpace(material.argsDigestHex) == "" {
 		return SigningMaterial{}, invalidInvocation("signing_material.args_digest_hex is required", nil)
 	}
@@ -330,6 +342,44 @@ func optionalSignerPolicy(fields map[string]json.RawMessage, name string) *Signe
 		policyRef:       optionalPreparedString(value, "policy_ref"),
 		expiresAtUnixMS: optionalPreparedInt64(value, "expires_at_unix_ms"),
 	}
+}
+
+func validateCanonicalMaterialHash(canonicalBytesBase64 string, canonicalHashHex string) error {
+	if canonicalHashHex == "" {
+		return nil
+	}
+	canonicalHash, err := normalizeSHA256Hex(canonicalHashHex, "canonical_hash_hex")
+	if err != nil {
+		return err
+	}
+	canonicalBytes, err := decodeCanonicalBytesBase64(canonicalBytesBase64)
+	if err != nil {
+		return err
+	}
+	actual := sha256.Sum256(canonicalBytes)
+	if hex.EncodeToString(actual[:]) != canonicalHash {
+		return invalidInvocation("canonical_hash_hex does not match canonical_bytes_base64", nil)
+	}
+	return nil
+}
+
+func normalizeSHA256Hex(value string, fieldName string) (string, error) {
+	raw := strings.TrimPrefix(value, "sha256:")
+	if len(raw) != 64 {
+		return "", invalidInvocation(fmt.Sprintf("%s must be a sha256 hex digest", fieldName), nil)
+	}
+	if _, err := hex.DecodeString(raw); err != nil {
+		return "", invalidInvocation(fmt.Sprintf("%s must be hex", fieldName), err)
+	}
+	return strings.ToLower(raw), nil
+}
+
+func decodeCanonicalBytesBase64(value string) ([]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, invalidInvocation("canonical_bytes_base64 must be base64", err)
+	}
+	return decoded, nil
 }
 
 func optionalPreparedString(fields map[string]json.RawMessage, name string) string {
