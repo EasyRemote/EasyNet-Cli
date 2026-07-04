@@ -95,6 +95,12 @@ from .control_ipc import (
     default_control_path,
     read_control_discovery,
 )
+from .cutover_audit import (
+    CutoverAuditResult,
+    CutoverViolation,
+    EasyRemoteCutoverAuditor,
+    audit_easyremote_cutover,
+)
 from .daemon import (
     AttachOptions,
     DaemonControl,
@@ -373,6 +379,8 @@ __all__ = [
     "ControlDiscoveryRuntimeConnector",
     "ControlFrame",
     "ControlIpcClient",
+    "CutoverAuditResult",
+    "CutoverViolation",
     "AttachOptions",
     "AbilityQuery",
     "AbilityDeployRequest",
@@ -448,6 +456,7 @@ __all__ = [
     "EventsInvocationSubscriptionRequest",
     "EventsSessionSubscriptionRequest",
     "EventsSubscriptionRequest",
+    "EasyRemoteCutoverAuditor",
     "FeatureSet",
     "FileRecord",
     "GatewayListener",
@@ -637,6 +646,7 @@ __all__ = [
     "WrapperTerminalStartRequest",
     "WrapperTransport",
     "attach_daemon",
+    "audit_easyremote_cutover",
     "canonical_ability_descriptor_ref",
     "connect_local",
     "default_environment",

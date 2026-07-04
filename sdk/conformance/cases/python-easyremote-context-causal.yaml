@@ -1,0 +1,21 @@
+id: python/easyremote_context_causal
+profile: receipt
+required_for:
+  - python
+description: EasyRemote Context.call attaches child causal refs through SDK receipt APIs.
+steps:
+  - action: build_child_context_from_parent_receipt
+  - action: build_child_invocation
+  - action: audit_consumer_source
+    consumer: easyremote
+expect:
+  result: ok
+  required_sdk_types:
+    - AbilityChildContext
+    - ReceiptClient
+    - CausalRef
+  required_methods:
+    - AbilityInvocationClient.child_context
+    - ReceiptClient.causal_context_from_invocation_result
+  fabricated_causal_context: false
+  parent_receipt_required: true

@@ -1,0 +1,24 @@
+id: python/easyremote_no_invocation_codec
+profile: runtime_core
+required_for:
+  - python
+description: EasyRemote consumes SDK Invocation DTOs and does not encode daemon Invocation JSON itself.
+steps:
+  - action: audit_consumer_source
+    consumer: easyremote
+  - action: inspect_sdk_invocation_dto_usage
+expect:
+  result: ok
+  required_sdk_types:
+    - InvocationDraft
+    - PreparedInvocation
+    - SignedInvocation
+    - StreamHandle
+    - BidiSession
+    - ReceiptSummary
+  forbidden_codec_markers:
+    - raw_invocation_json_codec
+    - axon_pb2
+    - caller_ura_json_dump
+    - descriptor_ref_json_dump
+  raw_lower_layer_dependency: false

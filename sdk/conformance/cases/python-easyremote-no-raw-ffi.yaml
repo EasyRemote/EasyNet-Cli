@@ -1,0 +1,24 @@
+id: python/easyremote_no_raw_ffi
+profile: runtime_core
+required_for:
+  - python
+description: EasyRemote production code does not own raw libeasynet_cli FFI loading.
+steps:
+  - action: audit_consumer_source
+    consumer: easyremote
+expect:
+  result: ok
+  allowed_dependency: easynet_sdk
+  forbidden_imports:
+    - ctypes
+    - easynet_axon
+    - axon
+    - axon_pb2
+  forbidden_symbols:
+    - dlopen
+    - CDLL
+    - PyDLL
+    - easynet_last_error
+    - easynet_daemon_start
+    - easynet_runtime_invoke
+  raw_lower_layer_dependency: false

@@ -1,6 +1,8 @@
 import inspect
 import json
 import pathlib
+import tempfile
+import textwrap
 import unittest
 
 from easynet_sdk import (
@@ -111,6 +113,7 @@ from easynet_sdk import (
     CausalRef,
     UnpublishAbilityRequest,
     ValidatePackageOptions,
+    audit_easyremote_cutover,
     build_receipt_fetch_invocation,
 )
 
@@ -3509,6 +3512,70 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         missing, duplicates = audit_shared_consumer_coverage(requirements)
         self.assertEqual([], missing)
         self.assertEqual([], duplicates)
+
+    def test_python_easyremote_cutover_cases_have_executable_audit_gate(self) -> None:
+        raw_ffi_case = shared_case("python-easyremote-no-raw-ffi.yaml")
+        self._require_case_id(raw_ffi_case, "python/easyremote_no_raw_ffi")
+        self._require_case_action(raw_ffi_case, "audit_consumer_source")
+        self._require_case_expectation(raw_ffi_case, "allowed_dependency: easynet_sdk")
+        self._require_case_expectation(raw_ffi_case, "raw_lower_layer_dependency: false")
+        for forbidden in (
+            "ctypes",
+            "easynet_axon",
+            "axon_pb2",
+            "easynet_last_error",
+            "easynet_daemon_start",
+            "easynet_runtime_invoke",
+        ):
+            self._require_case_literal(raw_ffi_case, f"- {forbidden}")
+
+        no_codec_case = shared_case("python-easyremote-no-invocation-codec.yaml")
+        self._require_case_id(
+            no_codec_case, "python/easyremote_no_invocation_codec"
+        )
+        self._require_case_action(no_codec_case, "audit_consumer_source")
+        self._require_case_action(no_codec_case, "inspect_sdk_invocation_dto_usage")
+        for sdk_type in (
+            "InvocationDraft",
+            "PreparedInvocation",
+            "SignedInvocation",
+            "StreamHandle",
+            "BidiSession",
+            "ReceiptSummary",
+        ):
+            self._require_case_literal(no_codec_case, f"- {sdk_type}")
+        self._require_case_literal(no_codec_case, "- raw_invocation_json_codec")
+
+        causal_case = shared_case("python-easyremote-context-causal.yaml")
+        self._require_case_id(causal_case, "python/easyremote_context_causal")
+        self._require_case_action(causal_case, "build_child_context_from_parent_receipt")
+        self._require_case_action(causal_case, "build_child_invocation")
+        self._require_case_expectation(causal_case, "fabricated_causal_context: false")
+        self._require_case_expectation(causal_case, "parent_receipt_required: true")
+        for required in (
+            "AbilityChildContext",
+            "ReceiptClient",
+            "CausalRef",
+            "AbilityInvocationClient.child_context",
+            "ReceiptClient.causal_context_from_invocation_result",
+        ):
+            self._require_case_literal(causal_case, f"- {required}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "client.py").write_text(
+                textwrap.dedent(
+                    """
+                    from easynet_sdk import AbilityInvocationClient, InvocationDraft
+
+                    def call(client: AbilityInvocationClient, draft: InvocationDraft):
+                        return client.invoke(draft)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            result = audit_easyremote_cutover(root)
+        self.assertTrue(result.ok)
 
     def test_python_memc_executes_shared_no_core_bloat_conformance_case(self) -> None:
         no_bloat_case = shared_case("memc-no-core-bloat.yaml")
