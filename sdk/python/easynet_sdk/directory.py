@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from ._lifecycle import ClientLifecycle
+from .invocation import InvocationDraft
 
 
 DEFAULT_DIRECTORY_PAGE_SIZE = 50
@@ -259,6 +260,30 @@ class DirectoryTransport(Protocol):
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def build_list_devices_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_list_agents_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_resolve_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def project_device_page(self, page_json: bytes) -> bytes:
+        ...
+
+    def project_agent_page(self, page_json: bytes) -> bytes:
+        ...
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        ...
+
+    def project_resolved_ref(self, answer_json: bytes) -> bytes:
+        ...
+
     def resolve(self, request_json: bytes) -> bytes:
         ...
 
@@ -385,17 +410,77 @@ class DirectoryClient:
 
     def build_directory_subscription_invocation(
         self, request: DirectorySubscriptionRequest
-    ):
-        from .invocation import InvocationDraft
+    ) -> InvocationDraft:
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_directory_subscription_invocation,
+            "directory subscription invocation failed",
+        )
 
+    def build_list_devices_invocation(self, query: DeviceQuery) -> InvocationDraft:
+        return self._build_base_invocation(
+            query.base,
+            self.transport.build_list_devices_invocation,
+            "directory list devices invocation failed",
+        )
+
+    def build_list_agents_invocation(self, query: AgentQuery) -> InvocationDraft:
+        return self._build_base_invocation(
+            query.base,
+            self.transport.build_list_agents_invocation,
+            "directory list agents invocation failed",
+        )
+
+    def build_list_abilities_invocation(self, query: AbilityQuery) -> InvocationDraft:
+        return self._build_invocation(
+            query.to_json_bytes(),
+            self.transport.build_list_abilities_invocation,
+            "directory list abilities invocation failed",
+        )
+
+    def build_resolve_invocation(self, query: ResolveQuery) -> InvocationDraft:
+        return self._build_invocation(
+            query.to_json_bytes(),
+            self.transport.build_resolve_invocation,
+            "directory resolve invocation failed",
+        )
+
+    def project_device_page(self, page_json: bytes) -> DirectoryPage:
+        return self._project_page(
+            page_json,
+            self.transport.project_device_page,
+            kind="device_page",
+            item_kind="device",
+            label="directory project device page failed",
+        )
+
+    def project_agent_page(self, page_json: bytes) -> DirectoryPage:
+        return self._project_page(
+            page_json,
+            self.transport.project_agent_page,
+            kind="agent_page",
+            item_kind="agent",
+            label="directory project agent page failed",
+        )
+
+    def project_ability_page(self, page_json: bytes) -> DirectoryPage:
+        return self._project_page(
+            page_json,
+            self.transport.project_ability_page,
+            kind="ability_page",
+            item_kind="ability",
+            label="directory project ability page failed",
+        )
+
+    def project_resolved_ref(self, answer_json: bytes) -> ResolvedRef:
         self._require_open()
         try:
-            raw = self.transport.build_directory_subscription_invocation(request.to_json_bytes())
+            raw = self.transport.project_resolved_ref(answer_json)
         except SDKError:
             raise
         except Exception as exc:
-            raise _transport_error("directory subscription invocation failed", exc) from exc
-        return InvocationDraft.from_json(raw)
+            raise _transport_error("directory project resolved ref failed", exc) from exc
+        return ResolvedRef.from_json(raw)
 
     def subscribe_directory(self, request: DirectorySubscriptionRequest) -> DirectorySubscription:
         self._require_open()
@@ -448,17 +533,56 @@ class DirectoryClient:
     def _list_page(
         self,
         base: DirectoryQueryBase,
-        fn,
+        fn: Callable[[bytes], bytes],
         *,
         kind: str,
         item_kind: str,
         label: str,
     ) -> DirectoryPage:
         self._require_open()
-        base = base.with_default_limit()
-        _validate_base(base, require_limit=True)
         try:
-            raw = fn(_json_bytes(base.to_json_dict()))
+            raw = fn(_base_page_json(base))
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
+        return DirectoryPage.from_json(raw, kind=kind, item_kind=item_kind)
+
+    def _build_base_invocation(
+        self,
+        base: DirectoryQueryBase,
+        fn: Callable[[bytes], bytes],
+        label: str,
+    ) -> InvocationDraft:
+        return self._build_invocation(_base_page_json(base), fn, label)
+
+    def _build_invocation(
+        self,
+        request_json: bytes,
+        fn: Callable[[bytes], bytes],
+        label: str,
+    ) -> InvocationDraft:
+        self._require_open()
+        try:
+            raw = fn(request_json)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
+        return InvocationDraft.from_json(raw)
+
+    def _project_page(
+        self,
+        page_json: bytes,
+        fn: Callable[[bytes], bytes],
+        *,
+        kind: str,
+        item_kind: str,
+        label: str,
+    ) -> DirectoryPage:
+        self._require_open()
+        try:
+            raw = fn(page_json)
         except SDKError:
             raise
         except Exception as exc:
@@ -470,6 +594,12 @@ class DirectoryClient:
 
     def _require_open(self) -> None:
         self._lifecycle.require_open()
+
+
+def _base_page_json(base: DirectoryQueryBase) -> bytes:
+    bounded = base.with_default_limit()
+    _validate_base(bounded, require_limit=True)
+    return _json_bytes(bounded.to_json_dict())
 
 
 def _validate_base(base: DirectoryQueryBase, *, require_limit: bool) -> None:

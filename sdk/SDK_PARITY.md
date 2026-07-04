@@ -181,7 +181,8 @@ method spelling.
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
-  read-model pages with bounded pagination, directory subscription state seams,
+  read-model pages with bounded pagination, list/resolve Invocation carrier
+  builders, Directory projection helpers, directory subscription state seams,
   and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
   Axon-delegated `parse_ura`, `owner_ability_ura`,
   `owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helper

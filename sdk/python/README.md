@@ -26,7 +26,8 @@ ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow transport protocols, plus DirectoryClient resolve/list
-read-model pages, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
+read-model pages, list/resolve Invocation carrier builders, directory
+projection helpers, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
 Axon-delegated addressing helper facade, signing-key lifecycle, and
 signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection and close state seams

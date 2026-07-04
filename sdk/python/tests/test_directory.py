@@ -25,6 +25,10 @@ class MemoryDirectoryTransport:
         self.agents_json = b"{}"
         self.abilities_json = b"{}"
         self.subscription_invocation_json = b"{}"
+        self.list_devices_invocation_json = b"{}"
+        self.list_agents_invocation_json = b"{}"
+        self.list_abilities_invocation_json = b"{}"
+        self.resolve_invocation_json = b"{}"
         self.subscription_json = b"{}"
         self.seen_request: dict[str, object] | None = None
         self.close_calls = 0
@@ -32,6 +36,38 @@ class MemoryDirectoryTransport:
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         return self.subscription_invocation_json
+
+    def build_list_devices_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        return self.list_devices_invocation_json
+
+    def build_list_agents_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        return self.list_agents_invocation_json
+
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        return self.list_abilities_invocation_json
+
+    def build_resolve_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        return self.resolve_invocation_json
+
+    def project_device_page(self, page_json: bytes) -> bytes:
+        self.seen_request = json.loads(page_json.decode("utf-8"))
+        return self.devices_json
+
+    def project_agent_page(self, page_json: bytes) -> bytes:
+        self.seen_request = json.loads(page_json.decode("utf-8"))
+        return self.agents_json
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        self.seen_request = json.loads(page_json.decode("utf-8"))
+        return self.abilities_json
+
+    def project_resolved_ref(self, answer_json: bytes) -> bytes:
+        self.seen_request = json.loads(answer_json.decode("utf-8"))
+        return self.resolve_json
 
     def resolve(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -108,6 +144,66 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(len(subscription.events), 3)
         self.assertEqual(subscription.events[2].phase, "live")
         self.assertEqual(subscription.events[2].item_kind, "ability")
+
+    def test_directory_carrier_builders_delegate_to_transport(self) -> None:
+        transport = MemoryDirectoryTransport()
+        transport.list_devices_invocation_json = invocation_json(
+            "easynet:///r/example/ability/device.dev-a.directory.list-devices@1.0.0"
+        )
+        transport.list_agents_invocation_json = invocation_json(
+            "easynet:///r/example/ability/device.dev-a.directory.list-agents@1.0.0"
+        )
+        transport.list_abilities_invocation_json = invocation_json(
+            "easynet:///r/example/ability/device.dev-a.directory.list-abilities@1.0.0"
+        )
+        transport.resolve_invocation_json = invocation_json(
+            "easynet:///r/example/ability/device.dev-a.directory.resolve@1.0.0"
+        )
+        client = DirectoryClient(transport)
+
+        devices = client.build_list_devices_invocation(DeviceQuery(base_query()))
+
+        self.assertEqual(
+            devices.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.directory.list-devices@1.0.0",
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["limit"], DEFAULT_DIRECTORY_PAGE_SIZE)
+
+        agents = client.build_list_agents_invocation(AgentQuery(base_query(10)))
+
+        self.assertEqual(
+            agents.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.directory.list-agents@1.0.0",
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["limit"], 10)
+
+        abilities = client.build_list_abilities_invocation(
+            AbilityQuery(base_query(5), scope="local", owner_ura="owner-1")
+        )
+
+        self.assertEqual(
+            abilities.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.directory.list-abilities@1.0.0",
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["scope"], "local")
+        self.assertEqual(transport.seen_request["owner_ura"], "owner-1")
+
+        resolved = client.build_resolve_invocation(
+            ResolveQuery(base_query(), query_name="easynet:///r/example/device/dev-a")
+        )
+
+        self.assertEqual(
+            resolved.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.directory.resolve@1.0.0",
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(
+            transport.seen_request["query_name"],
+            "easynet:///r/example/device/dev-a",
+        )
 
     def test_subscription_rejects_invalid_state_transitions(self) -> None:
         from easynet_sdk import DirectorySubscription
@@ -214,6 +310,37 @@ class DirectoryTests(unittest.TestCase):
             "easynet:///r/example/device/dev-a",
         )
 
+    def test_directory_projection_helpers_delegate_to_transport(self) -> None:
+        transport = MemoryDirectoryTransport()
+        transport.devices_json = page_json("device_page", "device", "device")
+        transport.agents_json = page_json("agent_page", "agent", "agent")
+        transport.abilities_json = page_json("ability_page", "ability", "ability")
+        transport.resolve_json = RESOLVED_REF_JSON
+        client = DirectoryClient(transport)
+
+        device_page = client.project_device_page(b'{"raw":"device-page"}')
+
+        self.assertEqual(device_page.kind, "device_page")
+        self.assertEqual(device_page.item_kind, "device")
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["raw"], "device-page")
+
+        agent_page = client.project_agent_page(b'{"raw":"agent-page"}')
+        self.assertEqual(agent_page.kind, "agent_page")
+        self.assertEqual(agent_page.item_kind, "agent")
+
+        ability_page = client.project_ability_page(b'{"raw":"ability-page"}')
+        self.assertEqual(ability_page.kind, "ability_page")
+        self.assertEqual(ability_page.item_kind, "ability")
+
+        resolved = client.project_resolved_ref(b'{"raw":"resolve-answer"}')
+        self.assertEqual(
+            resolved.ability_ura,
+            "easynet:///r/example/ability/device.dev-a.agent.list",
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["raw"], "resolve-answer")
+
     def test_list_abilities_rejects_wrong_page_kind(self) -> None:
         transport = MemoryDirectoryTransport()
         transport.abilities_json = (
@@ -243,6 +370,62 @@ class DirectoryTests(unittest.TestCase):
             client.list_devices(DeviceQuery(base_query()))
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(transport.seen_request)
+
+
+def invocation_json(descriptor_ref: str) -> bytes:
+    return json.dumps(
+        {
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_ref": descriptor_ref,
+            "subject_ura": "easynet:///r/example/device/dev-a",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "args": {},
+            "content_type": "application/json",
+            "metadata": {"carrier_owner": "daemon_sdk"},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def page_json(kind: str, item_kind: str, item_key: str) -> bytes:
+    return json.dumps(
+        {
+            "profile": "directory_identity",
+            "kind": kind,
+            "item_kind": item_kind,
+            "items": [{item_key + "_ura": f"easynet:///r/example/{item_key}/one"}],
+            "next_cursor": None,
+            "limit": 1,
+            "source": "read_model",
+            "metadata": {"source": "directory.project"},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+RESOLVED_REF_JSON = b"""
+{
+  "profile": "directory_identity",
+  "kind": "resolved_ref",
+  "answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+  "query_name": "easynet:///r/example/device/dev-a",
+  "canonical_name": "easynet:///r/example/device/dev-a",
+  "owner_ura": "easynet:///r/example/device/dev-a",
+  "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+  "route_ura": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
+  "next_hop": {"localDeviceAbility": {"dispatchName": "agent.list"}},
+  "selected_route": {"reason": "ROUTE_REASON_LOCAL_DEVICE"},
+  "route_candidates": [],
+  "records": [],
+  "negative": null,
+  "release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+  "authority": {"authorityUra": "easynet:///r/example/hub"},
+  "cache_policy": {"ttlMs": 0},
+  "metadata": {"source": "namespace.resolve"}
+}
+"""
 
 DIRECTORY_SUBSCRIPTION_INVOCATION_JSON = b"""
 {

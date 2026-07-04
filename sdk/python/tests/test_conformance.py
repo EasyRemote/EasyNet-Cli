@@ -185,6 +185,18 @@ class SharedDirectoryTransport:
             "directory-list-abilities-request.v4.json"
         )
         self.expected_resolve_request = shared_fixture("directory-resolve-request.v4.json")
+        self.device_invocation_json = shared_fixture(
+            "directory-list-devices-invocation.v4.json"
+        )
+        self.agent_invocation_json = shared_fixture(
+            "directory-list-agents-invocation.v4.json"
+        )
+        self.ability_invocation_json = shared_fixture(
+            "directory-list-abilities-invocation.v4.json"
+        )
+        self.resolve_invocation_json = shared_fixture(
+            "directory-resolve-invocation.v4.json"
+        )
         self.devices_json = shared_fixture("directory-device-page.v4.json")
         self.agents_json = shared_fixture("directory-agent-page.v4.json")
         self.abilities_json = shared_fixture("directory-ability-page.v4.json")
@@ -197,6 +209,38 @@ class SharedDirectoryTransport:
             retry=RetryHint.NEVER,
             message="not used by shared directory conformance fixture test",
         )
+
+    def build_list_devices_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_devices_request)
+        return self.device_invocation_json
+
+    def build_list_agents_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agents_request)
+        return self.agent_invocation_json
+
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_ability_request)
+        return self.ability_invocation_json
+
+    def build_resolve_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_resolve_request)
+        return self.resolve_invocation_json
+
+    def project_device_page(self, page_json: bytes) -> bytes:
+        assert_json_equivalent(page_json, self.devices_json)
+        return self.devices_json
+
+    def project_agent_page(self, page_json: bytes) -> bytes:
+        assert_json_equivalent(page_json, self.agents_json)
+        return self.agents_json
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        assert_json_equivalent(page_json, self.abilities_json)
+        return self.abilities_json
+
+    def project_resolved_ref(self, answer_json: bytes) -> bytes:
+        assert_json_equivalent(answer_json, self.resolve_json)
+        return self.resolve_json
 
     def resolve(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_resolve_request)
@@ -1702,6 +1746,19 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(device_page.limit, 2)
         self.assertEqual(len(device_page.items), 1)
         self.assertEqual(device_page.metadata["source_ability"], "node.list")
+        device_invocation = directory.build_list_devices_invocation(
+            DeviceQuery(
+                shared_directory_query_base("directory-list-devices-request.v4.json")
+            )
+        )
+        assert_json_equivalent(
+            device_invocation.to_json().encode("utf-8"),
+            shared_fixture("directory-list-devices-invocation.v4.json"),
+        )
+        projected_device_page = directory.project_device_page(
+            shared_fixture("directory-device-page.v4.json")
+        )
+        self.assertEqual(projected_device_page.item_kind, "device")
 
         agent_page = directory.list_agents(AgentQuery(shared_directory_query_base(
             "directory-list-agents-request.v4.json"
@@ -1709,6 +1766,19 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(agent_page.limit, 2)
         self.assertEqual(len(agent_page.items), 1)
         self.assertEqual(agent_page.metadata["source_ability"], "agent.list")
+        agent_invocation = directory.build_list_agents_invocation(
+            AgentQuery(
+                shared_directory_query_base("directory-list-agents-request.v4.json")
+            )
+        )
+        assert_json_equivalent(
+            agent_invocation.to_json().encode("utf-8"),
+            shared_fixture("directory-list-agents-invocation.v4.json"),
+        )
+        projected_agent_page = directory.project_agent_page(
+            shared_fixture("directory-agent-page.v4.json")
+        )
+        self.assertEqual(projected_agent_page.item_kind, "agent")
 
         oversized_base = shared_directory_query_base(
             "directory-list-devices-request.v4.json"
@@ -1751,6 +1821,17 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(
             ability_page.metadata["source_ability"], "meta.list_abilities"
         )
+        ability_invocation = directory.build_list_abilities_invocation(
+            shared_ability_query()
+        )
+        assert_json_equivalent(
+            ability_invocation.to_json().encode("utf-8"),
+            shared_fixture("directory-list-abilities-invocation.v4.json"),
+        )
+        projected_ability_page = directory.project_ability_page(
+            shared_fixture("directory-ability-page.v4.json")
+        )
+        self.assertEqual(projected_ability_page.item_kind, "ability")
 
         resolve_case = shared_case("directory-resolve.yaml")
         self._require_case_id(resolve_case, "directory/resolve")
@@ -1773,6 +1854,17 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             resolved.ability_ura,
             "easynet:///r/example/ability/device.dev-a.agent.list",
         )
+        resolve_invocation = directory.build_resolve_invocation(
+            shared_resolve_query()
+        )
+        assert_json_equivalent(
+            resolve_invocation.to_json().encode("utf-8"),
+            shared_fixture("directory-resolve-invocation.v4.json"),
+        )
+        projected_resolved = directory.project_resolved_ref(
+            shared_fixture("directory-resolved-ref.v4.json")
+        )
+        self.assertEqual(projected_resolved.kind, "resolved_ref")
 
         identity_case = shared_case("identity-ura-descriptor-projection.yaml")
         self._require_case_id(identity_case, "identity/ura_descriptor_projection")
@@ -2745,11 +2837,29 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "directory_identity",
                 DirectoryClient,
                 {
-                    "build_directory_subscription_invocation": "directory_identity.directory.build_subscription_invocation",
+                    "build_list_abilities_invocation": (
+                        "directory_identity.directory.build_list_abilities_invocation"
+                    ),
+                    "build_list_agents_invocation": (
+                        "directory_identity.directory.build_list_agents_invocation"
+                    ),
+                    "build_list_devices_invocation": (
+                        "directory_identity.directory.build_list_devices_invocation"
+                    ),
+                    "build_resolve_invocation": (
+                        "directory_identity.directory.build_resolve_invocation"
+                    ),
+                    "build_directory_subscription_invocation": (
+                        "directory_identity.directory.build_subscription_invocation"
+                    ),
                     "close": "directory_identity.directory.close",
                     "list_abilities": "directory_identity.directory.list_abilities",
                     "list_agents": "directory_identity.directory.list_agents",
                     "list_devices": "directory_identity.directory.list_devices",
+                    "project_ability_page": "directory_identity.directory.project_ability_page",
+                    "project_agent_page": "directory_identity.directory.project_agent_page",
+                    "project_device_page": "directory_identity.directory.project_device_page",
+                    "project_resolved_ref": "directory_identity.directory.project_resolved_ref",
                     "resolve": "directory_identity.directory.resolve",
                     "subscribe_directory": "directory_identity.directory.subscribe",
                 },

@@ -8,6 +8,8 @@ from easynet_sdk import (
     CompatibilityCarrierBase,
     CompatibilityListModelsRequest,
     ConnectOptions,
+    DeviceQuery,
+    DirectoryQueryBase,
     ErrorCode,
     EventsCarrierBase,
     EventsSubscriptionRequest,
@@ -132,6 +134,7 @@ class SdkEnvironmentTests(unittest.TestCase):
             mission = env.mission_client()
             admin = env.admin_client()
             events = env.event_client()
+            directory = env.directory_client()
             surface = env.surface_client()
             compatibility = env.compatibility_client()
 
@@ -167,6 +170,7 @@ class SdkEnvironmentTests(unittest.TestCase):
             events.build_directory_subscription_invocation(
                 EventsSubscriptionRequest(base=_events_base())
             )
+            directory.build_list_devices_invocation(DeviceQuery(_directory_base()))
             surface.build_list_pages_invocation(
                 SurfaceListPagesRequest(base=_surface_base())
             )
@@ -200,6 +204,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_mission_build_run_eal_invocation", symbols)
         self.assertIn("easynet_admin_build_agent_list_invocation", symbols)
         self.assertIn("easynet_events_build_directory_subscription_invocation", symbols)
+        self.assertIn("easynet_directory_build_list_devices_invocation", symbols)
         self.assertIn("easynet_surface_build_list_pages_invocation", symbols)
         self.assertIn("easynet_compatibility_build_list_models_invocation", symbols)
 
@@ -269,6 +274,17 @@ def _mission_base() -> MissionCarrierBase:
 
 def _events_base() -> EventsCarrierBase:
     return EventsCarrierBase(
+        caller_ura=_CALLER,
+        callee_ura=_CALLEE,
+        subject_ura=_SUBJECT,
+        descriptor_version="1.0.0",
+        nonce_base64=_NONCE,
+        causal_context=_CAUSAL,
+    )
+
+
+def _directory_base() -> DirectoryQueryBase:
+    return DirectoryQueryBase(
         caller_ura=_CALLER,
         callee_ura=_CALLEE,
         subject_ura=_SUBJECT,
