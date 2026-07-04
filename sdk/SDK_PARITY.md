@@ -149,11 +149,12 @@ method spelling.
   backend route serving, browser auth, CDN/cache policy, content-management UX,
   concrete surface health carriers, and backend page-route cutover remain
   incomplete.
-- Go Compatibility facade exposes `CompatibilityClient` list-models, chat, and
-  stream-chat Invocation carrier builders plus model, chat, stream, file, and
-  file-delete projection seams; product API-key policy, quota/rate limits,
-  billing, backend HTTP route shaping, multipart storage policy, SSE/WebSocket
-  fanout, and backend compatibility-route cutover remain incomplete.
+- Go Compatibility facade exposes `CompatibilityClient` list-models, chat,
+  stream-chat, and file upload/get/delete Invocation carrier builders plus
+  model, chat, stream, file, and file-delete projection seams; product API-key
+  policy, quota/rate limits, billing, backend HTTP route shaping, multipart
+  storage execution, SSE/WebSocket fanout, and backend compatibility-route
+  cutover remain incomplete.
 - Go Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session record projection seams; execution helpers,
   backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers
@@ -214,10 +215,11 @@ method spelling.
   backend route serving, browser auth, CDN/cache policy, content-management UX,
   concrete surface health carriers, and product cutovers remain incomplete.
 - Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
-  and stream-chat Invocation carrier builders plus model, chat, stream, file,
-  and file-delete projection seams; product API-key policy, quota/rate limits,
-  billing, backend HTTP route shaping, multipart storage policy, SSE/WebSocket
-  fanout, and EasyRemote/Hub compatibility cutovers remain incomplete.
+  stream-chat, and file upload/get/delete Invocation carrier builders plus
+  model, chat, stream, file, and file-delete projection seams; product API-key
+  policy, quota/rate limits, billing, backend HTTP route shaping, multipart
+  storage execution, SSE/WebSocket fanout, and EasyRemote/Hub compatibility
+  cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session record projection seams; execution helpers,
   backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers

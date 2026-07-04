@@ -37,6 +37,7 @@ type CompatibilityStreamChatCompletionRequest struct {
 }
 
 type CompatibilityFileUploadRequest struct {
+	CompatibilityCarrierBase
 	ID          string         `json:"id,omitempty"`
 	FileID      string         `json:"file_id,omitempty"`
 	FileRef     string         `json:"file_ref,omitempty"`
@@ -55,6 +56,7 @@ type CompatibilityFileUploadRequest struct {
 }
 
 type CompatibilityFileRequest struct {
+	CompatibilityCarrierBase
 	ID          string         `json:"id,omitempty"`
 	FileID      string         `json:"file_id,omitempty"`
 	FileRef     string         `json:"file_ref,omitempty"`
@@ -74,6 +76,7 @@ type CompatibilityFileRequest struct {
 }
 
 type CompatibilityFileDeleteRequest struct {
+	CompatibilityCarrierBase
 	ID          string         `json:"id,omitempty"`
 	FileID      string         `json:"file_id,omitempty"`
 	FileRef     string         `json:"file_ref,omitempty"`
@@ -168,9 +171,15 @@ type CompatibilityTransport interface {
 	BuildListModelsInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildChatCompletionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildStreamChatCompletionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildFileUploadInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildFileRetrieveInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildFileDeleteInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListModels(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CreateChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error)
 	StreamChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error)
+	UploadFile(ctx context.Context, requestJSON []byte) ([]byte, error)
+	RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error)
+	DeleteFile(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 // CompatibilityTransportFunc adapts functions into a CompatibilityTransport.
@@ -178,9 +187,15 @@ type CompatibilityTransportFunc struct {
 	BuildListModelsInvocationFunc           func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildChatCompletionInvocationFunc       func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildStreamChatCompletionInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildFileUploadInvocationFunc           func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildFileRetrieveInvocationFunc         func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildFileDeleteInvocationFunc           func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListModelsFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CreateChatCompletionFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	StreamChatCompletionFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	UploadFileFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	RetrieveFileFunc                        func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	DeleteFileFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 func (f CompatibilityTransportFunc) BuildListModelsInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -204,6 +219,27 @@ func (f CompatibilityTransportFunc) BuildStreamChatCompletionInvocation(ctx cont
 	return f.BuildStreamChatCompletionInvocationFunc(ctx, requestJSON)
 }
 
+func (f CompatibilityTransportFunc) BuildFileUploadInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildFileUploadInvocationFunc == nil {
+		return nil, invalidRuntimeClient("compatibility file-upload invocation transport function is required")
+	}
+	return f.BuildFileUploadInvocationFunc(ctx, requestJSON)
+}
+
+func (f CompatibilityTransportFunc) BuildFileRetrieveInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildFileRetrieveInvocationFunc == nil {
+		return nil, invalidRuntimeClient("compatibility file-retrieve invocation transport function is required")
+	}
+	return f.BuildFileRetrieveInvocationFunc(ctx, requestJSON)
+}
+
+func (f CompatibilityTransportFunc) BuildFileDeleteInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildFileDeleteInvocationFunc == nil {
+		return nil, invalidRuntimeClient("compatibility file-delete invocation transport function is required")
+	}
+	return f.BuildFileDeleteInvocationFunc(ctx, requestJSON)
+}
+
 func (f CompatibilityTransportFunc) ListModels(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListModelsFunc == nil {
 		return nil, invalidRuntimeClient("compatibility list-models transport function is required")
@@ -223,6 +259,27 @@ func (f CompatibilityTransportFunc) StreamChatCompletion(ctx context.Context, re
 		return nil, invalidRuntimeClient("compatibility stream-chat-completion transport function is required")
 	}
 	return f.StreamChatCompletionFunc(ctx, requestJSON)
+}
+
+func (f CompatibilityTransportFunc) UploadFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.UploadFileFunc == nil {
+		return nil, invalidRuntimeClient("compatibility file-upload transport function is required")
+	}
+	return f.UploadFileFunc(ctx, requestJSON)
+}
+
+func (f CompatibilityTransportFunc) RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.RetrieveFileFunc == nil {
+		return nil, invalidRuntimeClient("compatibility file-retrieve transport function is required")
+	}
+	return f.RetrieveFileFunc(ctx, requestJSON)
+}
+
+func (f CompatibilityTransportFunc) DeleteFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.DeleteFileFunc == nil {
+		return nil, invalidRuntimeClient("compatibility file-delete transport function is required")
+	}
+	return f.DeleteFileFunc(ctx, requestJSON)
 }
 
 // CompatibilityClient is the Compatibility profile facade.
@@ -247,6 +304,22 @@ func (c *CompatibilityClient) BuildChatCompletionInvocation(ctx context.Context,
 
 func (c *CompatibilityClient) BuildStreamChatCompletionInvocation(ctx context.Context, req CompatibilityStreamChatCompletionRequest) (InvocationDraft, error) {
 	return c.buildInvocation(ctx, req, validateCompatibilityStreamChatCompletionRequest, marshalCompatibilityStreamRequest, c.transport.BuildStreamChatCompletionInvocation, "compatibility stream-chat-completion invocation failed")
+}
+
+func (c *CompatibilityClient) BuildFileUploadInvocation(ctx context.Context, req CompatibilityFileUploadRequest) (InvocationDraft, error) {
+	return c.buildInvocation(ctx, req, validateCompatibilityFileUploadCarrierRequest, marshalCompatibilityFileUploadRequest, c.transport.BuildFileUploadInvocation, "compatibility file-upload invocation failed")
+}
+
+func (c *CompatibilityClient) BuildFileRetrieveInvocation(ctx context.Context, req CompatibilityFileRequest) (InvocationDraft, error) {
+	return c.buildInvocation(ctx, req, validateCompatibilityFileCarrierRequest, marshalCompatibilityFileRequest, c.transport.BuildFileRetrieveInvocation, "compatibility file-retrieve invocation failed")
+}
+
+func (c *CompatibilityClient) BuildFileGetInvocation(ctx context.Context, req CompatibilityFileRequest) (InvocationDraft, error) {
+	return c.BuildFileRetrieveInvocation(ctx, req)
+}
+
+func (c *CompatibilityClient) BuildFileDeleteInvocation(ctx context.Context, req CompatibilityFileDeleteRequest) (InvocationDraft, error) {
+	return c.buildInvocation(ctx, req, validateCompatibilityFileDeleteCarrierRequest, marshalCompatibilityFileDeleteRequest, c.transport.BuildFileDeleteInvocation, "compatibility file-delete invocation failed")
 }
 
 func (c *CompatibilityClient) ListModels(ctx context.Context, req CompatibilityListModelsRequest) (CompatibilityModelPage, error) {
@@ -292,6 +365,55 @@ func (c *CompatibilityClient) StreamChatCompletion(ctx context.Context, req Comp
 		return CompatibilityChatCompletionStream{}, wrapCompatibilityTransportError("compatibility stream chat completion failed", err)
 	}
 	return NewCompatibilityChatCompletionStreamFromJSON(raw)
+}
+
+func (c *CompatibilityClient) UploadFile(ctx context.Context, req CompatibilityFileUploadRequest) (CompatibilityFile, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return CompatibilityFile{}, err
+	}
+	requestJSON, err := marshalCompatibilityFileUploadRequest(req, validateCompatibilityFileUploadCarrierRequest)
+	if err != nil {
+		return CompatibilityFile{}, err
+	}
+	raw, err := c.transport.UploadFile(ctx, requestJSON)
+	if err != nil {
+		return CompatibilityFile{}, wrapCompatibilityTransportError("compatibility file upload failed", err)
+	}
+	return NewCompatibilityFileFromJSON(raw)
+}
+
+func (c *CompatibilityClient) RetrieveFile(ctx context.Context, req CompatibilityFileRequest) (CompatibilityFile, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return CompatibilityFile{}, err
+	}
+	requestJSON, err := marshalCompatibilityFileRequest(req, validateCompatibilityFileCarrierRequest)
+	if err != nil {
+		return CompatibilityFile{}, err
+	}
+	raw, err := c.transport.RetrieveFile(ctx, requestJSON)
+	if err != nil {
+		return CompatibilityFile{}, wrapCompatibilityTransportError("compatibility file retrieve failed", err)
+	}
+	return NewCompatibilityFileFromJSON(raw)
+}
+
+func (c *CompatibilityClient) GetFile(ctx context.Context, req CompatibilityFileRequest) (CompatibilityFile, error) {
+	return c.RetrieveFile(ctx, req)
+}
+
+func (c *CompatibilityClient) DeleteFile(ctx context.Context, req CompatibilityFileDeleteRequest) (CompatibilityFileDeleteResult, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return CompatibilityFileDeleteResult{}, err
+	}
+	requestJSON, err := marshalCompatibilityFileDeleteRequest(req, validateCompatibilityFileDeleteCarrierRequest)
+	if err != nil {
+		return CompatibilityFileDeleteResult{}, err
+	}
+	raw, err := c.transport.DeleteFile(ctx, requestJSON)
+	if err != nil {
+		return CompatibilityFileDeleteResult{}, wrapCompatibilityTransportError("compatibility file delete failed", err)
+	}
+	return NewCompatibilityFileDeleteResultFromJSON(raw)
 }
 
 func (c *CompatibilityClient) ProjectFileUpload(req CompatibilityFileUploadRequest) (CompatibilityFile, error) {
@@ -443,6 +565,72 @@ func marshalCompatibilityStreamRequest(req any, validate func(any) error) ([]byt
 	return json.Marshal(carrier)
 }
 
+func marshalCompatibilityFileUploadRequest(req any, validate func(any) error) ([]byte, error) {
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	value := req.(CompatibilityFileUploadRequest)
+	payload := compatibilityBaseMap(value.CompatibilityCarrierBase)
+	putNonEmpty(payload, "id", value.ID)
+	putNonEmpty(payload, "file_id", value.FileID)
+	putNonEmpty(payload, "file_ref", value.FileRef)
+	putNonEmpty(payload, "resource_ref", value.ResourceRef)
+	putNonEmpty(payload, "resource_ura", value.ResourceURA)
+	putNonEmpty(payload, "filename", value.Filename)
+	payload["purpose"] = value.Purpose
+	putNonEmpty(payload, "owner_ura", value.OwnerURA)
+	putNonEmpty(payload, "content_type", value.ContentType)
+	putNonEmpty(payload, "content_hash", value.ContentHash)
+	putNonZeroInt64(payload, "bytes", value.Bytes)
+	putNonZeroInt64(payload, "size_bytes", value.SizeBytes)
+	putNonZeroInt64(payload, "created_at", value.CreatedAt)
+	putNonEmpty(payload, "status", value.Status)
+	mergeCompatibilityMetadata(payload, value.Metadata)
+	return json.Marshal(payload)
+}
+
+func marshalCompatibilityFileRequest(req any, validate func(any) error) ([]byte, error) {
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	value := req.(CompatibilityFileRequest)
+	payload := compatibilityBaseMap(value.CompatibilityCarrierBase)
+	putNonEmpty(payload, "id", value.ID)
+	putNonEmpty(payload, "file_id", value.FileID)
+	putNonEmpty(payload, "file_ref", value.FileRef)
+	putNonEmpty(payload, "resource_ref", value.ResourceRef)
+	putNonEmpty(payload, "resource_ura", value.ResourceURA)
+	putNonEmpty(payload, "filename", value.Filename)
+	putNonEmpty(payload, "purpose", value.Purpose)
+	putNonEmpty(payload, "owner_ura", value.OwnerURA)
+	putNonEmpty(payload, "content_type", value.ContentType)
+	putNonEmpty(payload, "content_hash", value.ContentHash)
+	putNonZeroInt64(payload, "bytes", value.Bytes)
+	putNonZeroInt64(payload, "size_bytes", value.SizeBytes)
+	putNonZeroInt64(payload, "created_at", value.CreatedAt)
+	putNonZeroInt64(payload, "created", value.Created)
+	putNonEmpty(payload, "status", value.Status)
+	mergeCompatibilityMetadata(payload, value.Metadata)
+	return json.Marshal(payload)
+}
+
+func marshalCompatibilityFileDeleteRequest(req any, validate func(any) error) ([]byte, error) {
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	value := req.(CompatibilityFileDeleteRequest)
+	payload := compatibilityBaseMap(value.CompatibilityCarrierBase)
+	putNonEmpty(payload, "id", value.ID)
+	putNonEmpty(payload, "file_id", value.FileID)
+	putNonEmpty(payload, "file_ref", value.FileRef)
+	putNonEmpty(payload, "resource_ref", value.ResourceRef)
+	putNonEmpty(payload, "resource_ura", value.ResourceURA)
+	putNonEmpty(payload, "content_hash", value.ContentHash)
+	payload["deleted"] = value.Deleted
+	mergeCompatibilityMetadata(payload, value.Metadata)
+	return json.Marshal(payload)
+}
+
 func validateCompatibilityListModelsRequest(req any) error {
 	value := req.(CompatibilityListModelsRequest)
 	return validateCompatibilityCarrierBase(value.CompatibilityCarrierBase)
@@ -521,8 +709,24 @@ func validateCompatibilityFileUploadRequest(req CompatibilityFileUploadRequest) 
 	return validateCompatibilityFileFacts(req.ID, req.FileID, req.FileRef, req.ResourceRef, req.ResourceURA, req.Filename, req.Bytes, req.SizeBytes, req.CreatedAt, 0)
 }
 
+func validateCompatibilityFileUploadCarrierRequest(req any) error {
+	value := req.(CompatibilityFileUploadRequest)
+	if err := validateCompatibilityCarrierBase(value.CompatibilityCarrierBase); err != nil {
+		return err
+	}
+	return validateCompatibilityFileUploadRequest(value)
+}
+
 func validateCompatibilityFileRequest(req CompatibilityFileRequest) error {
 	return validateCompatibilityFileFacts(req.ID, req.FileID, req.FileRef, req.ResourceRef, req.ResourceURA, req.Filename, req.Bytes, req.SizeBytes, req.CreatedAt, req.Created)
+}
+
+func validateCompatibilityFileCarrierRequest(req any) error {
+	value := req.(CompatibilityFileRequest)
+	if err := validateCompatibilityCarrierBase(value.CompatibilityCarrierBase); err != nil {
+		return err
+	}
+	return validateCompatibilityFileRequest(value)
 }
 
 func validateCompatibilityFileDeleteRequest(req CompatibilityFileDeleteRequest) error {
@@ -533,6 +737,14 @@ func validateCompatibilityFileDeleteRequest(req CompatibilityFileDeleteRequest) 
 		return invalidRuntimePayload("compatibility file delete result must be deleted", nil)
 	}
 	return nil
+}
+
+func validateCompatibilityFileDeleteCarrierRequest(req any) error {
+	value := req.(CompatibilityFileDeleteRequest)
+	if err := validateCompatibilityCarrierBase(value.CompatibilityCarrierBase); err != nil {
+		return err
+	}
+	return validateCompatibilityFileDeleteRequest(value)
 }
 
 func validateCompatibilityFileFacts(id, fileID, fileRef, resourceRef, resourceURA, filename string, bytesValue, sizeBytes, createdAt, created int64) error {
@@ -620,6 +832,34 @@ func copyStringAnyMap(value map[string]any) map[string]any {
 		out[key] = raw
 	}
 	return out
+}
+
+func putNonEmpty(value map[string]any, key string, item string) {
+	if item != "" {
+		value[key] = item
+	}
+}
+
+func putNonZeroInt64(value map[string]any, key string, item int64) {
+	if item != 0 {
+		value[key] = item
+	}
+}
+
+func mergeCompatibilityMetadata(payload map[string]any, metadata map[string]any) {
+	if metadata == nil {
+		return
+	}
+	merged := map[string]any{}
+	if base, ok := payload["metadata"].(map[string]any); ok {
+		for key, value := range base {
+			merged[key] = value
+		}
+	}
+	for key, value := range metadata {
+		merged[key] = value
+	}
+	payload["metadata"] = merged
 }
 
 func firstNonEmpty(values ...string) string {

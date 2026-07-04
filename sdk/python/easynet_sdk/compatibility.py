@@ -96,6 +96,13 @@ class CompatibilityFileUploadRequest:
     created_at: int = 0
     status: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+    base: Optional[CompatibilityCarrierBase] = None
+
+    def to_json_bytes(self) -> bytes:
+        if self.base is None:
+            raise _invalid_compatibility("complete compatibility invocation carrier is required")
+        _validate_file_upload_request(self)
+        return _json_bytes(_file_upload_payload(self.base, self))
 
 
 @dataclass(frozen=True)
@@ -116,6 +123,13 @@ class CompatibilityFileRequest:
     created: int = 0
     status: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+    base: Optional[CompatibilityCarrierBase] = None
+
+    def to_json_bytes(self) -> bytes:
+        if self.base is None:
+            raise _invalid_compatibility("complete compatibility invocation carrier is required")
+        _validate_file_request(self)
+        return _json_bytes(_file_payload(self.base, self))
 
 
 @dataclass(frozen=True)
@@ -128,6 +142,13 @@ class CompatibilityFileDeleteRequest:
     resource_ura: str = ""
     content_hash: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+    base: Optional[CompatibilityCarrierBase] = None
+
+    def to_json_bytes(self) -> bytes:
+        if self.base is None:
+            raise _invalid_compatibility("complete compatibility invocation carrier is required")
+        _validate_file_delete_request(self)
+        return _json_bytes(_file_delete_payload(self.base, self))
 
 
 ListModelsRequest = CompatibilityListModelsRequest
@@ -317,6 +338,15 @@ class CompatibilityTransport(Protocol):
     def build_stream_chat_completion_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def build_file_upload_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_file_retrieve_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_file_delete_invocation(self, request_json: bytes) -> bytes:
+        ...
+
     def list_models(self, request_json: bytes) -> bytes:
         ...
 
@@ -324,6 +354,15 @@ class CompatibilityTransport(Protocol):
         ...
 
     def stream_chat_completion(self, request_json: bytes) -> bytes:
+        ...
+
+    def upload_file(self, request_json: bytes) -> bytes:
+        ...
+
+    def retrieve_file(self, request_json: bytes) -> bytes:
+        ...
+
+    def delete_file(self, request_json: bytes) -> bytes:
         ...
 
 
@@ -360,6 +399,30 @@ class CompatibilityClient:
             "compatibility stream-chat-completion invocation failed",
         )
 
+    def build_file_upload_invocation(self, request: CompatibilityFileUploadRequest) -> InvocationDraft:
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_file_upload_invocation,
+            "compatibility file-upload invocation failed",
+        )
+
+    def build_file_retrieve_invocation(self, request: CompatibilityFileRequest) -> InvocationDraft:
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_file_retrieve_invocation,
+            "compatibility file-retrieve invocation failed",
+        )
+
+    def build_file_get_invocation(self, request: CompatibilityFileRequest) -> InvocationDraft:
+        return self.build_file_retrieve_invocation(request)
+
+    def build_file_delete_invocation(self, request: CompatibilityFileDeleteRequest) -> InvocationDraft:
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_file_delete_invocation,
+            "compatibility file-delete invocation failed",
+        )
+
     def list_models(self, request: CompatibilityListModelsRequest) -> CompatibilityModelPage:
         try:
             raw = self.transport.list_models(request.to_json_bytes())
@@ -390,6 +453,36 @@ class CompatibilityClient:
         except Exception as exc:
             raise _transport_error("compatibility stream chat completion failed", exc) from exc
         return CompatibilityChatCompletionStream.from_json(raw)
+
+    def upload_file(self, request: CompatibilityFileUploadRequest) -> CompatibilityFile:
+        try:
+            raw = self.transport.upload_file(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("compatibility file upload failed", exc) from exc
+        return CompatibilityFile.from_json(raw)
+
+    def retrieve_file(self, request: CompatibilityFileRequest) -> CompatibilityFile:
+        try:
+            raw = self.transport.retrieve_file(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("compatibility file retrieve failed", exc) from exc
+        return CompatibilityFile.from_json(raw)
+
+    def get_file(self, request: CompatibilityFileRequest) -> CompatibilityFile:
+        return self.retrieve_file(request)
+
+    def delete_file(self, request: CompatibilityFileDeleteRequest) -> CompatibilityFileDeleteResult:
+        try:
+            raw = self.transport.delete_file(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("compatibility file delete failed", exc) from exc
+        return CompatibilityFileDeleteResult.from_json(raw)
 
     def project_file_upload(self, request: CompatibilityFileUploadRequest) -> CompatibilityFile:
         _validate_file_upload_request(request)
@@ -543,6 +636,64 @@ def _file(raw: Mapping[str, object]) -> CompatibilityFile:
         status=_required_string(raw, "status"),
         metadata=_required_mapping(raw, "metadata"),
     )
+
+
+def _file_upload_payload(
+    base: CompatibilityCarrierBase, request: CompatibilityFileUploadRequest
+) -> dict[str, object]:
+    value = base.to_json_dict()
+    _put_non_empty(value, "id", request.id)
+    _put_non_empty(value, "file_id", request.file_id)
+    _put_non_empty(value, "file_ref", request.file_ref)
+    _put_non_empty(value, "resource_ref", request.resource_ref)
+    _put_non_empty(value, "resource_ura", request.resource_ura)
+    _put_non_empty(value, "filename", request.filename)
+    value["purpose"] = request.purpose
+    _put_non_empty(value, "owner_ura", request.owner_ura)
+    _put_non_empty(value, "content_type", request.content_type)
+    _put_non_empty(value, "content_hash", request.content_hash)
+    _put_non_zero(value, "bytes", request.bytes)
+    _put_non_zero(value, "size_bytes", request.size_bytes)
+    _put_non_zero(value, "created_at", request.created_at)
+    _put_non_empty(value, "status", request.status)
+    _merge_metadata(value, request.metadata)
+    return value
+
+
+def _file_payload(base: CompatibilityCarrierBase, request: CompatibilityFileRequest) -> dict[str, object]:
+    value = base.to_json_dict()
+    _put_non_empty(value, "id", request.id)
+    _put_non_empty(value, "file_id", request.file_id)
+    _put_non_empty(value, "file_ref", request.file_ref)
+    _put_non_empty(value, "resource_ref", request.resource_ref)
+    _put_non_empty(value, "resource_ura", request.resource_ura)
+    _put_non_empty(value, "filename", request.filename)
+    _put_non_empty(value, "purpose", request.purpose)
+    _put_non_empty(value, "owner_ura", request.owner_ura)
+    _put_non_empty(value, "content_type", request.content_type)
+    _put_non_empty(value, "content_hash", request.content_hash)
+    _put_non_zero(value, "bytes", request.bytes)
+    _put_non_zero(value, "size_bytes", request.size_bytes)
+    _put_non_zero(value, "created_at", request.created_at)
+    _put_non_zero(value, "created", request.created)
+    _put_non_empty(value, "status", request.status)
+    _merge_metadata(value, request.metadata)
+    return value
+
+
+def _file_delete_payload(
+    base: CompatibilityCarrierBase, request: CompatibilityFileDeleteRequest
+) -> dict[str, object]:
+    value = base.to_json_dict()
+    _put_non_empty(value, "id", request.id)
+    _put_non_empty(value, "file_id", request.file_id)
+    _put_non_empty(value, "file_ref", request.file_ref)
+    _put_non_empty(value, "resource_ref", request.resource_ref)
+    _put_non_empty(value, "resource_ura", request.resource_ura)
+    _put_non_empty(value, "content_hash", request.content_hash)
+    value["deleted"] = request.deleted
+    _merge_metadata(value, request.metadata)
+    return value
 
 
 def _validate_file_upload_request(request: CompatibilityFileUploadRequest) -> None:
@@ -706,6 +857,27 @@ def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
+def _put_non_empty(value: dict[str, object], key: str, item: str) -> None:
+    if item:
+        value[key] = item
+
+
+def _put_non_zero(value: dict[str, object], key: str, item: int) -> None:
+    if item != 0:
+        value[key] = item
+
+
+def _merge_metadata(value: dict[str, object], metadata: Mapping[str, object]) -> None:
+    if not metadata:
+        return
+    base = value.get("metadata")
+    merged: dict[str, object] = {}
+    if isinstance(base, dict):
+        merged.update(base)
+    merged.update(metadata)
+    value["metadata"] = merged
+
+
 def _first_non_empty(*values: str) -> str:
     for value in values:
         if value:
@@ -739,4 +911,3 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         message=message,
         cause=cause,
     )
-

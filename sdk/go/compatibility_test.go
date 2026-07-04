@@ -7,13 +7,18 @@ import (
 )
 
 type memoryCompatibilityTransport struct {
-	listInvocation       string
-	chatInvocation       string
-	streamChatInvocation string
-	modelPage            string
-	chatCompletion       string
-	chatStream           string
-	seen                 map[string]map[string]any
+	listInvocation         string
+	chatInvocation         string
+	streamChatInvocation   string
+	fileUploadInvocation   string
+	fileRetrieveInvocation string
+	fileDeleteInvocation   string
+	modelPage              string
+	chatCompletion         string
+	chatStream             string
+	file                   string
+	fileDelete             string
+	seen                   map[string]map[string]any
 }
 
 func (m *memoryCompatibilityTransport) remember(name string, requestJSON []byte) {
@@ -40,6 +45,21 @@ func (m *memoryCompatibilityTransport) BuildStreamChatCompletionInvocation(_ con
 	return []byte(m.streamChatInvocation), nil
 }
 
+func (m *memoryCompatibilityTransport) BuildFileUploadInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_file_upload", requestJSON)
+	return []byte(m.fileUploadInvocation), nil
+}
+
+func (m *memoryCompatibilityTransport) BuildFileRetrieveInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_file_retrieve", requestJSON)
+	return []byte(m.fileRetrieveInvocation), nil
+}
+
+func (m *memoryCompatibilityTransport) BuildFileDeleteInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_file_delete", requestJSON)
+	return []byte(m.fileDeleteInvocation), nil
+}
+
 func (m *memoryCompatibilityTransport) ListModels(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("list_models", requestJSON)
 	return []byte(m.modelPage), nil
@@ -53,6 +73,21 @@ func (m *memoryCompatibilityTransport) CreateChatCompletion(_ context.Context, r
 func (m *memoryCompatibilityTransport) StreamChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("stream_chat", requestJSON)
 	return []byte(m.chatStream), nil
+}
+
+func (m *memoryCompatibilityTransport) UploadFile(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("upload_file", requestJSON)
+	return []byte(m.file), nil
+}
+
+func (m *memoryCompatibilityTransport) RetrieveFile(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("retrieve_file", requestJSON)
+	return []byte(m.file), nil
+}
+
+func (m *memoryCompatibilityTransport) DeleteFile(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("delete_file", requestJSON)
+	return []byte(m.fileDelete), nil
 }
 
 func compatibilityBaseForTest() CompatibilityCarrierBase {
@@ -78,11 +113,56 @@ func compatibilityChatRequest() map[string]any {
 	}
 }
 
+func compatibilityFileUploadRequest(base CompatibilityCarrierBase) CompatibilityFileUploadRequest {
+	base.Metadata = map[string]any{"request_id": "compat-file-upload-1"}
+	return CompatibilityFileUploadRequest{
+		CompatibilityCarrierBase: base,
+		ID:                       "file-easynet-docs-1",
+		FileRef:                  "easynet:///r/example/resource/alice.files/prompt.jsonl",
+		OwnerURA:                 "easynet:///r/example/agent/alice.sdk",
+		Filename:                 "prompt.jsonl",
+		Purpose:                  "batch",
+		ContentType:              "application/jsonl",
+		ContentHash:              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SizeBytes:                19,
+		CreatedAt:                1783094400,
+		Metadata:                 map[string]any{"file_route": "uploads"},
+	}
+}
+
+func compatibilityFileRequest(base CompatibilityCarrierBase) CompatibilityFileRequest {
+	base.AuthToken = ""
+	base.Metadata = map[string]any{"request_id": "compat-file-retrieve-1"}
+	return CompatibilityFileRequest{
+		CompatibilityCarrierBase: base,
+		ID:                       "file-easynet-docs-1",
+		FileRef:                  "easynet:///r/example/resource/alice.files/prompt.jsonl",
+		Filename:                 "prompt.jsonl",
+		Purpose:                  "batch",
+		SizeBytes:                19,
+		CreatedAt:                1783094400,
+	}
+}
+
+func compatibilityFileDeleteRequest(base CompatibilityCarrierBase) CompatibilityFileDeleteRequest {
+	base.AuthToken = ""
+	base.Metadata = map[string]any{"request_id": "compat-file-delete-1"}
+	return CompatibilityFileDeleteRequest{
+		CompatibilityCarrierBase: base,
+		ID:                       "file-easynet-docs-1",
+		FileRef:                  "easynet:///r/example/resource/alice.files/prompt.jsonl",
+		Deleted:                  true,
+	}
+}
+
 func TestCompatibilityBuildsOpenAIInvocations(t *testing.T) {
 	transport := &memoryCompatibilityTransport{
-		listInvocation:       compatibilityListModelsInvocationJSON,
-		chatInvocation:       compatibilityChatCompletionInvocationJSON,
-		streamChatInvocation: compatibilityStreamChatCompletionInvocationJSON,
+		listInvocation:         compatibilityListModelsInvocationJSON,
+		chatInvocation:         compatibilityChatCompletionInvocationJSON,
+		streamChatInvocation:   compatibilityStreamChatCompletionInvocationJSON,
+		fileUploadInvocation:   compatibilityFileUploadInvocationJSON,
+		fileRetrieveInvocation: compatibilityFileRetrieveInvocationJSON,
+		fileDeleteInvocation:   compatibilityFileDeleteInvocationJSON,
 	}
 	client, err := NewCompatibilityClient(transport)
 	if err != nil {
@@ -129,6 +209,44 @@ func TestCompatibilityBuildsOpenAIInvocations(t *testing.T) {
 	if request["stream"] != true {
 		t.Fatalf("stream request did not force stream=true: %#v", request)
 	}
+
+	uploadDraft, err := client.BuildFileUploadInvocation(context.Background(), compatibilityFileUploadRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploadDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.files.upload@1.0.0" {
+		t.Fatalf("file upload descriptor = %q", uploadDraft.DescriptorRef())
+	}
+	if transport.seen["build_file_upload"]["auth_token"] != "tok_example" {
+		t.Fatalf("file upload auth token not preserved: %#v", transport.seen["build_file_upload"])
+	}
+	metadata := transport.seen["build_file_upload"]["metadata"].(map[string]any)
+	if metadata["request_id"] != "compat-file-upload-1" || metadata["file_route"] != "uploads" {
+		t.Fatalf("file metadata not merged: %#v", metadata)
+	}
+
+	retrieveDraft, err := client.BuildFileRetrieveInvocation(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retrieveDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.files.retrieve@1.0.0" {
+		t.Fatalf("file retrieve descriptor = %q", retrieveDraft.DescriptorRef())
+	}
+	getDraft, err := client.BuildFileGetInvocation(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getDraft.DescriptorRef() != retrieveDraft.DescriptorRef() {
+		t.Fatalf("file get descriptor = %q", getDraft.DescriptorRef())
+	}
+
+	deleteDraft, err := client.BuildFileDeleteInvocation(context.Background(), compatibilityFileDeleteRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.files.delete@1.0.0" {
+		t.Fatalf("file delete descriptor = %q", deleteDraft.DescriptorRef())
+	}
 }
 
 func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
@@ -136,6 +254,8 @@ func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
 		modelPage:      compatibilityModelPageJSON,
 		chatCompletion: compatibilityChatCompletionJSON,
 		chatStream:     compatibilityChatStreamJSON,
+		file:           compatibilityFileJSON,
+		fileDelete:     compatibilityFileDeleteResultJSON,
 	}
 	client, err := NewCompatibilityClient(transport)
 	if err != nil {
@@ -166,6 +286,37 @@ func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
 	}
 	if !stream.Stream || stream.DoneSentinel != "[DONE]" || len(stream.Items) != 1 {
 		t.Fatalf("unexpected chat stream: %#v", stream)
+	}
+
+	uploaded, err := client.UploadFile(context.Background(), compatibilityFileUploadRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploaded.ID != "file-easynet-docs-1" || uploaded.Bytes != 19 {
+		t.Fatalf("unexpected uploaded file projection: %#v", uploaded)
+	}
+
+	retrieved, err := client.RetrieveFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retrieved.ID != uploaded.ID || retrieved.Filename != "prompt.jsonl" {
+		t.Fatalf("unexpected retrieved file projection: %#v", retrieved)
+	}
+	got, err := client.GetFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != uploaded.ID || got.Filename != "prompt.jsonl" {
+		t.Fatalf("unexpected get file projection: %#v", got)
+	}
+
+	daemonDeleted, err := client.DeleteFile(context.Background(), compatibilityFileDeleteRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !daemonDeleted.Deleted || daemonDeleted.ID != "file-easynet-docs-1" {
+		t.Fatalf("unexpected daemon file delete projection: %#v", daemonDeleted)
 	}
 
 	file, err := client.ProjectFileUpload(CompatibilityFileUploadRequest{
@@ -222,6 +373,9 @@ func TestCompatibilityRejectsInvalidRequests(t *testing.T) {
 	if _, err := client.ProjectFileUpload(CompatibilityFileUploadRequest{Purpose: "batch"}); err == nil {
 		t.Fatal("expected incomplete file facts rejection")
 	}
+	if _, err := client.BuildFileUploadInvocation(context.Background(), CompatibilityFileUploadRequest{Purpose: "batch"}); err == nil {
+		t.Fatal("expected incomplete file carrier rejection")
+	}
 	if _, err := client.ProjectFileDeleteResult(CompatibilityFileDeleteRequest{ID: "file-1", Deleted: false}); err == nil {
 		t.Fatal("expected non-deleted result rejection")
 	}
@@ -261,6 +415,42 @@ const compatibilityStreamChatCompletionInvocationJSON = `{
   "args": {"request": {"model": "easynet:///r/example/ability/alice.codex.chat", "messages": [{"role": "user", "content": "reply with: ok"}], "stream": true}},
   "content_type": "application/json",
   "metadata": {"request_id": "compat-stream-chat-completion-1", "profile": "compatibility", "system_ability": "openai.chat_completions", "carrier_owner": "daemon_sdk"}
+}`
+
+const compatibilityFileUploadInvocationJSON = `{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.openai.files.upload@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl", "purpose": "batch"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "compat-file-upload-1", "profile": "compatibility", "system_ability": "openai.files.upload", "carrier_owner": "daemon_sdk"}
+}`
+
+const compatibilityFileRetrieveInvocationJSON = `{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.openai.files.retrieve@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"file_id": "file-easynet-docs-1"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "compat-file-retrieve-1", "profile": "compatibility", "system_ability": "openai.files.retrieve", "carrier_owner": "daemon_sdk"}
+}`
+
+const compatibilityFileDeleteInvocationJSON = `{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.openai.files.delete@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"file_id": "file-easynet-docs-1", "deleted": true},
+  "content_type": "application/json",
+  "metadata": {"request_id": "compat-file-delete-1", "profile": "compatibility", "system_ability": "openai.files.delete", "carrier_owner": "daemon_sdk"}
 }`
 
 const compatibilityModelPageJSON = `{
@@ -310,4 +500,26 @@ const compatibilityChatStreamJSON = `{
   }],
   "done_sentinel": "[DONE]",
   "metadata": {"profile": "compatibility", "source": "openai.chat_completions"}
+}`
+
+const compatibilityFileJSON = `{
+  "profile": "compatibility",
+  "kind": "file",
+  "id": "file-easynet-docs-1",
+  "object": "file",
+  "bytes": 19,
+  "created_at": 1783094400,
+  "filename": "prompt.jsonl",
+  "purpose": "batch",
+  "status": "processed",
+  "metadata": {"profile": "compatibility", "source": "openai.files", "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl"}
+}`
+
+const compatibilityFileDeleteResultJSON = `{
+  "profile": "compatibility",
+  "kind": "file_delete_result",
+  "id": "file-easynet-docs-1",
+  "object": "file",
+  "deleted": true,
+  "metadata": {"profile": "compatibility", "source": "openai.files.delete"}
 }`

@@ -38,15 +38,16 @@ exposes page list/create/delete/manifest Invocation carriers plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
 seams. CompatibilityClient exposes
-OpenAI-compatible list-models/chat/stream-chat Invocation carriers plus model,
-chat, stream, file, and file-delete projection seams. WrapperClient exposes
+OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
+Invocation carriers plus model, chat, stream, file, and file-delete projection
+seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session record projection
 seams. Concrete daemon
 process spawn/default C ABI or UDS transport, directory subscriptions, local signer implementations,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
-carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE
-product cutovers, wrapper execution helpers and backend HTTP/WebSocket bridges,
+carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
+multipart storage execution, and product cutovers, wrapper execution helpers and backend HTTP/WebSocket bridges,
 concrete bidi adapters, and EasyRemote cutover gates remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.
