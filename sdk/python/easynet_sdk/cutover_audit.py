@@ -31,6 +31,7 @@ _FORBIDDEN_DEPENDENCY_NAMES = {
     "easynet-run-axon",
     "libeasynet-cli",
 }
+_LEGACY_TRANSPORT_PACKAGE = "_transport"
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class EasyRemoteCutoverAuditor:
         text = source.read_text(encoding="utf-8")
         relative = str(source.relative_to(root) if source != root else source.name)
         violations: list[CutoverViolation] = []
+        violations.extend(_audit_legacy_transport_path(relative))
         violations.extend(_audit_imports(relative, text))
         violations.extend(_audit_raw_ffi_markers(relative, text))
         violations.extend(_audit_raw_abi_symbols(relative, text))
@@ -166,6 +168,15 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
                             line=node.lineno,
                         )
                     )
+                if _is_legacy_transport_module(alias.name):
+                    violations.append(
+                        CutoverViolation(
+                            path=path,
+                            rule="raw_transport_module",
+                            detail=alias.name,
+                            line=node.lineno,
+                        )
+                    )
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             root = module.split(".", 1)[0]
@@ -178,7 +189,40 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
                         line=node.lineno,
                     )
                 )
+            if _is_legacy_transport_module(module, level=node.level):
+                violations.append(
+                    CutoverViolation(
+                        path=path,
+                        rule="raw_transport_module",
+                        detail=module or "." * node.level,
+                        line=node.lineno,
+                    )
+                )
+            for alias in node.names:
+                if _is_legacy_transport_module(alias.name, level=node.level):
+                    violations.append(
+                        CutoverViolation(
+                            path=path,
+                            rule="raw_transport_module",
+                            detail=alias.name,
+                            line=node.lineno,
+                        )
+                    )
     return tuple(violations)
+
+
+def _audit_legacy_transport_path(path: str) -> tuple[CutoverViolation, ...]:
+    parts = Path(path).parts
+    if _LEGACY_TRANSPORT_PACKAGE not in parts:
+        return tuple()
+    return (
+        CutoverViolation(
+            path=path,
+            rule="raw_transport_module",
+            detail="/".join(parts),
+            line=1,
+        ),
+    )
 
 
 def _audit_raw_abi_symbols(path: str, text: str) -> tuple[CutoverViolation, ...]:
@@ -622,6 +666,20 @@ def _invocation_dict_fields(node: ast.Dict) -> set[str]:
 
 def _is_raw_axon_module(module: str) -> bool:
     return module == "axon" or module.startswith("axon.") or "axon_pb2" in module
+
+
+def _is_legacy_transport_module(module: str, *, level: int = 0) -> bool:
+    if module == _LEGACY_TRANSPORT_PACKAGE or module.startswith(
+        _LEGACY_TRANSPORT_PACKAGE + "."
+    ):
+        return True
+    if level and (
+        module == _LEGACY_TRANSPORT_PACKAGE
+        or module.startswith(_LEGACY_TRANSPORT_PACKAGE + ".")
+    ):
+        return True
+    parts = module.split(".")
+    return _LEGACY_TRANSPORT_PACKAGE in parts
 
 
 def _is_python_manifest(path: Path) -> bool:

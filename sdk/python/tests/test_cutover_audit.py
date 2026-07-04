@@ -52,6 +52,47 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertIn("raw_ffi_loader", _rules(result))
         self.assertIn("raw_c_abi_symbol", _rules(result))
 
+    def test_flags_legacy_private_transport_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            transport = root / "easyremote" / "_transport"
+            transport.mkdir(parents=True)
+            (transport / "abi.py").write_text(
+                textwrap.dedent(
+                    """
+                    class Session:
+                        def invoke(self, payload):
+                            return payload
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_transport_module", _rules(result))
+
+    def test_flags_legacy_private_transport_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "client.py").write_text(
+                textwrap.dedent(
+                    """
+                    import easyremote._transport.abi
+                    from ._transport import session
+                    from . import _transport
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        violations = [item for item in result.violations if item.rule == "raw_transport_module"]
+        self.assertGreaterEqual(len(violations), 3)
+
     def test_accepts_sdk_only_pyproject_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
