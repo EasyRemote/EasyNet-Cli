@@ -56,6 +56,18 @@ from easynet_sdk import (
     SurfaceDeletePageRequest,
     SurfaceListPagesRequest,
     SurfaceManifestRequest,
+    WrapperBrowserSessionRequest,
+    WrapperBrowserStartRequest,
+    WrapperCarrierBase,
+    WrapperClient,
+    WrapperFileRecordRequest,
+    WrapperFileTransferRequest,
+    WrapperMediaSessionRequest,
+    WrapperMediaStartRequest,
+    WrapperRemoteDesktopSessionRequest,
+    WrapperRemoteDesktopStartRequest,
+    WrapperTerminalSessionRequest,
+    WrapperTerminalStartRequest,
     is_code,
 )
 from easynet_sdk._cabi import (
@@ -71,6 +83,7 @@ from easynet_sdk._cabi import (
     CABIRuntimeConnector,
     CABIRuntimeTransport,
     CABISurfaceTransport,
+    CABIWrapperTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
     _JSON_HANDLE_OUTPUT_SYMBOLS,
@@ -492,6 +505,47 @@ class FakeRawCABI:
             }
         if system_ability == "openai.files.delete":
             return {"id": "file-easynet-docs-1", "deleted": True}
+        if system_ability == "wrapper.file.transfer":
+            return {
+                "file_ref": "easynet:///r/example/resource/alice.files/report.txt",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "content_type": "text/plain",
+                "size_bytes": 42,
+                "content_hash": (
+                    "sha256:"
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+                "metadata": {"route": "upload"},
+            }
+        if system_ability == "wrapper.terminal.start":
+            return {
+                "session_id": "term-1",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "state": "ready",
+                "terminal_ref": "pty:1",
+            }
+        if system_ability == "wrapper.remote_desktop.start":
+            return {
+                "session_id": "rdp-1",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "state": "ready",
+                "display_ref": "display:1",
+            }
+        if system_ability == "wrapper.browser.start":
+            return {
+                "session_id": "browser-1",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "state": "ready",
+                "browser_ref": "browser:1",
+            }
+        if system_ability == "wrapper.media.start":
+            return {
+                "session_id": "media-1",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "state": "ready",
+                "media_kind": "voice",
+                "stream_ref": "stream:1",
+            }
         if system_ability == "namespace.resolve":
             return {
                 "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
@@ -743,6 +797,16 @@ class FakeRawCABI:
             return COMPAT_FILE_RETRIEVE_INVOCATION
         if symbol == "easynet_compatibility_build_file_delete_invocation":
             return COMPAT_FILE_DELETE_INVOCATION
+        if symbol == "easynet_wrappers_build_file_transfer_invocation":
+            return WRAPPER_FILE_TRANSFER_INVOCATION
+        if symbol == "easynet_wrappers_build_terminal_session_invocation":
+            return WRAPPER_TERMINAL_INVOCATION
+        if symbol == "easynet_wrappers_build_remote_desktop_session_invocation":
+            return WRAPPER_REMOTE_DESKTOP_INVOCATION
+        if symbol == "easynet_wrappers_build_browser_session_invocation":
+            return WRAPPER_BROWSER_INVOCATION
+        if symbol == "easynet_wrappers_build_media_session_invocation":
+            return WRAPPER_MEDIA_INVOCATION
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -1456,34 +1520,107 @@ COMPAT_FILE_DELETE_PROJECTION = (
     b'"metadata":{"profile":"compatibility","source":"openai.files.delete"}}'
 )
 
+WRAPPER_FILE_TRANSFER_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.wrapper.file.transfer@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"wrapper_kind":"file","operation":"transfer"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"wrappers","system_ability":"wrapper.file.transfer",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+WRAPPER_TERMINAL_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.wrapper.terminal.start@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"wrapper_kind":"terminal","session_id":"term-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"wrappers","system_ability":"wrapper.terminal.start",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+WRAPPER_REMOTE_DESKTOP_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.wrapper.remote_desktop.start@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"wrapper_kind":"remote_desktop","session_id":"rdp-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"wrappers",'
+    b'"system_ability":"wrapper.remote_desktop.start",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+WRAPPER_BROWSER_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.wrapper.browser.start@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"wrapper_kind":"browser","session_id":"browser-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"wrappers","system_ability":"wrapper.browser.start",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+WRAPPER_MEDIA_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.wrapper.media.start@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"wrapper_kind":"media","session_id":"media-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"wrappers","system_ability":"wrapper.media.start",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 WRAPPER_FILE_PROJECTION = (
-    b'{"profile":"wrappers","kind":"file_record","file_id":"file-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","resource_ura":"res",'
-    b'"state":"ready","metadata":{}}'
+    b'{"profile":"wrappers","kind":"file_record",'
+    b'"file_ref":"easynet:///r/example/resource/alice.files/report.txt",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"content_type":"text/plain","size_bytes":42,'
+    b'"content_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+    b'"metadata":{"profile":"wrappers","source":"wrappers.file_record"}}'
 )
 
 WRAPPER_TERMINAL_PROJECTION = (
     b'{"profile":"wrappers","kind":"terminal_session","session_id":"term-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
-    b'"pty_ref":"pty:1","metadata":{}}'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk","state":"ready",'
+    b'"terminal_ref":"pty:1",'
+    b'"metadata":{"profile":"wrappers","source":"wrappers.terminal_session"}}'
 )
 
 WRAPPER_REMOTE_DESKTOP_PROJECTION = (
     b'{"profile":"wrappers","kind":"remote_desktop_session","session_id":"rdp-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
-    b'"desktop_ref":"desktop:1","metadata":{}}'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk","state":"ready",'
+    b'"display_ref":"display:1",'
+    b'"metadata":{"profile":"wrappers","source":"wrappers.remote_desktop_session"}}'
 )
 
 WRAPPER_BROWSER_PROJECTION = (
     b'{"profile":"wrappers","kind":"browser_session","session_id":"browser-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
-    b'"browser_ref":"browser:1","metadata":{}}'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk","state":"ready",'
+    b'"browser_ref":"browser:1",'
+    b'"metadata":{"profile":"wrappers","source":"wrappers.browser_session"}}'
 )
 
 WRAPPER_MEDIA_PROJECTION = (
     b'{"profile":"wrappers","kind":"media_session","session_id":"media-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","state":"ready",'
-    b'"media_kind":"audio","stream_ref":"stream:1","metadata":{}}'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk","state":"ready",'
+    b'"media_kind":"voice","stream_ref":"stream:1",'
+    b'"metadata":{"profile":"wrappers","source":"wrappers.media_session"}}'
 )
 
 CURRENT_ABI_PREPARED = b"""{
@@ -2150,6 +2287,120 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.profile_requests[5][2]["purpose"], "batch")
         self.assertEqual(raw.profile_requests[7][2]["id"], "file-easynet-docs-1")
         self.assertTrue(raw.profile_requests[9][2]["deleted"])
+        self.assertEqual(raw.buffers, {})
+
+    def test_wrapper_live_helpers_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = WrapperClient(CABIWrapperTransport(lib, handle=7))
+        base = WrapperCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        file = client.transfer_file(
+            WrapperFileTransferRequest(
+                base=base,
+                file=WrapperFileRecordRequest(
+                    file_ref="easynet:///r/example/resource/alice.files/report.txt",
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    content_type="text/plain",
+                    size_bytes=42,
+                    content_hash=(
+                        "sha256:"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    ),
+                ),
+            )
+        )
+        terminal = client.start_terminal_session(
+            WrapperTerminalStartRequest(
+                base=base,
+                session=WrapperTerminalSessionRequest(
+                    session_id="term-1",
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    state="starting",
+                ),
+                command=("bash", "-lc"),
+            )
+        )
+        remote = client.start_remote_desktop_session(
+            WrapperRemoteDesktopStartRequest(
+                base=base,
+                session=WrapperRemoteDesktopSessionRequest(
+                    session_id="rdp-1",
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    state="starting",
+                    display_ref="display-main",
+                ),
+                display="main",
+            )
+        )
+        browser = client.start_browser_session(
+            WrapperBrowserStartRequest(
+                base=base,
+                session=WrapperBrowserSessionRequest(
+                    session_id="browser-1",
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    state="starting",
+                    browser_ref="browser-main",
+                ),
+                url="https://example.com",
+            )
+        )
+        media = client.start_media_session(
+            WrapperMediaStartRequest(
+                base=base,
+                session=WrapperMediaSessionRequest(
+                    session_id="media-1",
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    state="starting",
+                    media_kind="voice",
+                    stream_ref="stream-voice-1",
+                ),
+                codec="opus",
+            )
+        )
+
+        self.assertEqual(file.file_ref, "easynet:///r/example/resource/alice.files/report.txt")
+        self.assertEqual(terminal.terminal_ref, "pty:1")
+        self.assertEqual(remote.display_ref, "display:1")
+        self.assertEqual(browser.browser_ref, "browser:1")
+        self.assertEqual(media.stream_ref, "stream:1")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_wrappers_build_file_transfer_invocation",
+                "easynet_wrappers_project_file_record",
+                "easynet_wrappers_build_terminal_session_invocation",
+                "easynet_wrappers_project_terminal_session",
+                "easynet_wrappers_build_remote_desktop_session_invocation",
+                "easynet_wrappers_project_remote_desktop_session",
+                "easynet_wrappers_build_browser_session_invocation",
+                "easynet_wrappers_project_browser_session",
+                "easynet_wrappers_build_media_session_invocation",
+                "easynet_wrappers_project_media_session",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            [
+                "wrapper.file.transfer",
+                "wrapper.terminal.start",
+                "wrapper.remote_desktop.start",
+                "wrapper.browser.start",
+                "wrapper.media.start",
+            ],
+        )
+        self.assertEqual(raw.profile_requests[1][2]["content_type"], "text/plain")
+        self.assertEqual(raw.profile_requests[3][2]["terminal_ref"], "pty:1")
+        self.assertEqual(raw.profile_requests[5][2]["display_ref"], "display:1")
+        self.assertEqual(raw.profile_requests[7][2]["browser_ref"], "browser:1")
+        self.assertEqual(raw.profile_requests[9][2]["media_kind"], "voice")
         self.assertEqual(raw.buffers, {})
 
     def test_mission_live_methods_use_carrier_invoke_and_projection(self) -> None:

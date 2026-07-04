@@ -486,6 +486,19 @@ class SdkEnvironmentTests(unittest.TestCase):
                     ),
                 )
             )
+            wrapper.transfer_file(
+                WrapperFileTransferRequest(
+                    base=_wrapper_base(),
+                    file=WrapperFileRecordRequest(
+                        file_ref=(
+                            "easynet:///r/example/resource/alice.files/report.txt"
+                        ),
+                        owner_ura=_CALLER,
+                        content_type="text/plain",
+                        size_bytes=42,
+                    ),
+                )
+            )
             wrapper.build_terminal_session_invocation(
                 WrapperTerminalStartRequest(
                     base=_wrapper_base(),
@@ -497,7 +510,30 @@ class SdkEnvironmentTests(unittest.TestCase):
                     command=("bash", "-lc"),
                 )
             )
+            wrapper.start_terminal_session(
+                WrapperTerminalStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperTerminalSessionRequest(
+                        session_id="term-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                    ),
+                    command=("bash", "-lc"),
+                )
+            )
             wrapper.build_remote_desktop_session_invocation(
+                WrapperRemoteDesktopStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperRemoteDesktopSessionRequest(
+                        session_id="rdp-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                        display_ref="display-main",
+                    ),
+                    display="main",
+                )
+            )
+            wrapper.start_remote_desktop_session(
                 WrapperRemoteDesktopStartRequest(
                     base=_wrapper_base(),
                     session=WrapperRemoteDesktopSessionRequest(
@@ -521,7 +557,32 @@ class SdkEnvironmentTests(unittest.TestCase):
                     url="https://example.com",
                 )
             )
+            wrapper.start_browser_session(
+                WrapperBrowserStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperBrowserSessionRequest(
+                        session_id="browser-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                        browser_ref="browser-main",
+                    ),
+                    url="https://example.com",
+                )
+            )
             wrapper.build_media_session_invocation(
+                WrapperMediaStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperMediaSessionRequest(
+                        session_id="media-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                        media_kind="voice",
+                        stream_ref="stream-voice-1",
+                    ),
+                    codec="opus",
+                )
+            )
+            wrapper.start_media_session(
                 WrapperMediaStartRequest(
                     base=_wrapper_base(),
                     session=WrapperMediaSessionRequest(
@@ -585,12 +646,17 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_compatibility_build_file_delete_invocation", symbols)
         self.assertIn("easynet_compatibility_project_file_delete_result", symbols)
         self.assertIn("easynet_wrappers_build_file_transfer_invocation", symbols)
+        self.assertIn("easynet_wrappers_project_file_record", symbols)
         self.assertIn("easynet_wrappers_build_terminal_session_invocation", symbols)
+        self.assertIn("easynet_wrappers_project_terminal_session", symbols)
         self.assertIn(
             "easynet_wrappers_build_remote_desktop_session_invocation", symbols
         )
+        self.assertIn("easynet_wrappers_project_remote_desktop_session", symbols)
         self.assertIn("easynet_wrappers_build_browser_session_invocation", symbols)
+        self.assertIn("easynet_wrappers_project_browser_session", symbols)
         self.assertIn("easynet_wrappers_build_media_session_invocation", symbols)
+        self.assertIn("easynet_wrappers_project_media_session", symbols)
         runtime_abilities = [
             entry[1]["metadata"]["system_ability"]
             for entry in raw.runtime_requests
@@ -606,6 +672,11 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("openai.files.upload", runtime_abilities)
         self.assertIn("openai.files.retrieve", runtime_abilities)
         self.assertIn("openai.files.delete", runtime_abilities)
+        self.assertIn("wrapper.file.transfer", runtime_abilities)
+        self.assertIn("wrapper.terminal.start", runtime_abilities)
+        self.assertIn("wrapper.remote_desktop.start", runtime_abilities)
+        self.assertIn("wrapper.browser.start", runtime_abilities)
+        self.assertIn("wrapper.media.start", runtime_abilities)
 
     def test_publication_deploy_uses_cabi_carrier_and_runtime_core(self) -> None:
         raw = FakeRawCABI()

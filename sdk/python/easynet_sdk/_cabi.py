@@ -1380,19 +1380,39 @@ class CABIWrapperTransport(_CABIProfileTransport):
         return self._call("easynet_wrappers_build_media_session_invocation", request_json)
 
     def transfer_file(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper file transfer")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_wrappers_build_file_transfer_invocation",
+            project_symbol="easynet_wrappers_project_file_record",
+        )
 
     def start_terminal_session(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper terminal session")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_wrappers_build_terminal_session_invocation",
+            project_symbol="easynet_wrappers_project_terminal_session",
+        )
 
     def start_remote_desktop_session(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper remote desktop session")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_wrappers_build_remote_desktop_session_invocation",
+            project_symbol="easynet_wrappers_project_remote_desktop_session",
+        )
 
     def start_browser_session(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper browser session")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_wrappers_build_browser_session_invocation",
+            project_symbol="easynet_wrappers_project_browser_session",
+        )
 
     def start_media_session(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper media session")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_wrappers_build_media_session_invocation",
+            project_symbol="easynet_wrappers_project_media_session",
+        )
 
     def project_file_record(self, file_json: bytes) -> bytes:
         return self._call("easynet_wrappers_project_file_record", file_json)

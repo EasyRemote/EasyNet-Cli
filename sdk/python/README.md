@@ -71,7 +71,8 @@ and file upload/get/delete execution through Runtime Core invoke, plus model,
 chat, stream, file, and file-delete projection seams and close state seams.
 WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
-builders, including C ABI-backed concrete carrier builders,
+builders, including C ABI-backed record-returning file, terminal, remote desktop,
+browser, and media helper execution through Runtime Core invoke,
 transport-backed helper close state seams, and record projections. Direct daemon
 UDS transport, directory subscription live adapters, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication
