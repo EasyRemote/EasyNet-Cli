@@ -10,6 +10,7 @@ from .client import Client, FeatureSet
 from .admin import AdminClient
 from .compatibility import CompatibilityClient
 from .connection import ConnectOptions, RuntimeConnection
+from .control_ipc import ControlIpcClient
 from .daemon import DaemonControl
 from .directory import DirectoryClient
 from .errors import ErrorCode, RetryHint, SDKError
@@ -74,6 +75,17 @@ class SdkEnvironment:
         )
         self._track(transport)
         return DaemonControl(transport)
+
+    def control_ipc_client(self, *, timeout: float | None = None) -> ControlIpcClient:
+        """Open a direct boot/status control IPC client."""
+
+        self._require_open()
+        return self._track(
+            ControlIpcClient.connect(
+                self.control_path,
+                timeout=timeout,
+            )
+        )
 
     def connect_local(
         self, options: ConnectOptions = ConnectOptions()

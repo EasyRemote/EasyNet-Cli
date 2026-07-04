@@ -11,7 +11,8 @@ Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compat
 OpenAI adapter seam, and Convenience Wrapper execution seam
 partial. The package exposes typed
 feature/version discovery with root client close, public `SdkEnvironment`
-process-root factories, private C ABI v4 discovery, daemon
+process-root factories, direct control-plane UDS boot/status IPC over
+`control.json`/`control.sock`, private C ABI v4 discovery, daemon
 lifecycle/open-runtime, identity projection, and runtime
 health/unary/stream/bidi/prepare-submit handle transports plus C ABI-backed
 RuntimeConnection connector, profile
@@ -86,8 +87,8 @@ WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed record-returning file, terminal, remote desktop,
 browser, and media helper execution through Runtime Core invoke,
-transport-backed helper close state seams, and record projections. Direct daemon
-UDS transport, local signer implementations,
+transport-backed helper close state seams, and record projections. Product Invocation
+direct daemon UDS transport, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication plugin
 install and ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution

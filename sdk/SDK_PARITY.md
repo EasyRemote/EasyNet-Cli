@@ -10,7 +10,7 @@ method spelling.
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
 | Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/direct control-plane UDS/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -175,7 +175,7 @@ method spelling.
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
-  `SdkEnvironment` process-root factories over private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport plus C ABI-backed RuntimeConnection connector, runtime
+  `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC and private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport plus C ABI-backed RuntimeConnection connector, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
@@ -192,7 +192,7 @@ method spelling.
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   EasyRemote-style descriptor-ref cutover tests; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
-  Surface, Compatibility, and Wrapper carriers/records; direct UDS transport,
+  Surface, Compatibility, and Wrapper carriers/records; product Invocation direct daemon UDS transport,
   live profile execution adapters, actual EasyRemote repository extraction, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
