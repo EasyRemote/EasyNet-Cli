@@ -285,12 +285,14 @@ method spelling.
   shaping, multipart storage execution, SSE/WebSocket fanout, streaming chat
   adapters, and EasyRemote/Hub compatibility cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
-  browser, and media session Invocation carrier builders, transport-backed
-  helper close state seams, and record projections; Python concrete C ABI
-  transport now backs wrapper carrier builders plus record-returning file,
-  terminal, remote desktop, browser, and media helper execution through Runtime
-  Core, while backend HTTP/WebSocket bridges, storage policy, concrete
-  stream/bidi adapters, and product wrapper cutovers remain incomplete.
+  browser, and media session Invocation carrier builders, public
+  `RuntimeWrapperTransport` carrier-build/runtime-invoke/record-project
+  composition, transport-backed helper close state seams, and record
+  projections; Python concrete C ABI transport now backs wrapper carrier
+  builders plus record-returning file, terminal, remote desktop, browser, and
+  media helper execution through Runtime Core, while backend HTTP/WebSocket
+  bridges, storage policy, concrete stream/bidi adapters, and product wrapper
+  cutovers remain incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.

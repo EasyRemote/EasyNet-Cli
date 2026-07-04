@@ -9,6 +9,7 @@ from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
+from .runtime import RuntimeClient
 
 
 _PROFILE = "wrappers"
@@ -292,6 +293,166 @@ class WrapperTransport(Protocol):
 
     def start_media_session(self, request_json: bytes) -> bytes:
         ...
+
+    def project_file_record(self, file_json: bytes) -> bytes:
+        ...
+
+    def project_terminal_session(self, session_json: bytes) -> bytes:
+        ...
+
+    def project_remote_desktop_session(self, session_json: bytes) -> bytes:
+        ...
+
+    def project_browser_session(self, session_json: bytes) -> bytes:
+        ...
+
+    def project_media_session(self, session_json: bytes) -> bytes:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@dataclass
+class RuntimeWrapperTransport:
+    """Wrapper transport that executes helpers through Runtime Core."""
+
+    carrier: WrapperTransport
+    runtime: RuntimeClient
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def build_file_transfer_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_file_transfer_invocation", request_json)
+
+    def build_terminal_session_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_terminal_session_invocation", request_json)
+
+    def build_remote_desktop_session_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_remote_desktop_session_invocation", request_json)
+
+    def build_browser_session_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_browser_session_invocation", request_json)
+
+    def build_media_session_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_media_session_invocation", request_json)
+
+    def transfer_file(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_file_transfer_invocation",
+            project_method="project_file_record",
+            failure_message="wrapper file transfer invocation failed",
+            output_message="wrapper file transfer output must be an object",
+        )
+
+    def start_terminal_session(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_terminal_session_invocation",
+            project_method="project_terminal_session",
+            failure_message="wrapper terminal session invocation failed",
+            output_message="wrapper terminal session output must be an object",
+        )
+
+    def start_remote_desktop_session(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_remote_desktop_session_invocation",
+            project_method="project_remote_desktop_session",
+            failure_message="wrapper remote desktop session invocation failed",
+            output_message="wrapper remote desktop session output must be an object",
+        )
+
+    def start_browser_session(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_browser_session_invocation",
+            project_method="project_browser_session",
+            failure_message="wrapper browser session invocation failed",
+            output_message="wrapper browser session output must be an object",
+        )
+
+    def start_media_session(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_media_session_invocation",
+            project_method="project_media_session",
+            failure_message="wrapper media session invocation failed",
+            output_message="wrapper media session output must be an object",
+        )
+
+    def project_file_record(self, file_json: bytes) -> bytes:
+        return self._delegate("project_file_record", file_json)
+
+    def project_terminal_session(self, session_json: bytes) -> bytes:
+        return self._delegate("project_terminal_session", session_json)
+
+    def project_remote_desktop_session(self, session_json: bytes) -> bytes:
+        return self._delegate("project_remote_desktop_session", session_json)
+
+    def project_browser_session(self, session_json: bytes) -> bytes:
+        return self._delegate("project_browser_session", session_json)
+
+    def project_media_session(self, session_json: bytes) -> bytes:
+        return self._delegate("project_media_session", session_json)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        for owned in (self.runtime, self.carrier):
+            try:
+                owned.close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            except Exception as exc:
+                if first_error is None:
+                    first_error = SDKError(
+                        code=ErrorCode.TRANSPORT,
+                        stage="wrappers",
+                        retry=RetryHint.SAFE,
+                        retryable=True,
+                        message="wrapper runtime transport close failed",
+                        cause=exc,
+                    )
+        if first_error is not None:
+            raise first_error
+
+    def _delegate(self, method_name: str, request_json: bytes) -> bytes:
+        self._require_open()
+        return getattr(self.carrier, method_name)(request_json)
+
+    def _invoke_projected(
+        self,
+        request_json: bytes,
+        *,
+        build_method: str,
+        project_method: str,
+        failure_message: str,
+        output_message: str,
+    ) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        result = self.runtime.invoke(draft)
+        if not result.ok:
+            raise SDKError(
+                code=ErrorCode.ABILITY_FAILED,
+                stage="wrappers",
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                message=failure_message,
+                cause=result.error,
+            )
+        output = result.output_json
+        if not isinstance(output, dict):
+            raise _invalid_wrappers(output_message)
+        return getattr(self.carrier, project_method)(_json_bytes(output))
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_wrappers("wrapper runtime transport is closed")
 
 
 @dataclass(frozen=True)

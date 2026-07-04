@@ -18,11 +18,15 @@ from easynet_sdk import (
     WrapperRemoteDesktopSessionRecord,
     WrapperRemoteDesktopSessionRequest,
     WrapperRemoteDesktopStartRequest,
+    RuntimeClient,
+    RuntimeWrapperTransport,
     WrapperTerminalSessionRecord,
     WrapperTerminalSessionRequest,
     WrapperTerminalStartRequest,
     is_code,
 )
+
+from test_runtime import MemoryRuntimeTransport
 
 
 FILE_RECORD_JSON = b"""
@@ -207,8 +211,73 @@ class MemoryWrapperTransport:
         self._remember("start_media", request_json)
         return MEDIA_SESSION_JSON
 
+    def project_file_record(self, file_json: bytes) -> bytes:
+        self._remember("project_file", file_json)
+        return FILE_RECORD_JSON
+
+    def project_terminal_session(self, session_json: bytes) -> bytes:
+        self._remember("project_terminal", session_json)
+        return TERMINAL_SESSION_JSON
+
+    def project_remote_desktop_session(self, session_json: bytes) -> bytes:
+        self._remember("project_remote_desktop", session_json)
+        return REMOTE_DESKTOP_SESSION_JSON
+
+    def project_browser_session(self, session_json: bytes) -> bytes:
+        self._remember("project_browser", session_json)
+        return BROWSER_SESSION_JSON
+
+    def project_media_session(self, session_json: bytes) -> bytes:
+        self._remember("project_media", session_json)
+        return MEDIA_SESSION_JSON
+
     def close(self) -> None:
         self.close_calls += 1
+
+
+class WrapperRuntimeTransport(MemoryRuntimeTransport):
+    def __init__(self, output_json: object | None = None, ok: bool = True) -> None:
+        super().__init__()
+        self.output_json = (
+            {
+                "file_ref": "easynet:///r/example/resource/alice.files/report.txt",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "content_type": "text/plain",
+                "size_bytes": 42,
+                "content_hash": (
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+            }
+            if output_json is None
+            else output_json
+        )
+        self.ok = ok
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        failure = None
+        if not self.ok:
+            failure = {
+                "code": "AbilityFailed",
+                "stage": "runtime",
+                "message": "wrapper ability failed",
+                "retryable": False,
+            }
+        return json.dumps(
+            {
+                "ok": self.ok,
+                "tuple": self.seen_draft,
+                "terminal_state": "Completed" if self.ok else "Failed",
+                "output_content_type": "application/json",
+                "output_base64": "e30=",
+                "output_json": self.output_json,
+                "elapsed_ms": 9,
+                "receipt": None,
+                "error": failure,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
 
 
 def wrapper_base() -> WrapperCarrierBase:
@@ -338,6 +407,56 @@ class WrapperClientTests(unittest.TestCase):
         self.assertEqual(browser.kind, "browser_session")
         media = client.start_media_session(media_start_request())
         self.assertEqual(media.kind, "media_session")
+
+    def test_runtime_wrapper_transport_executes_helpers_through_runtime_core(self) -> None:
+        carrier = MemoryWrapperTransport()
+        runtime_transport = WrapperRuntimeTransport()
+        client = WrapperClient(
+            RuntimeWrapperTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        file = client.transfer_file(file_transfer_request())
+
+        self.assertEqual(file.kind, "file_record")
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.wrapper.file.transfer@1.0.0",
+        )
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "wrapper.file.transfer",
+        )
+        self.assertEqual(carrier.seen["project_file"]["size_bytes"], 42)
+
+        client.close()
+        client.close()
+        self.assertEqual(runtime_transport.close_calls, 1)
+        self.assertEqual(carrier.close_calls, 1)
+
+    def test_runtime_wrapper_transport_rejects_failed_or_malformed_output(self) -> None:
+        failed = WrapperClient(
+            RuntimeWrapperTransport(
+                carrier=MemoryWrapperTransport(),
+                runtime=RuntimeClient(WrapperRuntimeTransport(ok=False)),
+            )
+        )
+        with self.assertRaises(SDKError) as caught:
+            failed.transfer_file(file_transfer_request())
+        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
+
+        malformed = WrapperClient(
+            RuntimeWrapperTransport(
+                carrier=MemoryWrapperTransport(),
+                runtime=RuntimeClient(WrapperRuntimeTransport(output_json=[])),
+            )
+        )
+        with self.assertRaises(SDKError) as caught:
+            malformed.transfer_file(file_transfer_request())
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_decodes_profile_records(self) -> None:
         file = WrapperFileRecord.from_json(FILE_RECORD_JSON)
