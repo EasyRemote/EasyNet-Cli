@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 )
@@ -56,12 +57,12 @@ func newTestBidiSession(t *testing.T, transport *memoryBidiTransport) *BidiSessi
 
 func TestBidiSessionSendsAndReceivesOrderedFrames(t *testing.T) {
 	transport := &memoryBidiTransport{recvFrames: []string{
-		`{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"ready":true}}`,
+		`{"sequence":1,"kind":"data","stream_id":1,"payload_content_type":"text/plain","payload_base64":"cmVhZHk="}`,
 	}}
 	session := newTestBidiSession(t, transport)
-	frame, err := NewBidiFrame(1, "data", 1)
+	frame, err := NewBidiBinaryFrame(1, 1, []byte("hello"), "text/plain")
 	if err != nil {
-		t.Fatalf("NewBidiFrame: %v", err)
+		t.Fatalf("NewBidiBinaryFrame: %v", err)
 	}
 
 	ack, err := session.Send(context.Background(), frame)
@@ -75,6 +76,12 @@ func TestBidiSessionSendsAndReceivesOrderedFrames(t *testing.T) {
 
 	if ack.Sequence() != 1 || received.Sequence() != 1 || session.State() != BidiOpen {
 		t.Fatalf("unexpected session state: ack=%#v received=%#v state=%s", ack, received, session.State())
+	}
+	if ack.PayloadBase64() != base64.StdEncoding.EncodeToString([]byte("hello")) || ack.PayloadContentType() != "text/plain" {
+		t.Fatalf("ack payload not preserved: content_type=%q payload=%q", ack.PayloadContentType(), ack.PayloadBase64())
+	}
+	if received.PayloadBase64() != "cmVhZHk=" || received.PayloadContentType() != "text/plain" {
+		t.Fatalf("received payload not preserved: content_type=%q payload=%q", received.PayloadContentType(), received.PayloadBase64())
 	}
 }
 

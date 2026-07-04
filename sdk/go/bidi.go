@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -452,8 +453,42 @@ func (f BidiFrame) Terminal() bool {
 	return f.terminal
 }
 
+func (f BidiFrame) PayloadContentType() string {
+	return f.payloadContentType
+}
+
+func (f BidiFrame) PayloadBase64() string {
+	return f.payloadBase64
+}
+
 func (f BidiFrame) PayloadJSON() json.RawMessage {
 	return append(json.RawMessage(nil), f.payloadJSON...)
+}
+
+func (f BidiFrame) ErrorJSON() json.RawMessage {
+	return append(json.RawMessage(nil), f.errorJSON...)
+}
+
+// NewBidiBinaryFrame creates an outbound binary data frame.
+func NewBidiBinaryFrame(sequence uint64, streamID uint64, payload []byte, contentType string) (BidiFrame, error) {
+	frame, err := NewBidiFrame(sequence, "data", streamID)
+	if err != nil {
+		return BidiFrame{}, err
+	}
+	frame.payloadBase64 = base64.StdEncoding.EncodeToString(payload)
+	frame.payloadContentType = contentType
+	return frame, nil
+}
+
+// NewBidiJSONFrame creates an outbound JSON-shaped frame.
+func NewBidiJSONFrame(sequence uint64, kind string, streamID uint64, payload json.RawMessage) (BidiFrame, error) {
+	frame, err := NewBidiFrame(sequence, kind, streamID)
+	if err != nil {
+		return BidiFrame{}, err
+	}
+	frame.payloadJSON = append(json.RawMessage(nil), payload...)
+	frame.payloadContentType = "application/json"
+	return frame, nil
 }
 
 func (o BidiOutcome) SessionID() string {
