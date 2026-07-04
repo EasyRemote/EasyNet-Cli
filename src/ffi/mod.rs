@@ -182,6 +182,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "receipt_fetch": true,
             "receipt_projection": true,
             "directory_identity_projection": true,
+            "identity_signing_key_lifecycle": true,
             "directory_read_model": true,
             "directory_resolve": true,
             "host_binding_codec": true,
@@ -373,6 +374,7 @@ mod tests {
         assert_eq!(json["symbols"]["receipt_fetch"], true);
         assert_eq!(json["symbols"]["receipt_projection"], true);
         assert_eq!(json["symbols"]["directory_identity_projection"], true);
+        assert_eq!(json["symbols"]["identity_signing_key_lifecycle"], true);
         assert_eq!(json["symbols"]["directory_read_model"], true);
         assert_eq!(json["symbols"]["directory_resolve"], true);
         assert_eq!(json["symbols"]["host_binding_codec"], true);

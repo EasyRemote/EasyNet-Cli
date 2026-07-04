@@ -261,7 +261,8 @@ class FakeRawCABI:
             out_ptr,
             b'{"abi_version":4,"sdk_version":"0.91.30",'
             b'"profiles":{"directory_identity":"read_model_projection_partial"},'
-            b'"symbols":{"directory_identity_projection":true},"axon_pb":true}',
+            b'"symbols":{"directory_identity_projection":true,'
+            b'"identity_signing_key_lifecycle":true},"axon_pb":true}',
         )
 
     def _last_error_json(self, out_ptr) -> int:
@@ -2033,6 +2034,7 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertTrue(features.axon_pb)
         self.assertTrue(features.symbols["directory_identity_projection"])
+        self.assertTrue(features.symbols["identity_signing_key_lifecycle"])
 
     def test_identity_transport_drives_addressing_helpers(self) -> None:
         raw = FakeRawCABI()
@@ -2231,6 +2233,7 @@ class CABITransportTests(unittest.TestCase):
             SigningKeyRevokeRequest(
                 key_id="alice-key-1",
                 reason="rotation",
+                owner_ura="easynet:///r/example/agent/alice.sdk",
                 public_key_base64="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
             )
         )

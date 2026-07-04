@@ -782,7 +782,7 @@ class CABIIdentityTransport:
             request_json,
             build_symbol="easynet_identity_build_revoke_signing_key_invocation",
             project_symbol="easynet_identity_project_signing_key_revoke_result",
-            projection_keys=("key_id", "public_key_base64", "reason"),
+            projection_keys=("owner_ura", "key_id", "public_key_base64", "reason"),
         )
 
     def signer(self, request_json: bytes) -> bytes:

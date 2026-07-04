@@ -46,7 +46,10 @@ void easynet_string_free(char* s);
 reject incompatible libraries before opening daemon traffic.
 
 `easynet_feature_discovery` returns caller-owned JSON. The returned `char*` MUST
-be released with `easynet_string_free`.
+be released with `easynet_string_free`. The `symbols` map includes precise
+profile capabilities such as `identity_signing_key_lifecycle` for daemon-backed
+register/list/revoke signing-key execution. That capability does not imply
+local signer construction or private-key access.
 
 `easynet_last_error` remains the legacy borrowed, thread-local human message.
 `easynet_last_error_json` returns caller-owned schema-backed `DaemonError` JSON

@@ -114,8 +114,15 @@ pub(crate) fn project_signing_key_record(input: &Value) -> Result<Value, Identit
         .unwrap_or_else(|| "ed25519".to_string());
     validate_algorithm(&algorithm)?;
     let usage = signing_key_usage(&projection.request)?;
-    let key_id = optional_string_field(&projection.request, "key_id")?
-        .unwrap_or_else(|| public_key_key_id(public_key_base64));
+    let key_id = match optional_string_field(&projection.request, "key_id")? {
+        Some(key_id) => key_id,
+        None => public_key_key_id(public_key_base64)?,
+    };
+    let role = normalized_role(
+        optional_string_field(&projection.request, "role")?
+            .as_deref()
+            .unwrap_or("user"),
+    )?;
     Ok(signing_key_record_json(
         &key_id,
         owner_ura,
@@ -126,7 +133,7 @@ pub(crate) fn project_signing_key_record(input: &Value) -> Result<Value, Identit
         json!({
             "source": "identity.register_pubkey",
             "daemon_ack": result,
-            "role": optional_string_field(&projection.request, "role")?.unwrap_or_else(|| "user".to_string()),
+            "role": role,
         }),
         0,
         0,
@@ -156,8 +163,9 @@ pub(crate) fn project_signing_key_page(input: &Value) -> Result<Value, IdentityS
         let public_key_base64 = required_string(key_obj, "public_key_b64")?;
         validate_ed25519_public_key(public_key_base64)?;
         let created_unix_ms = optional_u64(key_obj, "added_at_unix_ms")?.unwrap_or(0);
+        let key_id = public_key_key_id(public_key_base64)?;
         items.push(signing_key_record_json(
-            &public_key_key_id(public_key_base64),
+            &key_id,
             &owner_ura,
             "ed25519",
             public_key_base64,
@@ -200,9 +208,14 @@ pub(crate) fn project_signing_key_revoke_result(input: &Value) -> Result<Value, 
     if let Some(public_key_base64) = public_key_base64.as_deref() {
         validate_ed25519_public_key(public_key_base64)?;
     }
-    let key_id = optional_string_field(&projection.request, "key_id")?
-        .or_else(|| public_key_base64.as_deref().map(public_key_key_id))
-        .ok_or(IdentitySdkError::MissingField("key_id"))?;
+    let key_id = match optional_string_field(&projection.request, "key_id")? {
+        Some(key_id) => key_id,
+        None => public_key_base64
+            .as_deref()
+            .map(public_key_key_id)
+            .transpose()?
+            .ok_or(IdentitySdkError::MissingField("key_id"))?,
+    };
     let removed = optional_bool(result, "removed")?.unwrap_or(true);
     Ok(json!({
         "profile": IDENTITY_PROFILE,
@@ -294,9 +307,10 @@ fn signing_key_usage(obj: &Map<String, Value>) -> Result<Vec<String>, IdentitySd
         .collect()
 }
 
-fn public_key_key_id(public_key_base64: &str) -> String {
-    let digest = sha2::Sha256::digest(public_key_base64.as_bytes());
-    format!("ed25519:{}", hex::encode(&digest[..16]))
+fn public_key_key_id(public_key_base64: &str) -> Result<String, IdentitySdkError> {
+    let decoded = decode_ed25519_public_key(public_key_base64)?;
+    let digest = sha2::Sha256::digest(&decoded);
+    Ok(format!("ed25519:{}", hex::encode(&digest[..16])))
 }
 
 fn optional_bool(
@@ -371,6 +385,10 @@ fn normalized_role(raw: &str) -> Result<&'static str, IdentitySdkError> {
 }
 
 fn validate_ed25519_public_key(raw: &str) -> Result<(), IdentitySdkError> {
+    decode_ed25519_public_key(raw).map(|_| ())
+}
+
+fn decode_ed25519_public_key(raw: &str) -> Result<Vec<u8>, IdentitySdkError> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(raw)
         .map_err(|err| IdentitySdkError::InvalidField("public_key_base64", err.to_string()))?;
@@ -380,7 +398,7 @@ fn validate_ed25519_public_key(raw: &str) -> Result<(), IdentitySdkError> {
             format!("must decode to exactly 32 bytes, got {}", decoded.len()),
         ));
     }
-    Ok(())
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -550,7 +568,10 @@ mod tests {
 
         assert_eq!(page["profile"], IDENTITY_PROFILE);
         assert_eq!(page["items"].as_array().unwrap().len(), 1);
-        assert_eq!(page["items"][0]["key_id"], public_key_key_id(public_key()));
+        assert_eq!(
+            page["items"][0]["key_id"],
+            public_key_key_id(public_key()).unwrap()
+        );
         assert_eq!(page["items"][0]["created_unix_ms"], 1783100000123u64);
         assert_eq!(page["next_cursor"], "1");
         assert_eq!(page["metadata"]["total_available"], 2);
@@ -577,5 +598,24 @@ mod tests {
         assert_eq!(result["state"], "not_found");
         assert_eq!(result["metadata"]["removed"], false);
         assert_eq!(result["metadata"]["reason"], "rotation");
+    }
+
+    #[test]
+    fn project_signing_key_record_rejects_unknown_role() {
+        let input = json!({
+            "request": {
+                "owner_ura": "easynet:///r/example/user/alice",
+                "key_id": "alice-key-1",
+                "algorithm": "ed25519",
+                "public_key_base64": public_key(),
+                "usage": ["invocation.sign"],
+                "role": "admin"
+            },
+            "result": {"ok": true}
+        });
+
+        let err = project_signing_key_record(&input).unwrap_err();
+
+        assert!(err.to_string().contains("role"));
     }
 }
