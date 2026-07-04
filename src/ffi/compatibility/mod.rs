@@ -32,7 +32,8 @@
 use std::os::raw::c_char;
 
 use crate::daemon::compatibility_contract::{
-    build_chat_completion_invocation, build_list_models_invocation,
+    build_chat_completion_invocation, build_file_delete_invocation, build_file_retrieve_invocation,
+    build_file_upload_invocation, build_list_models_invocation,
     build_stream_chat_completion_invocation, project_chat_completion, project_chat_stream,
     project_file, project_file_delete_result, project_file_upload, project_model_page,
     CompatibilityError,
@@ -108,6 +109,72 @@ pub unsafe extern "C" fn easynet_compatibility_build_stream_chat_completion_invo
         "out_invocation_json",
         "request_json",
         build_stream_chat_completion_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `openai.files.upload`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_compatibility_build_file_upload_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_compatibility_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_compatibility_build_file_upload_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_file_upload_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `openai.files.retrieve`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_compatibility_build_file_retrieve_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_compatibility_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_compatibility_build_file_retrieve_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_file_retrieve_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `openai.files.delete`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_compatibility_build_file_delete_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_compatibility_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_compatibility_build_file_delete_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_file_delete_invocation,
     )
 }
 
@@ -357,6 +424,64 @@ mod tests {
         assert_eq!(code, EASYNET_OK);
         let value = read_json(out);
         assert_eq!(value["args"]["request"]["stream"], true);
+        release(handle);
+    }
+
+    #[test]
+    fn compatibility_build_file_carriers_project_complete_invocations() {
+        let handle = handle();
+        let upload = base_request(serde_json::json!({
+            "auth_token": "tok_123",
+            "purpose": "batch",
+            "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl",
+            "metadata": {"request_id": "compat-file-upload-1"}
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_compatibility_build_file_upload_invocation(handle, upload.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "openai.files.upload");
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.openai.files.upload@1.0.0"
+        );
+        assert_eq!(
+            value["args"]["file_ref"],
+            "easynet:///r/example/resource/alice.files/prompt.jsonl"
+        );
+        assert_eq!(value["args"]["auth_token"], "tok_123");
+
+        let retrieve = base_request(serde_json::json!({"id": "file-easynet-docs-1"}));
+        let code = unsafe {
+            easynet_compatibility_build_file_retrieve_invocation(
+                handle,
+                retrieve.as_ptr(),
+                &mut out,
+            )
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "openai.files.retrieve");
+        assert_eq!(value["args"]["file_id"], "file-easynet-docs-1");
+
+        let delete = base_request(serde_json::json!({
+            "id": "file-easynet-docs-1",
+            "deleted": true
+        }));
+        let code = unsafe {
+            easynet_compatibility_build_file_delete_invocation(handle, delete.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "openai.files.delete");
+        assert_eq!(value["args"]["file_id"], "file-easynet-docs-1");
+        assert_eq!(value["args"]["deleted"], true);
         release(handle);
     }
 

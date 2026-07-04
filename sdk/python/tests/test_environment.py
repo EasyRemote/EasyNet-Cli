@@ -6,6 +6,9 @@ from easynet_sdk import (
     AdminAgentListRequest,
     AdminCarrierBase,
     CompatibilityCarrierBase,
+    CompatibilityFileDeleteRequest,
+    CompatibilityFileRequest,
+    CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     ConnectOptions,
     DeviceQuery,
@@ -177,6 +180,37 @@ class SdkEnvironmentTests(unittest.TestCase):
             compatibility.build_list_models_invocation(
                 CompatibilityListModelsRequest(base=_compatibility_base())
             )
+            compatibility.build_file_upload_invocation(
+                CompatibilityFileUploadRequest(
+                    base=_compatibility_base(),
+                    purpose="batch",
+                    id="file-easynet-docs-1",
+                    file_ref=(
+                        "easynet:///r/example/resource/alice.files/prompt.jsonl"
+                    ),
+                    filename="prompt.jsonl",
+                )
+            )
+            compatibility.build_file_retrieve_invocation(
+                CompatibilityFileRequest(
+                    base=_compatibility_base(),
+                    id="file-easynet-docs-1",
+                    file_ref=(
+                        "easynet:///r/example/resource/alice.files/prompt.jsonl"
+                    ),
+                    filename="prompt.jsonl",
+                )
+            )
+            compatibility.build_file_delete_invocation(
+                CompatibilityFileDeleteRequest(
+                    base=_compatibility_base(),
+                    id="file-easynet-docs-1",
+                    file_ref=(
+                        "easynet:///r/example/resource/alice.files/prompt.jsonl"
+                    ),
+                    deleted=True,
+                )
+            )
             receipt.build_fetch_invocation(
                 ReceiptFetchRequest(
                     caller_ura=_CALLER,
@@ -207,6 +241,9 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_directory_build_list_devices_invocation", symbols)
         self.assertIn("easynet_surface_build_list_pages_invocation", symbols)
         self.assertIn("easynet_compatibility_build_list_models_invocation", symbols)
+        self.assertIn("easynet_compatibility_build_file_upload_invocation", symbols)
+        self.assertIn("easynet_compatibility_build_file_retrieve_invocation", symbols)
+        self.assertIn("easynet_compatibility_build_file_delete_invocation", symbols)
 
     def test_missing_live_profile_operations_are_typed_not_implemented(self) -> None:
         raw = FakeRawCABI()

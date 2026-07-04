@@ -83,8 +83,8 @@ method spelling.
   CDN/cache policy, content-management UX, concrete surface health carriers, and
   product cutovers remain incomplete.
 - Compatibility carrier/projection guardrails exist for Rust/C ABI over daemon
-  `openai.list_models` and `openai.chat_completions` plus file adapter
-  projections over SDK file/resource facts; product API-key policy,
+  `openai.list_models`, `openai.chat_completions`, and file upload/retrieve/delete
+  carriers plus file adapter projections over SDK file/resource facts; product API-key policy,
   quota/rate limits, billing, backend HTTP route shaping, multipart
   upload/storage policy, SSE/WebSocket fanout, and language facades remain
   incomplete.
@@ -232,7 +232,8 @@ method spelling.
   concrete surface health carriers, and product cutovers remain incomplete.
 - Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
   stream-chat, and file upload/get/delete Invocation carrier builders plus
-  model, chat, stream, file, file-delete projection seams, and close state seams; product API-key
+  model, chat, stream, file, file-delete projection seams, and close state
+  seams; Python concrete C ABI transport now backs file carrier builders while product API-key
   policy, quota/rate limits, billing, backend HTTP route shaping, multipart
   storage execution, SSE/WebSocket fanout, and EasyRemote/Hub compatibility
   cutovers remain incomplete.

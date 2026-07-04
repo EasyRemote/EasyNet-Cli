@@ -50,6 +50,9 @@ const ABILITY_OPENAI_LIST_MODELS: &str =
     crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS;
 const ABILITY_OPENAI_CHAT_COMPLETIONS: &str =
     crate::daemon::ability::names::integrations::OPENAI_CHAT_COMPLETIONS;
+const ABILITY_OPENAI_FILES_UPLOAD: &str = "openai.files.upload";
+const ABILITY_OPENAI_FILES_RETRIEVE: &str = "openai.files.retrieve";
+const ABILITY_OPENAI_FILES_DELETE: &str = "openai.files.delete";
 
 pub(crate) type CompatibilityError = SdkContractError;
 
@@ -92,6 +95,64 @@ pub(crate) fn build_stream_chat_completion_invocation(
         COMPATIBILITY_PROFILE,
         ABILITY_OPENAI_CHAT_COMPLETIONS,
         args,
+    )
+}
+
+pub(crate) fn build_file_upload_invocation(request: &Value) -> Result<Value, CompatibilityError> {
+    let obj = object(request, "CompatibilityFileUploadRequest")?;
+    let purpose = required_string(obj, "purpose")?;
+    let mut args = Map::new();
+    args.insert("purpose".to_string(), Value::String(purpose.to_string()));
+    insert_file_ref_arg(obj, &mut args)?;
+    insert_auth_arg(obj, &mut args)?;
+    build_system_invocation(
+        obj,
+        COMPATIBILITY_PROFILE,
+        ABILITY_OPENAI_FILES_UPLOAD,
+        Value::Object(args),
+    )
+}
+
+pub(crate) fn build_file_retrieve_invocation(request: &Value) -> Result<Value, CompatibilityError> {
+    let obj = object(request, "CompatibilityFileRequest")?;
+    let mut args = Map::new();
+    args.insert(
+        "file_id".to_string(),
+        Value::String(compatibility_file_id(obj)?),
+    );
+    insert_auth_arg(obj, &mut args)?;
+    build_system_invocation(
+        obj,
+        COMPATIBILITY_PROFILE,
+        ABILITY_OPENAI_FILES_RETRIEVE,
+        Value::Object(args),
+    )
+}
+
+pub(crate) fn build_file_delete_invocation(request: &Value) -> Result<Value, CompatibilityError> {
+    let obj = object(request, "CompatibilityFileDeleteRequest")?;
+    let deleted = obj
+        .get("deleted")
+        .and_then(Value::as_bool)
+        .ok_or(CompatibilityError::MissingField("deleted"))?;
+    if !deleted {
+        return Err(CompatibilityError::InvalidField(
+            "deleted",
+            "must be true for file delete carriers".to_string(),
+        ));
+    }
+    let mut args = Map::new();
+    args.insert(
+        "file_id".to_string(),
+        Value::String(compatibility_file_id(obj)?),
+    );
+    args.insert("deleted".to_string(), Value::Bool(true));
+    insert_auth_arg(obj, &mut args)?;
+    build_system_invocation(
+        obj,
+        COMPATIBILITY_PROFILE,
+        ABILITY_OPENAI_FILES_DELETE,
+        Value::Object(args),
     )
 }
 
@@ -276,10 +337,39 @@ fn compatibility_chat_args(
 ) -> Result<Value, CompatibilityError> {
     let mut args = Map::new();
     args.insert("request".to_string(), openai_request);
+    insert_auth_arg(obj, &mut args)?;
+    Ok(Value::Object(args))
+}
+
+fn insert_auth_arg(
+    obj: &Map<String, Value>,
+    args: &mut Map<String, Value>,
+) -> Result<(), CompatibilityError> {
     if let Some(auth_token) = optional_string_field(obj, "auth_token")? {
         args.insert("auth_token".to_string(), Value::String(auth_token));
     }
-    Ok(Value::Object(args))
+    Ok(())
+}
+
+fn insert_file_ref_arg(
+    obj: &Map<String, Value>,
+    args: &mut Map<String, Value>,
+) -> Result<(), CompatibilityError> {
+    if let Some(file_ref) = optional_string_field(obj, "file_ref")? {
+        args.insert("file_ref".to_string(), Value::String(file_ref));
+        return Ok(());
+    }
+    if let Some(resource_ref) = optional_string_field(obj, "resource_ref")? {
+        args.insert("file_ref".to_string(), Value::String(resource_ref));
+        return Ok(());
+    }
+    if let Some(resource_ura) = optional_string_field(obj, "resource_ura")? {
+        args.insert("file_ref".to_string(), Value::String(resource_ura));
+        return Ok(());
+    }
+    let file_id = compatibility_file_id(obj)?;
+    args.insert("file_id".to_string(), Value::String(file_id));
+    Ok(())
 }
 
 fn project_model_record(input: &Value) -> Result<Value, CompatibilityError> {
@@ -715,6 +805,60 @@ mod tests {
             "openai.chat_completions"
         );
         assert_eq!(carrier["args"]["request"]["stream"], true);
+    }
+
+    #[test]
+    fn build_file_carriers_preserve_minimal_daemon_args() {
+        let upload = build_file_upload_invocation(&base_request(json!({
+            "auth_token": "tok_123",
+            "purpose": "batch",
+            "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl",
+            "id": "file-easynet-docs-1"
+        })))
+        .unwrap();
+
+        assert_eq!(
+            upload["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.openai.files.upload@1.0.0"
+        );
+        assert_eq!(upload["metadata"]["system_ability"], "openai.files.upload");
+        assert_eq!(
+            upload["args"]["file_ref"],
+            "easynet:///r/example/resource/alice.files/prompt.jsonl"
+        );
+        assert_eq!(upload["args"]["purpose"], "batch");
+        assert_eq!(upload["args"]["auth_token"], "tok_123");
+        assert!(upload["args"].get("id").is_none());
+
+        let retrieve = build_file_retrieve_invocation(&base_request(json!({
+            "id": "file-easynet-docs-1"
+        })))
+        .unwrap();
+        assert_eq!(
+            retrieve["metadata"]["system_ability"],
+            "openai.files.retrieve"
+        );
+        assert_eq!(retrieve["args"]["file_id"], "file-easynet-docs-1");
+
+        let delete = build_file_delete_invocation(&base_request(json!({
+            "id": "file-easynet-docs-1",
+            "deleted": true
+        })))
+        .unwrap();
+        assert_eq!(delete["metadata"]["system_ability"], "openai.files.delete");
+        assert_eq!(delete["args"]["file_id"], "file-easynet-docs-1");
+        assert_eq!(delete["args"]["deleted"], true);
+    }
+
+    #[test]
+    fn build_file_delete_rejects_false_delete_intent() {
+        let err = build_file_delete_invocation(&base_request(json!({
+            "id": "file-easynet-docs-1",
+            "deleted": false
+        })))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("must be true"));
     }
 
     #[test]

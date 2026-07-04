@@ -681,6 +681,24 @@ int32_t easynet_compatibility_build_stream_chat_completion_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_compatibility_build_file_upload_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_compatibility_build_file_retrieve_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_compatibility_build_file_delete_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_compatibility_project_model_page(
     EasynetHandle handle,
     const char *models_json,

@@ -82,6 +82,9 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_compatibility_build_list_models_invocation",
     "easynet_compatibility_build_chat_completion_invocation",
     "easynet_compatibility_build_stream_chat_completion_invocation",
+    "easynet_compatibility_build_file_upload_invocation",
+    "easynet_compatibility_build_file_retrieve_invocation",
+    "easynet_compatibility_build_file_delete_invocation",
     "easynet_compatibility_project_model_page",
     "easynet_compatibility_project_chat_completion",
     "easynet_compatibility_project_chat_stream",
@@ -1134,13 +1137,19 @@ class CABICompatibilityTransport(_CABIProfileTransport):
         )
 
     def build_file_upload_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility file upload carrier")
+        return self._call(
+            "easynet_compatibility_build_file_upload_invocation", request_json
+        )
 
     def build_file_retrieve_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility file retrieve carrier")
+        return self._call(
+            "easynet_compatibility_build_file_retrieve_invocation", request_json
+        )
 
     def build_file_delete_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility file delete carrier")
+        return self._call(
+            "easynet_compatibility_build_file_delete_invocation", request_json
+        )
 
     def list_models(self, request_json: bytes) -> bytes:
         return self._missing("compatibility list models")
