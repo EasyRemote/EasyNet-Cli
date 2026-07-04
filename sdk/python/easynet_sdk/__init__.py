@@ -4,7 +4,12 @@ The public package exposes SDK DTOs and typed errors. It intentionally does not
 expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 """
 
-from .ability_invocation import AbilityCallRequest, AbilityInvocationClient
+from .ability_invocation import (
+    AbilityCallRequest,
+    AbilityInvocationClient,
+    AbilityTargetRequest,
+    ResolvedAbilityTarget,
+)
 from .client import Client, DiscoveryTransport, FeatureSet, Version
 from .compatibility import (
     ChatCompletionRequest,
@@ -457,6 +462,8 @@ __all__ = [
     "DeviceQuery",
     "AddressingClient",
     "AddressingTransport",
+    "AbilityTargetRequest",
+    "ResolvedAbilityTarget",
     "ability_ura_from_descriptor_ref",
     "IdentityClient",
     "IdentityCarrierBase",

@@ -182,7 +182,8 @@ method spelling.
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, `AbilityInvocationClient`
-  descriptor-delegated complete tuple build/invoke/stream/bidi facade, prepared/signed Invocation DTOs, signer workflow
+  descriptor-delegated complete tuple build/invoke/stream/bidi facade plus
+  EasyRemote-style target build/invoke/stream/bidi helpers, prepared/signed Invocation DTOs, signer workflow
   objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
   receipt projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
@@ -192,7 +193,7 @@ method spelling.
   stream, and bidi facade over RuntimeClient/C ABI v4;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
-  EasyRemote-style descriptor-ref cutover tests; private C ABI v4 profile carrier/projection bridges for
+  EasyRemote-style descriptor-ref and target-dispatch cutover tests; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; product Invocation direct daemon UDS transport,
   live profile execution adapters, actual EasyRemote repository extraction, per-profile

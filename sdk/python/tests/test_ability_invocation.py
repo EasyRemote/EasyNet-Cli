@@ -3,6 +3,7 @@ import unittest
 from easynet_sdk import (
     AbilityCallRequest,
     AbilityInvocationClient,
+    AbilityTargetRequest,
     BidiStreamDescriptor,
     ErrorCode,
     RuntimeClient,
@@ -138,6 +139,145 @@ class AbilityInvocationClientTests(unittest.TestCase):
             [{"content_type": "application/json", "stream_id": 1}],
         )
 
+    def test_target_invocation_from_ability_ura_derives_tuple_facts(self) -> None:
+        identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(identity),
+        )
+
+        result = client.invoke_target(
+            _target_request(
+                ability_ura=(
+                    "easynet:///r/example/ability/"
+                    "device.dev-a.observe.health"
+                )
+            )
+        )
+
+        self.assertTrue(result.ok)
+        assert runtime.seen_draft is not None
+        self.assertEqual(
+            runtime.seen_draft["callee_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            runtime.seen_draft["subject_ura"],
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(
+            runtime.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            identity.seen_requests,
+            [
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+                    "descriptor_version": "1.0.0",
+                },
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+            ],
+        )
+
+    def test_target_invocation_from_descriptor_ref_uses_projection_once(self) -> None:
+        identity = _identity_transport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            addressing=AddressingClient(identity),
+        )
+
+        draft = client.build_target_invocation(
+            _target_request(
+                descriptor_ref=(
+                    "easynet:///r/example/ability/"
+                    "device.dev-a.observe.health@1.0.0"
+                )
+            )
+        )
+
+        self.assertEqual(draft.callee_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(
+            draft.subject_ura,
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(
+            identity.seen_requests,
+            [
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/"
+                        "device.dev-a.observe.health@1.0.0"
+                    )
+                },
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+            ],
+        )
+
+    def test_target_invocation_from_owner_ability_delegates_ura_builder(self) -> None:
+        identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(identity),
+        )
+
+        stream = client.stream_target(
+            _target_request(
+                owner_ura="easynet:///r/example/device/dev-a",
+                ability_name="observe.health",
+            )
+        )
+        event = stream.next()
+        stream.close()
+
+        self.assertTrue(event.terminal)
+        assert runtime.seen_draft is not None
+        self.assertEqual(
+            runtime.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            identity.seen_requests,
+            [
+                {
+                    "kind": "ability",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "ability_name": "observe.health",
+                },
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+                    "descriptor_version": "1.0.0",
+                },
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+            ],
+        )
+
+    def test_target_invocation_rejects_ambiguous_or_incomplete_selectors(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(_identity_transport()),
+        )
+
+        for request in (
+            _target_request(),
+            _target_request(owner_ura="easynet:///r/example/device/dev-a"),
+            _target_request(ability_name="observe.health"),
+            _target_request(
+                ability_ura="easynet:///r/example/ability/device.dev-a.observe.health",
+                owner_ura="easynet:///r/example/device/dev-a",
+                ability_name="observe.health",
+            ),
+        ):
+            with self.subTest(request=request):
+                with self.assertRaises(SDKError) as caught:
+                    client.build_target_invocation(request)
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        self.assertIsNone(runtime.seen_draft)
+
     def test_rejects_incomplete_tuple_and_selector_ambiguity(self) -> None:
         client = AbilityInvocationClient(
             runtime=RuntimeClient(MemoryRuntimeTransport()),
@@ -216,7 +356,9 @@ def _identity_transport() -> MemoryIdentityTransport:
         b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
         b'"profile":"easynet-strict-v2",'
         b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
-        b'"public_name":"observe.health"},'
+        b'"owner_kind":"device","public_name":"observe.health",'
+        b'"local_registry_ability":"easynet:///r/example/device/dev-a:observe.health",'
+        b'"namespace":"observe","local_name":"health"},'
         b'"metadata":{"grammar_owner":"axon"}}'
     )
     transport.descriptor_json = (
@@ -240,6 +382,25 @@ def _request(
         descriptor_ref=descriptor_ref,
         ability_ura=ability_ura,
         ability_name=ability_name,
+    )
+
+
+def _target_request(
+    *,
+    descriptor_ref: str = "",
+    ability_ura: str = "",
+    owner_ura: str = "",
+    ability_name: str = "",
+) -> AbilityTargetRequest:
+    return AbilityTargetRequest(
+        caller_ura="easynet:///r/example/agent/alice.sdk",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        descriptor_ref=descriptor_ref,
+        ability_ura=ability_ura,
+        owner_ura=owner_ura,
+        ability_name=ability_name,
+        args={"ready": True},
     )
 
 
