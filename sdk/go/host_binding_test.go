@@ -192,6 +192,59 @@ func TestHostBindingFoldOutputHashRejectsSequenceGap(t *testing.T) {
 	}
 }
 
+func TestHostBindingHashStateRejectsCorruptedFrameCursor(t *testing.T) {
+	var zero HostStreamHashState
+	if err := json.Unmarshal([]byte(hostStreamHashStateFixtureJSON), &zero); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	var lastSeq uint64
+	zero.Frames = 0
+	zero.LastSeq = &lastSeq
+	raw, _ := json.Marshal(zero)
+	if _, err := NewHostStreamHashStateFromJSON(raw); err == nil {
+		t.Fatalf("accepted zero-frame state with last_seq")
+	} else if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+
+	var gap HostStreamHashState
+	if err := json.Unmarshal([]byte(hostStreamHashStateFixtureJSON), &gap); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	gap.Frames = 3
+	gap.LastSeq = &lastSeq
+	raw, _ = json.Marshal(gap)
+	if _, err := NewHostStreamHashStateFromJSON(raw); err == nil {
+		t.Fatalf("accepted state whose last_seq does not match frames")
+	} else if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestHostBindingFoldOutputHashRejectsCorruptedLocalState(t *testing.T) {
+	transport := newMemoryHostBindingTransport()
+	client, err := NewHostBindingClient(transport)
+	if err != nil {
+		t.Fatalf("NewHostBindingClient: %v", err)
+	}
+	lastSeq := uint64(0)
+	state := HostStreamHashState{
+		Algorithm:  hostStreamHashAlgorithm,
+		OutputHash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		Frames:     2,
+		LastSeq:    &lastSeq,
+	}
+
+	if _, err := client.FoldOutputHash(context.Background(), state, 2, map[string]any{"token": "late"}); err == nil {
+		t.Fatalf("accepted corrupted local hash state")
+	} else if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called for corrupted state: %#v", transport.seenRequest)
+	}
+}
+
 func TestHostBindingClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 	transport := newMemoryHostBindingTransport()
 	client, err := NewHostBindingClient(transport)

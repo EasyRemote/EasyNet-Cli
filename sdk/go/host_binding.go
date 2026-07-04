@@ -346,6 +346,9 @@ func NewHostStreamHashStateFromJSON(raw []byte) (HostStreamHashState, error) {
 	if state.Algorithm != hostStreamHashAlgorithm || state.OutputHash == "" || state.Frames < 0 {
 		return HostStreamHashState{}, invalidRuntimePayload("invalid host stream hash state projection", nil)
 	}
+	if err := validateHostStreamHashState(state); err != nil {
+		return HostStreamHashState{}, err
+	}
 	return state, nil
 }
 
@@ -393,14 +396,24 @@ func validateHostStreamHashFold(state HostStreamHashState, seq uint64) error {
 	if state.Algorithm != hostStreamHashAlgorithm || state.OutputHash == "" || state.Frames < 0 {
 		return invalidRuntimePayload("valid hash state is required", nil)
 	}
-	if state.LastSeq == nil {
-		if state.Frames != 0 || seq != 0 {
-			return invalidRuntimePayload("host stream hash sequence gap", nil)
+	if err := validateHostStreamHashState(state); err != nil {
+		return err
+	}
+	if seq != uint64(state.Frames) {
+		return invalidRuntimePayload("host stream hash sequence gap", nil)
+	}
+	return nil
+}
+
+func validateHostStreamHashState(state HostStreamHashState) error {
+	if state.Frames == 0 {
+		if state.LastSeq != nil {
+			return invalidRuntimePayload("host stream hash state cannot have last_seq when frames is zero", nil)
 		}
 		return nil
 	}
-	if seq != *state.LastSeq+1 {
-		return invalidRuntimePayload("host stream hash sequence gap", nil)
+	if state.LastSeq == nil || *state.LastSeq != uint64(state.Frames-1) {
+		return invalidRuntimePayload("host stream hash state last_seq must match frames", nil)
 	}
 	return nil
 }
