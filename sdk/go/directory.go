@@ -46,10 +46,11 @@ type DirectoryQueryBase struct {
 // ResolveQuery asks the daemon-owned directory resolver for a stable projection.
 type ResolveQuery struct {
 	DirectoryQueryBase
-	QueryName   string `json:"query_name,omitempty"`
-	AbilityName string `json:"ability_name,omitempty"`
-	QType       string `json:"qtype,omitempty"`
-	RealmHint   string `json:"realm_hint,omitempty"`
+	QueryName   string   `json:"query_name,omitempty"`
+	AbilityName string   `json:"ability_name,omitempty"`
+	QType       string   `json:"qtype,omitempty"`
+	RealmHint   string   `json:"realm_hint,omitempty"`
+	PeerHubURLs []string `json:"peer_hub_urls,omitempty"`
 }
 
 // DeviceQuery requests a paginated device read model page.
@@ -267,6 +268,9 @@ func (c *DirectoryClient) Resolve(ctx context.Context, query ResolveQuery) (Reso
 	}
 	if query.QueryName == "" && query.RealmHint == "" {
 		return ResolvedRef{}, invalidProfilePayload(directoryIdentityProfile, "query_name or realm_hint is required", nil)
+	}
+	if err := validatePeerHubURLs(query.PeerHubURLs, false); err != nil {
+		return ResolvedRef{}, err
 	}
 	requestJSON, err := json.Marshal(query)
 	if err != nil {
@@ -648,10 +652,14 @@ func validatePeerUserDeviceQuery(query PeerUserDeviceQuery) error {
 	if strings.TrimSpace(query.UserTenantID) == "" {
 		return invalidProfilePayload(directoryIdentityProfile, "user_tenant_id is required", nil)
 	}
-	if len(query.PeerHubURLs) == 0 {
+	return validatePeerHubURLs(query.PeerHubURLs, true)
+}
+
+func validatePeerHubURLs(peerHubURLs []string, requireNonEmpty bool) error {
+	if requireNonEmpty && len(peerHubURLs) == 0 {
 		return invalidProfilePayload(directoryIdentityProfile, "peer_hub_urls is required", nil)
 	}
-	for _, endpoint := range query.PeerHubURLs {
+	for _, endpoint := range peerHubURLs {
 		if strings.TrimSpace(endpoint) == "" || strings.TrimSpace(endpoint) != endpoint {
 			return invalidProfilePayload(directoryIdentityProfile, "peer_hub_urls must contain non-empty trimmed endpoints", nil)
 		}

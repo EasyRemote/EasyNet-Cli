@@ -377,6 +377,7 @@ func TestDirectoryResolveDecodesResolvedRef(t *testing.T) {
 		QueryName:          "easynet:///r/example/device/dev-a",
 		AbilityName:        "agent.list",
 		QType:              "route",
+		PeerHubURLs:        []string{"https://peer.example:50443"},
 	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -387,6 +388,17 @@ func TestDirectoryResolveDecodesResolvedRef(t *testing.T) {
 	}
 	if transport.seenRequest["query_name"] != "easynet:///r/example/device/dev-a" {
 		t.Fatalf("query not forwarded: %#v", transport.seenRequest)
+	}
+	peerHubURLs, ok := transport.seenRequest["peer_hub_urls"].([]any)
+	if !ok || len(peerHubURLs) != 1 || peerHubURLs[0] != "https://peer.example:50443" {
+		t.Fatalf("peer hub URLs not forwarded: %#v", transport.seenRequest)
+	}
+	if _, err := client.Resolve(context.Background(), ResolveQuery{
+		DirectoryQueryBase: baseDirectoryQuery(),
+		QueryName:          "easynet:///r/example/device/dev-a",
+		PeerHubURLs:        []string{" https://peer.example:50443"},
+	}); err == nil {
+		t.Fatalf("Resolve accepted untrimmed peer_hub_urls")
 	}
 }
 

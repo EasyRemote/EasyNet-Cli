@@ -69,14 +69,14 @@ func (t *DirectoryRuntimeTransport) Resolve(ctx context.Context, requestJSON []b
 		return nil, err
 	}
 	abilityName := directoryAbilityNamespaceResolve
-	if peerHubURLs, ok := payload["peer_hub_urls"].([]any); ok && len(peerHubURLs) > 0 {
+	if len(request.PeerHubURLs) > 0 {
 		abilityName = directoryAbilityProxyResolve
 	}
 	output, err := t.invoke(ctx, requestJSON, request.DirectoryQueryBase, abilityName, directoryResolveArgs(payload))
 	if err != nil {
 		return nil, err
 	}
-	return projectDirectoryResolvedRef(output)
+	return projectDirectoryResolvedRef(output, abilityName)
 }
 
 func (t *DirectoryRuntimeTransport) ListDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -218,6 +218,9 @@ func decodeDirectoryResolveForRuntime(requestJSON []byte) (ResolveQuery, map[str
 	if strings.TrimSpace(request.QueryName) == "" && strings.TrimSpace(request.RealmHint) == "" {
 		return ResolveQuery{}, nil, invalidProfilePayload(directoryIdentityProfile, "query_name or realm_hint is required", nil)
 	}
+	if err := validatePeerHubURLs(request.PeerHubURLs, false); err != nil {
+		return ResolveQuery{}, nil, err
+	}
 	payload, err := directoryPayloadObject(requestJSON)
 	if err != nil {
 		return ResolveQuery{}, nil, err
@@ -339,7 +342,7 @@ func directoryRuntimeMetadata(input map[string]any, abilityName string) map[stri
 	return metadata
 }
 
-func projectDirectoryResolvedRef(raw []byte) ([]byte, error) {
+func projectDirectoryResolvedRef(raw []byte, sourceAbility string) ([]byte, error) {
 	payload, err := directoryOutputObject(raw)
 	if err != nil {
 		return nil, err
@@ -375,7 +378,7 @@ func projectDirectoryResolvedRef(raw []byte) ([]byte, error) {
 		"cache_policy":     firstValue(answer, "cachePolicy", "cache_policy"),
 		"metadata": map[string]any{
 			"profile":    directoryIdentityProfile,
-			"source":     directoryAbilityNamespaceResolve,
+			"source":     sourceAbility,
 			"raw_answer": answer,
 		},
 	}

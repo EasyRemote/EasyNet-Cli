@@ -51,6 +51,49 @@ func TestDirectoryRuntimeTransportResolvesThroughRuntime(t *testing.T) {
 	}
 }
 
+func TestDirectoryRuntimeTransportProxyResolvesThroughRuntime(t *testing.T) {
+	identityTransport := newDirectoryRuntimeIdentityTransport()
+	identity, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: directoryRuntimeResolveRawJSON}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeDirectoryClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeDirectoryClient: %v", err)
+	}
+
+	ref, err := client.Resolve(context.Background(), ResolveQuery{
+		DirectoryQueryBase: directoryBaseForTest(),
+		QueryName:          "easynet:///r/example/agent/alice.",
+		QType:              "directory_listing",
+		RealmHint:          "example",
+		PeerHubURLs:        []string{"https://peer-hub.example:50443"},
+	})
+	if err != nil {
+		t.Fatalf("Resolve proxy: %v", err)
+	}
+	if ref.Metadata["source"] != directoryAbilityProxyResolve {
+		t.Fatalf("metadata source = %#v", ref.Metadata)
+	}
+	args := runtimeTransport.seenDraft["args"].(map[string]any)
+	peerHubURLs, ok := args["peer_hub_urls"].([]any)
+	if !ok || len(peerHubURLs) != 1 || peerHubURLs[0] != "https://peer-hub.example:50443" {
+		t.Fatalf("peer_hub_urls arg = %#v", args["peer_hub_urls"])
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.namespace.proxy_resolve@1.0.0" {
+		t.Fatalf("descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+	if len(identityTransport.seenBuildURA) != 1 ||
+		identityTransport.seenBuildURA[0]["ability_name"] != directoryAbilityProxyResolve {
+		t.Fatalf("identity lookup not delegated to proxy resolve: %#v", identityTransport.seenBuildURA)
+	}
+}
+
 func TestDirectoryRuntimeTransportBuildsDevicePageInvocation(t *testing.T) {
 	identity, err := NewIdentityClient(newDirectoryRuntimeIdentityTransport())
 	if err != nil {
