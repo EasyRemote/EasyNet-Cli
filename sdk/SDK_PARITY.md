@@ -284,10 +284,12 @@ method spelling.
   C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, and C ABI-backed typed device-session page projection plus close
-  state seams; C ABI transport reports explicit semantic-boundary errors for hub
+  state seams, with an SDK-owned EasyRemote hosted-agent Admin adapter and raw
+  admin carrier cutover audit gate for `agent.start/list/refresh`; C ABI
+  transport reports explicit semantic-boundary errors for hub
   join/leave, pairing/credential trust lifecycle, and device-session
   create/delete until daemon/ABI lifecycle contracts exist. Certificate policy and
-  EasyRemote Server/AgentControl extraction remain incomplete.
+  full EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory and session
   subscription execution through Runtime Core open_stream, plus `EventFrame`

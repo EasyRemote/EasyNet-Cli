@@ -185,6 +185,59 @@ ADMIN_LIFECYCLE_RESULT = b"""{
   }
 }"""
 
+ADMIN_START_RESULT = b"""{
+  "profile": "admin_gateway",
+  "kind": "agent_lifecycle_result",
+  "operation": "agent.start",
+  "state": "ok",
+  "agent_ura": "easynet:///r/example/agent/alice.codex",
+  "ack": null,
+  "runtime_not_ready": false,
+  "runtime_catalog_not_ready": false,
+  "metadata": {
+    "profile": "admin_gateway",
+    "source": "agent_lifecycle",
+    "runtime_registered": 3,
+    "runtime_failed": 0,
+    "runtime_removed": 0,
+    "raw_result": {
+      "agent_ura": "easynet:///r/example/agent/alice.codex",
+      "model": "gpt-5",
+      "root_path": "/tmp/agent",
+      "replaced_prior": true,
+      "runtime_registered": 3,
+      "runtime_failed": 0,
+      "runtime_removed": 0,
+      "runtime_not_ready": false,
+      "runtime_catalog_not_ready": false
+    }
+  }
+}"""
+
+ADMIN_REFRESH_RESULT = b"""{
+  "profile": "admin_gateway",
+  "kind": "agent_lifecycle_result",
+  "operation": "agent.refresh",
+  "state": "ok",
+  "agent_ura": null,
+  "ack": null,
+  "runtime_not_ready": false,
+  "runtime_catalog_not_ready": false,
+  "metadata": {
+    "profile": "admin_gateway",
+    "source": "agent_lifecycle",
+    "runtime_registered": 1,
+    "runtime_failed": 0,
+    "runtime_removed": 0,
+    "raw_result": {
+      "agents_scanned": 1,
+      "runtime_registered": 1,
+      "runtime_failed": 0,
+      "runtime_removed": 0
+    }
+  }
+}"""
+
 ADMIN_JOIN_RESULT = b"""{
   "profile": "admin_gateway",
   "kind": "hub_membership_result",
@@ -312,6 +365,8 @@ class MemoryAdminTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
         self.close_calls = 0
+        self.start_result = ADMIN_LIFECYCLE_RESULT
+        self.refresh_result = ADMIN_LIFECYCLE_RESULT
 
     def _remember(self, name: str, request_json: bytes) -> None:
         self.seen[name] = json.loads(request_json.decode("utf-8"))
@@ -346,7 +401,7 @@ class MemoryAdminTransport:
 
     def agent_start(self, request_json: bytes) -> bytes:
         self._remember("agent_start", request_json)
-        return ADMIN_LIFECYCLE_RESULT
+        return self.start_result
 
     def agent_stop(self, request_json: bytes) -> bytes:
         self._remember("agent_stop", request_json)
@@ -354,7 +409,7 @@ class MemoryAdminTransport:
 
     def agent_refresh(self, request_json: bytes) -> bytes:
         self._remember("agent_refresh", request_json)
-        return ADMIN_LIFECYCLE_RESULT
+        return self.refresh_result
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
         self._remember("list_device_sessions", request_json)
@@ -400,24 +455,6 @@ class MemoryAdminTransport:
         self.close_calls += 1
 
 
-class _EasyRemoteInvocation:
-    def __init__(self, response: dict[str, object]) -> None:
-        self._response = response
-
-    def result(self) -> dict[str, object]:
-        return self._response
-
-
-class _EasyRemoteClient:
-    def __init__(self, *responses: dict[str, object]) -> None:
-        self.responses = list(responses)
-        self.invocations: list[dict[str, object]] = []
-
-    def invoke(self, ability: str, **kwargs: object) -> _EasyRemoteInvocation:
-        self.invocations.append({"ability": ability, "args": dict(kwargs)})
-        return _EasyRemoteInvocation(self.responses.pop(0))
-
-
 def admin_base() -> AdminCarrierBase:
     return AdminCarrierBase(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -432,23 +469,11 @@ def admin_base() -> AdminCarrierBase:
 
 class AdminClientTests(unittest.TestCase):
     def test_easyremote_adapter_controls_hosted_agents(self) -> None:
-        client = _EasyRemoteClient(
-            {"root_path": "/tmp/agent", "model": "gpt-5", "replaced_prior": True},
-            {
-                "agents": [
-                    {
-                        "name": "codex",
-                        "runtime": "codex",
-                        "model": "gpt-5",
-                        "root_path": "/tmp/agent",
-                        "root_exists": True,
-                        "timeout_secs": 600,
-                    }
-                ]
-            },
-            {"agents_scanned": 1},
-        )
-        adapter = EasyRemoteAdminAdapter(client)
+        transport = MemoryAdminTransport()
+        transport.start_result = ADMIN_START_RESULT
+        transport.refresh_result = ADMIN_REFRESH_RESULT
+        client = AdminClient(transport)
+        adapter = EasyRemoteAdminAdapter(client, admin_base())
 
         started = adapter.start_agent(
             "codex",
@@ -464,12 +489,29 @@ class AdminClientTests(unittest.TestCase):
         self.assertEqual(started.name, "codex")
         self.assertEqual(started.runtime, "codex")
         self.assertTrue(started.replaced_prior)
-        self.assertEqual(records[0].root_path, "/tmp/agent")
+        self.assertEqual(records[0].root_path, "/tmp/easynet/agents/codex")
         self.assertEqual(records[0].timeout_secs, 600)
         self.assertEqual(refreshed["agents_scanned"], 1)
-        self.assertEqual(client.invocations[0]["ability"], "agent.start")
         self.assertEqual(
-            client.invocations[0]["args"],
+            transport.seen["agent_start"]["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            {
+                key: transport.seen["agent_start"][key]
+                for key in (
+                    "name",
+                    "agent_type",
+                    "model",
+                    "model_present",
+                    "label",
+                    "command",
+                    "command_args",
+                    "materialize_directory",
+                    "update_existing_spec",
+                    "project_workspace",
+                )
+            },
             {
                 "name": "codex",
                 "agent_type": "codex",
@@ -483,11 +525,8 @@ class AdminClientTests(unittest.TestCase):
                 "project_workspace": True,
             },
         )
-        self.assertEqual(client.invocations[1], {"ability": "agent.list", "args": {}})
-        self.assertEqual(
-            client.invocations[2],
-            {"ability": "agent.refresh", "args": {"name": "codex"}},
-        )
+        self.assertEqual(transport.seen["list_agents"]["callee_ura"], admin_base().callee_ura)
+        self.assertEqual(transport.seen["agent_refresh"]["name"], "codex")
 
     def test_builds_agent_and_session_invocations(self) -> None:
         transport = MemoryAdminTransport()

@@ -634,15 +634,30 @@ class EasyRemoteAgentRecord:
     raw: Mapping[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_wire(cls, value: Mapping[str, object]) -> "EasyRemoteAgentRecord":
+    def from_record(cls, record: AdminAgentRecord) -> "EasyRemoteAgentRecord":
         return cls(
-            name=str(value.get("name") or ""),
-            runtime=str(value.get("runtime") or value.get("agent_type") or ""),
-            model=_optional_string(value.get("model"), "model"),
-            root_path=_optional_string(value.get("root_path"), "root_path"),
-            timeout_secs=_optional_int(value.get("timeout_secs"), "timeout_secs"),
-            root_exists=_optional_bool(value.get("root_exists"), "root_exists"),
-            raw=dict(value),
+            name=record.name,
+            runtime=record.runtime,
+            model=record.model,
+            root_path=_optional_string(record.metadata.get("root_path"), "root_path"),
+            timeout_secs=_optional_int(
+                record.metadata.get("timeout_secs"), "timeout_secs"
+            ),
+            root_exists=_optional_bool(
+                record.metadata.get("root_exists"), "root_exists"
+            ),
+            raw={
+                "name": record.name,
+                "agent_ura": record.agent_ura,
+                "owner_ura": record.owner_ura,
+                "device_ura": record.device_ura,
+                "state": record.state,
+                "runtime": record.runtime,
+                "model": record.model,
+                "label": record.label,
+                "abilities": list(record.abilities),
+                "metadata": dict(record.metadata),
+            },
         )
 
 
@@ -658,24 +673,26 @@ class EasyRemoteAgentStartProjection:
     raw: Mapping[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_wire(
-        cls, value: Mapping[str, object], *, name: str, runtime: str
+    def from_result(
+        cls, result: AdminGatewayResult, *, name: str, runtime: str
     ) -> "EasyRemoteAgentStartProjection":
+        raw = _raw_result(result.metadata)
         return cls(
             name=name,
             runtime=runtime,
-            model=_optional_string(value.get("model"), "model"),
-            root_path=_optional_string(value.get("root_path"), "root_path"),
-            replaced_prior=bool(value.get("replaced_prior", False)),
-            raw=dict(value),
+            model=_optional_string(raw.get("model"), "model"),
+            root_path=_optional_string(raw.get("root_path"), "root_path"),
+            replaced_prior=bool(raw.get("replaced_prior", False)),
+            raw=raw,
         )
 
 
 class EasyRemoteAdminAdapter:
-    """SDK-owned Admin/Gateway cutover adapter for EasyRemote-like clients."""
+    """SDK-owned Admin/Gateway cutover adapter for EasyRemote-like callers."""
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: "AdminClient", base: AdminCarrierBase) -> None:
         self._client = client
+        self._base = base
 
     def start_agent(
         self,
@@ -690,42 +707,41 @@ class EasyRemoteAdminAdapter:
         agent_name = _required_clean_string(name, "agent name")
         _validate_agent_name(agent_name, "name")
         runtime = _required_clean_string(kind, "agent type")
-        response = self._invoke(
-            "agent.start",
-            name=agent_name,
-            agent_type=runtime,
-            model=model,
-            model_present=True,
-            label=label,
-            command=command,
-            command_args=list(args),
-            materialize_directory=True,
-            update_existing_spec=False,
-            project_workspace=True,
+        result = self._client.agent_start(
+            AdminAgentStartRequest(
+                self._base,
+                name=agent_name,
+                agent_type=runtime,
+                model=model or "",
+                label=label or "",
+                command=command or "",
+                command_args=tuple(args),
+                model_present=True,
+                materialize_directory=True,
+                update_existing_spec=False,
+                project_workspace=True,
+            )
         )
-        return EasyRemoteAgentStartProjection.from_wire(
-            response,
+        return EasyRemoteAgentStartProjection.from_result(
+            result,
             name=agent_name,
             runtime=runtime,
         )
 
     def list_agents(self) -> tuple[EasyRemoteAgentRecord, ...]:
-        response = self._invoke("agent.list")
-        agents = response.get("agents") or []
-        if not isinstance(agents, list):
-            raise _invalid_admin("agent.list response field 'agents' is not a list")
-        return tuple(EasyRemoteAgentRecord.from_wire(_mapping(row, "agent row")) for row in agents)
+        page = self._client.list_agents(AdminAgentListRequest(self._base))
+        return tuple(EasyRemoteAgentRecord.from_record(record) for record in page.items)
 
     def refresh_agents(self, name: str | None = None) -> Mapping[str, object]:
         agent_name = name.strip() if name is not None else None
         if name is not None and not agent_name:
             raise _invalid_admin("agent name must not be empty")
-        payload = {"name": agent_name} if agent_name else {}
-        return self._invoke("agent.refresh", **payload)
-
-    def _invoke(self, ability: str, **kwargs: object) -> dict[str, object]:
-        invocation = _call_method(self._client, "invoke", ability, **kwargs)
-        return _mapping(_call_method(invocation, "result"), "admin response")
+        if agent_name:
+            _validate_agent_name(agent_name, "name")
+        result = self._client.agent_refresh(
+            AdminAgentRefreshRequest(self._base, name=agent_name or "")
+        )
+        return _raw_result(result.metadata)
 
 
 @runtime_checkable
@@ -1225,30 +1241,17 @@ def _mapping_tuple(value: object, field_name: str) -> tuple[Mapping[str, object]
     return tuple(dict(item) for item in value)
 
 
-def _mapping(value: object, field_name: str) -> dict[str, object]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    raise _invalid_admin(f"{field_name} must be an object")
-
-
 def _string_array(value: object, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise _invalid_admin(f"{field_name} must be an array of strings")
     return tuple(value)
 
 
-def _call_method(
-    target: object, method_name: str, *args: object, **kwargs: object
-) -> object:
-    method = getattr(target, method_name, None)
-    if not callable(method):
-        raise _invalid_admin(f"EasyRemote client is missing {method_name}()")
-    try:
-        return method(*args, **kwargs)
-    except SDKError:
-        raise
-    except Exception as exc:
-        raise _transport_error(f"EasyRemote admin {method_name} failed", exc) from exc
+def _raw_result(metadata: Mapping[str, object]) -> dict[str, object]:
+    raw = metadata.get("raw_result")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return dict(metadata)
 
 
 def _invalid_admin(message: str, cause: BaseException | None = None) -> SDKError:

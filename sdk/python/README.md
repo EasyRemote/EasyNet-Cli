@@ -89,7 +89,9 @@ builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
 Core invoke, C ABI-backed session-list execution through Runtime Core invoke,
 C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
-verification, and C ABI-backed typed device-session page projection plus close state seams.
+verification, and C ABI-backed typed device-session page projection plus close state seams,
+with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
+requests.
 EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, C ABI-backed directory and session subscription execution
 through Runtime Core open_stream, device event history pages, and EventFrame
