@@ -1813,6 +1813,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         for action in (
             "project_receipt_summary",
             "verify_receipt_summary",
+            "require_cryptographic_verification",
             "build_causal_ref",
         ):
             self._require_case_action(receipt_case, action)
@@ -1820,6 +1821,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(receipt_case, "summary_verified: false")
         self._require_case_expectation(
             receipt_case, "verify_summary_claims_cryptographic_validity: false"
+        )
+        self._require_case_expectation(
+            receipt_case, "require_cryptographic_summary_result: err_invalid_arg"
         )
         self._require_case_expectation(
             receipt_case, "causal_ref_fixture_result: err_invalid_arg"
@@ -1837,6 +1841,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertFalse(verification.verified)
         self.assertEqual(verification.method, "summary-only")
+        self.assertFalse(verification.is_cryptographic)
+        with self.assertRaises(SDKError) as verify_caught:
+            verification.require_cryptographic()
+        self.assertEqual(verify_caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
         with self.assertRaises(SDKError) as caught:
             CausalRef.from_json(b'{"metadata":{}}')

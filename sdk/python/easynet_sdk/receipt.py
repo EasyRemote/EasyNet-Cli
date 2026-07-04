@@ -147,13 +147,46 @@ class ReceiptVerification:
     @classmethod
     def from_json(cls, raw: bytes | str) -> "ReceiptVerification":
         decoded = _json_object(raw, "receipt verification")
-        return cls(
+        verification = cls(
             verified=_required_bool(decoded, "verified"),
             method=_required_string(decoded, "method"),
             receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura"),
             invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id"),
             reason=_optional_string(decoded.get("reason"), "reason") or "",
             metadata=_optional_mapping(decoded.get("metadata"), "metadata") or {},
+        )
+        if verification.verified and _is_summary_only_method(verification.method):
+            raise _invalid_receipt("summary-only projection cannot be verified")
+        return verification
+
+    @property
+    def is_cryptographic(self) -> bool:
+        """Return whether this projection names Axon/full receipt verification."""
+
+        if not self.verified:
+            return False
+        method = self.method.strip().lower().replace("_", "-")
+        source = str(self.metadata.get("source", "")).strip().lower()
+        assurance = str(self.metadata.get("assurance", "")).strip().lower()
+        if method in {"summary-only", "daemon-receipt-chain-continuity"}:
+            return False
+        if assurance in {"cryptographic", "axon-cryptographic"}:
+            return True
+        if source in {"axon", "axon-verifier", "daemon-axon"}:
+            return True
+        return method.startswith("axon-") or method in {
+            "full-receipt",
+            "full-receipt-verification",
+            "cryptographic",
+        }
+
+    def require_cryptographic(self) -> "ReceiptVerification":
+        """Require Axon/full receipt verification evidence."""
+
+        if self.is_cryptographic:
+            return self
+        raise _invalid_receipt(
+            "receipt verification is not Axon-backed cryptographic evidence"
         )
 
 
@@ -650,6 +683,10 @@ def _required_receipt_hash(decoded: Mapping[str, object]) -> str:
 
 def _normalize_receipt_hash(value: str) -> str:
     return value.removeprefix("sha256:").strip().lower()
+
+
+def _is_summary_only_method(value: str) -> bool:
+    return value.strip().lower().replace("_", "-") == "summary-only"
 
 
 def _validate_receipt_hash_hex(value: str) -> None:

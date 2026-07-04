@@ -61,6 +61,8 @@ child-context helpers for EasyRemote-style nested calls, C ABI-backed fetch exec
 through Runtime Core invoke, and close state seams
 over opaque receipt refs plus typed ReceiptRef/ReceiptChain facades that
 delegate causal-context and continuity projection back through ReceiptClient,
+plus `ReceiptVerification` cryptographic-assurance guardrails that reject
+summary-only projections as verifier evidence,
 plus PublicationClient resource-ref,
 package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
 C ABI-backed deploy-result projection,

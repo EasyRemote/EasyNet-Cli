@@ -12,6 +12,7 @@ from easynet_sdk import (
     ReceiptFetchRequest,
     ReceiptRef,
     ReceiptSummary,
+    ReceiptVerification,
     SDKError,
     build_receipt_fetch_invocation,
     is_code,
@@ -243,6 +244,8 @@ class ReceiptTests(unittest.TestCase):
 
         self.assertTrue(verification.verified)
         self.assertEqual(verification.method, "axon-full-receipt")
+        self.assertTrue(verification.is_cryptographic)
+        self.assertIs(verification.require_cryptographic(), verification)
         self.assertEqual(causal.form, "scalar")
         self.assertEqual(
             causal.to_causal_context(),
@@ -550,6 +553,34 @@ class ReceiptTests(unittest.TestCase):
     def test_summary_requires_output_field(self) -> None:
         with self.assertRaises(SDKError):
             ReceiptSummary.from_json(b'{"state":"completed","verified":false,"metadata":{}}')
+
+    def test_verification_assurance_rejects_summary_only_claims(self) -> None:
+        summary_only = ReceiptVerification.from_json(
+            b'{"verified":false,"method":"summary-only",'
+            b'"reason":"full receipt required",'
+            b'"metadata":{"source":"sdk_conformance"}}'
+        )
+        continuity_only = ReceiptVerification.from_json(
+            b'{"verified":true,"method":"daemon_receipt_chain_continuity",'
+            b'"metadata":{"source":"daemon"}}'
+        )
+        metadata_backed = ReceiptVerification.from_json(
+            b'{"verified":true,"method":"full-receipt",'
+            b'"metadata":{"assurance":"cryptographic"}}'
+        )
+
+        self.assertFalse(summary_only.is_cryptographic)
+        self.assertFalse(continuity_only.is_cryptographic)
+        self.assertTrue(metadata_backed.is_cryptographic)
+        self.assertIs(metadata_backed.require_cryptographic(), metadata_backed)
+        with self.assertRaises(SDKError):
+            summary_only.require_cryptographic()
+        with self.assertRaises(SDKError):
+            continuity_only.require_cryptographic()
+        with self.assertRaises(SDKError):
+            ReceiptVerification.from_json(
+                b'{"verified":true,"method":"summary-only","metadata":{}}'
+            )
 
     def test_close_delegates_once_and_fails_closed(self) -> None:
         transport = MemoryReceiptTransport()

@@ -229,8 +229,9 @@ method spelling.
   receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
   child-context helpers for EasyRemote-style nested calls, typed `ReceiptRef` and
   `ReceiptChain` wrappers that delegate causal-context and continuity projection
-  through the client, C ABI-backed fetch execution through Runtime Core invoke,
-  and close state seams over opaque receipt refs;
+  through the client, `ReceiptVerification` cryptographic-assurance guardrails
+  that reject summary-only projections as verifier evidence, C ABI-backed fetch
+  execution through Runtime Core invoke, and close state seams over opaque receipt refs;
   Axon-backed cryptographic verification, receipt URI construction after RFC-007,
   and actual EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
