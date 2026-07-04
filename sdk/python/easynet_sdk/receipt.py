@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
@@ -400,6 +402,152 @@ class CausalRef:
         """Return the child-Invocation `causal_context` DTO."""
 
         return dict(self.causal_context)
+
+
+class EasyRemoteInvocationState(IntEnum):
+    """EasyRemote-facing invocation lifecycle states.
+
+    Numbering is normative, from ``axon/v1/types.proto``. The SDK owns this
+    projection so product clients do not carry Axon enum parsing code.
+    """
+
+    UNSPECIFIED = 0
+    ACCEPTED = 1
+    ADMITTED = 2
+    DISPATCHED = 3
+    RUNNING = 4
+    COMPLETED = 5
+    FAILED = 6
+    TIMED_OUT = 7
+    CANCELLED = 8
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in _EASYREMOTE_TERMINAL_STATES
+
+
+_EASYREMOTE_TERMINAL_STATES = frozenset(
+    {
+        EasyRemoteInvocationState.COMPLETED,
+        EasyRemoteInvocationState.FAILED,
+        EasyRemoteInvocationState.TIMED_OUT,
+        EasyRemoteInvocationState.CANCELLED,
+    }
+)
+
+_EASYREMOTE_STATE_NAMES = {
+    "unspecified": EasyRemoteInvocationState.UNSPECIFIED,
+    "accepted": EasyRemoteInvocationState.ACCEPTED,
+    "admitted": EasyRemoteInvocationState.ADMITTED,
+    "dispatched": EasyRemoteInvocationState.DISPATCHED,
+    "running": EasyRemoteInvocationState.RUNNING,
+    "completed": EasyRemoteInvocationState.COMPLETED,
+    "failed": EasyRemoteInvocationState.FAILED,
+    "timed_out": EasyRemoteInvocationState.TIMED_OUT,
+    "cancelled": EasyRemoteInvocationState.CANCELLED,
+}
+
+
+@dataclass(frozen=True)
+class EasyRemoteReceipt:
+    """EasyRemote receipt-summary facade.
+
+    The daemon currently returns summary receipts on the local invoke path.
+    This facade preserves the exact wire body while centralizing all parsing,
+    hash-chain projection, and the honest full-receipt verification guardrail
+    inside the SDK Receipt profile.
+    """
+
+    index: int
+    invocation_id: str
+    receipt_type: str
+    state: EasyRemoteInvocationState
+    timestamp_unix_ms: int
+    prev_receipt_hash: bytes
+    self_hash: bytes
+    payload_content_type: str
+    cleanup_complete: bool
+    reason: str
+    child_invocation_id: str
+    raw: dict[str, Any] = field(repr=False)
+
+    @classmethod
+    def from_wire(cls, wire: Mapping[str, object]) -> "EasyRemoteReceipt":
+        try:
+            return cls(
+                index=_easyremote_int(wire["index"]),
+                invocation_id=str(wire["invocation_id"]),
+                receipt_type=str(wire["receipt_type"]),
+                state=_easyremote_parse_state(wire["state"]),
+                timestamp_unix_ms=_easyremote_int(wire["timestamp_unix_ms"]),
+                prev_receipt_hash=bytes.fromhex(str(wire["prev_receipt_hash_hex"])),
+                self_hash=bytes.fromhex(str(wire["self_hash_hex"])),
+                payload_content_type=str(wire.get("payload_content_type", "")),
+                cleanup_complete=bool(wire.get("cleanup_complete", False)),
+                reason=str(wire.get("reason", "")),
+                child_invocation_id=str(wire.get("child_invocation_id", "")),
+                raw=dict(wire),
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise _easyremote_receipt_protocol_error(
+                f"daemon receipt summary is malformed: {exc}", exc
+            ) from exc
+
+    def to_json_bytes(self) -> bytes:
+        return json.dumps(
+            self.raw, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+
+    def verify(
+        self, client: "ReceiptClient | None" = None
+    ) -> "ReceiptVerification":
+        """Require Axon/full-receipt verification evidence.
+
+        Summary-only receipts cannot satisfy this. When the backing transport
+        cannot return cryptographic evidence, the SDK raises a typed
+        ``full_receipt_unavailable`` error instead of silently accepting weaker
+        proof.
+        """
+
+        verifier = client or ReceiptClient(LocalReceiptTransport())
+        verification = verifier.verify(self.to_json_bytes())
+        if verification.is_cryptographic:
+            return verification
+        raise _easyremote_full_receipt_unavailable(self.invocation_id)
+
+
+class EasyRemoteReceiptChain(Sequence[EasyRemoteReceipt]):
+    """Ordered EasyRemote receipt summaries with SDK-owned continuity checks."""
+
+    def __init__(self, receipts: Sequence[EasyRemoteReceipt]) -> None:
+        self._receipts = tuple(receipts)
+
+    def __len__(self) -> int:
+        return len(self._receipts)
+
+    def __getitem__(self, index):
+        return self._receipts[index]
+
+    def __iter__(self) -> Iterator[EasyRemoteReceipt]:
+        return iter(self._receipts)
+
+    def verify_continuity(
+        self,
+        client: "ReceiptClient | None" = None,
+    ) -> "ReceiptChainVerification | None":
+        """Project hash-chain continuity through the SDK Receipt profile."""
+
+        if len(self._receipts) < 2:
+            return None
+        verifier = client or ReceiptClient(LocalReceiptTransport())
+        verification = verifier.verify_chain(
+            ReceiptChainVerificationRequest(
+                receipts=tuple(receipt.to_json_bytes() for receipt in self._receipts)
+            )
+        )
+        if verification.continuous:
+            return verification
+        raise _easyremote_receipt_chain_broken(verification)
 
 
 @runtime_checkable
@@ -929,6 +1077,74 @@ def _optional_sdk_error(value: object, field_name: str) -> Optional[SDKError]:
     if not isinstance(value, dict):
         raise _invalid_receipt(f"{field_name} must be an object or null")
     return SDKError.from_json(json.dumps(value, separators=(",", ":"), sort_keys=True))
+
+
+def _easyremote_parse_state(value: Any) -> EasyRemoteInvocationState:
+    if isinstance(value, str):
+        parsed = _EASYREMOTE_STATE_NAMES.get(value.strip().lower())
+        if parsed is not None:
+            return parsed
+    try:
+        return EasyRemoteInvocationState(int(value))
+    except (ValueError, TypeError):
+        return EasyRemoteInvocationState.UNSPECIFIED
+
+
+def _easyremote_int(value: object) -> int:
+    if isinstance(value, bool):
+        raise TypeError("boolean is not an integer receipt field")
+    if isinstance(value, (str, bytes, bytearray, int)):
+        return int(value)
+    raise TypeError(f"unsupported integer receipt field: {type(value).__name__}")
+
+
+def _easyremote_receipt_protocol_error(
+    message: str, cause: BaseException | None = None
+) -> SDKError:
+    return SDKError(
+        code=ErrorCode.PROTOCOL,
+        stage="easyremote_receipt",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
+        details={"reason": "protocol"},
+        cause=cause,
+    )
+
+
+def _easyremote_full_receipt_unavailable(invocation_id: str) -> SDKError:
+    return SDKError(
+        code=ErrorCode.NOT_IMPLEMENTED,
+        stage="easyremote_receipt",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=(
+            "cryptographic receipt verification needs the full receipt body, "
+            "which the local summary does not provide"
+        ),
+        invocation_id=invocation_id or None,
+        details={"reason": "full_receipt_unavailable"},
+    )
+
+
+def _easyremote_receipt_chain_broken(
+    verification: ReceiptChainVerification,
+) -> SDKError:
+    broken = next((item for item in verification.items if not item.continuous), None)
+    index = broken.index if broken is not None else 0
+    invocation_id = broken.invocation_id if broken is not None else None
+    return SDKError(
+        code=ErrorCode.PROTOCOL,
+        stage="easyremote_receipt",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=(
+            f"receipt chain broken at index {index}: "
+            "prev_receipt_hash does not match predecessor's self_hash"
+        ),
+        invocation_id=invocation_id,
+        details={"reason": "receipt_chain_broken"},
+    )
 
 
 def _invalid_receipt(
