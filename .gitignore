@@ -7,6 +7,7 @@ Cargo.lock
 .idea/
 .vscode/
 *.iml
+*.pyc
 
 # macOS BSD sed writes `<name>-e` backups when `-i ''` is mis-used.
 *-e
