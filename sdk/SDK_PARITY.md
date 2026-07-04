@@ -220,9 +220,10 @@ method spelling.
   cleanup execution, local canonical JSON/hash implementation, EasyRemote warm
   host integration, and behavior-executing conformance remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
-  Invocation carrier builders plus daemon `MissionStatus` and
-  `MissionEventPage` projection seams and close state seams; daemon mission execution carriers,
-  concrete live-tail adapters, child Invocation behavior conformance,
+  Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
+  through Runtime Core invoke, plus daemon `MissionStatus` and
+  `MissionEventPage` projection seams and close state seams; concrete live-tail adapters,
+  child Invocation behavior conformance,
   EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders plus

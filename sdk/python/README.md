@@ -50,7 +50,8 @@ deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding, and
 output-hash folding seams plus close state seams. MissionClient exposes run/run-file/track/cancel
-Invocation carrier builders plus MissionStatus and MissionEventPage projection
+Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
+through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing token,
@@ -71,8 +72,8 @@ builders, including C ABI-backed concrete carrier builders,
 transport-backed helper close state seams, and record projections. Direct daemon
 UDS transport, directory subscription live adapters, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication
-show/unpublish and plugin lifecycle live adapters, host-binding/mission
-execution adapters, mission event streams, concrete Admin trust/session carriers,
+show/unpublish and plugin lifecycle live adapters, host-binding execution
+adapters, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 live adapters, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,

@@ -769,6 +769,27 @@ class _CABIProfileTransport:
         project_symbol: str,
     ) -> bytes:
         handle = self._require_open()
+        output = self._invoke_output_json(handle, build_symbol, request_json)
+        projection_json = _projection_request_json(request_json, output)
+        return self.lib.json_handle_output(project_symbol, handle, projection_json)
+
+    def _invoke_output_projected(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+        project_symbol: str,
+    ) -> bytes:
+        handle = self._require_open()
+        output = self._invoke_output_json(handle, build_symbol, request_json)
+        return self.lib.json_handle_output(project_symbol, handle, _json_bytes(output))
+
+    def _invoke_output_json(
+        self,
+        handle: int,
+        build_symbol: str,
+        request_json: bytes,
+    ) -> dict[str, object]:
         draft_json = self.lib.json_handle_output(build_symbol, handle, request_json)
         result_json = self.lib.invocation_invoke(handle, draft_json)
         result = _json_object(result_json, "profile invocation result")
@@ -781,8 +802,7 @@ class _CABIProfileTransport:
                 retryable=False,
                 message="profile invocation output_json must be an object",
             )
-        projection_json = _projection_request_json(request_json, output)
-        return self.lib.json_handle_output(project_symbol, handle, projection_json)
+        return output
 
     def _missing(self, method: str) -> bytes:
         raise SDKError(
@@ -998,16 +1018,32 @@ class CABIMissionTransport(_CABIProfileTransport):
         return self._call("easynet_mission_build_cancel_invocation", request_json)
 
     def run_eal(self, request_json: bytes) -> bytes:
-        return self._missing("mission run eal")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_mission_build_run_eal_invocation",
+            project_symbol="easynet_mission_project_status",
+        )
 
     def run_file(self, request_json: bytes) -> bytes:
-        return self._missing("mission run file")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_mission_build_run_file_invocation",
+            project_symbol="easynet_mission_project_status",
+        )
 
     def track(self, request_json: bytes) -> bytes:
-        return self._missing("mission track")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_mission_build_track_invocation",
+            project_symbol="easynet_mission_project_status",
+        )
 
     def cancel(self, request_json: bytes) -> bytes:
-        return self._missing("mission cancel")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_mission_build_cancel_invocation",
+            project_symbol="easynet_mission_project_status",
+        )
 
     def events(self, request_json: bytes) -> bytes:
         return self._call("easynet_mission_project_events", request_json)

@@ -20,6 +20,12 @@ from easynet_sdk import (
     HealthClient,
     IdentityClient,
     InvocationSignature,
+    MissionCancelRequest,
+    MissionCarrierBase,
+    MissionClient,
+    MissionRunFileRequest,
+    MissionRunRequest,
+    MissionTrackRequest,
     PrepareOptions,
     PublicationClient,
     PublishedAbilityQuery,
@@ -38,6 +44,7 @@ from easynet_sdk._cabi import (
     CABIDiscoveryTransport,
     CABIDaemonTransport,
     CABIIdentityTransport,
+    CABIMissionTransport,
     CABIPublicationTransport,
     CABIReceiptTransport,
     CABIRuntimeConnector,
@@ -361,6 +368,18 @@ class FakeRawCABI:
                 "install_id": "install-1",
                 "state": "enabled",
             }
+        if system_ability in {"mission.run", "mission.track", "mission.cancel"}:
+            return {
+                "run_id": "mission-1",
+                "running": False,
+                "meta": {
+                    "trace_id": "mission-1",
+                    "status": "cancelled"
+                    if system_ability == "mission.cancel"
+                    else "ok",
+                    "steps_failed": 0,
+                },
+            }
         if system_ability == "namespace.resolve":
             return {
                 "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
@@ -577,6 +596,15 @@ class FakeRawCABI:
             return PUBLICATION_LIST_INVOCATION
         if symbol == "easynet_publication_project_ability_page":
             return PUBLICATION_ABILITY_PAGE
+        if symbol in {
+            "easynet_mission_build_run_eal_invocation",
+            "easynet_mission_build_run_file_invocation",
+        }:
+            return MISSION_RUN_INVOCATION
+        if symbol == "easynet_mission_build_track_invocation":
+            return MISSION_TRACK_INVOCATION
+        if symbol == "easynet_mission_build_cancel_invocation":
+            return MISSION_CANCEL_INVOCATION
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -928,6 +956,45 @@ MISSION_STATUS_PROJECTION = (
     b'"parent_receipt_ura":null,"parent_invocation":{},'
     b'"child_invocations":[],"child_receipts":[],"output_refs":[],'
     b'"metadata":{"profile":"mission"}}'
+)
+
+MISSION_RUN_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.mission.run@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"source":"mission demo"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"mission","system_ability":"mission.run",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+MISSION_TRACK_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.mission.track@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"run_id":"mission-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"mission","system_ability":"mission.track",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+MISSION_CANCEL_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"run_id":"mission-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"mission","system_ability":"mission.cancel",'
+    b'"carrier_owner":"daemon_sdk"}}'
 )
 
 MISSION_EVENT_PAGE_PROJECTION = (
@@ -1509,6 +1576,52 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertIn("result", raw.profile_requests[1][2])
         self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
+        self.assertEqual(raw.buffers, {})
+
+    def test_mission_live_methods_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = MissionClient(CABIMissionTransport(lib, handle=7))
+        base = MissionCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        run = client.run_eal(MissionRunRequest(base=base, source="mission demo"))
+        run_file = client.run_file(
+            "/tmp/mission.eal",
+            MissionRunFileRequest(base=base, path="/tmp/mission.eal"),
+        )
+        tracked = client.track(MissionTrackRequest(base=base, mission_id="mission-1"))
+        cancelled = client.cancel(MissionCancelRequest(base=base, mission_id="mission-1"))
+
+        self.assertTrue(run.status.terminal)
+        self.assertTrue(run_file.status.terminal)
+        self.assertEqual(tracked.state, "completed")
+        self.assertEqual(cancelled.state, "completed")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_mission_build_run_eal_invocation",
+                "easynet_mission_project_status",
+                "easynet_mission_build_run_file_invocation",
+                "easynet_mission_project_status",
+                "easynet_mission_build_track_invocation",
+                "easynet_mission_project_status",
+                "easynet_mission_build_cancel_invocation",
+                "easynet_mission_project_status",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            ["mission.run", "mission.run", "mission.track", "mission.cancel"],
+        )
+        self.assertEqual(raw.profile_requests[1][2]["run_id"], "mission-1")
+        self.assertEqual(raw.profile_requests[7][2]["meta"]["status"], "cancelled")
         self.assertEqual(raw.buffers, {})
 
     def test_runtime_transport_prepare_sign_submit_choreography(self) -> None:

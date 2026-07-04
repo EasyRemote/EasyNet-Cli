@@ -361,6 +361,7 @@ class SdkEnvironmentTests(unittest.TestCase):
             mission.build_run_eal_invocation(
                 MissionRunRequest(base=_mission_base(), source="mission weather")
             )
+            mission.run_eal(MissionRunRequest(base=_mission_base(), source="mission weather"))
             admin.build_agent_list_invocation(AdminAgentListRequest(_admin_base()))
             events.build_directory_subscription_invocation(
                 EventsSubscriptionRequest(base=_events_base())
@@ -491,6 +492,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_publication_project_ability_page", symbols)
         self.assertIn("easynet_host_binding_build", symbols)
         self.assertIn("easynet_mission_build_run_eal_invocation", symbols)
+        self.assertIn("easynet_mission_project_status", symbols)
         self.assertIn("easynet_admin_build_agent_list_invocation", symbols)
         self.assertIn("easynet_events_build_directory_subscription_invocation", symbols)
         self.assertIn("easynet_directory_build_list_devices_invocation", symbols)
