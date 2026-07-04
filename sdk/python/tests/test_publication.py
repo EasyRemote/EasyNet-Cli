@@ -197,6 +197,10 @@ class MemoryPublicationTransport:
         self.seen_projection = json.loads(page_json.decode("utf-8"))
         return self.list_json
 
+    def project_unpublish_result(self, result_json: bytes) -> bytes:
+        self.seen_projection = json.loads(result_json.decode("utf-8"))
+        return self.unpublish_json
+
     def show_ability(self, request_json: bytes) -> bytes:
         self._remember(request_json)
         return self.show_json
@@ -411,6 +415,43 @@ class PublicationTests(unittest.TestCase):
         assert carrier.seen_projection is not None
         self.assertEqual(carrier.seen_projection["limit"], 50)
         self.assertIn("abilities", carrier.seen_projection["result"])
+
+    def test_runtime_publication_transport_executes_unpublish_via_runtime_core(self) -> None:
+        carrier = MemoryPublicationTransport()
+        runtime_transport = DeployRuntimeTransport(
+            output_json={
+                "ok": True,
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "public_name": "weather",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "removed_path": "/tmp/easynet/abilities/weather.ability.json",
+                "content_hash": "sha256:abc",
+            }
+        )
+        client = PublicationClient(
+            RuntimePublicationTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        client.unpublish_ability(unpublish_request())
+
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "ability.unpublish",
+        )
+        assert carrier.seen_projection is not None
+        self.assertEqual(carrier.seen_projection["descriptor_version"], "1.0.0")
+        self.assertEqual(
+            carrier.seen_projection["ability_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather",
+        )
+        self.assertEqual(
+            carrier.seen_projection["result"]["content_hash"],
+            "sha256:abc",
+        )
 
     def test_rejects_incomplete_deploy_carrier(self) -> None:
         client = PublicationClient(MemoryPublicationTransport())

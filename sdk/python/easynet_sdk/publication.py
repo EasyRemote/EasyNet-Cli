@@ -423,6 +423,9 @@ class PublicationTransport(Protocol):
     def project_ability_page(self, page_json: bytes) -> bytes:
         ...
 
+    def project_unpublish_result(self, result_json: bytes) -> bytes:
+        ...
+
     def show_ability(self, request_json: bytes) -> bytes:
         ...
 
@@ -476,6 +479,9 @@ class RuntimePublicationTransport:
     def build_deploy_invocation(self, request_json: bytes) -> bytes:
         return self._delegate("build_deploy_invocation", request_json)
 
+    def project_deploy_result(self, result_json: bytes) -> bytes:
+        return self._delegate("project_deploy_result", result_json)
+
     def install_plugin(self, request_json: bytes) -> bytes:
         return self._delegate("install_plugin", request_json)
 
@@ -485,6 +491,12 @@ class RuntimePublicationTransport:
             build_method="build_list_abilities_invocation",
             project_method="project_ability_page",
         )
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        return self._delegate("project_ability_page", page_json)
+
+    def project_unpublish_result(self, result_json: bytes) -> bytes:
+        return self._delegate("project_unpublish_result", result_json)
 
     def show_ability(self, request_json: bytes) -> bytes:
         return self._delegate("show_ability", request_json)
@@ -499,7 +511,14 @@ class RuntimePublicationTransport:
         return self._delegate("build_unpublish_invocation", request_json)
 
     def unpublish_ability(self, request_json: bytes) -> bytes:
-        return self._delegate("unpublish_ability", request_json)
+        return self._invoke_projected(
+            request_json,
+            build_method="build_unpublish_invocation",
+            project_method="project_unpublish_result",
+            projection_keys=("descriptor_version", "ability_ura"),
+            failure_message="publication unpublish invocation failed",
+            output_message="publication unpublish output must be an object",
+        )
 
     def close(self) -> None:
         if self._closed:
@@ -535,6 +554,9 @@ class RuntimePublicationTransport:
         *,
         build_method: str,
         project_method: str,
+        projection_keys: tuple[str, ...] = ("limit", "cursor"),
+        failure_message: str = "publication read-model invocation failed",
+        output_message: str = "publication read-model output must be an object",
     ) -> bytes:
         self._require_open()
         draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
@@ -545,13 +567,13 @@ class RuntimePublicationTransport:
                 stage="publication",
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
-                message="publication read-model invocation failed",
+                message=failure_message,
                 cause=result.error,
             )
         output = result.output_json
         if not isinstance(output, dict):
-            raise _invalid_publication("publication read-model output must be an object")
-        projection = _projection_request(request_json, output)
+            raise _invalid_publication(output_message)
+        projection = _projection_request(request_json, output, projection_keys)
         return getattr(self.carrier, project_method)(_json_bytes(projection))
 
     def _require_open(self) -> None:
@@ -695,13 +717,17 @@ class PublicationClient:
             raise _transport_error("publication unpublish invocation failed", exc) from exc
         return InvocationDraft.from_json(raw)
 
-    def unpublish_ability(self, descriptor_ref: str) -> None:
+    def unpublish_ability(self, target: str | UnpublishAbilityRequest) -> None:
         self._require_open()
-        if not descriptor_ref:
-            raise _invalid_publication("descriptor_ref is required")
+        if isinstance(target, UnpublishAbilityRequest):
+            request_json = target.to_json_bytes()
+        else:
+            if not target:
+                raise _invalid_publication("descriptor_ref is required")
+            request_json = _json_bytes({"descriptor_ref": target})
         self._expect_record(
             self.transport.unpublish_ability,
-            _json_bytes({"descriptor_ref": descriptor_ref}),
+            request_json,
             "ability_unpublished",
             "publication unpublish ability failed",
         )
@@ -809,10 +835,14 @@ def _published_ability(value: object) -> PublishedAbility:
     )
 
 
-def _projection_request(request_json: bytes, result: Mapping[str, object]) -> dict[str, object]:
+def _projection_request(
+    request_json: bytes,
+    result: Mapping[str, object],
+    passthrough_keys: tuple[str, ...] = ("limit", "cursor"),
+) -> dict[str, object]:
     request = _json_object(request_json, "publication projection request")
     projection: dict[str, object] = {"result": dict(result)}
-    for key in ("limit", "cursor"):
+    for key in passthrough_keys:
         value = request.get(key)
         if value is not None:
             projection[key] = value

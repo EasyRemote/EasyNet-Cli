@@ -59,6 +59,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_publication_build_list_abilities_invocation",
     "easynet_publication_project_ability_page",
     "easynet_publication_build_unpublish_invocation",
+    "easynet_publication_project_unpublish_result",
     "easynet_mission_build_run_eal_invocation",
     "easynet_mission_build_run_file_invocation",
     "easynet_mission_build_track_invocation",
@@ -838,6 +839,23 @@ class _CABIProfileTransport:
         output = self._invoke_output_json(handle, build_symbol, request_json)
         return self.lib.json_handle_output(project_symbol, handle, _json_bytes(output))
 
+    def _invoke_output_projected_with_request(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+        project_symbol: str,
+        projection_keys: tuple[str, ...],
+    ) -> bytes:
+        handle = self._require_open()
+        output = self._invoke_output_json(handle, build_symbol, request_json)
+        projection_json = _projection_request_json(
+            request_json,
+            output,
+            passthrough_keys=projection_keys,
+        )
+        return self.lib.json_handle_output(project_symbol, handle, projection_json)
+
     def _invoke_output_json(
         self,
         handle: int,
@@ -1033,6 +1051,9 @@ class CABIPublicationTransport(_CABIProfileTransport):
     def project_ability_page(self, page_json: bytes) -> bytes:
         return self._call("easynet_publication_project_ability_page", page_json)
 
+    def project_unpublish_result(self, result_json: bytes) -> bytes:
+        return self._call("easynet_publication_project_unpublish_result", result_json)
+
     def show_ability(self, request_json: bytes) -> bytes:
         return self._missing("publication show ability")
 
@@ -1048,7 +1069,12 @@ class CABIPublicationTransport(_CABIProfileTransport):
         )
 
     def unpublish_ability(self, request_json: bytes) -> bytes:
-        return self._missing("publication unpublish ability")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_publication_build_unpublish_invocation",
+            project_symbol="easynet_publication_project_unpublish_result",
+            projection_keys=("descriptor_version", "ability_ura"),
+        )
 
 
 @dataclass
@@ -2376,10 +2402,15 @@ def _json_bytes(value: dict[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
-def _projection_request_json(request_json: bytes, result: dict[str, object]) -> bytes:
+def _projection_request_json(
+    request_json: bytes,
+    result: dict[str, object],
+    *,
+    passthrough_keys: tuple[str, ...] = ("limit", "cursor"),
+) -> bytes:
     request = _json_object(request_json, "profile projection request")
     projection: dict[str, object] = {"result": result}
-    for key in ("limit", "cursor"):
+    for key in passthrough_keys:
         value = request.get(key)
         if value is not None:
             projection[key] = value

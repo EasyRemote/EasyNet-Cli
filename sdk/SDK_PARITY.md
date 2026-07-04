@@ -210,10 +210,11 @@ method spelling.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   C ABI-backed deploy-result projection,
-  published-ability list execution through Runtime Core invoke, deploy/unpublish
-  Invocation carrier, deploy-result, plugin install projection,
+  published-ability list execution through Runtime Core invoke, complete unpublish
+  execution through Runtime Core invoke, deploy/unpublish Invocation carrier,
+  deploy/unpublish result, plugin install projection,
   published-ability read-model seams, and close state seams; concrete daemon
-  show/enable/disable/unpublish runtime execution, host binding bridge,
+  show/enable/disable runtime execution, host binding bridge,
   EasyRemote decorator/package extraction, and plugin/skill lifecycle policy
   remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope

@@ -193,6 +193,51 @@ pub(crate) fn build_unpublish_invocation(request: &Value) -> Result<Value, Publi
     )
 }
 
+pub(crate) fn project_ability_unpublish_result(input: &Value) -> Result<Value, PublicationError> {
+    let payload = mutation_projection_payload(input);
+    let obj = object(payload, "AbilityUnpublishResult")?;
+    if matches!(obj.get("ok").and_then(Value::as_bool), Some(false)) {
+        return Err(PublicationError::InvalidField(
+            "ok",
+            "must be true for ability_unpublished projection".to_string(),
+        ));
+    }
+    let ability_ura = required_string(obj, "ability_ura")?;
+    let parsed = ura::parse_ura(ability_ura)
+        .map_err(|err| PublicationError::InvalidField("ability_ura", err.to_string()))?;
+    if parsed.kind != ura::URAKind::Ability {
+        return Err(PublicationError::InvalidField(
+            "ability_ura",
+            format!("must be an Ability URA, got {}", parsed.kind),
+        ));
+    }
+    let owner_ura = optional_string_field(obj, "owner_ura")?;
+    if let Some(owner_ura) = owner_ura.as_deref() {
+        validate_ura(owner_ura, "owner_ura")?;
+    }
+    let descriptor_version = projection_descriptor_version(input, obj)?;
+    let descriptor_ref =
+        canonical_ability_descriptor_ref(&format!("{ability_ura}@{descriptor_version}"))
+            .map_err(|err| PublicationError::InvalidField("descriptor_ref", err.to_string()))?;
+    Ok(json!({
+        "profile": PUBLICATION_PROFILE,
+        "kind": "ability_unpublished",
+        "descriptor_ref": descriptor_ref,
+        "owner_ura": owner_ura,
+        "status": "unpublished",
+        "metadata": {
+            "profile": PUBLICATION_PROFILE,
+            "source_ability": SYSTEM_ABILITY_UNPUBLISH,
+            "ability_ura": ability_ura,
+            "descriptor_version": descriptor_version,
+            "public_name": optional_string_field(obj, "public_name")?,
+            "removed_path": optional_string_field(obj, "removed_path")?,
+            "content_hash": optional_string_field(obj, "content_hash")?,
+            "raw_result": payload,
+        },
+    }))
+}
+
 fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, PublicationError> {
     let mut args = Map::new();
     if let Some(owner_ura) = optional_string_field(obj, "owner_ura")? {
@@ -289,6 +334,13 @@ fn projection_payload(input: &Value) -> &Value {
         .unwrap_or(input)
 }
 
+fn mutation_projection_payload(input: &Value) -> &Value {
+    input
+        .as_object()
+        .and_then(|obj| obj.get("result").filter(|value| !value.is_null()))
+        .unwrap_or_else(|| projection_payload(input))
+}
+
 fn rows_from_value<'a>(
     input: &'a Value,
     primary: &'static str,
@@ -381,6 +433,21 @@ fn project_published_descriptor(obj: &Map<String, Value>) -> Result<Value, Publi
         }
     }
     Ok(Value::Object(descriptor))
+}
+
+fn projection_descriptor_version(
+    input: &Value,
+    payload: &Map<String, Value>,
+) -> Result<String, PublicationError> {
+    let request_version = input.as_object().and_then(|obj| {
+        optional_string_field(obj, "descriptor_version")
+            .ok()
+            .flatten()
+    });
+    let payload_version = optional_string_field(payload, "descriptor_version")?;
+    Ok(request_version
+        .or(payload_version)
+        .unwrap_or_else(|| crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string()))
 }
 
 fn validate_limit(limit: usize) -> Result<(), PublicationError> {
@@ -827,5 +894,51 @@ mod tests {
         let err = build_unpublish_invocation(&request).unwrap_err();
 
         assert!(format!("{err}").contains("Ability URA"));
+    }
+
+    #[test]
+    fn project_ability_unpublish_result_uses_request_descriptor_version() {
+        let result = project_ability_unpublish_result(&json!({
+            "descriptor_version": "1.2.3",
+            "result": {
+                "ok": true,
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "public_name": "weather",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "removed_path": "/tmp/easynet/abilities/weather.ability.json",
+                "content_hash": "sha256:abc"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(result["profile"], PUBLICATION_PROFILE);
+        assert_eq!(result["kind"], "ability_unpublished");
+        assert_eq!(result["status"], "unpublished");
+        assert_eq!(
+            result["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.2.3"
+        );
+        assert_eq!(
+            result["metadata"]["source_ability"],
+            SYSTEM_ABILITY_UNPUBLISH
+        );
+        assert_eq!(
+            result["metadata"]["raw_result"]["content_hash"],
+            "sha256:abc"
+        );
+    }
+
+    #[test]
+    fn project_ability_unpublish_result_rejects_failed_daemon_ack() {
+        let err = project_ability_unpublish_result(&json!({
+            "descriptor_version": "1.0.0",
+            "result": {
+                "ok": false,
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+            }
+        }))
+        .unwrap_err();
+
+        assert!(format!("{err}").contains("ok"));
     }
 }

@@ -65,6 +65,7 @@ from easynet_sdk import (
     SurfaceDeletePageRequest,
     SurfaceListPagesRequest,
     SurfaceManifestRequest,
+    UnpublishAbilityRequest,
     WrapperBrowserSessionRequest,
     WrapperBrowserStartRequest,
     WrapperCarrierBase,
@@ -432,6 +433,15 @@ class FakeRawCABI:
                 "install_id": "install-1",
                 "state": "enabled",
             }
+        if system_ability == "ability.unpublish":
+            return {
+                "ok": True,
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "public_name": "weather",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "removed_path": "/tmp/easynet/abilities/weather.ability.json",
+                "content_hash": "sha256:abc",
+            }
         if system_ability in {"mission.run", "mission.track", "mission.cancel"}:
             return {
                 "run_id": "mission-1",
@@ -779,6 +789,10 @@ class FakeRawCABI:
             return PUBLICATION_LIST_INVOCATION
         if symbol == "easynet_publication_project_ability_page":
             return PUBLICATION_ABILITY_PAGE
+        if symbol == "easynet_publication_build_unpublish_invocation":
+            return PUBLICATION_UNPUBLISH_INVOCATION
+        if symbol == "easynet_publication_project_unpublish_result":
+            return PUBLICATION_UNPUBLISH_RESULT_PROJECTION
         if symbol == "easynet_admin_build_agent_list_invocation":
             return ADMIN_AGENT_LIST_INVOCATION
         if symbol == "easynet_admin_build_agent_start_invocation":
@@ -1004,6 +1018,29 @@ PUBLICATION_ABILITY_PAGE = (
     b'"implementation":{},"metadata":{"source_ability":"meta.list_abilities"}}],'
     b'"next_cursor":null,"limit":50,"source":"read_model",'
     b'"metadata":{"profile":"publication","source_ability":"meta.list_abilities"}}'
+)
+
+PUBLICATION_UNPUBLISH_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.ability.unpublish@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"publication","system_ability":"ability.unpublish",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_UNPUBLISH_RESULT_PROJECTION = (
+    b'{"profile":"publication","kind":"ability_unpublished",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"status":"unpublished","metadata":{"profile":"publication",'
+    b'"source_ability":"ability.unpublish",'
+    b'"content_hash":"sha256:abc"}}'
 )
 
 RECEIPT_SUMMARY_PROJECTION = (
@@ -2360,6 +2397,45 @@ class CABITransportTests(unittest.TestCase):
             "ability.deploy",
         )
         self.assertEqual(raw.profile_requests[1][2]["state"], "enabled")
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_unpublish_uses_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
+
+        client.unpublish_ability(
+            UnpublishAbilityRequest(
+                caller_ura="easynet:///r/example/agent/alice.sdk",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/device/dev-a",
+                descriptor_version="1.0.0",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
+            )
+        )
+
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_publication_build_unpublish_invocation",
+                "easynet_publication_project_unpublish_result",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "ability.unpublish",
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["descriptor_version"],
+            "1.0.0",
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["result"]["content_hash"],
+            "sha256:abc",
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_admin_live_agent_methods_use_carrier_invoke_and_projection(self) -> None:

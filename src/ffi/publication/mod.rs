@@ -33,8 +33,8 @@ use std::os::raw::c_char;
 
 use crate::daemon::publication_contract::{
     build_deploy_invocation, build_list_abilities_invocation, build_local_resource_ref,
-    build_unpublish_invocation, project_ability_deploy_result, project_published_ability_page,
-    validate_package,
+    build_unpublish_invocation, project_ability_deploy_result, project_ability_unpublish_result,
+    project_published_ability_page, validate_package,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -190,6 +190,28 @@ pub unsafe extern "C" fn easynet_publication_build_unpublish_invocation(
         "out_invocation_json",
         "request_json",
         build_unpublish_invocation,
+    )
+}
+
+/// Project daemon `ability.unpublish` output into an SDK mutation DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_project_unpublish_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_publication_project_unpublish_result",
+        "out_result_json",
+        "result_json",
+        project_ability_unpublish_result,
     )
 }
 
@@ -465,6 +487,41 @@ mod tests {
 
         assert_eq!(code, ERR_INVALID_ARG);
         assert!(out.is_null());
+        release(handle);
+    }
+
+    #[test]
+    fn publication_project_unpublish_result_projects_daemon_output() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "descriptor_version": "1.0.0",
+                "result": {
+                    "ok": true,
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "public_name": "weather",
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                    "removed_path": "/tmp/easynet/abilities/weather.ability.json",
+                    "content_hash": "sha256:abc"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_publication_project_unpublish_result(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "ability_unpublished");
+        assert_eq!(value["status"], "unpublished");
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+        );
+        assert_eq!(value["metadata"]["source_ability"], "ability.unpublish");
         release(handle);
     }
 }
