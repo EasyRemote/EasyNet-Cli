@@ -90,6 +90,7 @@ for path in \
   sdk/go/import_boundary_test.go \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
+  sdk/python/easynet_sdk/_cabi.py \
   sdk/python/easynet_sdk/daemon.py \
   sdk/python/easynet_sdk/directory.py \
   sdk/python/easynet_sdk/identity.py \
@@ -111,6 +112,7 @@ for path in \
   sdk/python/easynet_sdk/signing.py \
   sdk/python/easynet_sdk/stream.py \
   sdk/python/tests/test_health.py \
+  sdk/python/tests/test_cabi.py \
   sdk/python/tests/test_daemon.py \
   sdk/python/tests/test_directory.py \
   sdk/python/tests/test_identity.py \
@@ -518,6 +520,10 @@ require_literal sdk/go/bidi.go "BidiTransport"
 require_literal sdk/go/bidi.go "MaxBidiBufferedFrames"
 require_literal sdk/go/import_boundary_test.go "TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries"
 require_literal sdk/python/easynet_sdk/client.py "DiscoveryTransport"
+require_literal sdk/python/easynet_sdk/_cabi.py "CLILibrary"
+require_literal sdk/python/easynet_sdk/_cabi.py "CABIDiscoveryTransport"
+require_literal sdk/python/easynet_sdk/_cabi.py "CABIIdentityTransport"
+require_literal sdk/python/easynet_sdk/_cabi.py "EXPECTED_ABI_VERSION"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonHandle"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonLifecycleState"
 require_literal sdk/python/easynet_sdk/daemon.py "DaemonTransport"

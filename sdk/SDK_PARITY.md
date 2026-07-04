@@ -183,9 +183,10 @@ method spelling.
   Axon-delegated `parse_ura`, `owner_ability_ura`,
   `owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helper
   facade, signing-key lifecycle, signer-handle projection, and close state
-  seams; directory live transport adapters, local signer implementations,
-  concrete daemon carriers, concrete C ABI v4 transport, and EasyRemote
-  extraction remain incomplete.
+  seams; Python now has private C ABI v4 discovery and identity projection
+  transports, while directory live transport adapters, local signer
+  implementations, runtime/profile C ABI transports, concrete daemon carriers,
+  and EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   and close state seams over opaque receipt refs; Axon-backed cryptographic
