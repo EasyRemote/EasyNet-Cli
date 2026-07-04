@@ -93,6 +93,16 @@ func TestBidiCloseSendDiffersFromCancel(t *testing.T) {
 	if session.State() != BidiHalfClosedLocal {
 		t.Fatalf("state = %s, want HalfClosedLocal", session.State())
 	}
+	frame, err := NewBidiFrame(1, "data", 1)
+	if err != nil {
+		t.Fatalf("NewBidiFrame: %v", err)
+	}
+	if _, err := session.Send(context.Background(), frame); !IsCode(err, ErrCancelled) {
+		t.Fatalf("Send after close-send error = %v, want %s", err, ErrCancelled)
+	}
+	if session.State() != BidiHalfClosedLocal {
+		t.Fatalf("state after rejected send = %s, want HalfClosedLocal", session.State())
+	}
 }
 
 func TestBidiRemoteCloseThenLocalCloseSendReachesTerminal(t *testing.T) {

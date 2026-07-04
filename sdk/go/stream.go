@@ -233,6 +233,10 @@ func (s *StreamHandle) Close(ctx context.Context) error {
 	}
 	if err := s.transport.Close(ctx); err != nil {
 		s.state = StreamFailed
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return sdkErr
+		}
 		return transportRuntimeError("stream close transport failed", err)
 	}
 	s.state = StreamClosed

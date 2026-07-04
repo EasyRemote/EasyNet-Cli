@@ -199,6 +199,15 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 	if ctx == nil {
 		return BidiFrame{}, invalidRuntimeClient("context is required")
 	}
+	if s.state == BidiHalfClosedLocal {
+		return BidiFrame{}, &SDKError{
+			Code:      ErrCancelled,
+			Stage:     "bidi",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "bidi send path is closed",
+		}
+	}
 	if s.state != BidiOpen {
 		return BidiFrame{}, invalidRuntimePayload("bidi send path is closed", nil)
 	}
@@ -342,6 +351,10 @@ func (s *BidiSession) Close(ctx context.Context) error {
 	}
 	if err := s.transport.Close(ctx); err != nil {
 		s.state = BidiFailed
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return sdkErr
+		}
 		return transportRuntimeError("bidi close transport failed", err)
 	}
 	s.state = BidiClosed

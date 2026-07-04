@@ -168,6 +168,129 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	}
 }
 
+func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	lifecycleCase := sharedCase(t, root, "stream-bidi-lifecycle-state.yaml")
+	requireCaseID(t, lifecycleCase, "stream_bidi/lifecycle_state")
+	for _, action := range []string{
+		"open_stream",
+		"close_stream",
+		"open_bidi",
+		"close_bidi_send",
+		"send_bidi_after_close_send",
+		"close_bidi",
+	} {
+		requireCaseAction(t, lifecycleCase, action)
+	}
+	requireCaseFixture(t, lifecycleCase, "invocation.complete.v4.json")
+	for _, expected := range []string{
+		"stream_close_unknown_is_idempotent: true",
+		"stream_cross_owner_close_error: ERR_INVALID_HANDLE",
+		"bidi_close_send_keeps_session_registered: true",
+		"bidi_close_send_unknown_error: ERR_INVALID_HANDLE",
+		"bidi_send_after_close_send_error: ERR_CANCELLED",
+		"bidi_close_releases_session: true",
+	} {
+		requireCaseExpectation(t, lifecycleCase, expected)
+	}
+
+	if _, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json")); err != nil {
+		t.Fatalf("NewInvocationDraftFromJSON(stream-bidi fixture): %v", err)
+	}
+
+	streamCloseCalls := 0
+	stream, err := NewStreamHandleFromJSON(StreamTransportFunc{
+		CloseFunc: func(context.Context) error {
+			streamCloseCalls++
+			return nil
+		},
+	}, []byte(`{"stream_id":"stream-lifecycle-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON(shared lifecycle): %v", err)
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("Close(shared stream lifecycle): %v", err)
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("second Close(shared stream lifecycle): %v", err)
+	}
+	if stream.State() != StreamClosed || streamCloseCalls != 1 {
+		t.Fatalf("stream close not idempotent: state=%s closeCalls=%d", stream.State(), streamCloseCalls)
+	}
+
+	crossOwnerStream, err := NewStreamHandleFromJSON(StreamTransportFunc{
+		CloseFunc: func(context.Context) error {
+			return &SDKError{Code: ErrInvalidHandle, Stage: "stream", Retry: RetryNever, Message: "stream handle is not owned by caller"}
+		},
+	}, []byte(`{"stream_id":"stream-cross-owner","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON(cross-owner): %v", err)
+	}
+	if err := crossOwnerStream.Close(context.Background()); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("cross-owner stream close error = %v, want %s", err, ErrInvalidHandle)
+	}
+
+	bidiTransport := &sharedBidiLifecycleTransport{
+		recvFrames: [][]byte{
+			[]byte(`{"sequence":1,"kind":"data","stream_id":1}`),
+			[]byte(`{"sequence":2,"kind":"remote_close_send","stream_id":1}`),
+		},
+	}
+	bidi, err := NewBidiSessionFromJSON(bidiTransport, []byte(`{"session_id":"bidi-lifecycle-1","state":"Open","max_buffered_frames":4}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON(shared lifecycle): %v", err)
+	}
+	outcome, err := bidi.CloseSend(context.Background())
+	if err != nil {
+		t.Fatalf("CloseSend(shared lifecycle): %v", err)
+	}
+	if outcome.State() != BidiHalfClosedLocal || outcome.Terminal() || bidi.State() != BidiHalfClosedLocal {
+		t.Fatalf("unexpected close-send lifecycle: outcome=%#v state=%s", outcome, bidi.State())
+	}
+	received, err := bidi.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive after CloseSend(shared lifecycle): %v", err)
+	}
+	if received.Kind() != "data" || bidi.State() != BidiHalfClosedLocal {
+		t.Fatalf("bidi receive side not alive after close-send: frame=%#v state=%s", received, bidi.State())
+	}
+	frame, err := NewBidiFrame(1, "data", 1)
+	if err != nil {
+		t.Fatalf("NewBidiFrame(shared lifecycle): %v", err)
+	}
+	if _, err := bidi.Send(context.Background(), frame); !IsCode(err, ErrCancelled) {
+		t.Fatalf("send after close-send error = %v, want %s", err, ErrCancelled)
+	}
+	if bidi.State() != BidiHalfClosedLocal {
+		t.Fatalf("send after close-send changed state to %s", bidi.State())
+	}
+	remoteClose, err := bidi.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive remote close after CloseSend(shared lifecycle): %v", err)
+	}
+	if remoteClose.Kind() != "remote_close_send" || bidi.State() != BidiTerminal {
+		t.Fatalf("remote close did not terminalize bidi: frame=%#v state=%s", remoteClose, bidi.State())
+	}
+	if err := bidi.Close(context.Background()); err != nil {
+		t.Fatalf("Close(shared bidi lifecycle): %v", err)
+	}
+	if bidi.State() != BidiClosed || !bidiTransport.closed {
+		t.Fatalf("bidi close did not release session: state=%s closed=%v", bidi.State(), bidiTransport.closed)
+	}
+
+	unknownBidi, err := NewBidiSessionFromJSON(BidiTransportFunc{
+		CloseSendFunc: func(context.Context) ([]byte, error) {
+			return nil, &SDKError{Code: ErrInvalidHandle, Stage: "bidi", Retry: RetryNever, Message: "bidi session is not owned by caller"}
+		},
+	}, []byte(`{"session_id":"bidi-cross-owner","state":"Open","max_buffered_frames":4}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON(unknown close-send): %v", err)
+	}
+	if _, err := unknownBidi.CloseSend(context.Background()); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("unknown bidi close-send error = %v, want %s", err, ErrInvalidHandle)
+	}
+}
+
 func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	hostBindingCase := sharedCase(t, root, "host-binding-codec-hash.yaml")
@@ -1608,6 +1731,37 @@ func (t *sharedCompatibilityTransport) RetrieveFile(context.Context, []byte) ([]
 }
 
 func (t *sharedCompatibilityTransport) DeleteFile(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+type sharedBidiLifecycleTransport struct {
+	recvFrames [][]byte
+	closed     bool
+}
+
+func (t *sharedBidiLifecycleTransport) Send(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedBidiLifecycleTransport) Recv(context.Context) ([]byte, error) {
+	if len(t.recvFrames) == 0 {
+		return nil, invalidRuntimePayload("no shared bidi lifecycle frame", nil)
+	}
+	frame := t.recvFrames[0]
+	t.recvFrames = t.recvFrames[1:]
+	return frame, nil
+}
+
+func (t *sharedBidiLifecycleTransport) CloseSend(context.Context) ([]byte, error) {
+	return []byte(`{"session_id":"bidi-lifecycle-1","state":"HalfClosedLocal","terminal":false}`), nil
+}
+
+func (t *sharedBidiLifecycleTransport) Close(context.Context) error {
+	t.closed = true
+	return nil
+}
+
+func (t *sharedBidiLifecycleTransport) Cancel(context.Context, string) ([]byte, error) {
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 

@@ -72,6 +72,11 @@ from easynet_sdk import (
     RetryHint,
     SDKError,
     MAX_SURFACE_PAGE_SIZE,
+    BidiFrame,
+    BidiSession,
+    BidiState,
+    StreamHandle,
+    StreamState,
     SurfaceCarrierBase,
     SurfaceClient,
     SurfaceCreatePageRequest,
@@ -949,6 +954,47 @@ class SharedControlOnlyDaemonTransport:
         return None
 
 
+class SharedBidiLifecycleTransport:
+    def __init__(self) -> None:
+        self.recv_frames = [
+            b'{"sequence":1,"kind":"data","stream_id":1}',
+            b'{"sequence":2,"kind":"remote_close_send","stream_id":1}',
+        ]
+        self.closed = False
+
+    def send(self, frame_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared stream-bidi lifecycle conformance test",
+        )
+
+    def recv(self) -> bytes:
+        if not self.recv_frames:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="test",
+                retry=RetryHint.NEVER,
+                message="no shared bidi lifecycle frame",
+            )
+        return self.recv_frames.pop(0)
+
+    def close_send(self) -> bytes:
+        return b'{"session_id":"bidi-lifecycle-1","state":"HalfClosedLocal","terminal":false}'
+
+    def close(self) -> None:
+        self.closed = True
+
+    def cancel(self, reason: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared stream-bidi lifecycle conformance test",
+        )
+
+
 class SharedConformanceFixtureTests(unittest.TestCase):
     def test_python_facade_executes_shared_runtime_core_conformance_cases(self) -> None:
         complete_tuple_case = shared_case("invocation-complete-tuple.yaml")
@@ -1065,6 +1111,124 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(timeout.code, ErrorCode.TIMEOUT)
         self.assertEqual(timeout.retry, RetryHint.SAFE)
         self.assertTrue(timeout.retryable)
+
+    def test_python_runtime_core_executes_shared_stream_bidi_lifecycle_conformance_case(self) -> None:
+        lifecycle_case = shared_case("stream-bidi-lifecycle-state.yaml")
+        self._require_case_id(lifecycle_case, "stream_bidi/lifecycle_state")
+        for action in (
+            "open_stream",
+            "close_stream",
+            "open_bidi",
+            "close_bidi_send",
+            "send_bidi_after_close_send",
+            "close_bidi",
+        ):
+            self._require_case_action(lifecycle_case, action)
+        self._require_case_fixture(lifecycle_case, "invocation.complete.v4.json")
+        for expectation in (
+            "stream_close_unknown_is_idempotent: true",
+            "stream_cross_owner_close_error: ERR_INVALID_HANDLE",
+            "bidi_close_send_keeps_session_registered: true",
+            "bidi_close_send_unknown_error: ERR_INVALID_HANDLE",
+            "bidi_send_after_close_send_error: ERR_CANCELLED",
+            "bidi_close_releases_session: true",
+        ):
+            self._require_case_expectation(lifecycle_case, expectation)
+
+        InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
+
+        class StreamCloseTransport:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def recv(self) -> bytes:
+                raise SDKError(
+                    code=ErrorCode.NOT_IMPLEMENTED,
+                    stage="test",
+                    retry=RetryHint.NEVER,
+                    message="not used by shared stream-bidi lifecycle conformance test",
+                )
+
+            def cancel(self, reason: str) -> bytes:
+                raise SDKError(
+                    code=ErrorCode.NOT_IMPLEMENTED,
+                    stage="test",
+                    retry=RetryHint.NEVER,
+                    message="not used by shared stream-bidi lifecycle conformance test",
+                )
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        stream_transport = StreamCloseTransport()
+        stream = StreamHandle.from_json(
+            stream_transport,
+            b'{"stream_id":"stream-lifecycle-1","state":"Open","max_buffered_events":4}',
+        )
+        stream.close()
+        stream.close()
+        self.assertEqual(stream.state, StreamState.CLOSED)
+        self.assertEqual(stream_transport.close_calls, 1)
+
+        class CrossOwnerStreamTransport(StreamCloseTransport):
+            def close(self) -> None:
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="stream",
+                    retry=RetryHint.NEVER,
+                    message="stream handle is not owned by caller",
+                )
+
+        cross_owner_stream = StreamHandle.from_json(
+            CrossOwnerStreamTransport(),
+            b'{"stream_id":"stream-cross-owner","state":"Open","max_buffered_events":4}',
+        )
+        with self.assertRaises(SDKError) as caught:
+            cross_owner_stream.close()
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_HANDLE)
+
+        bidi_transport = SharedBidiLifecycleTransport()
+        bidi = BidiSession.from_json(
+            bidi_transport,
+            b'{"session_id":"bidi-lifecycle-1","state":"Open","max_buffered_frames":4}',
+        )
+        outcome = bidi.close_send()
+        self.assertEqual(outcome.state, BidiState.HALF_CLOSED_LOCAL)
+        self.assertFalse(outcome.terminal)
+        self.assertEqual(bidi.state, BidiState.HALF_CLOSED_LOCAL)
+
+        received = bidi.receive()
+        self.assertEqual(received.kind, "data")
+        self.assertEqual(bidi.state, BidiState.HALF_CLOSED_LOCAL)
+
+        with self.assertRaises(SDKError) as caught:
+            bidi.send(BidiFrame(sequence=1, kind="data", stream_id=1))
+        self.assertEqual(caught.exception.code, ErrorCode.CANCELLED)
+        self.assertEqual(bidi.state, BidiState.HALF_CLOSED_LOCAL)
+
+        remote_close = bidi.receive()
+        self.assertEqual(remote_close.kind, "remote_close_send")
+        self.assertEqual(bidi.state, BidiState.TERMINAL)
+        bidi.close()
+        self.assertEqual(bidi.state, BidiState.CLOSED)
+        self.assertTrue(bidi_transport.closed)
+
+        class UnknownBidiCloseSendTransport(SharedBidiLifecycleTransport):
+            def close_send(self) -> bytes:
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="bidi",
+                    retry=RetryHint.NEVER,
+                    message="bidi session is not owned by caller",
+                )
+
+        unknown_bidi = BidiSession.from_json(
+            UnknownBidiCloseSendTransport(),
+            b'{"session_id":"bidi-cross-owner","state":"Open","max_buffered_frames":4}',
+        )
+        with self.assertRaises(SDKError) as caught:
+            unknown_bidi.close_send()
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_HANDLE)
 
     def test_python_host_binding_executes_shared_conformance_case(self) -> None:
         host_binding_case = shared_case("host-binding-codec-hash.yaml")

@@ -68,6 +68,10 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(outcome.state, BidiState.HALF_CLOSED_LOCAL)
         self.assertFalse(outcome.terminal)
         self.assertEqual(session.state, BidiState.HALF_CLOSED_LOCAL)
+        with self.assertRaises(SDKError) as caught:
+            session.send(BidiFrame(sequence=1, kind="data", stream_id=1))
+        self.assertEqual(caught.exception.code, ErrorCode.CANCELLED)
+        self.assertEqual(session.state, BidiState.HALF_CLOSED_LOCAL)
 
     def test_remote_close_then_local_close_send_reaches_terminal(self) -> None:
         transport = MemoryBidiTransport(

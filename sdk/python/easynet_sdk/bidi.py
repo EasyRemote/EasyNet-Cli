@@ -211,6 +211,14 @@ class BidiSession:
         )
 
     def send(self, frame: BidiFrame) -> BidiFrame:
+        if self.state == BidiState.HALF_CLOSED_LOCAL:
+            raise SDKError(
+                code=ErrorCode.CANCELLED,
+                stage="bidi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="bidi send path is closed",
+            )
         if self.state != BidiState.OPEN:
             raise _invalid_bidi("bidi send path is closed")
         if self.max_buffered_frames > 0 and len(self.sent_frames) >= self.max_buffered_frames:
