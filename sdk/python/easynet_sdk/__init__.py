@@ -147,6 +147,7 @@ from .health import HealthClient, HealthTransport, RuntimeHealth
 from .identity import (
     AddressingClient,
     AddressingTransport,
+    AbilityAddress,
     DEFAULT_SIGNING_KEY_PAGE_SIZE,
     MAX_SIGNING_KEY_PAGE_SIZE,
     DescriptorRefRequest,
@@ -165,6 +166,7 @@ from .identity import (
     SigningKeyRegistrationRequest,
     SigningKeyRevokeRequest,
     SigningKeyRevokeResult,
+    ability_address,
     ability_ura_from_descriptor_ref,
     canonical_ability_descriptor_ref,
     owner_ability_descriptor_ref,

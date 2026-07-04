@@ -38,7 +38,8 @@ projection helpers, directory subscription state seams, and close state seams pl
 AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ura`,
 `owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
 `owner_ability_descriptor_ref`, and
-`canonical_ability_descriptor_ref` helpers,
+`canonical_ability_descriptor_ref` helpers plus an
+`AbilityAddress` projection for EasyRemote-style callee/subject ownership facts,
 IdentityClient descriptor/resource projection, signing-key lifecycle, and
 signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,

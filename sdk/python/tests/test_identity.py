@@ -116,7 +116,9 @@ class IdentityTests(unittest.TestCase):
             b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
             b'"profile":"easynet-strict-v2",'
             b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
-            b'"public_name":"observe.health"},'
+            b'"owner_kind":"device","public_name":"observe.health",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:observe.health",'
+            b'"namespace":"observe","local_name":"health"},'
             b'"metadata":{"grammar_owner":"axon"}}'
         )
         descriptor_projection = (
@@ -191,7 +193,9 @@ class IdentityTests(unittest.TestCase):
             b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
             b'"profile":"easynet-strict-v2",'
             b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
-            b'"public_name":"observe.health"},'
+            b'"owner_kind":"device","public_name":"observe.health",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:observe.health",'
+            b'"namespace":"observe","local_name":"health"},'
             b'"metadata":{"grammar_owner":"axon"}}'
         )
         descriptor_projection = (
@@ -221,6 +225,7 @@ class IdentityTests(unittest.TestCase):
         built_ref = client.canonical_ability_descriptor_ref(ability_ura, "1.0.0")
         projected_ref = client.canonical_ability_descriptor_ref(built_ref)
         ability_from_ref = client.ability_ura_from_descriptor_ref(built_ref)
+        address = client.ability_address(ability_ura)
 
         self.assertEqual(parsed.kind, "ability")
         self.assertEqual(
@@ -234,6 +239,13 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(owner_ref, built_ref)
         self.assertEqual(projected_ref, built_ref)
         self.assertEqual(ability_from_ref, ability_ura)
+        self.assertEqual(address.ability_ura, ability_ura)
+        self.assertEqual(address.subject_ura, ability_ura)
+        self.assertEqual(address.owner_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(address.owner_kind, "device")
+        self.assertEqual(address.public_name, "observe.health")
+        self.assertEqual(address.namespace, "observe")
+        self.assertEqual(address.local_name, "health")
         self.assertEqual(
             transport.seen_requests,
             [
@@ -263,6 +275,7 @@ class IdentityTests(unittest.TestCase):
                 {
                     "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
                 },
+                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
             ],
         )
 

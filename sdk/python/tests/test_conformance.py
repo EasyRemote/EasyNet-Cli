@@ -2962,6 +2962,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "directory_identity",
                 IdentityClient,
                 {
+                    "ability_address": "directory_identity.identity.ability_address",
                     "build_list_signing_keys_invocation": "directory_identity.identity.build_list_signing_keys_invocation",
                     "build_register_signing_key_invocation": "directory_identity.identity.build_register_signing_key_invocation",
                     "build_revoke_signing_key_invocation": "directory_identity.identity.build_revoke_signing_key_invocation",

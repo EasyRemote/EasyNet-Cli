@@ -320,7 +320,10 @@ class FakeRawCABI:
             b'{"kind":"ability","valid":true,'
             b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
             b'"profile":"easynet-strict-v2",'
-            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"owner_kind":"device","public_name":"observe.health",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:observe.health",'
+            b'"namespace":"observe","local_name":"health"},'
             b'"metadata":{"grammar_owner":"axon"}}',
         )
 

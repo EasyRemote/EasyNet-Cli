@@ -194,7 +194,8 @@ method spelling.
   `owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
   `owner_ability_descriptor_ref`, and
   `canonical_ability_descriptor_ref` helper
-  facades, `IdentityClient` descriptor, identity, ResourceRef,
+  facades plus an `AbilityAddress` projection for owner/subject facts consumed
+  by EasyRemote-style addressing, `IdentityClient` descriptor, identity, ResourceRef,
   signing-key lifecycle, signer-handle projection, and close state
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through

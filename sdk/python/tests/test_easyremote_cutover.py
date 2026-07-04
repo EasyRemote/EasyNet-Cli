@@ -5,6 +5,7 @@ from easynet_sdk import (
     AbilityInvocationClient,
     AddressingClient,
     RuntimeClient,
+    ability_address,
 )
 
 from test_identity import MemoryIdentityTransport
@@ -21,7 +22,9 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             b'"ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
             b'"profile":"easynet-strict-v2",'
             b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
-            b'"public_name":"er.weather"},'
+            b'"owner_kind":"device","public_name":"er.weather",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:er.weather",'
+            b'"namespace":"er","local_name":"weather"},'
             b'"metadata":{"grammar_owner":"axon"}}'
         )
         identity_transport.descriptor_json = (
@@ -37,28 +40,31 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             runtime=RuntimeClient(runtime_transport),
             addressing=AddressingClient(identity_transport),
         )
+        address = client.addressing.ability_address(
+            "easynet:///r/example/ability/device.dev-a.er.weather"
+        )
 
         result = client.invoke(
             AbilityCallRequest(
                 caller_ura="easynet:///r/example/agent/alice.sdk",
-                callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/device/dev-a",
+                callee_ura=address.owner_ura,
+                subject_ura=address.subject_ura,
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
-                ability_name="er.weather",
+                ability_ura=address.ability_ura,
                 args={"city": "Singapore"},
             )
         )
 
         self.assertTrue(result.ok)
+        self.assertEqual(address.public_name, "er.weather")
+        self.assertEqual(address.owner_kind, "device")
+        self.assertEqual(address.namespace, "er")
+        self.assertEqual(address.local_name, "weather")
         self.assertEqual(
             identity_transport.seen_requests,
             [
-                {
-                    "kind": "ability",
-                    "owner_ura": "easynet:///r/example/device/dev-a",
-                    "ability_name": "er.weather",
-                },
+                {"ura": "easynet:///r/example/ability/device.dev-a.er.weather"},
                 {
                     "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
                     "descriptor_version": "1.0.0",
@@ -71,6 +77,28 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
         )
         self.assertEqual(runtime_transport.seen_draft["args"], {"city": "Singapore"})
+
+    def test_package_level_ability_address_uses_default_sdk_facade(self) -> None:
+        from test_environment import FakeRawCABI, _load_patch
+
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            address = ability_address(
+                "easynet:///r/example/ability/device.dev-a.observe.health",
+                control_path="/tmp/control.json",
+            )
+
+        self.assertEqual(
+            address.ability_ura,
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(address.subject_ura, address.ability_ura)
+        self.assertEqual(address.owner_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(address.owner_kind, "device")
+        self.assertEqual(address.public_name, "observe.health")
+        self.assertEqual(raw.init_paths, ["/tmp/control.json"])
+        self.assertEqual(raw.shutdown_handles, [42])
+        self.assertEqual([entry[0] for entry in raw.identity_requests], ["project_ura"])
 
 
 if __name__ == "__main__":

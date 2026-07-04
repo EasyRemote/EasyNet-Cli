@@ -263,6 +263,43 @@ class IdentityProjection:
 
 
 @dataclass(frozen=True)
+class AbilityAddress:
+    """Typed SDK projection of one canonical Ability URA."""
+
+    ability_ura: str
+    owner_ura: str
+    owner_kind: str
+    public_name: str
+    subject_ura: str
+    local_registry_ability: str = ""
+    namespace: str = ""
+    local_name: str = ""
+    profile: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_projection(cls, projection: IdentityProjection) -> "AbilityAddress":
+        if projection.kind != "ability" or not projection.ura:
+            raise _invalid_identity("ability address requires an ability URA projection")
+        components = projection.components
+        return cls(
+            ability_ura=projection.ura,
+            owner_ura=_required_component_string(components, "owner_ura"),
+            owner_kind=_required_component_string(components, "owner_kind"),
+            public_name=_required_component_string(components, "public_name"),
+            subject_ura=projection.ura,
+            local_registry_ability=_optional_component_string(
+                components, "local_registry_ability"
+            )
+            or "",
+            namespace=_optional_component_string(components, "namespace") or "",
+            local_name=_optional_component_string(components, "local_name") or "",
+            profile=projection.profile,
+            metadata=dict(projection.metadata),
+        )
+
+
+@dataclass(frozen=True)
 class ResourceRef:
     """SDK resource-ref.schema.json projection."""
 
@@ -563,6 +600,11 @@ class AddressingClient:
             raise _invalid_identity("invalid descriptor_ref ability projection")
         return projection.ability_ura
 
+    def ability_address(self, ability_ura: str) -> AbilityAddress:
+        """Project an Ability URA into owner/subject facts via Axon helpers."""
+
+        return AbilityAddress.from_projection(self.parse_ura(ability_ura))
+
     def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
         self._require_open()
         try:
@@ -646,6 +688,12 @@ class IdentityClient:
 
         self._require_open()
         return self._addressing.ability_ura_from_descriptor_ref(descriptor_ref)
+
+    def ability_address(self, ability_ura: str) -> AbilityAddress:
+        """Project an Ability URA into owner/subject facts via identity transport."""
+
+        self._require_open()
+        return self._addressing.ability_address(ability_ura)
 
     def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
         self._require_open()
@@ -854,6 +902,21 @@ def ability_ura_from_descriptor_ref(
     )
 
 
+def ability_address(
+    ability_ura: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> AbilityAddress:
+    """Project an Ability URA into SDK owner/subject facts."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.ability_address(ability_ura),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
 def _with_default_addressing(
     callback: Callable[[AddressingClient], _TAddressingResult],
     *,
@@ -953,6 +1016,26 @@ def _required_mapping(decoded: Mapping[str, object], field_name: str) -> Mapping
     if not isinstance(value, dict):
         raise _invalid_identity(f"{field_name} must be an object")
     return dict(value)
+
+
+def _required_component_string(
+    components: Mapping[str, object], field_name: str
+) -> str:
+    value = _optional_component_string(components, field_name)
+    if not value:
+        raise _invalid_identity(f"ability projection missing {field_name}")
+    return value
+
+
+def _optional_component_string(
+    components: Mapping[str, object], field_name: str
+) -> str | None:
+    value = components.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise _invalid_identity(f"ability projection {field_name} must be a string")
+    return value
 
 
 def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
