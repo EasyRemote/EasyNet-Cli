@@ -204,6 +204,8 @@ from .host_binding import (
     HostStreamFrameWriter,
     HostStreamHashState,
     HostStreamRequest,
+    HostStreamSession,
+    HostStreamSessionState,
     HostStreamTerminalSummary,
 )
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
@@ -460,6 +462,8 @@ __all__ = [
     "HostStreamFrameWriter",
     "HostStreamHashState",
     "HostStreamRequest",
+    "HostStreamSession",
+    "HostStreamSessionState",
     "HostStreamTerminalSummary",
     "AgentQuery",
     "DeviceQuery",

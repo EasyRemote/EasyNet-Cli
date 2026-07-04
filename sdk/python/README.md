@@ -67,7 +67,8 @@ deploy/show/unpublish Invocation carrier, deploy/show/unpublish result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding,
 output-hash folding seams, and a HostStreamFrameWriter lifecycle helper that
-delegates frame/hash semantics through the client plus close state seams. MissionClient exposes run/run-file/track/cancel
+delegates frame/hash semantics through the client plus per-call HostStreamSession
+state seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient

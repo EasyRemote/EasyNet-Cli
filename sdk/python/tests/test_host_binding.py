@@ -11,6 +11,7 @@ from easynet_sdk.host_binding import (
     HostStreamEnvelope,
     HostStreamEnvelopeRequest,
     HostStreamHashState,
+    HostStreamSessionState,
     HostStreamTerminalSummary,
 )
 
@@ -311,6 +312,61 @@ class HostBindingTests(unittest.TestCase):
         writer.close()
         self.assertEqual(transport.close_calls, 0)
 
+    def test_open_session_decodes_request_and_owns_frame_state(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+
+        session = client.open_session(_weather_envelope())
+
+        self.assertEqual(session.request.function, "weather.stream")
+        self.assertEqual(session.state, HostStreamSessionState.OPEN)
+        item = session.emit({"token": "hello"})
+        terminal = session.finish(
+            metadata={"canonical_json": session.writer.state.canonical_json}
+        )
+
+        self.assertEqual(item.frame_type, "item")
+        self.assertEqual(terminal.frame_type, "terminal")
+        self.assertEqual(session.state, HostStreamSessionState.TERMINAL)
+        self.assertIs(session.terminal_frame, terminal)
+        self.assertEqual(
+            transport.calls,
+            [
+                "decode_request",
+                "fold_output_hash",
+                "encode_item",
+                "encode_terminal",
+            ],
+        )
+        with self.assertRaises(SDKError):
+            session.emit({"token": "late"})
+
+    def test_host_stream_session_fail_is_single_terminal(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+        session = client.open_session(_weather_envelope())
+
+        frame = session.fail(ValueError("bad input"))
+
+        self.assertEqual(frame.frame_type, "error")
+        self.assertEqual(session.state, HostStreamSessionState.TERMINAL)
+        self.assertIs(session.terminal_frame, frame)
+        with self.assertRaises(SDKError):
+            session.finish()
+
+    def test_host_stream_session_close_is_idempotent_without_terminal_frame(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+        session = client.open_session(_weather_envelope())
+
+        session.close()
+        session.close()
+
+        self.assertEqual(session.state, HostStreamSessionState.CLOSED)
+        self.assertIsNone(session.terminal_frame)
+        with self.assertRaises(SDKError):
+            session.emit({"token": "late"})
+
     def test_close_delegates_once_and_fails_closed(self) -> None:
         transport = MemoryHostBindingTransport()
         client = HostBindingClient(transport)
@@ -323,6 +379,17 @@ class HostBindingTests(unittest.TestCase):
             client.encode_item(0, {"token": "hello"})
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(transport.seen_request)
+
+
+def _weather_envelope() -> HostStreamEnvelope:
+    return HostStreamEnvelope(
+        HostStreamEnvelopeRequest(
+            fn="weather.stream",
+            args={"city": "Singapore"},
+            call_id="call-weather-1",
+            caller="easynet:///r/example/user/alice",
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -244,7 +244,8 @@ method spelling.
   decode, item/error/terminal frame encoding, output-hash folding seams with
   shared conformance-pinned hash cursor invariants over schema-backed transport
   projections, and a `HostStreamFrameWriter` lifecycle helper that delegates all
-  frame/hash semantics through the client plus close state seams; product host
+  frame/hash semantics through the client plus per-call `HostStreamSession`
+  state seams; product host
   readiness execution, cleanup execution, EasyRemote warm host integration, and
   behavior-executing host lifecycle conformance remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel

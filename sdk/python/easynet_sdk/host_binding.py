@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
@@ -15,6 +16,14 @@ HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value
 HOST_STREAM_EMPTY_OUTPUT_HASH = (
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
+
+
+class HostStreamSessionState(StrEnum):
+    """Per-call host-stream session states."""
+
+    OPEN = "Open"
+    TERMINAL = "Terminal"
+    CLOSED = "Closed"
 
 
 @dataclass(frozen=True)
@@ -354,6 +363,19 @@ class HostBindingClient:
             state=initial_state or HostStreamHashState.initial(),
         )
 
+    def open_session(
+        self,
+        envelope: HostStreamEnvelope,
+        initial_state: Optional[HostStreamHashState] = None,
+    ) -> "HostStreamSession":
+        """Decode one daemon envelope and open a stateful frame session."""
+
+        self._require_open()
+        return HostStreamSession(
+            request=self.decode_request(envelope),
+            writer=self.open_frame_writer(initial_state),
+        )
+
     def close(self) -> None:
         self._lifecycle.close(self.transport)
 
@@ -415,6 +437,68 @@ class HostStreamFrameWriter:
     def _require_open(self) -> None:
         if self._terminal:
             raise _invalid_host_binding("host stream writer is terminal")
+
+
+@dataclass
+class HostStreamSession:
+    """One decoded host-stream call plus SDK-owned frame state."""
+
+    request: HostStreamRequest
+    writer: HostStreamFrameWriter
+    state: HostStreamSessionState = HostStreamSessionState.OPEN
+    terminal_frame: Optional[HostStreamFrame] = None
+
+    @property
+    def frames(self) -> int:
+        return self.writer.frames
+
+    @property
+    def output_hash(self) -> str:
+        return self.writer.output_hash
+
+    @property
+    def terminal(self) -> bool:
+        return self.state in {
+            HostStreamSessionState.TERMINAL,
+            HostStreamSessionState.CLOSED,
+        }
+
+    def emit(self, value: object) -> HostStreamFrame:
+        self._require_open()
+        return self.writer.write_item(value)
+
+    def finish(
+        self, metadata: Optional[Mapping[str, object]] = None
+    ) -> HostStreamFrame:
+        self._require_open()
+        frame = self.writer.finish(metadata)
+        self.terminal_frame = frame
+        self.state = HostStreamSessionState.TERMINAL
+        return frame
+
+    def fail(self, error: BaseException) -> HostStreamFrame:
+        self._require_open()
+        frame = self.writer.fail(error)
+        self.terminal_frame = frame
+        self.state = HostStreamSessionState.TERMINAL
+        return frame
+
+    def close(self) -> None:
+        if self.state == HostStreamSessionState.CLOSED:
+            return
+        self.writer.close()
+        self.state = HostStreamSessionState.CLOSED
+
+    def __enter__(self) -> "HostStreamSession":
+        self._require_open()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def _require_open(self) -> None:
+        if self.state != HostStreamSessionState.OPEN:
+            raise _invalid_host_binding("host stream session is terminal")
 
 
 def _validate_binding_request(request: HostStreamBindingRequest) -> None:
