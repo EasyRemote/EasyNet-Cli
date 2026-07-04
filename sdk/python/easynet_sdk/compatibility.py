@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .invocation import InvocationDraft
 
 
@@ -920,6 +920,7 @@ def _invalid_compatibility(message: str) -> SDKError:
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_PROFILE),
     )
 
 
@@ -930,5 +931,6 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         retry=RetryHint.UNKNOWN,
         retryable=False,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )

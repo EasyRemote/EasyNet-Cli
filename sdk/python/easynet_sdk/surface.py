@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .invocation import InvocationDraft
 
 
@@ -667,6 +667,7 @@ def _invalid_surface(message: str, cause: BaseException | None = None) -> SDKErr
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )
 
@@ -678,5 +679,6 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         retry=RetryHint.SAFE,
         retryable=True,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )

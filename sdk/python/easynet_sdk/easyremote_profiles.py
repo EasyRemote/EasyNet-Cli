@@ -13,7 +13,7 @@ from .admin import (
     AdminClient,
     EasyRemoteAdminAdapter,
 )
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .mission import (
     EasyRemoteMissionAdapter,
     MissionCarrierBase,
@@ -23,6 +23,8 @@ from .system_abilities import AdminSystemAbility, MissionSystemAbility
 
 _ADMIN_PROFILE = "admin_gateway"
 _MISSION_PROFILE = "mission"
+_EASYREMOTE_ADMIN_PROFILE = "easyremote_admin_profile"
+_EASYREMOTE_MISSION_PROFILE = "easyremote_mission_profile"
 _DESCRIPTOR_VERSION = "1.0.0"
 _AGENT_START = AdminSystemAbility.AGENT_START
 _AGENT_LIST = AdminSystemAbility.AGENT_LIST
@@ -645,6 +647,7 @@ def _invalid_admin(message: str) -> SDKError:
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_EASYREMOTE_ADMIN_PROFILE),
     )
 
 
@@ -655,6 +658,7 @@ def _invalid_mission(message: str) -> SDKError:
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_EASYREMOTE_MISSION_PROFILE),
     )
 
 
@@ -669,7 +673,10 @@ def _unsupported_admin_profile(method_name: str) -> bytes:
             f"{method_name}; use the EasyNet-Cli SDK/Admin backend facade for "
             "Hub, pairing, session, gateway, and invocation-builder operations"
         ),
-        details={"profile_method": method_name},
+        details=profile_error_details(
+            _EASYREMOTE_ADMIN_PROFILE,
+            details={"profile_method": method_name},
+        ),
     )
 
 
@@ -684,5 +691,8 @@ def _unsupported_mission_profile(method_name: str) -> bytes:
             f"{method_name}; use the EasyNet-Cli SDK/Mission backend facade for "
             "file execution and invocation-builder operations"
         ),
-        details={"profile_method": method_name},
+        details=profile_error_details(
+            _EASYREMOTE_MISSION_PROFILE,
+            details={"profile_method": method_name},
+        ),
     )

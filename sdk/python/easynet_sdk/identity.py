@@ -6,12 +6,13 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, TypeVar, runtime_checkable
 
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .invocation import InvocationDraft
 from ._lifecycle import ClientLifecycle
 
 DEFAULT_SIGNING_KEY_PAGE_SIZE = 50
 MAX_SIGNING_KEY_PAGE_SIZE = 500
+_PROFILE = "directory_identity"
 
 _TAddressingResult = TypeVar("_TAddressingResult")
 
@@ -1293,6 +1294,7 @@ def _invalid_identity(
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )
 
@@ -1304,5 +1306,6 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         retry=RetryHint.SAFE,
         retryable=True,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )

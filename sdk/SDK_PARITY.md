@@ -46,8 +46,9 @@ method spelling.
 - C ABI now exposes invocation builder handles and submitted InvocationHandle
   await/cancel/events/free handles for unary submit; live event streaming and
   Axon-backed receipt verification remain incomplete.
-- C ABI now exposes schema-shaped typed error JSON for ABI return codes; broad
-  language facade error classes and per-profile source refs remain incomplete.
+- C ABI now exposes schema-shaped typed error JSON for ABI return codes; Python
+  profile facades now attach stable `profile`/`source_ref` details, while broad
+  non-Python language facade error classes and source refs remain incomplete.
 - Receipt fetch carrier, projection, and causal-ref guardrails exist for
   Rust/C ABI over daemon `invocation.history.get`; Axon-backed full
   verification, fetched-record execution convenience, and language facades
@@ -112,9 +113,10 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
-  transport seams; direct UDS transport, profile
-  clients, backend import-ban integration, per-profile error source refs, and
-  remaining profile conformance action execution remain incomplete before backend cutover.
+  transport seams plus direct daemon UDS unary/stream/bidi transports and Python
+  profile clients with stable per-profile error source refs; backend import-ban
+  integration and remaining profile conformance action execution remain incomplete
+  before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, directory subscription state seams,
   and close state seams plus `IdentityClient` descriptor, identity, Axon-delegated

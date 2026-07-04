@@ -1,6 +1,7 @@
 import unittest
 
 from easynet_sdk import ErrorCode, SDKError, is_code
+from easynet_sdk.errors import profile_error_details
 
 
 class ErrorTests(unittest.TestCase):
@@ -68,6 +69,30 @@ class ErrorTests(unittest.TestCase):
 
     def test_from_json_null_is_no_error(self) -> None:
         self.assertIsNone(SDKError.from_json(b"null"))
+
+    def test_profile_error_details_adds_stable_profile_refs(self) -> None:
+        details = profile_error_details(
+            "publication",
+            details={"reason": "resource_ref_namespace_reserved"},
+            operation="build_local_resource_ref",
+        )
+
+        self.assertEqual(details["profile"], "publication")
+        self.assertEqual(details["source_ref"], "python_sdk.profile.publication")
+        self.assertEqual(details["reason"], "resource_ref_namespace_reserved")
+        self.assertEqual(details["operation"], "build_local_resource_ref")
+
+    def test_profile_error_details_preserves_caller_refs(self) -> None:
+        details = profile_error_details(
+            "mission",
+            source_ref="fixture.profile.source",
+            details={"profile": "custom", "source_ref": "custom.source"},
+            operation="run_file",
+        )
+
+        self.assertEqual(details["profile"], "custom")
+        self.assertEqual(details["source_ref"], "custom.source")
+        self.assertEqual(details["operation"], "run_file")
 
 
 if __name__ == "__main__":

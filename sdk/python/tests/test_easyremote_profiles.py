@@ -101,6 +101,18 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
             )
 
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(
+            caught.exception.details["profile"],
+            "easyremote_admin_profile",
+        )
+        self.assertEqual(
+            caught.exception.details["source_ref"],
+            "python_sdk.profile.easyremote_admin_profile",
+        )
+        self.assertEqual(
+            caught.exception.details["profile_method"],
+            "build_agent_list_invocation",
+        )
 
         with self.assertRaises(SDKError) as mission_caught:
             bridge.mission_facade()._client.build_run_file_invocation(  # noqa: SLF001
@@ -108,6 +120,18 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
             )
 
         self.assertTrue(is_code(mission_caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(
+            mission_caught.exception.details["profile"],
+            "easyremote_mission_profile",
+        )
+        self.assertEqual(
+            mission_caught.exception.details["source_ref"],
+            "python_sdk.profile.easyremote_mission_profile",
+        )
+        self.assertEqual(
+            mission_caught.exception.details["profile_method"],
+            "build_run_file_invocation",
+        )
 
     def test_mission_bad_response_uses_mission_error_stage(self) -> None:
         bridge = EasyRemoteProfileBridge(BadMissionResponseDispatcher())

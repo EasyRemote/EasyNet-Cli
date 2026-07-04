@@ -8,13 +8,14 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from ._lifecycle import ClientLifecycle
 from .invocation import InvocationBuilder, InvocationDraft
 from .runtime import InvocationResult, RuntimeReceipt
 
 
 _PROFILE = "receipt"
+_EASYREMOTE_RECEIPT_PROFILE = "easyremote_receipt"
 _FETCH_ABILITY = "invocation.history.get"
 
 
@@ -1107,7 +1108,10 @@ def _easyremote_receipt_protocol_error(
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
-        details={"reason": "protocol"},
+        details=profile_error_details(
+            _EASYREMOTE_RECEIPT_PROFILE,
+            details={"reason": "protocol"},
+        ),
         cause=cause,
     )
 
@@ -1123,7 +1127,10 @@ def _easyremote_full_receipt_unavailable(invocation_id: str) -> SDKError:
             "which the local summary does not provide"
         ),
         invocation_id=invocation_id or None,
-        details={"reason": "full_receipt_unavailable"},
+        details=profile_error_details(
+            _EASYREMOTE_RECEIPT_PROFILE,
+            details={"reason": "full_receipt_unavailable"},
+        ),
     )
 
 
@@ -1143,7 +1150,10 @@ def _easyremote_receipt_chain_broken(
             "prev_receipt_hash does not match predecessor's self_hash"
         ),
         invocation_id=invocation_id,
-        details={"reason": "receipt_chain_broken"},
+        details=profile_error_details(
+            _EASYREMOTE_RECEIPT_PROFILE,
+            details={"reason": "receipt_chain_broken"},
+        ),
     )
 
 
@@ -1156,6 +1166,7 @@ def _invalid_receipt(
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )
 
@@ -1167,5 +1178,6 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         retry=RetryHint.SAFE,
         retryable=True,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )

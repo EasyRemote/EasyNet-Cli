@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 
 
 HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json"
@@ -17,6 +17,7 @@ HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value
 HOST_STREAM_EMPTY_OUTPUT_HASH = (
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
+_PROFILE = "host_binding"
 
 
 class HostStreamSessionState(StrEnum):
@@ -1148,6 +1149,7 @@ def _invalid_host_binding(
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )
 
@@ -1159,5 +1161,6 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         retry=RetryHint.SAFE,
         retryable=True,
         message=message,
+        details=profile_error_details(_PROFILE),
         cause=cause,
     )

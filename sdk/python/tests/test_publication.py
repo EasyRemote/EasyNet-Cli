@@ -607,6 +607,11 @@ class PublicationTests(unittest.TestCase):
             client.deploy_ability(deploy_request())
 
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(raised.exception.details["profile"], "publication")
+        self.assertEqual(
+            raised.exception.details["source_ref"],
+            "python_sdk.profile.publication",
+        )
 
     def test_runtime_publication_transport_executes_list_via_runtime_core(self) -> None:
         carrier = MemoryPublicationTransport()

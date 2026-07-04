@@ -196,6 +196,24 @@ def normalize_error_code(code: str) -> ErrorCode:
     return aliases[code]
 
 
+def profile_error_details(
+    profile: str,
+    *,
+    source_ref: str = "",
+    details: Mapping[str, object] | None = None,
+    **refs: object,
+) -> dict[str, object]:
+    """Return stable profile-origin metadata for SDKError.details."""
+
+    value = dict(details or {})
+    value.setdefault("profile", profile)
+    value.setdefault("source_ref", source_ref or f"python_sdk.profile.{profile}")
+    for key, ref_value in refs.items():
+        if ref_value is not None and ref_value != "":
+            value.setdefault(key, ref_value)
+    return value
+
+
 def _retry_hint(value: str) -> RetryHint:
     try:
         return RetryHint(value)

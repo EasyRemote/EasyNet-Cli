@@ -647,6 +647,11 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.details["reason"], "full_receipt_unavailable"
         )
+        self.assertEqual(caught.exception.details["profile"], "easyremote_receipt")
+        self.assertEqual(
+            caught.exception.details["source_ref"],
+            "python_sdk.profile.easyremote_receipt",
+        )
 
     def test_easyremote_receipt_chain_facade_projects_continuity(self) -> None:
         first = EasyRemoteReceipt.from_wire(
