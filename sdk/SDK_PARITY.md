@@ -184,7 +184,9 @@ method spelling.
   construction with inspect/build handle consumption, `AbilityInvocationClient`
   descriptor-delegated complete tuple build/invoke/stream/bidi facade plus
   EasyRemote-style target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and
-  explicit submit/await/cancel/events/close-handle observation helpers, object-bound
+  explicit submit/await/cancel/events/close-handle observation helpers,
+  `EasyRemoteInvocationAdapter` tuple-like object cutover facade for SDK
+  `InvocationDraft` and staged legacy wire dict construction, object-bound
   Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, prepared/signed Invocation DTOs, signer workflow
   objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
   receipt projection, StreamHandle state observation, BidiSession frame ordering/

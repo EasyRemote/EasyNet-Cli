@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional
@@ -29,30 +28,6 @@ class InvocationSignature:
         if self.signer_public_key_base64 is not None:
             value["signer_public_key_base64"] = self.signer_public_key_base64
         return value
-
-
-@dataclass(frozen=True)
-class EasyRemoteInvocationRequest:
-    """EasyRemote-compatible Invocation wire request.
-
-    This request preserves EasyRemote's existing daemon wire shape while moving
-    descriptor binding and field assembly into the SDK facade.
-    """
-
-    caller_ura: str
-    callee_ura: str
-    ability: str
-    subject_ura: str
-    nonce_base64: str
-    causal_context: Mapping[str, object]
-    content_type: str
-    descriptor_version: str = "1.0.0"
-    args: Any = None
-    has_json_args: bool = False
-    arguments_base64: str = ""
-    metadata: Mapping[str, object] = field(default_factory=dict)
-    caller_signature: Mapping[str, object] | None = None
-    bidi_streams: Sequence[Mapping[str, object]] = ()
 
 
 @dataclass(frozen=True)
@@ -165,70 +140,6 @@ class InvocationDraft:
 
     def _bind_runtime(self, runtime: object) -> "InvocationDraft":
         return replace(self, _runtime=runtime)
-
-
-def encode_easyremote_invocation(
-    request: EasyRemoteInvocationRequest,
-) -> dict[str, object]:
-    """Build EasyRemote's legacy daemon Invocation JSON through the SDK facade."""
-
-    descriptor_ref = _easyremote_descriptor_ref(request)
-    wire: dict[str, object] = {
-        "caller_ura": _required_clean_string(request.caller_ura, "caller_ura"),
-        "callee_ura": _required_clean_string(request.callee_ura, "callee_ura"),
-        "descriptor_ref": descriptor_ref,
-        "subject_ura": _required_clean_string(request.subject_ura, "subject_ura"),
-        "nonce_base64": _required_clean_string(request.nonce_base64, "nonce_base64"),
-        "causal_context": _required_mapping(request.causal_context, "causal_context"),
-    }
-    if request.has_json_args:
-        wire["args"] = request.args
-    else:
-        wire["arguments_base64"] = _required_clean_string(
-            request.arguments_base64,
-            "arguments_base64",
-        )
-        wire["content_type"] = _required_clean_string(
-            request.content_type,
-            "content_type",
-        )
-    if request.metadata:
-        wire["metadata"] = dict(request.metadata)
-    if request.caller_signature is not None:
-        wire["caller_signature"] = dict(request.caller_signature)
-    if request.bidi_streams:
-        wire["bidi_streams"] = [dict(stream) for stream in request.bidi_streams]
-    return wire
-
-
-def _easyremote_descriptor_ref(request: EasyRemoteInvocationRequest) -> str:
-    version = _required_clean_string(
-        request.descriptor_version,
-        "descriptor_version",
-    )
-    ability = _required_clean_string(request.ability, "ability")
-    try:
-        return _canonical_ability_descriptor_ref(ability)
-    except SDKError as exc:
-        if exc.code != ErrorCode.INVALID_ARGUMENT:
-            raise
-        ability_ura = _owner_ability_ura(
-            _required_clean_string(request.callee_ura, "callee_ura"),
-            ability,
-        )
-        return _canonical_ability_descriptor_ref(f"{ability_ura}@{version}")
-
-
-def _canonical_ability_descriptor_ref(value: str) -> str:
-    from .identity import canonical_ability_descriptor_ref
-
-    return canonical_ability_descriptor_ref(value)
-
-
-def _owner_ability_ura(owner_ura: str, ability_name: str) -> str:
-    from .identity import owner_ability_ura
-
-    return owner_ability_ura(owner_ura, ability_name)
 
 
 class InvocationBuilder:
@@ -393,18 +304,6 @@ def _required_object(
     value = decoded.get(field_name)
     if not isinstance(value, dict):
         raise _invalid_invocation(f"{field_name} must be an object")
-    return value
-
-
-def _required_mapping(value: Mapping[str, object], field_name: str) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        raise _invalid_invocation(f"{field_name} must be an object")
-    return dict(value)
-
-
-def _required_clean_string(value: str, field_name: str) -> str:
-    if not isinstance(value, str) or value.strip() == "":
-        raise _invalid_invocation(f"{field_name} is required")
     return value
 
 

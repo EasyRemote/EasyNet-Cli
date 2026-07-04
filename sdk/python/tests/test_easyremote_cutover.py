@@ -1,11 +1,14 @@
 import json
 import unittest
 
+from dataclasses import dataclass
+
 from easynet_sdk import (
     AbilityCallRequest,
     AbilityInvocationClient,
     AbilityTargetRequest,
     AddressingClient,
+    EasyRemoteInvocationAdapter,
     InvocationResult,
     ReceiptClient,
     RuntimeClient,
@@ -18,6 +21,177 @@ from test_runtime import MemoryRuntimeTransport
 
 
 class EasyRemoteCutoverTests(unittest.TestCase):
+    def test_easyremote_tuple_adapter_builds_sdk_draft_from_route_name(
+        self,
+    ) -> None:
+        identity_transport = RejectBareDescriptorTransport()
+        runtime_transport = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime_transport),
+            addressing=AddressingClient(identity_transport),
+        )
+        adapter = EasyRemoteInvocationAdapter(client)
+
+        draft = adapter.build_invocation(
+            EasyRemoteTuple(
+                caller="easynet:///r/example/agent/alice.sdk",
+                callee="easynet:///r/example/device/dev-a",
+                ability="er.weather",
+                subject="easynet:///r/example/device/dev-a",
+                nonce=bytes(range(1, 17)),
+                causal=None,
+                arguments=EasyRemoteArguments.from_json({"city": "Singapore"}),
+            ),
+            metadata={"trace_id": "er-1"},
+        )
+
+        self.assertEqual(
+            draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+        self.assertEqual(draft.nonce_base64, "AQIDBAUGBwgJCgsMDQ4PEA==")
+        self.assertEqual(draft.causal_context, {"form": "none"})
+        self.assertEqual(draft.metadata, {"trace_id": "er-1"})
+        self.assertEqual(draft.args, {"city": "Singapore"})
+        self.assertEqual(
+            identity_transport.seen_requests,
+            [
+                {"descriptor_ref": "er.weather"},
+                {
+                    "kind": "ability",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "ability_name": "er.weather",
+                },
+                {
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                    "descriptor_version": "1.0.0",
+                },
+            ],
+        )
+
+    def test_easyremote_tuple_adapter_returns_migration_wire_dict(
+        self,
+    ) -> None:
+        identity_transport = MemoryIdentityTransport()
+        identity_transport.descriptor_json = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            addressing=AddressingClient(identity_transport),
+        )
+        adapter = EasyRemoteInvocationAdapter(client)
+
+        wire = adapter.to_wire_dict(
+            EasyRemoteTuple(
+                caller="easynet:///r/example/agent/alice.sdk",
+                callee="easynet:///r/example/device/dev-a",
+                ability=(
+                    "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+                ),
+                subject="easynet:///r/example/device/dev-a",
+                nonce=bytes(range(1, 17)),
+                causal=[
+                    EasyRemoteCausalRef(
+                        receipt_ura="easynet:///r/example/receipt/parent-1",
+                        receipt_hash=bytes.fromhex("aa" * 32),
+                    )
+                ],
+                arguments=EasyRemoteArguments.from_bytes(
+                    b"abc", "application/octet-stream"
+                ),
+            ),
+            caller_signature=EasyRemoteSignature(),
+            bidi_streams=(
+                EasyRemoteStreamSpec(
+                    stream_id=7,
+                    content_type="application/octet-stream",
+                    ordering="STRICT",
+                    codec_params="chunk=4096",
+                ),
+            ),
+        )
+
+        self.assertEqual(wire["arguments_base64"], "YWJj")
+        self.assertEqual(wire["content_type"], "application/octet-stream")
+        self.assertEqual(
+            wire["causal_context"],
+            {
+                "form": "list",
+                "prior": [
+                    {
+                        "receipt_ura": "easynet:///r/example/receipt/parent-1",
+                        "receipt_hash_hex": "aa" * 32,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(
+            wire["caller_signature"],
+            {
+                "algorithm": "ed25519",
+                "signature_base64": "c2ln",
+                "key_id_hint": "alice-key-1",
+            },
+        )
+        self.assertEqual(
+            wire["bidi_streams"],
+            [
+                {
+                    "stream_id": 7,
+                    "content_type": "application/octet-stream",
+                    "ordering": "STRICT",
+                    "codec_params": "chunk=4096",
+                }
+            ],
+        )
+        self.assertNotIn("ability", wire)
+        self.assertEqual(
+            identity_transport.seen_requests,
+            [
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+                    )
+                }
+            ],
+        )
+
+    def test_easyremote_tuple_adapter_dispatches_through_runtime_client(
+        self,
+    ) -> None:
+        identity_transport = RejectBareDescriptorTransport()
+        runtime_transport = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime_transport),
+            addressing=AddressingClient(identity_transport),
+        )
+        adapter = EasyRemoteInvocationAdapter(client)
+
+        result = adapter.invoke(
+            EasyRemoteTuple(
+                caller="easynet:///r/example/agent/alice.sdk",
+                callee="easynet:///r/example/device/dev-a",
+                ability="er.weather",
+                subject="easynet:///r/example/device/dev-a",
+                nonce=bytes(range(1, 17)),
+                causal=None,
+                arguments=EasyRemoteArguments.from_json({"city": "Singapore"}),
+            )
+        )
+
+        self.assertTrue(result.ok)
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+        )
+
     def test_easyremote_style_unary_invoke_uses_sdk_addressing_and_transport(
         self,
     ) -> None:
@@ -252,6 +426,105 @@ def _parent_result_with_receipt() -> InvocationResult:
             sort_keys=True,
         )
     )
+
+
+class RejectBareDescriptorTransport(MemoryIdentityTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.identity_json = (
+            b'{"kind":"ability","valid":true,'
+            b'"ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"owner_kind":"device","public_name":"er.weather",'
+            b'"local_registry_ability":"easynet:///r/example/device/dev-a:er.weather",'
+            b'"namespace":"er","local_name":"weather"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        self.descriptor_json = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+
+    def project_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        self.seen_request = request
+        self.seen_requests.append(request)
+        if request.get("descriptor_ref") == "er.weather":
+            return b"{}"
+        return self.descriptor_json
+
+
+@dataclass(frozen=True)
+class EasyRemoteTuple:
+    caller: str
+    callee: str
+    ability: str
+    subject: str
+    nonce: bytes
+    causal: object
+    arguments: "EasyRemoteArguments"
+
+
+@dataclass(frozen=True)
+class EasyRemoteArguments:
+    content_type: str
+    json_value: object = None
+    raw: bytes | None = None
+
+    @classmethod
+    def from_json(cls, value: object) -> "EasyRemoteArguments":
+        return cls(content_type="application/json", json_value=value)
+
+    @classmethod
+    def from_bytes(cls, value: bytes, content_type: str) -> "EasyRemoteArguments":
+        return cls(content_type=content_type, raw=value)
+
+    @property
+    def is_json(self) -> bool:
+        return self.raw is None
+
+
+@dataclass(frozen=True)
+class EasyRemoteCausalRef:
+    receipt_ura: str
+    receipt_hash: bytes
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "receipt_ura": self.receipt_ura,
+            "receipt_hash_hex": self.receipt_hash.hex(),
+        }
+
+
+@dataclass(frozen=True)
+class EasyRemoteSignature:
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "algorithm": "ed25519",
+            "signature_base64": "c2ln",
+            "key_id_hint": "alice-key-1",
+        }
+
+
+@dataclass(frozen=True)
+class EasyRemoteStreamSpec:
+    stream_id: int
+    content_type: str
+    ordering: str
+    codec_params: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "stream_id": self.stream_id,
+            "content_type": self.content_type,
+            "ordering": self.ordering,
+            "codec_params": self.codec_params,
+        }
 
 
 if __name__ == "__main__":

@@ -26,7 +26,9 @@ state seams, schema-backed SDK error projection, complete
 Invocation draft construction, AbilityInvocationClient descriptor-delegated
 complete tuple build/invoke/stream/bidi convenience facade plus EasyRemote-style
 target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and explicit
-submit/await/cancel/events/close-handle observation helpers, prepared/signed Invocation DTOs, unary
+submit/await/cancel/events/close-handle observation helpers, EasyRemote tuple-like
+object adapter for building SDK `InvocationDraft` values and staged legacy wire
+dicts without raw product codecs, prepared/signed Invocation DTOs, unary
 InvocationResult and non-verifying terminal receipt projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, object-bound
 Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow

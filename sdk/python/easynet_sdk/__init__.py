@@ -226,11 +226,9 @@ from .host_binding import (
     HostStreamTerminalSummary,
 )
 from .invocation import (
-    EasyRemoteInvocationRequest,
     InvocationBuilder,
     InvocationDraft,
     InvocationSignature,
-    encode_easyremote_invocation,
 )
 from .mission import (
     MissionCancelRequest,
@@ -409,7 +407,6 @@ __all__ = [
     "AbilityInvocationClient",
     "AbilityPackageManifest",
     "EasyRemoteInvocationAdapter",
-    "EasyRemoteInvocationRequest",
     "AdminAgentListRequest",
     "AdminAgentPage",
     "AdminAgentRecord",
@@ -677,7 +674,6 @@ __all__ = [
     "device_agent_ura",
     "device_ura",
     "discover_daemon",
-    "encode_easyremote_invocation",
     "hub_ura",
     "is_code",
     "owner_ability_descriptor_ref",
