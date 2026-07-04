@@ -217,6 +217,123 @@ class MissionEventPage:
 
 
 @dataclass(frozen=True)
+class MissionEventTailOptions:
+    """Bounded live-tail controls for Mission event pages."""
+
+    cursor_sequence: int = 0
+    limit: int = 0
+    max_empty_pages: int = 0
+    poll_interval_seconds: float = 0.0
+
+    def validated(self) -> "MissionEventTailOptions":
+        if self.cursor_sequence < 0:
+            raise _invalid_mission("mission event cursor_sequence must be non-negative")
+        if self.limit < 0:
+            raise _invalid_mission("mission event limit must be non-negative")
+        if self.limit > 1000:
+            raise _invalid_mission("mission event limit exceeds bounds")
+        if self.max_empty_pages < 0:
+            raise _invalid_mission("mission event max_empty_pages must be non-negative")
+        if self.poll_interval_seconds < 0:
+            raise _invalid_mission(
+                "mission event poll_interval_seconds must be non-negative"
+            )
+        return self
+
+
+class MissionEventTailer:
+    """SDK-owned state machine for tailing Mission event pages."""
+
+    def __init__(
+        self,
+        client: "MissionClient",
+        request: MissionEventListRequest,
+        *,
+        options: MissionEventTailOptions | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self._client = client
+        self._request = request
+        self._options = (options or MissionEventTailOptions()).validated()
+        self._sleep = sleep
+        self._cursor_sequence = self._options.cursor_sequence
+        self._buffer: list[MissionEvent] = []
+        self._empty_pages = 0
+        self._closed = False
+        self._terminal_seen = False
+
+    @property
+    def cursor_sequence(self) -> int:
+        return self._cursor_sequence
+
+    def close(self) -> None:
+        self._closed = True
+
+    def __iter__(self) -> "MissionEventTailer":
+        return self
+
+    def __next__(self) -> MissionEvent:
+        if not self._buffer:
+            self._fill_buffer()
+        if not self._buffer:
+            raise StopIteration
+        event = self._buffer.pop(0)
+        if event.terminal:
+            self.close()
+        return event
+
+    def _fill_buffer(self) -> None:
+        while not self._closed and not self._terminal_seen:
+            request = replace(
+                self._request,
+                cursor_sequence=self._cursor_sequence,
+                limit=self._options.limit,
+            )
+            previous_cursor = self._cursor_sequence
+            page = self._client.events(request)
+            if page.dropped_count:
+                raise SDKError(
+                    code=ErrorCode.PROTOCOL,
+                    stage="mission",
+                    retry=RetryHint.SAFE,
+                    retryable=True,
+                    message="mission event tail dropped daemon events",
+                    details={
+                        "reason": "mission_events_dropped",
+                        "mission_id": page.mission_id,
+                        "cursor_sequence": page.cursor_sequence,
+                        "dropped_count": page.dropped_count,
+                    },
+                )
+            self._cursor_sequence = page.next_cursor_sequence
+            self._buffer.extend(page.events)
+            if any(event.terminal for event in page.events):
+                self._terminal_seen = True
+            if self._buffer:
+                return
+            if page.has_more and self._cursor_sequence == previous_cursor:
+                raise _invalid_mission("mission event tail made no cursor progress")
+            if page.has_more:
+                continue
+            self._empty_pages += 1
+            if self._empty_pages > self._options.max_empty_pages:
+                self.close()
+                return
+            self._sleep_once()
+
+    def _sleep_once(self) -> None:
+        interval = self._options.poll_interval_seconds
+        if interval <= 0:
+            return
+        if self._sleep is not None:
+            self._sleep(interval)
+            return
+        import time
+
+        time.sleep(interval)
+
+
+@dataclass(frozen=True)
 class MissionStatus:
     """SDK mission-status.schema.json projection."""
 
@@ -312,6 +429,32 @@ class EasyRemoteMissionRunProjection:
         )
 
 
+class EasyRemoteMissionEventTailer:
+    """EasyRemote-facing iterator over SDK Mission tail events."""
+
+    def __init__(self, tailer: MissionEventTailer) -> None:
+        self._tailer = tailer
+
+    @property
+    def cursor_sequence(self) -> int:
+        return self._tailer.cursor_sequence
+
+    def close(self) -> None:
+        self._tailer.close()
+
+    def __iter__(self) -> "EasyRemoteMissionEventTailer":
+        return self
+
+    def __next__(self) -> Mapping[str, object]:
+        return _event_projection(next(self._tailer))
+
+    def __enter__(self) -> "EasyRemoteMissionEventTailer":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
 class EasyRemoteMissionAdapter:
     """SDK-owned Mission cutover adapter for EasyRemote-like callers."""
 
@@ -367,6 +510,35 @@ class EasyRemoteMissionAdapter:
             )
         )
         return _event_page_projection(page)
+
+    def tail_events(
+        self,
+        run_id: str,
+        *,
+        cursor_sequence: int = 0,
+        limit: int = 0,
+        max_empty_pages: int = 0,
+        poll_interval_seconds: float = 0.0,
+    ) -> EasyRemoteMissionEventTailer:
+        mission_id = _validated_easyremote_run_id(run_id)
+        options = MissionEventTailOptions(
+            cursor_sequence=cursor_sequence,
+            limit=limit,
+            max_empty_pages=max_empty_pages,
+            poll_interval_seconds=poll_interval_seconds,
+        ).validated()
+        return EasyRemoteMissionEventTailer(
+            MissionEventTailer(
+                self._client,
+                MissionEventListRequest(
+                    base=self._base,
+                    mission_id=mission_id,
+                    cursor_sequence=options.cursor_sequence,
+                    limit=options.limit,
+                ),
+                options=options,
+            )
+        )
 
 
 @runtime_checkable
@@ -751,19 +923,20 @@ def _event_page_projection(page: MissionEventPage) -> dict[str, object]:
         "next_cursor_sequence": page.next_cursor_sequence,
         "has_more": page.has_more,
         "dropped_count": page.dropped_count,
-        "events": [
-            {
-                "event_type": event.event_type,
-                "sequence": event.sequence,
-                "occurred_unix_ms": event.occurred_unix_ms,
-                "terminal": event.terminal,
-                "payload": event.payload,
-                "receipt": dict(event.receipt),
-                "metadata": dict(event.metadata),
-            }
-            for event in page.events
-        ],
+        "events": [_event_projection(event) for event in page.events],
         "metadata": dict(page.metadata),
+    }
+
+
+def _event_projection(event: MissionEvent) -> dict[str, object]:
+    return {
+        "event_type": event.event_type,
+        "sequence": event.sequence,
+        "occurred_unix_ms": event.occurred_unix_ms,
+        "terminal": event.terminal,
+        "payload": event.payload,
+        "receipt": dict(event.receipt),
+        "metadata": dict(event.metadata),
     }
 
 

@@ -65,7 +65,9 @@ through Runtime Core invoke, and close state seams
 over opaque receipt refs plus typed ReceiptRef/ReceiptChain facades that
 delegate causal-context and continuity projection back through ReceiptClient,
 plus `ReceiptVerification` cryptographic-assurance guardrails that reject
-summary-only projections as verifier evidence,
+summary-only projections as verifier evidence, and SDK-owned
+`EasyRemoteReceipt`/`EasyRemoteReceiptChain` summary parsing, state projection,
+summary-only verification guardrails, and hash-chain continuity projection,
 plus PublicationClient resource-ref,
 package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
 C ABI-backed deploy-result projection,
@@ -91,7 +93,8 @@ Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams, an EasyRemote Mission cutover adapter over typed Mission profile
 requests, SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue,
-EasyRemote page-based Mission event access, and close state seams. AdminClient
+EasyRemote page-based Mission event access, SDK-owned bounded Mission event
+tailing for EasyRemote Pipeline live updates, and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
 Core invoke, C ABI-backed session-list execution through Runtime Core invoke,
@@ -129,7 +132,7 @@ require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-profile-specific stream execution adapters, EasyRemote Pipeline live-tail/
-conformance cutover, and full
+profile-specific stream execution adapters, EasyRemote Pipeline child Invocation
+execution conformance, and full
 EasyRemote AgentControl/Server product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

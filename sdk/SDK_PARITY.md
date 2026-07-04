@@ -237,7 +237,10 @@ method spelling.
   `ReceiptChain` wrappers that delegate causal-context and continuity projection
   through the client, `ReceiptVerification` cryptographic-assurance guardrails
   that reject summary-only projections as verifier evidence, local SDK
-  receipt-summary projection/continuity/causal-ref guardrails, C ABI-backed fetch
+  receipt-summary projection/continuity/causal-ref guardrails, SDK-owned
+  `EasyRemoteReceipt`/`EasyRemoteReceiptChain` summary parsing, state projection,
+  summary-only verification guardrails, and hash-chain continuity projection,
+  C ABI-backed fetch
   execution through Runtime Core invoke, and close state seams over opaque receipt refs.
   EasyRemote receipt summary verification, hash-chain continuity, and
   parent-receipt-anchored Context child dispatch now delegate to SDK Receipt.
@@ -277,11 +280,11 @@ method spelling.
   gates, and admin/mission carrier gates; EasyRemote transport, unary
   wait/retire lifecycle, stream value projection, invocation,
   bidi session lifecycle,
-  addressing helpers, warm host frame/hash substrate, receipt continuity,
+  addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
-  Pipeline event access plus publication product catalogue extraction now pass
-  static gates, while Pipeline live-tail/conformance cutover, full AgentControl/Server
+  Pipeline event access/live-tail plus publication product catalogue extraction now pass
+  static gates, while Pipeline child Invocation execution conformance, full AgentControl/Server
   cutover, and full receipt verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
@@ -289,10 +292,11 @@ method spelling.
   projection seams, an SDK-owned EasyRemote Mission cutover adapter with
   event-page projection, SDK-owned EasyRemote profile bridge dispatch/projection
   glue, EasyRemote `MissionControl`/`MissionRun` page-based
-  event access, raw mission carrier audit gate for
+  event access, SDK-owned bounded Mission event tailing for EasyRemote Pipeline
+  live updates, raw mission carrier audit gate for
   `mission.run/track/cancel/events`, and close state seams;
-  concrete live-tail adapters, child Invocation behavior conformance, Pipeline
-  execution conformance, and scheduler/retry policy remain incomplete.
+  daemon stream-backed live adapters, child Invocation behavior conformance,
+  Pipeline execution conformance, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders,
   C ABI-backed agent list/start/stop/refresh and session-list execution through Runtime Core,

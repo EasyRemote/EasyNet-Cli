@@ -173,6 +173,68 @@ MISSION_EVENT_PAGE_JSON = b"""{
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }"""
 
+MISSION_EVENT_TAIL_PAGE_1_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "run-1",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 1,
+  "has_more": true,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "run-1",
+      "sequence": 0,
+      "event_type": "progress",
+      "occurred_unix_ms": 1000,
+      "terminal": false,
+      "payload": {"step": "fetch"},
+      "receipt": {},
+      "metadata": {"step_id": "fetch"}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
+MISSION_EVENT_TAIL_PAGE_2_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "run-1",
+  "cursor_sequence": 1,
+  "next_cursor_sequence": 2,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "run-1",
+      "sequence": 1,
+      "event_type": "completed",
+      "occurred_unix_ms": 1001,
+      "terminal": true,
+      "payload": {"reply": "done"},
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
+MISSION_EVENT_DROPPED_PAGE_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "run-1",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 3,
+  "has_more": false,
+  "dropped_count": 2,
+  "events": [],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
 
 class MemoryMissionTransport:
     def __init__(self) -> None:
@@ -185,13 +247,16 @@ class MemoryMissionTransport:
         self.track_status_json = MISSION_STATUS_JSON
         self.cancel_status_json = MISSION_STATUS_JSON
         self.events_json = MISSION_EVENT_PAGE_JSON
+        self.events_jsons: list[bytes] = []
         self.seen: dict[str, dict[str, object]] = {}
+        self.seen_calls: dict[str, list[dict[str, object]]] = {}
         self.seen_request: dict[str, object] | None = None
         self.close_calls = 0
 
     def _remember(self, name: str, request_json: bytes) -> None:
         decoded = json.loads(request_json.decode("utf-8"))
         self.seen[name] = decoded
+        self.seen_calls.setdefault(name, []).append(decoded)
         self.seen_request = decoded
 
     def build_run_eal_invocation(self, request_json: bytes) -> bytes:
@@ -228,6 +293,8 @@ class MemoryMissionTransport:
 
     def events(self, request_json: bytes) -> bytes:
         self._remember("events", request_json)
+        if self.events_jsons:
+            return self.events_jsons.pop(0)
         return self.events_json
 
     def close(self) -> None:
@@ -285,6 +352,37 @@ class MissionTests(unittest.TestCase):
         self.assertEqual(transport.seen["events"]["mission_id"], "run-1")
         self.assertEqual(transport.seen["events"]["cursor_sequence"], 4)
         self.assertEqual(transport.seen["events"]["limit"], 100)
+
+    def test_easyremote_adapter_tails_mission_events_until_terminal(self) -> None:
+        transport = MemoryMissionTransport()
+        transport.events_jsons = [
+            MISSION_EVENT_TAIL_PAGE_1_JSON,
+            MISSION_EVENT_TAIL_PAGE_2_JSON,
+        ]
+        adapter = EasyRemoteMissionAdapter(MissionClient(transport), base())
+
+        tail = adapter.tail_events("run-1", cursor_sequence=0, limit=10)
+        events = list(tail)
+
+        self.assertEqual([event["event_type"] for event in events], ["progress", "completed"])
+        self.assertEqual(events[1]["payload"], {"reply": "done"})
+        self.assertEqual(tail.cursor_sequence, 2)
+        self.assertEqual(
+            [call["cursor_sequence"] for call in transport.seen_calls["events"]],
+            [0, 1],
+        )
+        self.assertEqual(transport.seen_calls["events"][0]["limit"], 10)
+
+    def test_easyremote_adapter_tail_reports_dropped_events(self) -> None:
+        transport = MemoryMissionTransport()
+        transport.events_jsons = [MISSION_EVENT_DROPPED_PAGE_JSON]
+        adapter = EasyRemoteMissionAdapter(MissionClient(transport), base())
+
+        with self.assertRaises(SDKError) as raised:
+            list(adapter.tail_events("run-1"))
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertEqual(raised.exception.details["reason"], "mission_events_dropped")
 
     def test_builds_run_track_cancel_invocations(self) -> None:
         client = MissionClient(MemoryMissionTransport())
