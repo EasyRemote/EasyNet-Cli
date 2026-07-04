@@ -42,9 +42,10 @@ list/resolve Invocation carrier builders, directory
 projection helpers, C ABI-backed directory subscription execution through
 Runtime Core open_stream, directory subscription state seams, buffered-event/drop
 projection helpers, and close state seams plus
-AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ura`,
-`owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
-`owner_ability_descriptor_ref`, and
+AddressingClient and package-level Axon-delegated `parse_ura`, `device_ura`,
+`agent_ura`, `device_agent_ura`, `hub_ura`, `resource_ura`,
+`device_ability_ura`, `owner_ability_ura`, `owner_ura_for_ability`,
+`ability_ura_from_descriptor_ref`, `owner_ability_descriptor_ref`, and
 `canonical_ability_descriptor_ref` helpers plus an
 `AbilityAddress` projection for EasyRemote-style callee/subject ownership facts,
 IdentityClient descriptor/resource projection, C ABI-backed signing-key

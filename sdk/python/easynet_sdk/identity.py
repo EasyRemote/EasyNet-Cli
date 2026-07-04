@@ -516,26 +516,91 @@ class AddressingClient:
 
         return self.project_identity(IdentityProjectionRequest(ura=ura))
 
+    def device_ura(self, realm: str, device_id: str) -> str:
+        """Build a canonical Device URA through the identity transport."""
+
+        return self._build_ura(
+            {"kind": "device", "realm": realm, "device_id": device_id},
+            expected_kind="device",
+        )
+
+    def agent_ura(self, realm: str, user_id: str, agent_id: str) -> str:
+        """Build a canonical user-owned Agent URA through the identity transport."""
+
+        return self._build_ura(
+            {
+                "kind": "agent",
+                "owner_kind": "user",
+                "realm": realm,
+                "user_id": user_id,
+                "agent_id": agent_id,
+            },
+            expected_kind="agent",
+        )
+
+    def device_agent_ura(self, realm: str, device_id: str, agent_id: str) -> str:
+        """Build a canonical device-owned Agent URA through the identity transport."""
+
+        return self._build_ura(
+            {
+                "kind": "agent",
+                "owner_kind": "device",
+                "realm": realm,
+                "device_id": device_id,
+                "agent_id": agent_id,
+            },
+            expected_kind="agent",
+        )
+
+    def hub_ura(self, realm: str) -> str:
+        """Build a canonical Hub URA through the identity transport."""
+
+        return self._build_ura(
+            {"kind": "hub", "realm": realm},
+            expected_kind="hub",
+        )
+
+    def resource_ura(self, owner_ura: str, path: str) -> str:
+        """Build a canonical Resource URA through the identity transport."""
+
+        return self._build_ura(
+            {"kind": "resource", "owner_ura": owner_ura, "path": path},
+            expected_kind="resource",
+        )
+
+    def device_ability_ura(
+        self, realm: str, device_id: str, namespace: str, local_name: str
+    ) -> str:
+        """Build a canonical device-owned Ability URA through the SDK facade."""
+
+        owner = self.device_ura(realm, device_id)
+        public_name = _qualified_ability_name(namespace, local_name)
+        return self.owner_ability_ura(owner, public_name)
+
     def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
         """Build a canonical Ability URA through the identity transport."""
 
-        self._require_open()
-        request = _json_bytes(
+        return self._build_ura(
             {
                 "kind": "ability",
                 "owner_ura": owner_ura,
                 "ability_name": ability_name,
-            }
+            },
+            expected_kind="ability",
         )
+
+    def _build_ura(self, request: Mapping[str, object], *, expected_kind: str) -> str:
+        self._require_open()
+        request_json = _json_bytes(request)
         try:
-            raw = self.transport.build_ura(request)
+            raw = self.transport.build_ura(request_json)
         except SDKError:
             raise
         except Exception as exc:
-            raise _transport_error("identity ability URA build failed", exc) from exc
+            raise _transport_error("identity URA build failed", exc) from exc
         projection = IdentityProjection.from_json(raw)
-        if projection.kind != "ability" or not projection.ura:
-            raise _invalid_identity("invalid ability URA projection")
+        if projection.kind != expected_kind or not projection.ura:
+            raise _invalid_identity(f"invalid {expected_kind} URA projection")
         return projection.ura
 
     def owner_ura_for_ability(self, ability_ura: str) -> str:
@@ -648,6 +713,49 @@ class IdentityClient:
 
         self._require_open()
         return self._addressing.parse_ura(ura)
+
+    def device_ura(self, realm: str, device_id: str) -> str:
+        """Build a canonical Device URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.device_ura(realm, device_id)
+
+    def agent_ura(self, realm: str, user_id: str, agent_id: str) -> str:
+        """Build a canonical user-owned Agent URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.agent_ura(realm, user_id, agent_id)
+
+    def device_agent_ura(self, realm: str, device_id: str, agent_id: str) -> str:
+        """Build a canonical device-owned Agent URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.device_agent_ura(realm, device_id, agent_id)
+
+    def hub_ura(self, realm: str) -> str:
+        """Build a canonical Hub URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.hub_ura(realm)
+
+    def resource_ura(self, owner_ura: str, path: str) -> str:
+        """Build a canonical Resource URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.resource_ura(owner_ura, path)
+
+    def device_ability_ura(
+        self, realm: str, device_id: str, namespace: str, local_name: str
+    ) -> str:
+        """Build a canonical device-owned Ability URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.device_ability_ura(
+            realm,
+            device_id,
+            namespace,
+            local_name,
+        )
 
     def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
         """Build a canonical Ability URA through the identity transport."""
@@ -814,6 +922,110 @@ def parse_ura(
 
     return _with_default_addressing(
         lambda addressing: addressing.parse_ura(ura),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def device_ura(
+    realm: str,
+    device_id: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical Device URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.device_ura(realm, device_id),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def agent_ura(
+    realm: str,
+    user_id: str,
+    agent_id: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical user-owned Agent URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.agent_ura(realm, user_id, agent_id),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def device_agent_ura(
+    realm: str,
+    device_id: str,
+    agent_id: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical device-owned Agent URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.device_agent_ura(realm, device_id, agent_id),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def hub_ura(
+    realm: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical Hub URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.hub_ura(realm),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def resource_ura(
+    owner_ura: str,
+    path: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical Resource URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.resource_ura(owner_ura, path),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def device_ability_ura(
+    realm: str,
+    device_id: str,
+    namespace: str,
+    local_name: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical device-owned Ability URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.device_ability_ura(
+            realm,
+            device_id,
+            namespace,
+            local_name,
+        ),
         library_path=library_path,
         control_path=control_path,
     )
@@ -1054,6 +1266,14 @@ def _clean_string_tuple(value: object, field_name: str) -> tuple[str, ...]:
     for item in value:
         items.append(_required_clean_string(item, field_name))
     return tuple(items)
+
+
+def _qualified_ability_name(namespace: str, local_name: str) -> str:
+    namespace = namespace.strip()
+    local_name = local_name.strip()
+    if not namespace or not local_name:
+        raise _invalid_identity("namespace and local_name are required")
+    return f"{namespace}.{local_name}"
 
 
 def _contains_private_key_metadata(metadata: Mapping[str, object]) -> bool:

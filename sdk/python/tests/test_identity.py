@@ -23,6 +23,7 @@ class MemoryIdentityTransport:
     def __init__(self) -> None:
         self.descriptor_json = b"{}"
         self.identity_json = b"{}"
+        self.identity_jsons: list[bytes] = []
         self.resource_json = b"{}"
         self.invocation_json = (
             b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
@@ -58,12 +59,12 @@ class MemoryIdentityTransport:
     def project_identity(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         self.seen_requests.append(self.seen_request)
-        return self.identity_json
+        return self._identity_json()
 
     def build_ura(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         self.seen_requests.append(self.seen_request)
-        return self.identity_json
+        return self._identity_json()
 
     def build_resource_ref(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -107,6 +108,11 @@ class MemoryIdentityTransport:
 
     def close(self) -> None:
         self.close_calls += 1
+
+    def _identity_json(self) -> bytes:
+        if self.identity_jsons:
+            return self.identity_jsons.pop(0)
+        return self.identity_json
 
 
 class IdentityTests(unittest.TestCase):
@@ -299,6 +305,140 @@ class IdentityTests(unittest.TestCase):
             ],
         )
 
+    def test_addressing_ura_builders_delegate_to_identity_transport(self) -> None:
+        transport = MemoryIdentityTransport()
+        client = AddressingClient(transport)
+
+        transport.identity_json = _projection(
+            "device", "easynet:///r/example/device/dev-a"
+        )
+        self.assertEqual(
+            client.device_ura("example", "dev-a"),
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            transport.seen_request,
+            {"kind": "device", "realm": "example", "device_id": "dev-a"},
+        )
+
+        transport.identity_json = _projection(
+            "agent", "easynet:///r/example/agent/alice.caesura"
+        )
+        self.assertEqual(
+            client.agent_ura("example", "alice", "caesura"),
+            "easynet:///r/example/agent/alice.caesura",
+        )
+        self.assertEqual(
+            transport.seen_request,
+            {
+                "kind": "agent",
+                "owner_kind": "user",
+                "realm": "example",
+                "user_id": "alice",
+                "agent_id": "caesura",
+            },
+        )
+
+        transport.identity_json = _projection(
+            "agent", "easynet:///r/example/agent/device.dev-a.terminal"
+        )
+        self.assertEqual(
+            client.device_agent_ura("example", "dev-a", "terminal"),
+            "easynet:///r/example/agent/device.dev-a.terminal",
+        )
+        self.assertEqual(
+            transport.seen_request,
+            {
+                "kind": "agent",
+                "owner_kind": "device",
+                "realm": "example",
+                "device_id": "dev-a",
+                "agent_id": "terminal",
+            },
+        )
+
+        transport.identity_json = _projection("hub", "easynet:///r/example/hub")
+        self.assertEqual(client.hub_ura("example"), "easynet:///r/example/hub")
+        self.assertEqual(transport.seen_request, {"kind": "hub", "realm": "example"})
+
+        transport.identity_json = _projection(
+            "resource", "easynet:///r/example/resource/device.dev-a/fs/pkg"
+        )
+        self.assertEqual(
+            client.resource_ura("easynet:///r/example/device/dev-a", "fs/pkg"),
+            "easynet:///r/example/resource/device.dev-a/fs/pkg",
+        )
+        self.assertEqual(
+            transport.seen_request,
+            {
+                "kind": "resource",
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "path": "fs/pkg",
+            },
+        )
+
+    def test_identity_client_exposes_same_delegated_ura_builders(self) -> None:
+        transport = MemoryIdentityTransport()
+        client = IdentityClient(transport)
+
+        transport.identity_json = _projection(
+            "device", "easynet:///r/example/device/dev-a"
+        )
+        self.assertEqual(
+            client.device_ura("example", "dev-a"),
+            "easynet:///r/example/device/dev-a",
+        )
+
+        transport.identity_json = _projection(
+            "agent", "easynet:///r/example/agent/alice.caesura"
+        )
+        self.assertEqual(
+            client.agent_ura("example", "alice", "caesura"),
+            "easynet:///r/example/agent/alice.caesura",
+        )
+
+        transport.identity_json = _projection(
+            "agent", "easynet:///r/example/agent/device.dev-a.terminal"
+        )
+        self.assertEqual(
+            client.device_agent_ura("example", "dev-a", "terminal"),
+            "easynet:///r/example/agent/device.dev-a.terminal",
+        )
+
+        transport.identity_json = _projection("hub", "easynet:///r/example/hub")
+        self.assertEqual(client.hub_ura("example"), "easynet:///r/example/hub")
+
+        transport.identity_json = _projection(
+            "resource", "easynet:///r/example/resource/device.dev-a/fs/pkg"
+        )
+        self.assertEqual(
+            client.resource_ura("easynet:///r/example/device/dev-a", "fs/pkg"),
+            "easynet:///r/example/resource/device.dev-a/fs/pkg",
+        )
+
+        transport.identity_jsons = [
+            _projection("device", "easynet:///r/example/device/dev-a"),
+            _projection(
+                "ability",
+                "easynet:///r/example/ability/device.dev-a.observe.health",
+            ),
+        ]
+        self.assertEqual(
+            client.device_ability_ura("example", "dev-a", "observe", "health"),
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(
+            transport.seen_requests[-2:],
+            [
+                {"kind": "device", "realm": "example", "device_id": "dev-a"},
+                {
+                    "kind": "ability",
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "ability_name": "observe.health",
+                },
+            ],
+        )
+
     def test_addressing_helpers_reject_invalid_transport_projection(self) -> None:
         transport = MemoryIdentityTransport()
         transport.identity_json = (
@@ -466,6 +606,20 @@ SIGNER_HANDLE = (
     b'"policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},'
     b'"metadata":{"source":"daemon_keyring"}}'
 )
+
+
+def _projection(kind: str, ura: str) -> bytes:
+    return json.dumps(
+        {
+            "kind": kind,
+            "valid": True,
+            "ura": ura,
+            "profile": "easynet-strict-v2",
+            "components": {},
+            "metadata": {"grammar_owner": "axon"},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 if __name__ == "__main__":
