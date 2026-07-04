@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -196,6 +197,36 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	}
 	if details["source_ref"] != "go_sdk.profile.publication" {
 		t.Fatalf("source_ref detail = %#v", details["source_ref"])
+	}
+}
+
+func TestGoBackendCutoverExecutesSharedImportBanConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	backendCase := sharedCase(t, root, "backend-sdk-only-import-ban.yaml")
+	requireCaseID(t, backendCase, "backend/import_ban")
+	for _, action := range []string{
+		"scan_backend_go_imports",
+		"reject_raw_axon_imports",
+		"reject_generated_axon_pb_imports",
+		"reject_direct_daemon_transport",
+		"reject_cabi_ffi_markers",
+		"reject_runtime_subprocess",
+	} {
+		requireCaseAction(t, backendCase, action)
+	}
+	requireCaseExpectation(t, backendCase, "allowed_runtime_import: easynet.run/cli/sdk/go")
+	requireCaseExpectation(t, backendCase, "raw_axon_import: false")
+	requireCaseExpectation(t, backendCase, "generated_axon_pb_import: false")
+	requireCaseExpectation(t, backendCase, "direct_daemon_transport: false")
+	requireCaseExpectation(t, backendCase, "runtime_subprocess: false")
+
+	cmd := exec.Command(filepath.Join(root, "tools/scripts/check-backend-sdk-only-boundary.sh"), "--self-test")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("backend SDK-only boundary self-test failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "self-test ok") {
+		t.Fatalf("backend SDK-only boundary self-test output = %q", output)
 	}
 }
 

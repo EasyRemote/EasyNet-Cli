@@ -88,6 +88,7 @@ for path in \
   sdk/go/signing.go \
   sdk/go/signing_test.go \
   sdk/go/import_boundary_test.go \
+  tools/scripts/check-backend-sdk-only-boundary.sh \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/_cabi.py \
@@ -338,6 +339,7 @@ case_files=(
   invocation-descriptor-ref-helper-delegation.yaml
   error-typed-json.yaml
   error-profile-source-refs.yaml
+  backend-sdk-only-import-ban.yaml
   identity-ura-descriptor-projection.yaml
   receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml
@@ -368,6 +370,8 @@ for case_file in "${case_files[@]}"; do
   require_literal "$path" "steps:"
   require_literal "$path" "expect:"
 done
+
+bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"

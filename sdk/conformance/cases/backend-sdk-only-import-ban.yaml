@@ -1,0 +1,21 @@
+id: backend/import_ban
+profile: backend_cutover
+required_for:
+  - go
+description: EasyNet backend production code must depend on the public CLI Go SDK boundary instead of raw Axon packages, generated Axon protobufs, direct daemon transports, C ABI/FFI, EasyRemote, or product runtime subprocess calls.
+steps:
+  - action: scan_backend_go_imports
+  - action: reject_raw_axon_imports
+  - action: reject_generated_axon_pb_imports
+  - action: reject_direct_daemon_transport
+  - action: reject_cabi_ffi_markers
+  - action: reject_runtime_subprocess
+expect:
+  result: backend_sdk_only_boundary_enforced
+  allowed_runtime_import: easynet.run/cli/sdk/go
+  raw_axon_import: false
+  generated_axon_pb_import: false
+  direct_daemon_transport: false
+  c_abi_ffi: false
+  runtime_subprocess: false
+  easyremote_runtime_dependency: false

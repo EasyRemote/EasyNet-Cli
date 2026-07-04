@@ -68,6 +68,7 @@ cargo run --bin sdk-conformance-runner -- --language c_abi --format jsonl
 cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh
+bash tools/scripts/check-backend-sdk-only-boundary.sh "$EASYNET_BACKEND_ROOT"
 ```
 
 Future runners should add:
