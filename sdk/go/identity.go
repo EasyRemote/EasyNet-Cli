@@ -47,8 +47,20 @@ type LocalResourceRefRequest struct {
 	Capability string `json:"capability"`
 }
 
+// IdentityCarrierBase is the complete Invocation carrier context for identity daemon abilities.
+type IdentityCarrierBase struct {
+	CallerURA         string         `json:"caller_ura,omitempty"`
+	CalleeURA         string         `json:"callee_ura,omitempty"`
+	SubjectURA        string         `json:"subject_ura,omitempty"`
+	DescriptorVersion string         `json:"descriptor_version,omitempty"`
+	NonceBase64       string         `json:"nonce_base64,omitempty"`
+	CausalContext     map[string]any `json:"causal_context,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
 // SigningKeyRegistrationRequest registers daemon-owned public signing-key metadata.
 type SigningKeyRegistrationRequest struct {
+	IdentityCarrierBase
 	OwnerURA        string         `json:"owner_ura"`
 	KeyID           string         `json:"key_id"`
 	Algorithm       string         `json:"algorithm"`
@@ -59,6 +71,7 @@ type SigningKeyRegistrationRequest struct {
 
 // SigningKeyListRequest asks for a bounded signing-key read-model page.
 type SigningKeyListRequest struct {
+	IdentityCarrierBase
 	OwnerURA string `json:"owner_ura,omitempty"`
 	Limit    int    `json:"limit,omitempty"`
 	Cursor   string `json:"cursor,omitempty"`
@@ -66,12 +79,16 @@ type SigningKeyListRequest struct {
 
 // SigningKeyRevokeRequest revokes one daemon-owned signing key.
 type SigningKeyRevokeRequest struct {
-	KeyID  string `json:"key_id"`
-	Reason string `json:"reason"`
+	IdentityCarrierBase
+	KeyID           string `json:"key_id"`
+	Reason          string `json:"reason"`
+	OwnerURA        string `json:"owner_ura,omitempty"`
+	PublicKeyBase64 string `json:"public_key_base64,omitempty"`
 }
 
 // SignerRequest asks the daemon for an authorized signer handle projection.
 type SignerRequest struct {
+	IdentityCarrierBase
 	OwnerURA string         `json:"owner_ura"`
 	KeyID    string         `json:"key_id"`
 	Usage    string         `json:"usage,omitempty"`

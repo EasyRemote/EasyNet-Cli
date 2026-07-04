@@ -51,5 +51,6 @@ func allowedPrivateCABIAdapter(path, text string) bool {
 	return (base == "cabi_dynamic.go" && strings.Contains(text, "type CABIDiscoveryTransport struct")) ||
 		(base == "cabi_runtime.go" && strings.Contains(text, "type CABIDaemonTransport struct")) ||
 		(base == "cabi_receipt.go" && strings.Contains(text, "type CABIReceiptTransport struct")) ||
+		(base == "cabi_identity.go" && strings.Contains(text, "type CABIIdentityTransport struct")) ||
 		(base == "cabi_callbacks.go" && strings.Contains(text, "easynetGoStreamCallback"))
 }

@@ -327,18 +327,22 @@ func cabiReceiptTakeCString(stringFree unsafe.Pointer, value *C.char) []byte {
 }
 
 func outputJSONFromInvocationResult(resultJSON []byte) ([]byte, error) {
+	return outputJSONFromProfileInvocationResult(resultJSON, "receipt")
+}
+
+func outputJSONFromProfileInvocationResult(resultJSON []byte, profile string) ([]byte, error) {
 	var result struct {
 		OutputJSON json.RawMessage `json:"output_json"`
 	}
 	if err := json.Unmarshal(resultJSON, &result); err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("decode receipt invocation result JSON: %v", err), err)
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode %s invocation result JSON: %v", profile, err), err)
 	}
 	if len(result.OutputJSON) == 0 || string(result.OutputJSON) == "null" {
-		return nil, invalidRuntimePayload("receipt invocation result output_json is required", nil)
+		return nil, invalidRuntimePayload(fmt.Sprintf("%s invocation result output_json is required", profile), nil)
 	}
 	var output map[string]any
 	if err := json.Unmarshal(result.OutputJSON, &output); err != nil {
-		return nil, invalidRuntimePayload("receipt invocation result output_json must be an object", err)
+		return nil, invalidRuntimePayload(fmt.Sprintf("%s invocation result output_json must be an object", profile), err)
 	}
 	return json.Marshal(output)
 }
