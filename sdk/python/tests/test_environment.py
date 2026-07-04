@@ -43,8 +43,13 @@ from easynet_sdk import (
     WrapperRemoteDesktopStartRequest,
     WrapperTerminalSessionRequest,
     WrapperTerminalStartRequest,
+    canonical_ability_descriptor_ref,
     default_environment,
     is_code,
+    owner_ability_descriptor_ref,
+    owner_ability_ura,
+    owner_ura_for_ability,
+    parse_ura,
 )
 from easynet_sdk._cabi import CLILibrary
 
@@ -174,6 +179,61 @@ class SdkEnvironmentTests(unittest.TestCase):
             ["build_ura", "project_ura", "build_descriptor_ref"],
         )
         self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_package_addressing_helpers_use_default_cabi_facade(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            parsed = parse_ura(
+                "easynet:///r/example/ability/device.dev-a.observe.health",
+                control_path="/tmp/control.json",
+            )
+            ability = owner_ability_ura(
+                "easynet:///r/example/device/dev-a",
+                "observe.health",
+                control_path="/tmp/control.json",
+            )
+            owner = owner_ura_for_ability(
+                ability,
+                control_path="/tmp/control.json",
+            )
+            descriptor = canonical_ability_descriptor_ref(
+                ability,
+                "1.0.0",
+                control_path="/tmp/control.json",
+            )
+            owner_descriptor = owner_ability_descriptor_ref(
+                "easynet:///r/example/device/dev-a",
+                "observe.health",
+                "1.0.0",
+                control_path="/tmp/control.json",
+            )
+
+        self.assertEqual(parsed.kind, "ability")
+        self.assertEqual(
+            ability,
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(owner, "easynet:///r/example/device/dev-a")
+        self.assertEqual(
+            descriptor,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(owner_descriptor, descriptor)
+        self.assertEqual(raw.init_paths, ["/tmp/control.json"] * 5)
+        self.assertEqual(raw.shutdown_handles, [42] * 5)
+        self.assertEqual(
+            [entry[0] for entry in raw.identity_requests],
+            [
+                "project_ura",
+                "build_ura",
+                "project_ura",
+                "project_ura",
+                "build_descriptor_ref",
+                "build_ura",
+                "project_ura",
+                "build_descriptor_ref",
+            ],
+        )
 
     def test_runtime_and_health_clients_are_environment_owned(self) -> None:
         raw = FakeRawCABI()

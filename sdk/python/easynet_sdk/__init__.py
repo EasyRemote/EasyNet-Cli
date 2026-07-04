@@ -163,6 +163,11 @@ from .identity import (
     SigningKeyRegistrationRequest,
     SigningKeyRevokeRequest,
     SigningKeyRevokeResult,
+    canonical_ability_descriptor_ref,
+    owner_ability_descriptor_ref,
+    owner_ability_ura,
+    owner_ura_for_ability,
+    parse_ura,
 )
 from .host_binding import (
     HOST_STREAM_FRAME_SCHEMA,
@@ -572,9 +577,14 @@ __all__ = [
     "WrapperTerminalStartRequest",
     "WrapperTransport",
     "attach_daemon",
+    "canonical_ability_descriptor_ref",
     "connect_local",
     "default_environment",
     "discover_daemon",
     "is_code",
+    "owner_ability_descriptor_ref",
+    "owner_ability_ura",
+    "owner_ura_for_ability",
+    "parse_ura",
     "start_daemon",
 ]

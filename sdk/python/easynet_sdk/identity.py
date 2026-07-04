@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Protocol, runtime_checkable
+from typing import Callable, Mapping, Optional, Protocol, TypeVar, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from ._lifecycle import ClientLifecycle
 
 DEFAULT_SIGNING_KEY_PAGE_SIZE = 50
 MAX_SIGNING_KEY_PAGE_SIZE = 500
+
+_TAddressingResult = TypeVar("_TAddressingResult")
 
 
 @dataclass(frozen=True)
@@ -636,6 +638,114 @@ class IdentityClient:
 
     def _require_open(self) -> None:
         self._lifecycle.require_open()
+
+
+def parse_ura(
+    ura: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> IdentityProjection:
+    """Project a URA through the default Axon-delegated SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.parse_ura(ura),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def owner_ability_ura(
+    owner_ura: str,
+    ability_name: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical Ability URA through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.owner_ability_ura(owner_ura, ability_name),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def owner_ura_for_ability(
+    ability_ura: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Project the owner URA for a canonical Ability URA."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.owner_ura_for_ability(ability_ura),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def owner_ability_descriptor_ref(
+    owner_ura: str,
+    ability_name: str,
+    descriptor_version: str = "1.0.0",
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a canonical AbilityDescriptorRef through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.owner_ability_descriptor_ref(
+            owner_ura,
+            ability_name,
+            descriptor_version,
+        ),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def canonical_ability_descriptor_ref(
+    value: str,
+    descriptor_version: str = "",
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Canonicalize or build an AbilityDescriptorRef through the SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.canonical_ability_descriptor_ref(
+            value,
+            descriptor_version,
+        ),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def _with_default_addressing(
+    callback: Callable[[AddressingClient], _TAddressingResult],
+    *,
+    library_path: str | None,
+    control_path: str,
+) -> _TAddressingResult:
+    from .environment import default_environment
+
+    env = default_environment(library_path=library_path, control_path=control_path)
+    try:
+        result = callback(env.addressing_client())
+    except BaseException:
+        try:
+            env.close()
+        except Exception:
+            pass
+        raise
+    else:
+        env.close()
+        return result
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

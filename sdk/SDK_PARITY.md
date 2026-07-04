@@ -177,7 +177,7 @@ method spelling.
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
   stream, and bidi facade over RuntimeClient/C ABI v4;
-  `SdkEnvironment.addressing_client()` for the
+  `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   EasyRemote-style descriptor-ref cutover tests; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,

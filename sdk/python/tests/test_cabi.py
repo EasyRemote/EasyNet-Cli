@@ -62,6 +62,7 @@ class FakeRawCABI:
     def __init__(self) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
         self.last_error_json = b"null"
+        self.init_paths: list[str] = []
         self.shutdown_handles: list[int] = []
         self.identity_requests: list[tuple[str, object]] = []
         self.runtime_requests: list[tuple[str, object]] = []
@@ -205,6 +206,12 @@ class FakeRawCABI:
         )
 
     def _init(self, control_path, out_handle) -> int:
+        if control_path is None:
+            self.init_paths.append("")
+        elif isinstance(control_path, bytes):
+            self.init_paths.append(control_path.decode("utf-8"))
+        else:
+            self.init_paths.append(control_path.value.decode("utf-8"))
         out_handle._obj.value = 42
         return 0
 
