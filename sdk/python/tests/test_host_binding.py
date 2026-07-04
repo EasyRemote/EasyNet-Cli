@@ -8,9 +8,12 @@ from easynet_sdk.host_binding import (
     HOST_STREAM_EMPTY_OUTPUT_HASH,
     HostBindingClient,
     HostStreamBindingRequest,
+    HostStreamCleanup,
     HostStreamEnvelope,
     HostStreamEnvelopeRequest,
     HostStreamHashState,
+    HostStreamLifecycle,
+    HostStreamReadiness,
     HostStreamSessionState,
     HostStreamTerminalSummary,
 )
@@ -155,6 +158,11 @@ class HostBindingTests(unittest.TestCase):
             )
         )
         self.assertEqual(binding.frame_schema, HOST_STREAM_FRAME_SCHEMA)
+        self.assertIsInstance(binding.cleanup, HostStreamCleanup)
+        self.assertIsInstance(binding.readiness, HostStreamReadiness)
+        self.assertIsInstance(binding.lifecycle, HostStreamLifecycle)
+        self.assertEqual(binding.cleanup.mode, "unlink_socket")
+        self.assertEqual(binding.readiness.state, "declared")
         self.assertEqual(binding.lifecycle["frame_contract_owner"], "daemon_sdk")
 
         request = client.decode_request(
@@ -191,6 +199,38 @@ class HostBindingTests(unittest.TestCase):
                     frame_schema="other.schema.json",
                 )
             )
+
+    def test_binding_request_accepts_typed_lifecycle_dtos(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+
+        client.build_host_stream_binding(
+            HostStreamBindingRequest(
+                binding_id="binding-weather-1",
+                descriptor_ref="easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+                endpoint="/tmp/easynet-weather.sock",
+                cleanup=HostStreamCleanup(mode="unlink_socket"),
+                readiness=HostStreamReadiness(
+                    state="declared",
+                    checked=False,
+                    endpoint_ready=None,
+                    metadata={"probe": "socket_exists"},
+                ),
+                timeout_ms=30000,
+            )
+        )
+
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["cleanup"], {"mode": "unlink_socket"})
+        self.assertEqual(
+            transport.seen_request["readiness"],
+            {
+                "checked": False,
+                "endpoint_ready": None,
+                "probe": "socket_exists",
+                "state": "declared",
+            },
+        )
 
     def test_encodes_frame_variants(self) -> None:
         client = HostBindingClient(MemoryHostBindingTransport())

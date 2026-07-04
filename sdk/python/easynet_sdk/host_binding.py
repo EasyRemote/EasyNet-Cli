@@ -27,6 +27,108 @@ class HostStreamSessionState(StrEnum):
 
 
 @dataclass(frozen=True)
+class HostStreamCleanup:
+    """Host cleanup contract declared to the daemon."""
+
+    mode: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> "HostStreamCleanup":
+        return cls(
+            mode=_optional_string(value.get("mode"), "mode") or "",
+            metadata=_mapping_extra(value, {"mode"}),
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        value = dict(self.metadata)
+        if self.mode:
+            value["mode"] = self.mode
+        return value
+
+    def __getitem__(self, key: str) -> object:
+        return self.to_json_dict()[key]
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.to_json_dict().get(key, default)
+
+
+@dataclass(frozen=True)
+class HostStreamReadiness:
+    """Host endpoint readiness facts supplied by daemon or product host."""
+
+    state: str = ""
+    checked: bool = False
+    endpoint_ready: Optional[bool] = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> "HostStreamReadiness":
+        return cls(
+            state=_optional_string(value.get("state"), "state") or "",
+            checked=_optional_bool(value.get("checked"), "checked") or False,
+            endpoint_ready=_optional_bool(value.get("endpoint_ready"), "endpoint_ready"),
+            metadata=_mapping_extra(value, {"state", "checked", "endpoint_ready"}),
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        value = dict(self.metadata)
+        if self.state:
+            value["state"] = self.state
+        value["checked"] = self.checked
+        value["endpoint_ready"] = self.endpoint_ready
+        return value
+
+    def __getitem__(self, key: str) -> object:
+        return self.to_json_dict()[key]
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.to_json_dict().get(key, default)
+
+
+@dataclass(frozen=True)
+class HostStreamLifecycle:
+    """Ownership contract for host endpoint, process, and frame semantics."""
+
+    endpoint_owner: str = ""
+    process_owner: str = ""
+    frame_contract_owner: str = ""
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> "HostStreamLifecycle":
+        return cls(
+            endpoint_owner=_optional_string(value.get("endpoint_owner"), "endpoint_owner")
+            or "",
+            process_owner=_optional_string(value.get("process_owner"), "process_owner")
+            or "",
+            frame_contract_owner=_optional_string(
+                value.get("frame_contract_owner"), "frame_contract_owner"
+            )
+            or "",
+            metadata=_mapping_extra(
+                value, {"endpoint_owner", "process_owner", "frame_contract_owner"}
+            ),
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        value = dict(self.metadata)
+        if self.endpoint_owner:
+            value["endpoint_owner"] = self.endpoint_owner
+        if self.process_owner:
+            value["process_owner"] = self.process_owner
+        if self.frame_contract_owner:
+            value["frame_contract_owner"] = self.frame_contract_owner
+        return value
+
+    def __getitem__(self, key: str) -> object:
+        return self.to_json_dict()[key]
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.to_json_dict().get(key, default)
+
+
+@dataclass(frozen=True)
 class HostStreamBindingRequest:
     """Declare a daemon-to-host execution binding."""
 
@@ -34,9 +136,9 @@ class HostStreamBindingRequest:
     descriptor_ref: str
     endpoint: str
     frame_schema: str = HOST_STREAM_FRAME_SCHEMA
-    cleanup: Optional[Mapping[str, object]] = None
+    cleanup: Optional[Mapping[str, object] | HostStreamCleanup] = None
     timeout_ms: Optional[int] = None
-    readiness: Optional[Mapping[str, object]] = None
+    readiness: Optional[Mapping[str, object] | HostStreamReadiness] = None
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def to_json_bytes(self) -> bytes:
@@ -48,11 +150,11 @@ class HostStreamBindingRequest:
             "frame_schema": self.frame_schema,
         }
         if self.cleanup is not None:
-            value["cleanup"] = dict(self.cleanup)
+            value["cleanup"] = _cleanup_dict(self.cleanup)
         if self.timeout_ms is not None:
             value["timeout_ms"] = self.timeout_ms
         if self.readiness is not None:
-            value["readiness"] = dict(self.readiness)
+            value["readiness"] = _readiness_dict(self.readiness)
         if self.metadata:
             value["metadata"] = dict(self.metadata)
         return _json_bytes(value)
@@ -66,10 +168,10 @@ class HostStreamBinding:
     descriptor_ref: str
     endpoint: str
     frame_schema: str
-    cleanup: Mapping[str, object]
+    cleanup: HostStreamCleanup
     timeout_ms: Optional[int]
-    readiness: Mapping[str, object]
-    lifecycle: Mapping[str, object]
+    readiness: HostStreamReadiness
+    lifecycle: HostStreamLifecycle
     metadata: Mapping[str, object]
 
     @classmethod
@@ -80,10 +182,14 @@ class HostStreamBinding:
             descriptor_ref=_required_string(decoded, "descriptor_ref"),
             endpoint=_required_string(decoded, "endpoint"),
             frame_schema=_required_string(decoded, "frame_schema"),
-            cleanup=_required_mapping(decoded, "cleanup"),
+            cleanup=HostStreamCleanup.from_mapping(_required_mapping(decoded, "cleanup")),
             timeout_ms=_optional_int(decoded.get("timeout_ms"), "timeout_ms"),
-            readiness=_required_mapping(decoded, "readiness"),
-            lifecycle=_required_mapping(decoded, "lifecycle"),
+            readiness=HostStreamReadiness.from_mapping(
+                _required_mapping(decoded, "readiness")
+            ),
+            lifecycle=HostStreamLifecycle.from_mapping(
+                _required_mapping(decoded, "lifecycle")
+            ),
             metadata=_required_mapping(decoded, "metadata"),
         )
         if binding.frame_schema != HOST_STREAM_FRAME_SCHEMA:
@@ -576,6 +682,30 @@ def _validate_hash_state_consistency(frames: int, last_seq: Optional[int]) -> No
         )
 
 
+def _cleanup_dict(value: Mapping[str, object] | HostStreamCleanup) -> dict[str, object]:
+    if isinstance(value, HostStreamCleanup):
+        return value.to_json_dict()
+    if not isinstance(value, dict):
+        raise _invalid_host_binding("cleanup must be an object")
+    return HostStreamCleanup.from_mapping(value).to_json_dict()
+
+
+def _readiness_dict(
+    value: Mapping[str, object] | HostStreamReadiness,
+) -> dict[str, object]:
+    if isinstance(value, HostStreamReadiness):
+        return value.to_json_dict()
+    if not isinstance(value, dict):
+        raise _invalid_host_binding("readiness must be an object")
+    return HostStreamReadiness.from_mapping(value).to_json_dict()
+
+
+def _mapping_extra(
+    value: Mapping[str, object], known_keys: set[str]
+) -> Mapping[str, object]:
+    return {key: item for key, item in value.items() if key not in known_keys}
+
+
 def _optional_terminal(value: object, field_name: str) -> Optional[HostStreamTerminalSummary]:
     if value is None:
         return None
@@ -656,6 +786,14 @@ def _optional_int(value: object, field_name: str) -> Optional[int]:
         raise _invalid_host_binding(f"{field_name} must be an integer or null")
     if value < 0:
         raise _invalid_host_binding(f"{field_name} must be non-negative")
+    return value
+
+
+def _optional_bool(value: object, field_name: str) -> Optional[bool]:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise _invalid_host_binding(f"{field_name} must be a boolean or null")
     return value
 
 
