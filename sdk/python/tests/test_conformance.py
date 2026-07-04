@@ -59,6 +59,15 @@ from easynet_sdk import (
     RuntimeHealth,
     RetryHint,
     SDKError,
+    MAX_SURFACE_PAGE_SIZE,
+    SurfaceCarrierBase,
+    SurfaceClient,
+    SurfaceCreatePageRequest,
+    SurfaceDeletePageRequest,
+    SurfaceListPagesRequest,
+    SurfaceManifest,
+    SurfaceManifestRequest,
+    SurfacePagePage,
     WrapperBrowserSessionRecord,
     WrapperFileRecord,
     WrapperFileRecordRequest,
@@ -668,6 +677,93 @@ class SharedEventsTransport:
     def project_terminal(self, terminal_json: bytes) -> bytes:
         assert_json_equivalent(terminal_json, self.expected_terminal_input)
         return self.terminal_json
+
+    def close(self) -> None:
+        return None
+
+
+class SharedSurfaceTransport:
+    def __init__(self) -> None:
+        self.expected_list_request = shared_fixture("surface-list-pages-request.v4.json")
+        self.expected_create_request = shared_fixture("surface-create-page-request.v4.json")
+        self.expected_delete_request = shared_fixture("surface-delete-page-request.v4.json")
+        self.expected_manifest_request = shared_fixture("surface-manifest-request.v4.json")
+        self.list_invocation_json = shared_fixture("surface-list-pages-invocation.v4.json")
+        self.create_invocation_json = shared_fixture(
+            "surface-create-page-invocation.v4.json"
+        )
+        self.delete_invocation_json = shared_fixture(
+            "surface-delete-page-invocation.v4.json"
+        )
+        self.manifest_invocation_json = shared_fixture(
+            "surface-manifest-invocation.v4.json"
+        )
+        self.page_page_json = shared_fixture("surface-page-page.v4.json")
+        self.manifest_json = shared_fixture("surface-manifest.v4.json")
+
+    def build_list_pages_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_list_request)
+        return self.list_invocation_json
+
+    def build_create_page_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_create_request)
+        return self.create_invocation_json
+
+    def build_delete_page_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_delete_request)
+        return self.delete_invocation_json
+
+    def build_manifest_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_manifest_request)
+        return self.manifest_invocation_json
+
+    def build_health_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared surface conformance fixture test",
+        )
+
+    def list_pages(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_list_request)
+        return self.page_page_json
+
+    def create_page(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared surface conformance fixture test",
+        )
+
+    def delete_page(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared surface conformance fixture test",
+        )
+
+    def surface_manifest(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_manifest_request)
+        return self.manifest_json
+
+    def public_page_ref(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared surface conformance fixture test",
+        )
+
+    def surface_health(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared surface conformance fixture test",
+        )
 
     def close(self) -> None:
         return None
@@ -1487,6 +1583,126 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             EventFrame.from_json(shared_events_terminal_without_terminal_flag())
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_surface_executes_shared_page_carrier_conformance_case(self) -> None:
+        surface_case = shared_case("surface-page-carriers.yaml")
+        self._require_case_id(surface_case, "surface/page_carriers")
+        for action in (
+            "build_surface_list_pages_invocation",
+            "build_surface_create_page_invocation",
+            "build_surface_delete_page_invocation",
+            "build_surface_manifest_invocation",
+            "project_surface_page_page",
+            "project_surface_manifest",
+        ):
+            self._require_case_action(surface_case, action)
+        for fixture in (
+            "surface-list-pages-request.v4.json",
+            "surface-create-page-request.v4.json",
+            "surface-delete-page-request.v4.json",
+            "surface-manifest-request.v4.json",
+            "surface-page-page.v4.json",
+            "surface-manifest.v4.json",
+        ):
+            self._require_case_fixture(surface_case, fixture)
+        for ability in ("pages.list", "pages.publish", "pages.get", "pages.unpublish"):
+            self._require_case_literal(surface_case, f"- {ability}")
+        self._require_case_expectation(
+            surface_case, "backend_rendering_owned_by_sdk: false"
+        )
+        self._require_case_expectation(
+            surface_case, "direct_filesystem_page_transport: false"
+        )
+
+        surface = SurfaceClient(SharedSurfaceTransport())
+
+        list_draft = surface.build_list_pages_invocation(
+            shared_surface_list_pages_request()
+        )
+        self.assertEqual(
+            list_draft.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.list@1.0.0",
+        )
+        self.assertEqual(list_draft.metadata["system_ability"], "pages.list")
+
+        create_draft = surface.build_create_page_invocation(
+            shared_surface_create_page_request()
+        )
+        self.assertEqual(
+            create_draft.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0",
+        )
+        self.assertEqual(create_draft.metadata["system_ability"], "pages.publish")
+
+        delete_draft = surface.build_delete_page_invocation(
+            shared_surface_delete_page_request()
+        )
+        self.assertEqual(
+            delete_draft.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0",
+        )
+        self.assertEqual(delete_draft.metadata["system_ability"], "pages.unpublish")
+
+        manifest_draft = surface.build_manifest_invocation(
+            shared_surface_manifest_request()
+        )
+        self.assertEqual(
+            manifest_draft.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.get@1.0.0",
+        )
+        self.assertEqual(manifest_draft.metadata["system_ability"], "pages.get")
+
+        page = surface.list_pages(shared_surface_list_pages_request())
+        self.assertEqual(page.kind, "surface_page_page")
+        self.assertEqual(page.source, "pages_read_model")
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(
+            page.items[0].surface_ref, "easynet:///r/example/resource/alice.docs"
+        )
+
+        manifest = surface.surface_manifest(shared_surface_manifest_request())
+        self.assertEqual(manifest.kind, "surface_manifest")
+        self.assertEqual(manifest.page.page_id, "docs")
+        self.assertEqual(manifest.entrypoint["kind"], "public_page_ref")
+
+        create_request = shared_surface_create_page_request()
+        with self.assertRaises(SDKError) as caught:
+            surface.build_create_page_invocation(
+                SurfaceCreatePageRequest(
+                    base=SurfaceCarrierBase(
+                        caller_ura="",
+                        callee_ura=create_request.base.callee_ura,
+                        subject_ura=create_request.base.subject_ura,
+                        descriptor_version=create_request.base.descriptor_version,
+                        nonce_base64=create_request.base.nonce_base64,
+                        causal_context=create_request.base.causal_context,
+                        metadata=create_request.base.metadata,
+                    ),
+                    project_id=create_request.project_id,
+                    folder=create_request.folder,
+                    visibility=create_request.visibility,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            surface.build_create_page_invocation(
+                SurfaceCreatePageRequest(
+                    base=create_request.base,
+                    project_id=create_request.project_id,
+                    folder="tmp/easynet-pages-docs",
+                    visibility=create_request.visibility,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            SurfacePagePage.from_json(shared_surface_page_page_with_oversized_limit())
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            SurfaceManifest.from_json(shared_surface_manifest_without_entrypoint())
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -1871,6 +2087,66 @@ def shared_events_frame(fixture: str) -> dict[str, object]:
 def shared_events_cursor_from_frame(frame: dict[str, object]) -> EventCursor:
     cursor = frame["cursor"]
     return EventCursor(cursor["stream"], cursor["sequence"])
+
+
+def shared_surface_carrier_base(fixture: str) -> SurfaceCarrierBase:
+    decoded = json.loads(shared_fixture(fixture))
+    return SurfaceCarrierBase(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_surface_list_pages_request() -> SurfaceListPagesRequest:
+    decoded = json.loads(shared_fixture("surface-list-pages-request.v4.json"))
+    return SurfaceListPagesRequest(
+        base=shared_surface_carrier_base("surface-list-pages-request.v4.json"),
+        limit=decoded.get("limit", 0),
+        cursor=decoded.get("cursor", ""),
+    )
+
+
+def shared_surface_create_page_request() -> SurfaceCreatePageRequest:
+    decoded = json.loads(shared_fixture("surface-create-page-request.v4.json"))
+    return SurfaceCreatePageRequest(
+        base=shared_surface_carrier_base("surface-create-page-request.v4.json"),
+        project_id=decoded["project_id"],
+        folder=decoded["folder"],
+        visibility=decoded.get("visibility", ""),
+    )
+
+
+def shared_surface_delete_page_request() -> SurfaceDeletePageRequest:
+    decoded = json.loads(shared_fixture("surface-delete-page-request.v4.json"))
+    return SurfaceDeletePageRequest(
+        base=shared_surface_carrier_base("surface-delete-page-request.v4.json"),
+        project_id=decoded["project_id"],
+    )
+
+
+def shared_surface_manifest_request() -> SurfaceManifestRequest:
+    decoded = json.loads(shared_fixture("surface-manifest-request.v4.json"))
+    return SurfaceManifestRequest(
+        base=shared_surface_carrier_base("surface-manifest-request.v4.json"),
+        project_id=decoded["project_id"],
+    )
+
+
+def shared_surface_page_page_with_oversized_limit() -> bytes:
+    page = json.loads(shared_fixture("surface-page-page.v4.json"))
+    page["limit"] = MAX_SURFACE_PAGE_SIZE + 1
+    return json.dumps(page, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_surface_manifest_without_entrypoint() -> bytes:
+    manifest = json.loads(shared_fixture("surface-manifest.v4.json"))
+    del manifest["entrypoint"]
+    return json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def shared_ability_query() -> AbilityQuery:

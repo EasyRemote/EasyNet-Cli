@@ -802,6 +802,125 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 	}
 }
 
+func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	surfaceCase := sharedCase(t, root, "surface-page-carriers.yaml")
+	requireCaseID(t, surfaceCase, "surface/page_carriers")
+	for _, action := range []string{
+		"build_surface_list_pages_invocation",
+		"build_surface_create_page_invocation",
+		"build_surface_delete_page_invocation",
+		"build_surface_manifest_invocation",
+		"project_surface_page_page",
+		"project_surface_manifest",
+	} {
+		requireCaseAction(t, surfaceCase, action)
+	}
+	for _, fixture := range []string{
+		"surface-list-pages-request.v4.json",
+		"surface-create-page-request.v4.json",
+		"surface-delete-page-request.v4.json",
+		"surface-manifest-request.v4.json",
+		"surface-page-page.v4.json",
+		"surface-manifest.v4.json",
+	} {
+		requireCaseFixture(t, surfaceCase, fixture)
+	}
+	for _, ability := range []string{"pages.list", "pages.publish", "pages.get", "pages.unpublish"} {
+		requireCaseLiteral(t, surfaceCase, "- "+ability)
+	}
+	requireCaseExpectation(t, surfaceCase, "backend_rendering_owned_by_sdk: false")
+	requireCaseExpectation(t, surfaceCase, "direct_filesystem_page_transport: false")
+
+	surface, err := NewSurfaceClient(&sharedSurfaceTransport{
+		t:                       t,
+		expectedListRequest:     sharedFixture(t, root, "surface-list-pages-request.v4.json"),
+		expectedCreateRequest:   sharedFixture(t, root, "surface-create-page-request.v4.json"),
+		expectedDeleteRequest:   sharedFixture(t, root, "surface-delete-page-request.v4.json"),
+		expectedManifestRequest: sharedFixture(t, root, "surface-manifest-request.v4.json"),
+		listInvocationJSON:      sharedFixture(t, root, "surface-list-pages-invocation.v4.json"),
+		createInvocationJSON:    sharedFixture(t, root, "surface-create-page-invocation.v4.json"),
+		deleteInvocationJSON:    sharedFixture(t, root, "surface-delete-page-invocation.v4.json"),
+		manifestInvocationJSON:  sharedFixture(t, root, "surface-manifest-invocation.v4.json"),
+		pagePageJSON:            sharedFixture(t, root, "surface-page-page.v4.json"),
+		manifestJSON:            sharedFixture(t, root, "surface-manifest.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewSurfaceClient: %v", err)
+	}
+
+	list, err := surface.BuildListPagesInvocation(context.Background(), sharedSurfaceListPagesRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildListPagesInvocation(shared fixture): %v", err)
+	}
+	if list.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.list@1.0.0" ||
+		list.Metadata()["system_ability"] != "pages.list" {
+		t.Fatalf("unexpected shared surface list invocation: %#v", list)
+	}
+
+	create, err := surface.BuildCreatePageInvocation(context.Background(), sharedSurfaceCreatePageRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildCreatePageInvocation(shared fixture): %v", err)
+	}
+	if create.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0" ||
+		create.Metadata()["system_ability"] != "pages.publish" {
+		t.Fatalf("unexpected shared surface create invocation: %#v", create)
+	}
+
+	del, err := surface.BuildDeletePageInvocation(context.Background(), sharedSurfaceDeletePageRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildDeletePageInvocation(shared fixture): %v", err)
+	}
+	if del.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0" ||
+		del.Metadata()["system_ability"] != "pages.unpublish" {
+		t.Fatalf("unexpected shared surface delete invocation: %#v", del)
+	}
+
+	manifestDraft, err := surface.BuildManifestInvocation(context.Background(), sharedSurfaceManifestRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildManifestInvocation(shared fixture): %v", err)
+	}
+	if manifestDraft.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.get@1.0.0" ||
+		manifestDraft.Metadata()["system_ability"] != "pages.get" {
+		t.Fatalf("unexpected shared surface manifest invocation: %#v", manifestDraft)
+	}
+
+	page, err := surface.ListPages(context.Background(), sharedSurfaceListPagesRequest(t, root))
+	if err != nil {
+		t.Fatalf("ListPages(shared fixture): %v", err)
+	}
+	if page.Kind != "surface_page_page" || page.Source != "pages_read_model" ||
+		len(page.Items) != 1 || page.Items[0].SurfaceRef != "easynet:///r/example/resource/alice.docs" {
+		t.Fatalf("unexpected shared surface page page: %#v", page)
+	}
+
+	manifest, err := surface.SurfaceManifest(context.Background(), sharedSurfaceManifestRequest(t, root))
+	if err != nil {
+		t.Fatalf("SurfaceManifest(shared fixture): %v", err)
+	}
+	if manifest.Kind != "surface_manifest" || manifest.Page.PageID != "docs" ||
+		manifest.Entrypoint["kind"] != "public_page_ref" {
+		t.Fatalf("unexpected shared surface manifest: %#v", manifest)
+	}
+
+	incomplete := sharedSurfaceCreatePageRequest(t, root)
+	incomplete.CallerURA = ""
+	if _, err := surface.BuildCreatePageInvocation(context.Background(), incomplete); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete surface carrier did not produce InvalidArgument: %v", err)
+	}
+	relativeFolder := sharedSurfaceCreatePageRequest(t, root)
+	relativeFolder.Folder = "tmp/easynet-pages-docs"
+	if _, err := surface.BuildCreatePageInvocation(context.Background(), relativeFolder); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("relative surface folder did not produce InvalidArgument: %v", err)
+	}
+	if _, err := NewSurfacePagePageFromJSON(sharedSurfacePagePageWithOversizedLimit(t, root)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("oversized surface page projection did not produce InvalidArgument: %v", err)
+	}
+	if _, err := NewSurfaceManifestFromJSON(sharedSurfaceManifestWithoutEntrypoint(t, root)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("surface manifest without entrypoint did not produce InvalidArgument: %v", err)
+	}
+}
+
 func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
@@ -1113,6 +1232,70 @@ func (t *sharedEventsTransport) ProjectDropReport(_ context.Context, dropJSON []
 func (t *sharedEventsTransport) ProjectTerminal(_ context.Context, terminalJSON []byte) ([]byte, error) {
 	assertJSONEquivalent(t.t, terminalJSON, t.expectedTerminalInput)
 	return t.terminalJSON, nil
+}
+
+type sharedSurfaceTransport struct {
+	t                       *testing.T
+	expectedListRequest     []byte
+	expectedCreateRequest   []byte
+	expectedDeleteRequest   []byte
+	expectedManifestRequest []byte
+	listInvocationJSON      []byte
+	createInvocationJSON    []byte
+	deleteInvocationJSON    []byte
+	manifestInvocationJSON  []byte
+	pagePageJSON            []byte
+	manifestJSON            []byte
+}
+
+func (t *sharedSurfaceTransport) BuildListPagesInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedListRequest)
+	return t.listInvocationJSON, nil
+}
+
+func (t *sharedSurfaceTransport) BuildCreatePageInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedCreateRequest)
+	return t.createInvocationJSON, nil
+}
+
+func (t *sharedSurfaceTransport) BuildDeletePageInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDeleteRequest)
+	return t.deleteInvocationJSON, nil
+}
+
+func (t *sharedSurfaceTransport) BuildManifestInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedManifestRequest)
+	return t.manifestInvocationJSON, nil
+}
+
+func (t *sharedSurfaceTransport) BuildHealthInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedSurfaceTransport) ListPages(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedListRequest)
+	return t.pagePageJSON, nil
+}
+
+func (t *sharedSurfaceTransport) CreatePage(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedSurfaceTransport) DeletePage(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedSurfaceTransport) SurfaceManifest(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedManifestRequest)
+	return t.manifestJSON, nil
+}
+
+func (t *sharedSurfaceTransport) PublicPageRef(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedSurfaceTransport) SurfaceHealth(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
 type sharedPublicationTransport struct {
@@ -1712,6 +1895,70 @@ func sharedEventsOptionalInt(value any) *int {
 	}
 	converted := int(value.(float64))
 	return &converted
+}
+
+func sharedSurfaceListPagesRequest(t *testing.T, root string) SurfaceListPagesRequest {
+	t.Helper()
+	var request SurfaceListPagesRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-list-pages-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared surface list-pages request: %v", err)
+	}
+	return request
+}
+
+func sharedSurfaceCreatePageRequest(t *testing.T, root string) SurfaceCreatePageRequest {
+	t.Helper()
+	var request SurfaceCreatePageRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-create-page-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared surface create-page request: %v", err)
+	}
+	return request
+}
+
+func sharedSurfaceDeletePageRequest(t *testing.T, root string) SurfaceDeletePageRequest {
+	t.Helper()
+	var request SurfaceDeletePageRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-delete-page-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared surface delete-page request: %v", err)
+	}
+	return request
+}
+
+func sharedSurfaceManifestRequest(t *testing.T, root string) SurfaceManifestRequest {
+	t.Helper()
+	var request SurfaceManifestRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-manifest-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared surface manifest request: %v", err)
+	}
+	return request
+}
+
+func sharedSurfacePagePageWithOversizedLimit(t *testing.T, root string) []byte {
+	t.Helper()
+	page := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-page-page.v4.json"), &page); err != nil {
+		t.Fatalf("decode shared surface page page: %v", err)
+	}
+	page["limit"] = float64(MaxSurfacePageSize + 1)
+	raw, err := json.Marshal(page)
+	if err != nil {
+		t.Fatalf("encode oversized surface page page: %v", err)
+	}
+	return raw
+}
+
+func sharedSurfaceManifestWithoutEntrypoint(t *testing.T, root string) []byte {
+	t.Helper()
+	manifest := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-manifest.v4.json"), &manifest); err != nil {
+		t.Fatalf("decode shared surface manifest: %v", err)
+	}
+	delete(manifest, "entrypoint")
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode surface manifest without entrypoint: %v", err)
+	}
+	return raw
 }
 
 func sharedDeviceQuery(t *testing.T, root string) DeviceQuery {
