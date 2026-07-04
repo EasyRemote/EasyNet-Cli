@@ -337,6 +337,7 @@ case_files=(
   invocation-local-daemon-signing-boundary.yaml
   invocation-descriptor-ref-helper-delegation.yaml
   error-typed-json.yaml
+  error-profile-source-refs.yaml
   identity-ura-descriptor-projection.yaml
   receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml

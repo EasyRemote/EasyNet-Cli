@@ -1,0 +1,22 @@
+id: error/profile_source_refs
+profile: errors
+required_for:
+  - go
+  - python
+description: Profile-originated SDK errors expose stable profile and source_ref details without changing typed error schema fields.
+steps:
+  - action: trigger_profile_validation_error
+    profile: publication
+    method: build_local_resource_ref
+  - action: inspect_error_details
+    required_detail: profile
+  - action: inspect_error_details
+    required_detail: source_ref
+expect:
+  result: profile_error_source_ref_observed
+  error_code: INVALID_ARGUMENT
+  profile: publication
+  python_source_ref: python_sdk.profile.publication
+  go_source_ref: go_sdk.profile.publication
+  top_level_schema_change: false
+  existing_details_preserved: true

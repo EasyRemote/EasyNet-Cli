@@ -168,6 +168,35 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	if timeout.Code != ErrTimeout || timeout.Retry != RetrySafe || !timeout.Retryable {
 		t.Fatalf("unexpected shared timeout error: %#v", timeout)
 	}
+
+	profileErrorCase := sharedCase(t, root, "error-profile-source-refs.yaml")
+	requireCaseID(t, profileErrorCase, "error/profile_source_refs")
+	requireCaseAction(t, profileErrorCase, "trigger_profile_validation_error")
+	requireCaseAction(t, profileErrorCase, "inspect_error_details")
+	requireCaseExpectation(t, profileErrorCase, "profile: publication")
+	requireCaseExpectation(t, profileErrorCase, "go_source_ref: go_sdk.profile.publication")
+	requireCaseExpectation(t, profileErrorCase, "top_level_schema_change: false")
+
+	publication, err := NewPublicationClient(&sharedPublicationTransport{
+		resourceJSON: sharedFixture(t, root, "resource-ref.local-fs.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublicationClient(profile error case): %v", err)
+	}
+	_, err = publication.BuildLocalResourceRef(context.Background(), LocalResourceRefRequest{
+		Path:       "tmp/easynet-weather-package",
+		Capability: "read",
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("shared profile validation error = %v, want %s", err, ErrInvalidArgument)
+	}
+	details := sdkErrorDetails(t, err)
+	if details["profile"] != publicationProfile {
+		t.Fatalf("profile detail = %#v, want %s", details["profile"], publicationProfile)
+	}
+	if details["source_ref"] != "go_sdk.profile.publication" {
+		t.Fatalf("source_ref detail = %#v", details["source_ref"])
+	}
 }
 
 func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing.T) {

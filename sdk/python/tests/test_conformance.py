@@ -1266,6 +1266,32 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(timeout.retry, RetryHint.SAFE)
         self.assertTrue(timeout.retryable)
 
+        profile_error_case = shared_case("error-profile-source-refs.yaml")
+        self._require_case_id(profile_error_case, "error/profile_source_refs")
+        self._require_case_action(
+            profile_error_case, "trigger_profile_validation_error"
+        )
+        self._require_case_action(profile_error_case, "inspect_error_details")
+        self._require_case_expectation(profile_error_case, "profile: publication")
+        self._require_case_expectation(
+            profile_error_case, "python_source_ref: python_sdk.profile.publication"
+        )
+        self._require_case_expectation(
+            profile_error_case, "top_level_schema_change: false"
+        )
+
+        publication = PublicationClient(SharedPublicationTransport())
+        with self.assertRaises(SDKError) as profile_caught:
+            publication.build_local_resource_ref(
+                LocalResourceRefRequest("tmp/easynet-weather-package", "read")
+            )
+        self.assertEqual(profile_caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertEqual(profile_caught.exception.details["profile"], "publication")
+        self.assertEqual(
+            profile_caught.exception.details["source_ref"],
+            "python_sdk.profile.publication",
+        )
+
     def test_python_runtime_core_executes_shared_invocation_signing_conformance_cases(self) -> None:
         builder_case = shared_case("invocation-builder-handle-state.yaml")
         self._require_case_id(builder_case, "invocation/builder_handle_state")
