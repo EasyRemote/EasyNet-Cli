@@ -12,6 +12,9 @@ from .errors import ErrorCode, RetryHint, SDKError
 
 HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json"
 HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value))"
+HOST_STREAM_EMPTY_OUTPUT_HASH = (
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+)
 
 
 @dataclass(frozen=True)
@@ -203,6 +206,15 @@ class HostStreamHashState:
             raise _invalid_host_binding("invalid host stream hash algorithm")
         return state
 
+    @classmethod
+    def initial(cls) -> "HostStreamHashState":
+        return cls(
+            algorithm=HOST_STREAM_HASH_ALGORITHM,
+            output_hash=HOST_STREAM_EMPTY_OUTPUT_HASH,
+            frames=0,
+            last_seq=None,
+        )
+
     def to_json_dict(self) -> dict[str, object]:
         if self.algorithm != HOST_STREAM_HASH_ALGORITHM or not self.output_hash or self.frames < 0:
             raise _invalid_host_binding("valid hash state is required")
@@ -331,11 +343,76 @@ class HostBindingClient:
             raise _transport_error("host binding hash fold failed", exc) from exc
         return HostStreamHashState.from_json(raw)
 
+    def open_frame_writer(
+        self, initial_state: Optional[HostStreamHashState] = None
+    ) -> "HostStreamFrameWriter":
+        self._require_open()
+        return HostStreamFrameWriter(
+            client=self,
+            state=initial_state or HostStreamHashState.initial(),
+        )
+
     def close(self) -> None:
         self._lifecycle.close(self.transport)
 
     def _require_open(self) -> None:
         self._lifecycle.require_open()
+
+
+@dataclass
+class HostStreamFrameWriter:
+    """Stateful host-stream frame writer backed by HostBindingClient codecs."""
+
+    client: HostBindingClient
+    state: HostStreamHashState = field(default_factory=HostStreamHashState.initial)
+    _terminal: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def frames(self) -> int:
+        return self.state.frames
+
+    @property
+    def output_hash(self) -> str:
+        return self.state.output_hash
+
+    @property
+    def terminal(self) -> bool:
+        return self._terminal
+
+    def write_item(self, value: object) -> HostStreamFrame:
+        self._require_open()
+        seq = self.state.frames
+        next_state = self.client.fold_output_hash(self.state, seq, value)
+        frame = self.client.encode_item(seq, value)
+        self.state = next_state
+        return frame
+
+    def finish(
+        self, metadata: Optional[Mapping[str, object]] = None
+    ) -> HostStreamFrame:
+        self._require_open()
+        frame = self.client.encode_terminal(
+            HostStreamTerminalSummary(
+                output_hash=self.state.output_hash,
+                frames=self.state.frames,
+                metadata=metadata or {},
+            )
+        )
+        self._terminal = True
+        return frame
+
+    def fail(self, error: BaseException) -> HostStreamFrame:
+        self._require_open()
+        frame = self.client.encode_error(error)
+        self._terminal = True
+        return frame
+
+    def close(self) -> None:
+        self._terminal = True
+
+    def _require_open(self) -> None:
+        if self._terminal:
+            raise _invalid_host_binding("host stream writer is terminal")
 
 
 def _validate_binding_request(request: HostStreamBindingRequest) -> None:

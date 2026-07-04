@@ -5,6 +5,7 @@ from easynet_sdk import ErrorCode, RetryHint, SDKError, is_code
 from easynet_sdk.host_binding import (
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
+    HOST_STREAM_EMPTY_OUTPUT_HASH,
     HostBindingClient,
     HostStreamBindingRequest,
     HostStreamEnvelope,
@@ -98,32 +99,39 @@ class MemoryHostBindingTransport:
         self.terminal_json = TERMINAL_FRAME_JSON
         self.hash_json = HASH_STATE_JSON
         self.seen_request: dict[str, object] | None = None
+        self.calls: list[str] = []
         self.close_calls = 0
 
     def _remember(self, request_json: bytes) -> None:
         self.seen_request = json.loads(request_json.decode("utf-8"))
 
     def build_host_stream_binding(self, request_json: bytes) -> bytes:
+        self.calls.append("build_host_stream_binding")
         self._remember(request_json)
         return self.binding_json
 
     def decode_request(self, envelope_json: bytes) -> bytes:
+        self.calls.append("decode_request")
         self._remember(envelope_json)
         return self.request_json
 
     def encode_item(self, request_json: bytes) -> bytes:
+        self.calls.append("encode_item")
         self._remember(request_json)
         return self.item_json
 
     def encode_error(self, request_json: bytes) -> bytes:
+        self.calls.append("encode_error")
         self._remember(request_json)
         return self.error_json
 
     def encode_terminal(self, request_json: bytes) -> bytes:
+        self.calls.append("encode_terminal")
         self._remember(request_json)
         return self.terminal_json
 
     def fold_output_hash(self, request_json: bytes) -> bytes:
+        self.calls.append("fold_output_hash")
         self._remember(request_json)
         return self.hash_json
 
@@ -214,12 +222,7 @@ class HostBindingTests(unittest.TestCase):
 
     def test_fold_output_hash_rejects_sequence_gap(self) -> None:
         client = HostBindingClient(MemoryHostBindingTransport())
-        state = HostStreamHashState(
-            algorithm=HOST_STREAM_HASH_ALGORITHM,
-            output_hash="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            frames=0,
-            last_seq=None,
-        )
+        state = HostStreamHashState.initial()
 
         folded = client.fold_output_hash(state, 0, {"token": "hello"})
         self.assertEqual(folded.last_seq, 0)
@@ -227,6 +230,51 @@ class HostBindingTests(unittest.TestCase):
 
         with self.assertRaises(SDKError):
             client.fold_output_hash(state, 2, {"token": "skip"})
+
+    def test_frame_writer_sequences_items_and_terminal_via_client(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+        writer = client.open_frame_writer()
+
+        self.assertEqual(writer.output_hash, HOST_STREAM_EMPTY_OUTPUT_HASH)
+        item = writer.write_item({"token": "hello"})
+        self.assertEqual(item.frame_type, "item")
+        self.assertEqual(item.seq, 0)
+        self.assertEqual(writer.frames, 1)
+        self.assertEqual(
+            writer.output_hash,
+            json.loads(HASH_STATE_JSON.decode("utf-8"))["output_hash"],
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["seq"], 0)
+        self.assertEqual(transport.calls, ["fold_output_hash", "encode_item"])
+
+        terminal = writer.finish(metadata={"canonical_json": writer.state.canonical_json})
+        self.assertEqual(terminal.frame_type, "terminal")
+        self.assertTrue(writer.terminal)
+        self.assertEqual(
+            transport.calls,
+            ["fold_output_hash", "encode_item", "encode_terminal"],
+        )
+
+        with self.assertRaises(SDKError):
+            writer.write_item({"token": "late"})
+
+    def test_frame_writer_fail_is_terminal_and_does_not_close_client(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+        writer = client.open_frame_writer()
+
+        frame = writer.fail(ValueError("bad input"))
+        self.assertEqual(frame.frame_type, "error")
+        self.assertTrue(writer.terminal)
+        self.assertEqual(transport.close_calls, 0)
+
+        with self.assertRaises(SDKError):
+            writer.finish()
+
+        writer.close()
+        self.assertEqual(transport.close_calls, 0)
 
     def test_close_delegates_once_and_fails_closed(self) -> None:
         transport = MemoryHostBindingTransport()

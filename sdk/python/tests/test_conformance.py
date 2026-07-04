@@ -3028,6 +3028,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "encode_item": "host_binding.encode_item",
                     "encode_terminal": "host_binding.encode_terminal",
                     "fold_output_hash": "host_binding.fold_output_hash",
+                    "open_frame_writer": "host_binding.open_frame_writer",
                 },
             ),
             (
