@@ -186,6 +186,13 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	if signature["signature_base64"] != "c2lnbmF0dXJl" {
 		t.Fatalf("signature not preserved: %#v", seenSigned)
 	}
+	prepared := seenSigned["prepared"].(map[string]any)
+	tuple := prepared["tuple"].(map[string]any)
+	if tuple["caller_ura"] != "easynet:///r/example/agent/alice.sdk" ||
+		tuple["callee_ura"] != "easynet:///r/example/device/dev-a" ||
+		tuple["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		t.Fatalf("prepared tuple not preserved: %#v", seenSigned)
+	}
 }
 
 func TestRuntimeClientPrepareWrapsTransportFailure(t *testing.T) {
@@ -252,6 +259,7 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 			return []byte(fmt.Sprintf(`{
 				"ok": true,
 				"tuple": %s,
+				"invocation_id": "inv-runtime-1",
 				"terminal_state": "Completed",
 				"output_content_type": "application/json",
 				"output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
@@ -285,6 +293,9 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 	}
 	if result.Tuple().CallerURA() != "easynet:///r/example/agent/alice.sdk" {
 		t.Fatalf("tuple not decoded: %#v", result.Tuple())
+	}
+	if result.InvocationID() != "inv-runtime-1" {
+		t.Fatalf("invocation id = %q", result.InvocationID())
 	}
 	if seenDraft["descriptor_ref"] == "" {
 		t.Fatalf("draft not sent to transport: %#v", seenDraft)

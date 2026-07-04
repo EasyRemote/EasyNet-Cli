@@ -407,6 +407,7 @@ func (c *RuntimeClient) Close(ctx context.Context) error {
 type InvocationResult struct {
 	ok                bool
 	tuple             InvocationDraft
+	invocationID      string
 	terminalState     string
 	outputContentType string
 	outputBase64      string
@@ -432,6 +433,10 @@ func (r InvocationResult) OK() bool {
 
 func (r InvocationResult) Tuple() InvocationDraft {
 	return r.tuple
+}
+
+func (r InvocationResult) InvocationID() string {
+	return r.invocationID
 }
 
 func (r InvocationResult) TerminalState() string {
@@ -495,6 +500,7 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	var dto struct {
 		OK                *bool           `json:"ok"`
 		Tuple             json.RawMessage `json:"tuple"`
+		InvocationID      string          `json:"invocation_id"`
 		TerminalState     string          `json:"terminal_state"`
 		OutputContentType string          `json:"output_content_type"`
 		OutputBase64      string          `json:"output_base64"`
@@ -537,6 +543,7 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	return InvocationResult{
 		ok:                *dto.OK,
 		tuple:             tuple,
+		invocationID:      dto.InvocationID,
 		terminalState:     dto.TerminalState,
 		outputContentType: dto.OutputContentType,
 		outputBase64:      dto.OutputBase64,

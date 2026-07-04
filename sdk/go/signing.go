@@ -426,6 +426,7 @@ func (s SignedInvocation) MarshalJSON() ([]byte, error) {
 			"canonical_hash_hex":     s.prepared.CanonicalHashHex(),
 			"expires_at_unix_ms":     s.prepared.ExpiresAtUnixMS(),
 			"canonical_bytes_base64": s.prepared.SigningMaterial().CanonicalBytesBase64(),
+			"tuple":                  s.prepared.Tuple(),
 		},
 		"signature": s.signature,
 	}
