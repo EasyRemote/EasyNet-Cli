@@ -1,9 +1,12 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from easynet_sdk import (
     AbilityDeployRequest,
     AbilityImplID,
+    EasyRemotePublicationAdapter,
     ErrorCode,
     LocalResourceRefRequest,
     PublicationClient,
@@ -253,6 +256,67 @@ class MemoryPublicationTransport:
         self.close_calls += 1
 
 
+class _EasyRemoteIdentity:
+    realm = "example"
+    node_id = "dev-a"
+    device_ura = "easynet:///r/example/device/dev-a"
+
+
+class _EasyRemoteDevice:
+    def __init__(self, node_id: str) -> None:
+        self.owner_ura = f"easynet:///r/example/device/{node_id}"
+
+
+class _EasyRemoteInvocation:
+    def __init__(self, response: dict[str, object]) -> None:
+        self._response = response
+
+    def result(self) -> dict[str, object]:
+        return self._response
+
+
+class _EasyRemoteClient:
+    def __init__(self, *responses: dict[str, object]) -> None:
+        self.responses = list(responses)
+        self.invocations: list[dict[str, object]] = []
+
+    def _who(self) -> _EasyRemoteIdentity:
+        return _EasyRemoteIdentity()
+
+    def target(self, ability: str, **kwargs: object) -> dict[str, object]:
+        return {"ability": ability, **kwargs}
+
+    def device(self, node_id: str) -> _EasyRemoteDevice:
+        return _EasyRemoteDevice(node_id)
+
+    def invoke(self, target: object, **kwargs: object) -> _EasyRemoteInvocation:
+        self.invocations.append({"target": target, "args": dict(kwargs)})
+        return _EasyRemoteInvocation(self.responses.pop(0))
+
+
+class _EasyRemoteUraProjection:
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+
+
+class _EasyRemoteAddressing:
+    def parse_ura(self, value: str) -> _EasyRemoteUraProjection:
+        if "/ability/" in value:
+            return _EasyRemoteUraProjection("ability")
+        if "/device/" in value:
+            return _EasyRemoteUraProjection("device")
+        if "/agent/" in value:
+            return _EasyRemoteUraProjection("agent")
+        if "/hub" in value:
+            return _EasyRemoteUraProjection("hub")
+        if "/user/" in value:
+            return _EasyRemoteUraProjection("user")
+        raise ValueError(f"invalid URA {value!r}")
+
+    def resource_ura(self, realm: str, owner_id: str, path: str) -> str:
+        return f"easynet:///r/{realm}/resource/{owner_id}/{path.strip('/')}"
+
+
 class DeployRuntimeTransport(MemoryRuntimeTransport):
     def __init__(self, output_json: object | None = None) -> None:
         super().__init__()
@@ -344,6 +408,66 @@ def unpublish_request() -> UnpublishAbilityRequest:
 
 
 class PublicationTests(unittest.TestCase):
+    def test_easyremote_adapter_installs_with_sdk_resource_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "pkg"
+            package.mkdir()
+            client = _EasyRemoteClient(
+                {
+                    "install_id": "inst-1",
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.fn",
+                    "state": "ACTIVE",
+                }
+            )
+
+            result = EasyRemotePublicationAdapter(
+                client,
+                addressing=_EasyRemoteAddressing(),
+            ).install_ability(package)
+
+        self.assertEqual(result.install_id, "inst-1")
+        invocation = client.invocations[0]
+        self.assertEqual(invocation["target"]["ability"], "ability.deploy")
+        ref = invocation["args"]["resource_ref"]
+        self.assertEqual(ref["namespace"], "fs")
+        self.assertEqual(ref["owner_ura"], "easynet:///r/example/device/dev-a")
+        self.assertEqual(ref["capability"], "read")
+        self.assertEqual(ref["revision"], "fs-local-mapping-v1")
+        self.assertEqual(invocation["target"]["subject"], ref["resource_ura"])
+        self.assertEqual(invocation["args"]["node_id"], "local")
+
+    def test_easyremote_adapter_lists_against_remote_device_owner(self) -> None:
+        row = {
+            "name": "er.fn",
+            "ability_ura": "easynet:///r/example/ability/device.gpu-2.er.fn",
+            "owner_ura": "easynet:///r/example/device/gpu-2",
+            "state": "ACTIVE",
+        }
+        client = _EasyRemoteClient({"abilities": [row]})
+
+        records = EasyRemotePublicationAdapter(
+            client,
+            addressing=_EasyRemoteAddressing(),
+        ).list_abilities(
+            node="gpu-2",
+            owner_ura="easynet:///r/example/device/gpu-2",
+            scope="realm",
+        )
+
+        self.assertEqual(records[0].ability_ura, row["ability_ura"])
+        invocation = client.invocations[0]
+        self.assertEqual(invocation["target"]["ability"], "meta.list_abilities")
+        self.assertEqual(
+            invocation["target"]["owner_ura"], "easynet:///r/example/device/gpu-2"
+        )
+        self.assertEqual(
+            invocation["args"],
+            {
+                "agent_ura": "easynet:///r/example/device/gpu-2",
+                "scope": "realm",
+            },
+        )
+
     def test_build_resource_ref_and_validate_package(self) -> None:
         transport = MemoryPublicationTransport()
         client = PublicationClient(transport)

@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
-from .identity import LocalResourceRefRequest, ResourceRef
+from .identity import (
+    LocalResourceRefRequest,
+    ResourceRef,
+    parse_ura as sdk_parse_ura,
+    resource_ura as sdk_resource_ura,
+)
 from .invocation import InvocationDraft
 from .runtime import RuntimeClient
 
@@ -17,6 +25,9 @@ from .runtime import RuntimeClient
 DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50
 MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500
 _PROFILE = "publication"
+_RESOURCE_NAMESPACE_FS = "fs"
+_RESOURCE_REF_REVISION = "fs-local-mapping-v1"
+_RESOURCE_REF_TTL_MS = 5 * 60 * 1000
 
 
 @dataclass(frozen=True)
@@ -422,6 +433,183 @@ class PluginInstallResult:
             status=_required_string(decoded, "status"),
             metadata=_required_mapping(decoded, "metadata"),
         )
+
+
+@dataclass(frozen=True)
+class EasyRemotePublishedAbilityRecord:
+    """EasyRemote-facing projection of one daemon catalogue row."""
+
+    name: str
+    ability_ura: str
+    owner_ura: str
+    description: str = ""
+    state: str = ""
+    input_schema: Mapping[str, object] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
+    raw: Mapping[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> "EasyRemotePublishedAbilityRecord":
+        return cls(
+            name=str(value.get("name") or value.get("ability") or ""),
+            ability_ura=str(
+                value.get("ability_ura")
+                or value.get("qualified_name")
+                or value.get("descriptor_ref")
+                or ""
+            ),
+            owner_ura=str(value.get("owner_ura") or ""),
+            description=str(value.get("description") or ""),
+            state=str(value.get("state") or ""),
+            input_schema=_optional_mapping(value.get("input_schema"), "input_schema"),
+            metadata=_optional_mapping(value.get("metadata"), "metadata"),
+            raw=dict(value),
+        )
+
+
+@dataclass(frozen=True)
+class EasyRemoteAbilityInstallProjection:
+    """EasyRemote-facing projection of daemon `ability.deploy`."""
+
+    install_id: str
+    ability_ura: str
+    state: str
+    node_id: str
+    raw: Mapping[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_wire(
+        cls, value: Mapping[str, object], *, node_id: str
+    ) -> "EasyRemoteAbilityInstallProjection":
+        return cls(
+            install_id=str(value.get("install_id") or ""),
+            ability_ura=str(value.get("ability_ura") or ""),
+            state=str(value.get("state") or ""),
+            node_id=node_id,
+            raw=dict(value),
+        )
+
+
+class EasyRemotePublicationAdapter:
+    """SDK-owned publication cutover adapter for EasyRemote-like clients."""
+
+    def __init__(self, client: object, *, addressing: object | None = None) -> None:
+        self._client = client
+        self._addressing = addressing
+
+    def install_ability(
+        self, path: str | Path, *, node_id: str = "local"
+    ) -> EasyRemoteAbilityInstallProjection:
+        node = _required_clean_string(node_id, "node_id")
+        package = Path(path)
+        if not package.is_dir():
+            raise _invalid_publication(
+                f"ability package path is not a directory: {package}"
+            )
+        ref = _EasyRemoteLocalFilesystemResourceRefs(
+            self._identity(),
+            addressing=self._addressing,
+        ).for_path(
+            package,
+            capability="read",
+        )
+        response = self._invoke(
+            self._target("ability.deploy", subject=ref["resource_ura"]),
+            resource_ref=ref,
+            node_id=node,
+        )
+        return EasyRemoteAbilityInstallProjection.from_wire(response, node_id=node)
+
+    def list_abilities(
+        self,
+        *,
+        node: str | None = None,
+        owner_ura: str = "",
+        subject_ura: str = "",
+        scope: str = "local",
+    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
+        if scope not in {"local", "realm"}:
+            raise _invalid_publication(f"unsupported ability list scope {scope!r}")
+        request: dict[str, object] = {}
+        if scope == "realm":
+            request["scope"] = scope
+        if owner_ura:
+            request["agent_ura"] = _validated_owner_ura(
+                owner_ura,
+                addressing=self._addressing,
+            )
+        if subject_ura:
+            request["subject_ura"] = _validated_ability_ura(
+                subject_ura,
+                addressing=self._addressing,
+            )
+        response = self._invoke(
+            self._system_target("meta.list_abilities", node=node), **request
+        )
+        abilities = response.get("abilities") or []
+        if not isinstance(abilities, list):
+            raise _invalid_publication(
+                "meta.list_abilities response field 'abilities' is not a list"
+            )
+        return tuple(
+            EasyRemotePublishedAbilityRecord.from_wire(_mapping(row, "ability row"))
+            for row in abilities
+        )
+
+    def device_owner_ura(self, node: str) -> str:
+        device = self._call_client_method("device", node)
+        return _required_object_attr(device, "owner_ura")
+
+    def local_device_owner_ura(self) -> str:
+        return _required_object_attr(self._identity(), "device_ura")
+
+    def _system_target(self, ability: str, *, node: str | None) -> object:
+        if node is None or node.strip() == "" or node.strip() == "local":
+            return self._target(ability)
+        return self._target(ability, owner_ura=self.device_owner_ura(node))
+
+    def _target(self, ability: str, **kwargs: object) -> object:
+        return self._call_client_method("target", ability, **kwargs)
+
+    def _invoke(self, target: object, **kwargs: object) -> dict[str, object]:
+        invocation = self._call_client_method("invoke", target, **kwargs)
+        result = _call_method(invocation, "result")
+        return _mapping(result, "publication response")
+
+    def _identity(self) -> object:
+        return self._call_client_method("_who")
+
+    def _call_client_method(self, name: str, *args: object, **kwargs: object) -> object:
+        return _call_method(self._client, name, *args, **kwargs)
+
+
+class _EasyRemoteLocalFilesystemResourceRefs:
+    """Build daemon-local filesystem ResourceRefs for EasyRemote publication."""
+
+    def __init__(self, identity: object, *, addressing: object | None) -> None:
+        self._identity = identity
+        self._addressing = addressing
+
+    def for_path(self, path: Path, *, capability: str) -> dict[str, object]:
+        virtual_root, relative = _map_local_path(path)
+        expires = int(time.time() * 1000) + _RESOURCE_REF_TTL_MS
+        owner = _required_object_attr(self._identity, "device_ura")
+        resource = _resource_ura_for_addressing(
+            self._addressing,
+            self._identity,
+            owner,
+            f"{_RESOURCE_NAMESPACE_FS}/{virtual_root}/{relative}",
+        )
+        ref = ResourceRef(
+            resource_ura=resource,
+            owner_ura=owner,
+            namespace=_RESOURCE_NAMESPACE_FS,
+            capability=capability,
+            expires_unix_ms=expires,
+            revision=_RESOURCE_REF_REVISION,
+            display_path=f"{virtual_root}/{relative}",
+        )
+        return _resource_ref_dict(ref)
 
 
 @runtime_checkable
@@ -903,6 +1091,143 @@ def _resource_ref_dict(ref: ResourceRef) -> dict[str, object]:
     if ref.display_path:
         value["display_path"] = ref.display_path
     return value
+
+
+def _map_local_path(path: Path) -> tuple[str, str]:
+    absolute = path if path.is_absolute() else Path.cwd() / path
+    try:
+        resolved = absolute.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise _invalid_publication(f"resource path does not exist: {path}", exc) from exc
+
+    roots = (
+        ("workspace", Path.cwd()),
+        ("tmp", Path(tempfile.gettempdir())),
+        ("home", Path.home()),
+    )
+    for label, root in roots:
+        try:
+            root_resolved = root.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        try:
+            relative = resolved.relative_to(root_resolved)
+        except ValueError:
+            continue
+        wire = relative.as_posix()
+        _validate_relative_resource_path(wire)
+        return label, wire
+    raise _invalid_publication(
+        f"resource path {path} is outside workspace, temp, and home roots"
+    )
+
+
+def _validate_relative_resource_path(value: str) -> None:
+    if not value or value.startswith("/") or "\\" in value:
+        raise _invalid_publication(f"invalid resource relative path {value!r}")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise _invalid_publication(f"invalid resource relative path {value!r}")
+
+
+def _validated_ability_ura(value: str, *, addressing: object | None = None) -> str:
+    trimmed = _required_clean_string(value, "ability_ura")
+    parsed = _parse_ura_with_addressing(addressing, trimmed)
+    if str(parsed.kind) != "ability":
+        raise _invalid_publication(f"expected an Ability URA, got {trimmed!r}")
+    return trimmed
+
+
+def _validated_owner_ura(value: str, *, addressing: object | None = None) -> str:
+    trimmed = _required_clean_string(value, "owner_ura")
+    parsed = _parse_ura_with_addressing(addressing, trimmed)
+    if str(parsed.kind) not in {"device", "agent", "hub", "user"}:
+        raise _invalid_publication(f"expected an owner URA, got {trimmed!r}")
+    return trimmed
+
+
+def _parse_ura_with_addressing(addressing: object | None, value: str) -> object:
+    if addressing is None:
+        try:
+            return sdk_parse_ura(value)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _invalid_publication(f"invalid URA {value!r}: {exc}", exc) from exc
+    parse = getattr(addressing, "parse_ura", None)
+    if not callable(parse):
+        raise _invalid_publication("publication addressing facade is missing parse_ura()")
+    try:
+        return parse(value)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _invalid_publication(f"invalid URA {value!r}: {exc}", exc) from exc
+
+
+def _resource_ura_for_addressing(
+    addressing: object | None, identity: object, owner_ura: str, path: str
+) -> str:
+    if addressing is None:
+        try:
+            return sdk_resource_ura(owner_ura, path)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _invalid_publication(f"build Resource URA: {exc}", exc) from exc
+    build = getattr(addressing, "resource_ura", None)
+    if not callable(build):
+        raise _invalid_publication("publication addressing facade is missing resource_ura()")
+    realm = _required_object_attr(identity, "realm")
+    node_id = _required_object_attr(identity, "node_id")
+    try:
+        return build(realm, f"device.{node_id}", path)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _invalid_publication(f"build Resource URA: {exc}", exc) from exc
+
+
+def _required_clean_string(value: str, field_name: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        raise _invalid_publication(f"{field_name} must not be empty")
+    return trimmed
+
+
+def _optional_mapping(value: object, field_name: str) -> dict[str, object]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise _invalid_publication(f"{field_name} must be an object")
+
+
+def _mapping(value: object, label: str) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise _invalid_publication(f"{label} must be an object")
+
+
+def _required_object_attr(value: object, name: str) -> str:
+    raw = getattr(value, name, "")
+    if not isinstance(raw, str) or not raw.strip():
+        raise _invalid_publication(f"{name} must be present")
+    return raw
+
+
+def _call_method(
+    target: object, name: str, *args: object, **kwargs: object
+) -> object:
+    method = getattr(target, name, None)
+    if not callable(method):
+        raise _invalid_publication(f"EasyRemote client is missing {name}()")
+    try:
+        return method(*args, **kwargs)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _transport_error(f"EasyRemote publication {name} failed", exc) from exc
 
 
 def _published_ability(value: object) -> PublishedAbility:

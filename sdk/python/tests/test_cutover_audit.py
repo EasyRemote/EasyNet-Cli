@@ -229,6 +229,28 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertIn("raw_invocation_json_codec", _rules(result))
         self.assertNotIn("raw_c_abi_symbol", _rules(result))
 
+    def test_flags_raw_publication_carrier_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "control.py").write_text(
+                textwrap.dedent(
+                    '''
+                    def install(client):
+                        """A docstring can mention ability.deploy safely."""
+                        return client.invoke("ability.deploy", node_id="local")
+
+                    def list_abilities(client):
+                        return client.invoke("meta.list_abilities")
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_publication_carrier", _rules(result))
+
     def test_ignores_comments_and_docstrings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

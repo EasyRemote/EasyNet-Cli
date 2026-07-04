@@ -119,6 +119,7 @@ class EasyRemoteCutoverAuditor:
         violations.extend(_audit_invocation_codec(relative, text))
         violations.extend(_audit_host_stream_codec(relative, text))
         violations.extend(_audit_receipt_chain_semantics(relative, text))
+        violations.extend(_audit_publication_carrier_semantics(relative, text))
         return tuple(violations)
 
     def _audit_manifest(
@@ -379,6 +380,33 @@ def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[CutoverViolati
                     path=path,
                     rule="raw_receipt_chain_semantics",
                     detail="prev_receipt_hash/self_hash continuity check",
+                    line=getattr(node, "lineno", 1),
+                )
+            )
+    return tuple(violations)
+
+
+def _audit_publication_carrier_semantics(
+    path: str, text: str
+) -> tuple[CutoverViolation, ...]:
+    violations: list[CutoverViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        if isinstance(node, ast.Constant) and node.value in {
+            "ability.deploy",
+            "meta.list_abilities",
+        }:
+            violations.append(
+                CutoverViolation(
+                    path=path,
+                    rule="raw_publication_carrier",
+                    detail=str(node.value),
                     line=getattr(node, "lineno", 1),
                 )
             )
