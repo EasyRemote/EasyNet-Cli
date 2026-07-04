@@ -251,6 +251,28 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("raw_publication_carrier", _rules(result))
 
+    def test_flags_raw_admin_carrier_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "control.py").write_text(
+                textwrap.dedent(
+                    '''
+                    def add(client):
+                        """A docstring can mention agent.start safely."""
+                        return client.invoke("agent.start", name="codex")
+
+                    def refresh(client):
+                        return client.invoke("agent.refresh")
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_admin_carrier", _rules(result))
+
     def test_ignores_comments_and_docstrings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

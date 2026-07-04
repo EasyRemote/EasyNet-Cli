@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from easynet_sdk import ErrorCode, SDKError, is_code
+from easynet_sdk import EasyRemoteAdminAdapter, ErrorCode, SDKError, is_code
 from easynet_sdk.admin import (
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -400,6 +400,24 @@ class MemoryAdminTransport:
         self.close_calls += 1
 
 
+class _EasyRemoteInvocation:
+    def __init__(self, response: dict[str, object]) -> None:
+        self._response = response
+
+    def result(self) -> dict[str, object]:
+        return self._response
+
+
+class _EasyRemoteClient:
+    def __init__(self, *responses: dict[str, object]) -> None:
+        self.responses = list(responses)
+        self.invocations: list[dict[str, object]] = []
+
+    def invoke(self, ability: str, **kwargs: object) -> _EasyRemoteInvocation:
+        self.invocations.append({"ability": ability, "args": dict(kwargs)})
+        return _EasyRemoteInvocation(self.responses.pop(0))
+
+
 def admin_base() -> AdminCarrierBase:
     return AdminCarrierBase(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -413,6 +431,64 @@ def admin_base() -> AdminCarrierBase:
 
 
 class AdminClientTests(unittest.TestCase):
+    def test_easyremote_adapter_controls_hosted_agents(self) -> None:
+        client = _EasyRemoteClient(
+            {"root_path": "/tmp/agent", "model": "gpt-5", "replaced_prior": True},
+            {
+                "agents": [
+                    {
+                        "name": "codex",
+                        "runtime": "codex",
+                        "model": "gpt-5",
+                        "root_path": "/tmp/agent",
+                        "root_exists": True,
+                        "timeout_secs": 600,
+                    }
+                ]
+            },
+            {"agents_scanned": 1},
+        )
+        adapter = EasyRemoteAdminAdapter(client)
+
+        started = adapter.start_agent(
+            "codex",
+            kind="codex",
+            model="gpt-5",
+            label="primary",
+            command="codex",
+            args=("--ask",),
+        )
+        records = adapter.list_agents()
+        refreshed = adapter.refresh_agents("codex")
+
+        self.assertEqual(started.name, "codex")
+        self.assertEqual(started.runtime, "codex")
+        self.assertTrue(started.replaced_prior)
+        self.assertEqual(records[0].root_path, "/tmp/agent")
+        self.assertEqual(records[0].timeout_secs, 600)
+        self.assertEqual(refreshed["agents_scanned"], 1)
+        self.assertEqual(client.invocations[0]["ability"], "agent.start")
+        self.assertEqual(
+            client.invocations[0]["args"],
+            {
+                "name": "codex",
+                "agent_type": "codex",
+                "model": "gpt-5",
+                "model_present": True,
+                "label": "primary",
+                "command": "codex",
+                "command_args": ["--ask"],
+                "materialize_directory": True,
+                "update_existing_spec": False,
+                "project_workspace": True,
+            },
+        )
+        self.assertEqual(client.invocations[1], {"ability": "agent.list", "args": {}})
+        self.assertEqual(
+            client.invocations[2],
+            {"ability": "agent.refresh", "args": {"name": "codex"}},
+        )
+
     def test_builds_agent_and_session_invocations(self) -> None:
         transport = MemoryAdminTransport()
         client = AdminClient(transport)

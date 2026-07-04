@@ -120,6 +120,7 @@ class EasyRemoteCutoverAuditor:
         violations.extend(_audit_host_stream_codec(relative, text))
         violations.extend(_audit_receipt_chain_semantics(relative, text))
         violations.extend(_audit_publication_carrier_semantics(relative, text))
+        violations.extend(_audit_admin_carrier_semantics(relative, text))
         return tuple(violations)
 
     def _audit_manifest(
@@ -389,6 +390,28 @@ def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[CutoverViolati
 def _audit_publication_carrier_semantics(
     path: str, text: str
 ) -> tuple[CutoverViolation, ...]:
+    return _audit_string_literals(
+        path,
+        text,
+        rule="raw_publication_carrier",
+        values={"ability.deploy", "meta.list_abilities"},
+    )
+
+
+def _audit_admin_carrier_semantics(
+    path: str, text: str
+) -> tuple[CutoverViolation, ...]:
+    return _audit_string_literals(
+        path,
+        text,
+        rule="raw_admin_carrier",
+        values={"agent.start", "agent.list", "agent.refresh"},
+    )
+
+
+def _audit_string_literals(
+    path: str, text: str, *, rule: str, values: set[str]
+) -> tuple[CutoverViolation, ...]:
     violations: list[CutoverViolation] = []
     try:
         tree = ast.parse(text)
@@ -398,14 +421,11 @@ def _audit_publication_carrier_semantics(
     for node in ast.walk(tree):
         if id(node) in docstrings:
             continue
-        if isinstance(node, ast.Constant) and node.value in {
-            "ability.deploy",
-            "meta.list_abilities",
-        }:
+        if isinstance(node, ast.Constant) and node.value in values:
             violations.append(
                 CutoverViolation(
                     path=path,
-                    rule="raw_publication_carrier",
+                    rule=rule,
                     detail=str(node.value),
                     line=getattr(node, "lineno", 1),
                 )

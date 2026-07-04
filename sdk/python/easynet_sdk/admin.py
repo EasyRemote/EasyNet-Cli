@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
+from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
@@ -620,6 +621,113 @@ DeviceAdminResult = AdminGatewayResult
 VerificationResult = DeviceCredentialVerification
 
 
+@dataclass(frozen=True)
+class EasyRemoteAgentRecord:
+    """EasyRemote-facing projection of one hosted daemon agent."""
+
+    name: str
+    runtime: str
+    model: Optional[str] = None
+    root_path: Optional[str] = None
+    timeout_secs: Optional[int] = None
+    root_exists: Optional[bool] = None
+    raw: Mapping[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_wire(cls, value: Mapping[str, object]) -> "EasyRemoteAgentRecord":
+        return cls(
+            name=str(value.get("name") or ""),
+            runtime=str(value.get("runtime") or value.get("agent_type") or ""),
+            model=_optional_string(value.get("model"), "model"),
+            root_path=_optional_string(value.get("root_path"), "root_path"),
+            timeout_secs=_optional_int(value.get("timeout_secs"), "timeout_secs"),
+            root_exists=_optional_bool(value.get("root_exists"), "root_exists"),
+            raw=dict(value),
+        )
+
+
+@dataclass(frozen=True)
+class EasyRemoteAgentStartProjection:
+    """EasyRemote-facing projection of daemon `agent.start`."""
+
+    name: str
+    runtime: str
+    model: Optional[str]
+    root_path: Optional[str]
+    replaced_prior: bool
+    raw: Mapping[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_wire(
+        cls, value: Mapping[str, object], *, name: str, runtime: str
+    ) -> "EasyRemoteAgentStartProjection":
+        return cls(
+            name=name,
+            runtime=runtime,
+            model=_optional_string(value.get("model"), "model"),
+            root_path=_optional_string(value.get("root_path"), "root_path"),
+            replaced_prior=bool(value.get("replaced_prior", False)),
+            raw=dict(value),
+        )
+
+
+class EasyRemoteAdminAdapter:
+    """SDK-owned Admin/Gateway cutover adapter for EasyRemote-like clients."""
+
+    def __init__(self, client: object) -> None:
+        self._client = client
+
+    def start_agent(
+        self,
+        name: str,
+        *,
+        kind: str,
+        model: str | None = None,
+        label: str | None = None,
+        command: str | None = None,
+        args: Sequence[str] = (),
+    ) -> EasyRemoteAgentStartProjection:
+        agent_name = _required_clean_string(name, "agent name")
+        _validate_agent_name(agent_name, "name")
+        runtime = _required_clean_string(kind, "agent type")
+        response = self._invoke(
+            "agent.start",
+            name=agent_name,
+            agent_type=runtime,
+            model=model,
+            model_present=True,
+            label=label,
+            command=command,
+            command_args=list(args),
+            materialize_directory=True,
+            update_existing_spec=False,
+            project_workspace=True,
+        )
+        return EasyRemoteAgentStartProjection.from_wire(
+            response,
+            name=agent_name,
+            runtime=runtime,
+        )
+
+    def list_agents(self) -> tuple[EasyRemoteAgentRecord, ...]:
+        response = self._invoke("agent.list")
+        agents = response.get("agents") or []
+        if not isinstance(agents, list):
+            raise _invalid_admin("agent.list response field 'agents' is not a list")
+        return tuple(EasyRemoteAgentRecord.from_wire(_mapping(row, "agent row")) for row in agents)
+
+    def refresh_agents(self, name: str | None = None) -> Mapping[str, object]:
+        agent_name = name.strip() if name is not None else None
+        if name is not None and not agent_name:
+            raise _invalid_admin("agent name must not be empty")
+        payload = {"name": agent_name} if agent_name else {}
+        return self._invoke("agent.refresh", **payload)
+
+    def _invoke(self, ability: str, **kwargs: object) -> dict[str, object]:
+        invocation = _call_method(self._client, "invoke", ability, **kwargs)
+        return _mapping(_call_method(invocation, "result"), "admin response")
+
+
 @runtime_checkable
 class AdminTransport(Protocol):
     """Concrete Admin + Gateway operations supplied by the integration layer."""
@@ -932,6 +1040,13 @@ def _validate_admin_identifier(value: str, field_name: str) -> str:
     return value
 
 
+def _required_clean_string(value: str, field_name: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        raise _invalid_admin(f"{field_name} must not be empty")
+    return trimmed
+
+
 def _validate_admin_scopes(value: tuple[str, ...]) -> tuple[str, ...]:
     for item in value:
         _validate_admin_identifier(item, "scope")
@@ -1110,10 +1225,30 @@ def _mapping_tuple(value: object, field_name: str) -> tuple[Mapping[str, object]
     return tuple(dict(item) for item in value)
 
 
+def _mapping(value: object, field_name: str) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise _invalid_admin(f"{field_name} must be an object")
+
+
 def _string_array(value: object, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise _invalid_admin(f"{field_name} must be an array of strings")
     return tuple(value)
+
+
+def _call_method(
+    target: object, method_name: str, *args: object, **kwargs: object
+) -> object:
+    method = getattr(target, method_name, None)
+    if not callable(method):
+        raise _invalid_admin(f"EasyRemote client is missing {method_name}()")
+    try:
+        return method(*args, **kwargs)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _transport_error(f"EasyRemote admin {method_name} failed", exc) from exc
 
 
 def _invalid_admin(message: str, cause: BaseException | None = None) -> SDKError:
