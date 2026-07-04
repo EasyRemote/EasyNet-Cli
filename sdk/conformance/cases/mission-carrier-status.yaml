@@ -17,22 +17,30 @@ steps:
     fixture: mission-cancel-request.v4.json
   - action: project_status
     fixture: mission-status.v4.json
+  - action: project_events
+    fixture: mission-events-request.v4.json
+    response_fixture: mission-event-page.v4.json
 expect:
   result: mission_carrier_status_observed
   run_request_schema: mission-run-request.schema.json
   run_file_request_schema: mission-run-file-request.schema.json
   track_request_schema: mission-track-request.schema.json
   cancel_request_schema: mission-cancel-request.schema.json
+  events_request_schema: mission-events-request.schema.json
+  event_page_schema: mission-event-page.schema.json
   status_schema: mission-status.schema.json
   invocation_schema: invocation.schema.json
   run_invocation_fixture: mission-run-invocation.v4.json
   track_invocation_fixture: mission-track-invocation.v4.json
   cancel_invocation_fixture: mission-cancel-invocation.v4.json
   status_fixture: mission-status.v4.json
+  event_page_fixture: mission-event-page.v4.json
   run_system_ability: mission.run
   track_system_ability: mission.track
   cancel_system_ability: mission.cancel
   rejects_incomplete_invocation_tuple: true
   rejects_path_like_mission_id: true
   child_receipts_only_when_anchored: true
-  mission_events_runtime: scaffold_only
+  events_system_ability: mission.events
+  mission_events_page_projection: true
+  mission_events_live_tail: scaffold_only

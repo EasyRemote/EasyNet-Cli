@@ -70,6 +70,7 @@ from easynet_sdk import (
     MissionCancelRequest,
     MissionCarrierBase,
     MissionClient,
+    MissionEventListRequest,
     MissionRunFileRequest,
     MissionRunRequest,
     MissionStatus,
@@ -530,10 +531,12 @@ class SharedMissionTransport:
         self.expected_run_file_request = shared_fixture("mission-run-file-request.v4.json")
         self.expected_track_request = shared_fixture("mission-track-request.v4.json")
         self.expected_cancel_request = shared_fixture("mission-cancel-request.v4.json")
+        self.expected_events_request = shared_fixture("mission-events-request.v4.json")
         self.run_invocation_json = shared_fixture("mission-run-invocation.v4.json")
         self.track_invocation_json = shared_fixture("mission-track-invocation.v4.json")
         self.cancel_invocation_json = shared_fixture("mission-cancel-invocation.v4.json")
         self.status_json = shared_fixture("mission-status.v4.json")
+        self.events_json = shared_fixture("mission-event-page.v4.json")
 
     def build_run_eal_invocation(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_run_request)
@@ -576,12 +579,8 @@ class SharedMissionTransport:
         return self.status_json
 
     def events(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared mission conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_events_request)
+        return self.events_json
 
     def close(self) -> None:
         return None
@@ -2239,6 +2238,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "build_track_invocation",
             "build_cancel_invocation",
             "project_status",
+            "project_events",
         ):
             self._require_case_action(mission_case, action)
         for fixture in (
@@ -2247,6 +2247,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "mission-track-request.v4.json",
             "mission-cancel-request.v4.json",
             "mission-status.v4.json",
+            "mission-events-request.v4.json",
+            "mission-event-page.v4.json",
         ):
             self._require_case_fixture(mission_case, fixture)
         self._require_case_expectation(
@@ -2267,6 +2269,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             mission_case, "cancel_system_ability: mission.cancel"
         )
         self._require_case_expectation(
+            mission_case, "events_system_ability: mission.events"
+        )
+        self._require_case_expectation(
             mission_case, "rejects_incomplete_invocation_tuple: true"
         )
         self._require_case_expectation(
@@ -2274,6 +2279,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_expectation(
             mission_case, "child_receipts_only_when_anchored: true"
+        )
+        self._require_case_expectation(
+            mission_case, "mission_events_page_projection: true"
+        )
+        self._require_case_expectation(
+            mission_case, "mission_events_live_tail: scaffold_only"
         )
 
         mission = MissionClient(SharedMissionTransport())
@@ -2311,6 +2322,23 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(len(status.child_receipts), 1)
         self.assertEqual(len(status.output_refs), 4)
+
+        event_page = mission.events(shared_mission_events_request())
+        self.assertEqual(event_page.kind, "mission_event_page")
+        self.assertEqual(event_page.cursor_sequence, 4)
+        self.assertEqual(event_page.next_cursor_sequence, 7)
+        self.assertFalse(event_page.has_more)
+        self.assertEqual(event_page.dropped_count, 0)
+        self.assertEqual(len(event_page.events), 2)
+        self.assertLess(event_page.events[0].sequence, event_page.events[1].sequence)
+        self.assertEqual(event_page.events[0].event_type, "progress")
+        self.assertFalse(event_page.events[0].terminal)
+        self.assertEqual(event_page.events[1].event_type, "completed")
+        self.assertTrue(event_page.events[1].terminal)
+        self.assertEqual(
+            event_page.events[1].receipt["receipt_ura"],
+            "easynet:///r/example/receipt/parent",
+        )
 
         run_request = shared_mission_run_request()
         with self.assertRaises(SDKError) as caught:
@@ -3958,6 +3986,16 @@ def shared_mission_cancel_request() -> MissionCancelRequest:
     return MissionCancelRequest(
         base=shared_mission_carrier_base("mission-cancel-request.v4.json"),
         mission_id=decoded["mission_id"],
+    )
+
+
+def shared_mission_events_request() -> MissionEventListRequest:
+    decoded = json.loads(shared_fixture("mission-events-request.v4.json"))
+    return MissionEventListRequest(
+        base=shared_mission_carrier_base("mission-events-request.v4.json"),
+        mission_id=decoded["mission_id"],
+        cursor_sequence=decoded["cursor_sequence"],
+        limit=decoded["limit"],
     )
 
 
