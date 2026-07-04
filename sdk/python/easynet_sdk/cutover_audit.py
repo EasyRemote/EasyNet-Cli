@@ -122,6 +122,7 @@ class EasyRemoteCutoverAuditor:
         violations.extend(_audit_invocation_codec(relative, text))
         violations.extend(_audit_host_stream_codec(relative, text))
         violations.extend(_audit_receipt_chain_semantics(relative, text))
+        violations.extend(_audit_context_causal_semantics(relative, text))
         violations.extend(_audit_publication_carrier_semantics(relative, text))
         violations.extend(_audit_admin_carrier_semantics(relative, text))
         violations.extend(_audit_mission_carrier_semantics(relative, text))
@@ -432,6 +433,55 @@ def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[CutoverViolati
                 )
             )
     return tuple(violations)
+
+
+def _audit_context_causal_semantics(
+    path: str, text: str
+) -> tuple[CutoverViolation, ...]:
+    violations: list[CutoverViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    if _uses_sdk_receipt_projection(tree):
+        return tuple()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not _is_causal_ref_constructor(node):
+            continue
+        if not _subtree_mentions_name(
+            node, {"receipt", "parent_receipt", "receipt_ura", "receipt_hash_hex"}
+        ):
+            continue
+        violations.append(
+            CutoverViolation(
+                path=path,
+                rule="raw_context_causal_ref",
+                detail="Context child causal refs must come from SDK Receipt projection",
+                line=getattr(node, "lineno", 1),
+            )
+        )
+    return tuple(violations)
+
+
+def _uses_sdk_receipt_projection(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in {
+            "ReceiptClient",
+            "ReceiptRef",
+        }:
+            return True
+        if isinstance(node, ast.Name) and node.id in {
+            "ReceiptClient",
+            "ReceiptRef",
+        }:
+            return True
+    return False
+
+
+def _is_causal_ref_constructor(node: ast.Call) -> bool:
+    return _dotted_name(node.func).split(".")[-1] == "CausalRef"
 
 
 def _audit_publication_carrier_semantics(

@@ -452,6 +452,57 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("raw_mission_carrier", _rules(result))
 
+    def test_flags_raw_context_causal_ref_construction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "context_dispatch.py").write_text(
+                textwrap.dedent(
+                    """
+                    from .invocation import CausalRef
+
+                    def child_causal(parent_receipt):
+                        return CausalRef(
+                            receipt_hash=bytes.fromhex(
+                                parent_receipt.raw["self_hash_hex"]
+                            ),
+                            receipt_ura=parent_receipt.raw["receipt_ura"],
+                        )
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_context_causal_ref", _rules(result))
+
+    def test_accepts_context_causal_ref_via_sdk_receipt_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "context_dispatch.py").write_text(
+                textwrap.dedent(
+                    """
+                    import easynet_sdk
+                    from .invocation import CausalRef
+
+                    def child_causal(receipt_json):
+                        ref = easynet_sdk.ReceiptClient(
+                            easynet_sdk.LocalReceiptTransport()
+                        ).causal_ref(receipt_json)
+                        return CausalRef(
+                            receipt_hash=bytes.fromhex(ref.receipt_hash_hex),
+                            receipt_ura=ref.receipt_ura,
+                        )
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
+
     def test_ignores_comments_and_docstrings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

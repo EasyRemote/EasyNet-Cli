@@ -208,16 +208,20 @@ class HostStreamEnvelopeRequest:
     args: Any
     call_id: str
     caller: str
+    parent_receipt: Optional[Mapping[str, object]] = None
 
     def to_json_dict(self) -> dict[str, object]:
         if not self.fn or not self.call_id or not self.caller:
             raise _invalid_host_binding("host stream envelope request is incomplete")
-        return {
+        value: dict[str, object] = {
             "fn": self.fn,
             "args": self.args,
             "call_id": self.call_id,
             "caller": self.caller,
         }
+        if self.parent_receipt is not None:
+            value["parent_receipt"] = dict(self.parent_receipt)
+        return value
 
 
 @dataclass(frozen=True)
@@ -239,6 +243,9 @@ class HostStreamEnvelope:
                 args=_required_present(request, "args"),
                 call_id=_required_string(request, "call_id"),
                 caller=_required_string(request, "caller"),
+                parent_receipt=_optional_mapping(
+                    request.get("parent_receipt"), "parent_receipt"
+                ),
             )
         )
 
@@ -255,6 +262,7 @@ class HostStreamRequest:
     call_id: str
     caller: str
     metadata: Mapping[str, object]
+    parent_receipt: Optional[Mapping[str, object]] = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "HostStreamRequest":
@@ -265,6 +273,9 @@ class HostStreamRequest:
             call_id=_required_string(decoded, "call_id"),
             caller=_required_string(decoded, "caller"),
             metadata=_required_mapping(decoded, "metadata"),
+            parent_receipt=_optional_mapping(
+                decoded.get("parent_receipt"), "parent_receipt"
+            ),
         )
 
 
@@ -483,6 +494,7 @@ class LocalHostBindingTransport:
                 "args": envelope.request.args,
                 "call_id": envelope.request.call_id,
                 "caller": envelope.request.caller,
+                "parent_receipt": envelope.request.parent_receipt,
                 "metadata": {
                     "wire": "host_stream_request_v1",
                     "frame_contract_owner": "daemon_sdk",

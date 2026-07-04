@@ -236,10 +236,10 @@ method spelling.
   that reject summary-only projections as verifier evidence, local SDK
   receipt-summary projection/continuity/causal-ref guardrails, C ABI-backed fetch
   execution through Runtime Core invoke, and close state seams over opaque receipt refs.
-  EasyRemote receipt summary verification and hash-chain continuity now delegate
-  to SDK Receipt. Axon-backed cryptographic verification, receipt URI
-  construction after RFC-007, and EasyRemote Context child dispatch remain
-  incomplete.
+  EasyRemote receipt summary verification, hash-chain continuity, and
+  parent-receipt-anchored Context child dispatch now delegate to SDK Receipt.
+  Axon-backed cryptographic verification and receipt URI construction after
+  RFC-007 remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   C ABI-backed plugin install through the daemon plugin installer,
@@ -272,8 +272,8 @@ method spelling.
   host-stream-codec ownership, receipt-continuity ownership, context-causal
   gates, and admin/mission carrier gates; EasyRemote transport, invocation,
   addressing helpers, warm host frame/hash substrate, receipt continuity,
-  hosted-agent admin, and Mission transport extraction now pass static gates,
-  while Context child dispatch, publication product extraction, full Pipeline
+  hosted-agent admin, Context child dispatch, and Mission transport extraction
+  now pass static gates, while publication product extraction, full Pipeline
   cutover, full AgentControl/Server cutover, and full receipt verification
   remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel

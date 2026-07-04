@@ -178,6 +178,29 @@ class HostBindingTests(unittest.TestCase):
         )
         self.assertEqual(request.function, "weather.stream")
         self.assertEqual(request.metadata["wire"], "host_stream_request_v1")
+        self.assertIsNone(request.parent_receipt)
+
+    def test_decode_request_preserves_parent_receipt_anchor(self) -> None:
+        client = HostBindingClient(LocalHostBindingTransport())
+        parent_receipt = {
+            "receipt_ura": "easynet:///r/example/receipt/parent-1",
+            "invocation_id": "inv-parent-1",
+            "self_hash_hex": "aa" * 32,
+        }
+
+        request = client.decode_request(
+            HostStreamEnvelope(
+                HostStreamEnvelopeRequest(
+                    fn="weather.child",
+                    args={"city": "Singapore"},
+                    call_id="call-weather-2",
+                    caller="easynet:///r/example/user/alice",
+                    parent_receipt=parent_receipt,
+                )
+            )
+        )
+
+        self.assertEqual(request.parent_receipt, parent_receipt)
 
     def test_rejects_relative_endpoint_and_schema_drift(self) -> None:
         client = HostBindingClient(MemoryHostBindingTransport())
