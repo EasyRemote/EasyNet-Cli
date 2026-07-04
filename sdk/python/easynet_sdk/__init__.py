@@ -253,6 +253,7 @@ from .mission import (
     MissionTrackRequest,
     MissionTransport,
 )
+from .system_abilities import AdminSystemAbility, MissionSystemAbility
 from .runtime import (
     InvocationHandle,
     InvocationHandleEvent,
@@ -433,6 +434,7 @@ __all__ = [
     "AdminJoinHubRequest",
     "AdminLeaveHubRequest",
     "AdminSessionListRequest",
+    "AdminSystemAbility",
     "AdminTransport",
     "CreateDeviceSessionRequest",
     "CreatePairingRequest",
@@ -567,6 +569,7 @@ __all__ = [
     "MissionRunFileRequest",
     "MissionRunRequest",
     "MissionStatus",
+    "MissionSystemAbility",
     "MissionTrackRequest",
     "MissionTransport",
     "PageQuery",
