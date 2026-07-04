@@ -832,8 +832,12 @@ mod tests {
             by_public.get("pages.publish").cloned().flatten().as_deref(),
             Some("easynet:///r/acme/ability/alice.pages.pages.publish"),
         );
-        // All four management abilities are present.
-        assert_eq!(descriptors.len(), 4);
+        assert_eq!(
+            by_public.get("pages.health").cloned().flatten().as_deref(),
+            Some("easynet:///r/acme/ability/alice.pages.pages.health"),
+        );
+        // All five management abilities are present.
+        assert_eq!(descriptors.len(), 5);
 
         // The advertised descriptor must carry the input schema so the
         // Frontend InvokeAbilityDialog renders a form (not "No input
@@ -846,6 +850,17 @@ mod tests {
         assert_eq!(
             schema["required"][0], "project_id",
             "pages.get must advertise project_id as required, got: {schema}"
+        );
+        let health = descriptors
+            .iter()
+            .find(|d| d.public_name() == "pages.health")
+            .expect("pages.health descriptor present");
+        assert!(
+            health.schema_summary.input["properties"]
+                .get("surface_ref")
+                .is_some(),
+            "pages.health must advertise optional surface_ref, got: {}",
+            health.schema_summary.input
         );
     }
 

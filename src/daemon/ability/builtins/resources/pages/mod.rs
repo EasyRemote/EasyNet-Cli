@@ -197,10 +197,23 @@ fn register_management_abilities(
     register_management_rpc(
         reg,
         "pages.get",
-        owner,
-        authority_scope,
+        owner.clone(),
+        authority_scope.clone(),
         manifest_for_verb("pages.get"),
         get_handler,
+    );
+
+    let user = config.user.clone();
+    let realm = config.realm.clone();
+    let health_handler: LocalRpcHandler =
+        Arc::new(move |args| list_get_unpublish::handle_health(&user, &realm, args));
+    register_management_rpc(
+        reg,
+        "pages.health",
+        owner,
+        authority_scope,
+        manifest_for_verb("pages.health"),
+        health_handler,
     );
 }
 
@@ -284,7 +297,23 @@ pub(crate) struct PagesAbilitySpec {
     pub input_schema: serde_json::Value,
 }
 
-/// The four user-scoped pages management verbs and their schemas.
+fn pages_health_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "project_id": {
+                "type": "string",
+                "description": "Optional project id to check."
+            },
+            "surface_ref": {
+                "type": "string",
+                "description": "Optional project resource URA to check."
+            }
+        }
+    })
+}
+
+/// The user-scoped pages management verbs and their schemas.
 pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
     vec![
         PagesAbilitySpec {
@@ -315,6 +344,11 @@ pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
             description:
                 "Unpublish a project: release the folder fd and unregister the fetch ability.",
             input_schema: pages_project_id_schema(),
+        },
+        PagesAbilitySpec {
+            relative_name: "pages.health",
+            description: "Report daemon Pages registry readiness for this user or one project.",
+            input_schema: pages_health_schema(),
         },
     ]
 }
@@ -416,5 +450,17 @@ mod tests {
         let req = publish.input_schema()["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "folder"));
         assert!(req.iter().any(|v| v == "project_id"));
+
+        let specs = management_ability_specs();
+        assert!(
+            specs
+                .iter()
+                .any(|spec| spec.relative_name == "pages.health"),
+            "pages.health must be advertised with the pages management family"
+        );
+        let health = pages_manifest("health", "d", pages_health_schema());
+        assert!(health.input_schema()["properties"]
+            .get("surface_ref")
+            .is_some());
     }
 }

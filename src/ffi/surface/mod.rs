@@ -33,9 +33,10 @@
 use std::os::raw::c_char;
 
 use crate::daemon::surface_contract::{
-    build_create_page_invocation, build_delete_page_invocation, build_list_pages_invocation,
-    build_manifest_invocation, project_mutation_result, project_page_page, project_page_record,
-    project_public_page_ref, project_surface_manifest, SurfaceError,
+    build_create_page_invocation, build_delete_page_invocation, build_health_invocation,
+    build_list_pages_invocation, build_manifest_invocation, project_mutation_result,
+    project_page_page, project_page_record, project_public_page_ref, project_surface_health,
+    project_surface_manifest, SurfaceError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -125,6 +126,28 @@ pub unsafe extern "C" fn easynet_surface_build_manifest_invocation(
         "out_invocation_json",
         "request_json",
         build_manifest_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `pages.health`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_surface_build_health_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_surface_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_surface_build_health_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_health_invocation,
     )
 }
 
@@ -238,6 +261,28 @@ pub unsafe extern "C" fn easynet_surface_project_mutation_result(
     )
 }
 
+/// Project daemon `pages.health` output into a SurfaceHealth DTO.
+///
+/// # Safety
+/// `health_json` must be a valid UTF-8 C string and `out_health_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_surface_project_health(
+    handle: EasynetHandle,
+    health_json: *const c_char,
+    out_health_json: *mut *mut c_char,
+) -> i32 {
+    project_surface_json(
+        handle,
+        health_json,
+        out_health_json,
+        "easynet_surface_project_health",
+        "out_health_json",
+        "health_json",
+        project_surface_health,
+    )
+}
+
 fn project_surface_json(
     handle: EasynetHandle,
     input: *const c_char,
@@ -333,6 +378,31 @@ mod tests {
         assert_eq!(
             value["descriptor_ref"],
             "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0"
+        );
+        release(handle);
+    }
+
+    #[test]
+    fn surface_build_health_projects_pages_health_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "surface_ref": "easynet:///r/example/resource/alice.docs"
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_surface_build_health_invocation(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "pages.health");
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0"
+        );
+        assert_eq!(
+            value["args"]["surface_ref"],
+            "easynet:///r/example/resource/alice.docs"
         );
         release(handle);
     }
@@ -455,6 +525,39 @@ mod tests {
         assert_eq!(code, EASYNET_OK);
         let value = read_json(out);
         assert_eq!(value["state"], "deleted");
+        release(handle);
+    }
+
+    #[test]
+    fn surface_project_health_projects_ready_status() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "callee_ura": "easynet:///r/example/agent/alice.pages",
+                "descriptor_version": "1.0.0",
+                "surface_ref": "easynet:///r/example/resource/alice.docs",
+                "result": {
+                    "state": "ready",
+                    "ready": true,
+                    "owner_ura": "easynet:///r/example/agent/alice.pages",
+                    "page_count": 1,
+                    "checks": [
+                        {"name": "manifest", "state": "ready", "ready": true, "latency_ms": 3}
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe { easynet_surface_project_health(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "surface_health");
+        assert_eq!(value["ready"], true);
+        assert_eq!(value["checks"][0]["name"], "manifest");
         release(handle);
     }
 }

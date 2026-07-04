@@ -87,11 +87,13 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_surface_build_create_page_invocation",
     "easynet_surface_build_delete_page_invocation",
     "easynet_surface_build_manifest_invocation",
+    "easynet_surface_build_health_invocation",
     "easynet_surface_project_page_record",
     "easynet_surface_project_page_page",
     "easynet_surface_project_manifest",
     "easynet_surface_project_public_page_ref",
     "easynet_surface_project_mutation_result",
+    "easynet_surface_project_health",
     "easynet_compatibility_build_list_models_invocation",
     "easynet_compatibility_build_chat_completion_invocation",
     "easynet_compatibility_build_stream_chat_completion_invocation",
@@ -1447,7 +1449,7 @@ class CABISurfaceTransport(_CABIProfileTransport):
         return self._call("easynet_surface_build_manifest_invocation", request_json)
 
     def build_health_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("surface health carrier")
+        return self._call("easynet_surface_build_health_invocation", request_json)
 
     def list_pages(self, request_json: bytes) -> bytes:
         return self._invoke_projected_with_controls(
@@ -1481,7 +1483,17 @@ class CABISurfaceTransport(_CABIProfileTransport):
         return self._call("easynet_surface_project_public_page_ref", request_json)
 
     def surface_health(self, request_json: bytes) -> bytes:
-        return self._missing("surface health")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_surface_build_health_invocation",
+            project_symbol="easynet_surface_project_health",
+            projection_keys=(
+                "callee_ura",
+                "descriptor_version",
+                "project_id",
+                "surface_ref",
+            ),
+        )
 
     def project_page_record(self, page_json: bytes) -> bytes:
         return self._call("easynet_surface_project_page_record", page_json)

@@ -74,6 +74,7 @@ from easynet_sdk import (
     SurfaceClient,
     SurfaceCreatePageRequest,
     SurfaceDeletePageRequest,
+    SurfaceHealthRequest,
     SurfaceListPagesRequest,
     SurfaceManifestRequest,
     UnpublishAbilityRequest,
@@ -522,6 +523,24 @@ class FakeRawCABI:
             }
         if system_ability == "pages.unpublish":
             return {"project_id": "docs", "removed": True}
+        if system_ability == "pages.health":
+            return {
+                "state": "ready",
+                "ready": True,
+                "owner_ura": "easynet:///r/example/agent/alice.pages",
+                "surface_ref": "easynet:///r/example/resource/alice.docs",
+                "descriptor_version": "1.0.0",
+                "page_count": 1,
+                "checks": [
+                    {
+                        "name": "manifest",
+                        "state": "ready",
+                        "ready": True,
+                        "latency_ms": 3,
+                        "metadata": {"source": "pages.get"},
+                    }
+                ],
+            }
         if system_ability == "openai.list_models":
             return {
                 "object": "list",
@@ -870,6 +889,8 @@ class FakeRawCABI:
             return SURFACE_DELETE_PAGE_INVOCATION
         if symbol == "easynet_surface_build_manifest_invocation":
             return SURFACE_MANIFEST_INVOCATION
+        if symbol == "easynet_surface_build_health_invocation":
+            return SURFACE_HEALTH_INVOCATION
         if symbol == "easynet_compatibility_build_list_models_invocation":
             return COMPAT_LIST_MODELS_INVOCATION
         if symbol == "easynet_compatibility_build_chat_completion_invocation":
@@ -962,6 +983,8 @@ class FakeRawCABI:
             return SURFACE_PUBLIC_REF_PROJECTION
         if symbol == "easynet_surface_project_mutation_result":
             return SURFACE_MUTATION_PROJECTION
+        if symbol == "easynet_surface_project_health":
+            return SURFACE_HEALTH_PROJECTION
         if symbol == "easynet_compatibility_project_model_page":
             return COMPAT_MODEL_PAGE_PROJECTION
         if symbol == "easynet_compatibility_project_chat_completion":
@@ -1590,6 +1613,19 @@ SURFACE_MANIFEST_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+SURFACE_HEALTH_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.health@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"project_id":"docs"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"surface","system_ability":"pages.health",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 SURFACE_PAGE_RECORD_PROJECTION = (
     b'{"profile":"surface","kind":"page_record","page_id":"docs",'
     b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
@@ -1639,6 +1675,18 @@ SURFACE_MUTATION_PROJECTION = (
     b'{"profile":"surface","kind":"surface_mutation_result","operation":"delete",'
     b'"page_id":"docs","removed":true,"state":"deleted",'
     b'"metadata":{"profile":"surface","source_ability":"pages.unpublish"}}'
+)
+
+SURFACE_HEALTH_PROJECTION = (
+    b'{"profile":"surface","kind":"surface_health","state":"ready","ready":true,'
+    b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"surface_ref":"easynet:///r/example/resource/alice.docs",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.health@1.0.0",'
+    b'"descriptor_version":"1.0.0","page_count":1,'
+    b'"checks":[{"name":"manifest","state":"ready","ready":true,'
+    b'"message":null,"latency_ms":3,"metadata":{"source":"pages.get"}}],'
+    b'"metadata":{"profile":"surface","source_ability":"pages.health",'
+    b'"rendering_owner":"backend"}}'
 )
 
 COMPAT_LIST_MODELS_INVOCATION = (
@@ -2939,6 +2987,7 @@ class CABITransportTests(unittest.TestCase):
             SurfaceManifestRequest(base=base, project_id="docs")
         )
         public_ref = client.public_page_ref(created)
+        health = client.surface_health(SurfaceHealthRequest(base=base, project_id="docs"))
         deleted = client.delete_page(
             SurfaceDeletePageRequest(base=base, project_id="docs")
         )
@@ -2947,6 +2996,8 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(created.surface_ref, "easynet:///r/example/resource/alice.docs")
         self.assertEqual(manifest.page.page_id, "docs")
         self.assertEqual(public_ref.route_kind, "hub_web")
+        self.assertTrue(health.ready)
+        self.assertEqual(health.checks[0].name, "manifest")
         self.assertEqual(deleted.state, "deleted")
         self.assertEqual(
             [item[0] for item in raw.profile_requests],
@@ -2958,13 +3009,15 @@ class CABITransportTests(unittest.TestCase):
                 "easynet_surface_build_manifest_invocation",
                 "easynet_surface_project_manifest",
                 "easynet_surface_project_public_page_ref",
+                "easynet_surface_build_health_invocation",
+                "easynet_surface_project_health",
                 "easynet_surface_build_delete_page_invocation",
                 "easynet_surface_project_mutation_result",
             ],
         )
         self.assertEqual(
             [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
-            ["pages.list", "pages.publish", "pages.get", "pages.unpublish"],
+            ["pages.list", "pages.publish", "pages.get", "pages.health", "pages.unpublish"],
         )
         self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
         self.assertEqual(
@@ -2973,7 +3026,8 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertEqual(raw.profile_requests[3][2]["page_id"], "docs")
         self.assertEqual(raw.profile_requests[5][2]["public_ref"], "https://example/web/alice/docs/")
-        self.assertEqual(raw.profile_requests[8][2]["project_id"], "docs")
+        self.assertEqual(raw.profile_requests[8][2]["result"]["state"], "ready")
+        self.assertEqual(raw.profile_requests[10][2]["project_id"], "docs")
         self.assertEqual(raw.buffers, {})
 
     def test_compatibility_unary_methods_use_carrier_invoke_and_projection(self) -> None:

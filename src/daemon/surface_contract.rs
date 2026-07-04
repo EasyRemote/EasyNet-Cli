@@ -38,8 +38,8 @@ use serde_json::{json, Map, Value};
 
 use crate::core::ura;
 use crate::daemon::sdk_contract::{
-    build_system_invocation, object, optional_string_field, required_string, validate_ura,
-    SdkContractError,
+    build_system_invocation, object, optional_bool_field, optional_string_field, required_string,
+    system_descriptor_ref, validate_descriptor_version, validate_ura, SdkContractError,
 };
 
 const SURFACE_PROFILE: &str = "surface";
@@ -47,6 +47,7 @@ const ABILITY_PAGES_LIST: &str = "pages.list";
 const ABILITY_PAGES_PUBLISH: &str = "pages.publish";
 const ABILITY_PAGES_GET: &str = "pages.get";
 const ABILITY_PAGES_UNPUBLISH: &str = "pages.unpublish";
+const ABILITY_PAGES_HEALTH: &str = "pages.health";
 
 pub(crate) const SURFACE_DEFAULT_PAGE_SIZE: usize = 50;
 pub(crate) const SURFACE_MAX_PAGE_SIZE: usize = 500;
@@ -97,6 +98,13 @@ pub(crate) fn build_manifest_invocation(request: &Value) -> Result<Value, Surfac
     reject_unsupported_fields(obj, SURFACE_PROJECT_REQUEST_FIELDS)?;
     let args = project_id_args(obj)?;
     build_system_invocation(obj, SURFACE_PROFILE, ABILITY_PAGES_GET, args)
+}
+
+pub(crate) fn build_health_invocation(request: &Value) -> Result<Value, SurfaceError> {
+    let obj = object(request, "SurfaceHealthRequest")?;
+    reject_unsupported_fields(obj, SURFACE_HEALTH_REQUEST_FIELDS)?;
+    let args = health_args(obj)?;
+    build_system_invocation(obj, SURFACE_PROFILE, ABILITY_PAGES_HEALTH, args)
 }
 
 pub(crate) fn project_page_record(input: &Value) -> Result<Value, SurfaceError> {
@@ -157,6 +165,10 @@ pub(crate) fn project_surface_manifest(input: &Value) -> Result<Value, SurfaceEr
     }))
 }
 
+pub(crate) fn project_surface_health(input: &Value) -> Result<Value, SurfaceError> {
+    SurfaceHealthFacts::from_value(input)?.to_json()
+}
+
 pub(crate) fn project_mutation_result(input: &Value) -> Result<Value, SurfaceError> {
     let obj = object(input, "SurfaceMutationResult")?;
     let project_id = required_string(obj, "project_id")?;
@@ -211,6 +223,17 @@ const SURFACE_PROJECT_REQUEST_FIELDS: &[&str] = &[
     "metadata",
     "project_id",
 ];
+const SURFACE_HEALTH_REQUEST_FIELDS: &[&str] = &[
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+    "project_id",
+    "surface_ref",
+];
 
 fn reject_unsupported_fields(
     obj: &Map<String, Value>,
@@ -231,6 +254,19 @@ fn project_id_args(obj: &Map<String, Value>) -> Result<Value, SurfaceError> {
     let project_id = required_string(obj, "project_id")?;
     validate_project_id(project_id)?;
     Ok(json!({ "project_id": project_id }))
+}
+
+fn health_args(obj: &Map<String, Value>) -> Result<Value, SurfaceError> {
+    let mut args = Map::new();
+    if let Some(project_id) = optional_string_field(obj, "project_id")? {
+        validate_project_id(&project_id)?;
+        args.insert("project_id".to_string(), Value::String(project_id));
+    }
+    if let Some(surface_ref) = optional_string_field(obj, "surface_ref")? {
+        validate_ura(&surface_ref, "surface_ref")?;
+        args.insert("surface_ref".to_string(), Value::String(surface_ref));
+    }
+    Ok(Value::Object(args))
 }
 
 fn validate_project_id(project_id: &str) -> Result<(), SurfaceError> {
@@ -407,6 +443,195 @@ impl PageFacts {
             },
         }))
     }
+}
+
+#[derive(Debug, Clone)]
+struct SurfaceHealthFacts {
+    state: String,
+    ready: bool,
+    owner_ura: String,
+    surface_ref: String,
+    descriptor_ref: String,
+    descriptor_version: String,
+    page_count: usize,
+    checks: Vec<SurfaceHealthCheck>,
+    raw: Value,
+}
+
+impl SurfaceHealthFacts {
+    fn from_value(input: &Value) -> Result<Self, SurfaceError> {
+        let root = object(input, "SurfaceHealth")?;
+        let result = root
+            .get("result")
+            .filter(|value| !value.is_null())
+            .unwrap_or(input);
+        let obj = object(result, "SurfaceHealth.result")?;
+        let owner_ura = first_string(obj, root, &["owner_ura", "callee_ura"])
+            .or_else(|| page_facts_if_possible(result).map(|facts| facts.owner_ura))
+            .ok_or(SurfaceError::MissingField("owner_ura"))?;
+        validate_ura(&owner_ura, "owner_ura")?;
+        let surface_ref = first_string(obj, root, &["surface_ref", "project_ura", "resource_ura"])
+            .or_else(|| page_facts_if_possible(result).map(|facts| facts.surface_ref))
+            .ok_or(SurfaceError::MissingField("surface_ref"))?;
+        validate_ura(&surface_ref, "surface_ref")?;
+        let descriptor_version = first_string(obj, root, &["descriptor_version"])
+            .or_else(|| {
+                first_string(obj, root, &["descriptor_ref"])
+                    .and_then(|descriptor_ref| descriptor_version_from_ref(&descriptor_ref))
+            })
+            .unwrap_or_else(|| "1.0.0".to_string());
+        validate_descriptor_version(&descriptor_version)?;
+        let descriptor_ref = first_string(obj, root, &["descriptor_ref"])
+            .map(Ok)
+            .unwrap_or_else(|| {
+                system_descriptor_ref(&owner_ura, ABILITY_PAGES_HEALTH, &descriptor_version)
+            })?;
+        let checks = health_checks(obj)?;
+        let state = optional_string_field(obj, "state")?.unwrap_or_else(|| {
+            if checks.iter().all(|check| check.ready) {
+                "ready".to_string()
+            } else {
+                "degraded".to_string()
+            }
+        });
+        let ready = optional_bool_field(obj, "ready")?.unwrap_or_else(|| {
+            matches!(state.as_str(), "ready" | "healthy" | "ok")
+                && checks.iter().all(|check| check.ready)
+        });
+        let page_count = optional_usize(obj, "page_count")?
+            .or_else(|| collection_len(obj, "projects"))
+            .or_else(|| collection_len(obj, "pages"))
+            .or_else(|| collection_len(obj, "items"))
+            .unwrap_or_else(|| {
+                usize::from(obj.contains_key("page_id") || obj.contains_key("project_id"))
+            });
+        Ok(Self {
+            state,
+            ready,
+            owner_ura,
+            surface_ref,
+            descriptor_ref,
+            descriptor_version,
+            page_count,
+            checks,
+            raw: input.clone(),
+        })
+    }
+
+    fn to_json(self) -> Result<Value, SurfaceError> {
+        Ok(json!({
+            "profile": SURFACE_PROFILE,
+            "kind": "surface_health",
+            "state": self.state,
+            "ready": self.ready,
+            "owner_ura": self.owner_ura,
+            "surface_ref": self.surface_ref,
+            "descriptor_ref": self.descriptor_ref,
+            "descriptor_version": self.descriptor_version,
+            "page_count": self.page_count,
+            "checks": self.checks.into_iter().map(SurfaceHealthCheck::to_json).collect::<Vec<_>>(),
+            "metadata": {
+                "profile": SURFACE_PROFILE,
+                "source_ability": ABILITY_PAGES_HEALTH,
+                "rendering_owner": "backend",
+                "raw_health": self.raw,
+            },
+        }))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SurfaceHealthCheck {
+    name: String,
+    state: String,
+    ready: bool,
+    message: Option<String>,
+    latency_ms: usize,
+    metadata: Value,
+}
+
+impl SurfaceHealthCheck {
+    fn from_value(input: &Value) -> Result<Self, SurfaceError> {
+        let obj = object(input, "SurfaceHealthCheck")?;
+        let name = optional_string_field(obj, "name")?.unwrap_or_else(|| "surface".to_string());
+        let state = optional_string_field(obj, "state")?.unwrap_or_else(|| "ready".to_string());
+        let ready = optional_bool_field(obj, "ready")?
+            .unwrap_or_else(|| matches!(state.as_str(), "ready" | "healthy" | "ok"));
+        let message = optional_string_field(obj, "message")?;
+        let latency_ms = optional_usize(obj, "latency_ms")?.unwrap_or(0);
+        let metadata = obj
+            .get("metadata")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        Ok(Self {
+            name,
+            state,
+            ready,
+            message,
+            latency_ms,
+            metadata,
+        })
+    }
+
+    fn to_json(self) -> Value {
+        json!({
+            "name": self.name,
+            "state": self.state,
+            "ready": self.ready,
+            "message": self.message,
+            "latency_ms": self.latency_ms,
+            "metadata": self.metadata,
+        })
+    }
+}
+
+fn health_checks(obj: &Map<String, Value>) -> Result<Vec<SurfaceHealthCheck>, SurfaceError> {
+    let Some(raw) = obj.get("checks").filter(|value| !value.is_null()) else {
+        return Ok(vec![SurfaceHealthCheck {
+            name: "surface".to_string(),
+            state: optional_string_field(obj, "state")?.unwrap_or_else(|| "ready".to_string()),
+            ready: optional_bool_field(obj, "ready")?.unwrap_or(true),
+            message: optional_string_field(obj, "message")?,
+            latency_ms: optional_usize(obj, "latency_ms")?.unwrap_or(0),
+            metadata: json!({"source": "pages.health"}),
+        }]);
+    };
+    let checks = raw
+        .as_array()
+        .ok_or_else(|| SurfaceError::InvalidField("checks", "must be an array".to_string()))?;
+    checks
+        .iter()
+        .map(SurfaceHealthCheck::from_value)
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn page_facts_if_possible(input: &Value) -> Option<PageFacts> {
+    PageFacts::from_value(input, ProjectionHints::default()).ok()
+}
+
+fn first_string(
+    primary: &Map<String, Value>,
+    fallback: &Map<String, Value>,
+    fields: &[&'static str],
+) -> Option<String> {
+    fields.iter().find_map(|field| {
+        optional_string_field(primary, field)
+            .ok()
+            .flatten()
+            .or_else(|| optional_string_field(fallback, field).ok().flatten())
+    })
+}
+
+fn descriptor_version_from_ref(descriptor_ref: &str) -> Option<String> {
+    descriptor_ref
+        .rsplit_once('@')
+        .map(|(_, version)| version.trim().to_string())
+        .filter(|version| !version.is_empty())
+}
+
+fn collection_len(obj: &Map<String, Value>, field: &'static str) -> Option<usize> {
+    obj.get(field).and_then(Value::as_array).map(Vec::len)
 }
 
 fn surface_ref(
@@ -734,6 +959,27 @@ mod tests {
     }
 
     #[test]
+    fn build_health_targets_pages_health_with_surface_ref() {
+        let invocation = build_health_invocation(&base_request(json!({
+            "surface_ref": "easynet:///r/example/resource/alice.docs"
+        })))
+        .unwrap();
+
+        assert_eq!(
+            invocation["metadata"]["system_ability"],
+            ABILITY_PAGES_HEALTH
+        );
+        assert_eq!(
+            invocation["descriptor_ref"],
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0"
+        );
+        assert_eq!(
+            invocation["args"],
+            json!({"surface_ref": "easynet:///r/example/resource/alice.docs"})
+        );
+    }
+
+    #[test]
     fn build_delete_targets_pages_unpublish() {
         let invocation =
             build_delete_page_invocation(&base_request(json!({"project_id": "docs"}))).unwrap();
@@ -820,5 +1066,33 @@ mod tests {
 
         assert_eq!(result["page_id"], "docs");
         assert_eq!(result["state"], "deleted");
+    }
+
+    #[test]
+    fn project_surface_health_derives_descriptor_and_checks() {
+        let health = project_surface_health(&json!({
+            "callee_ura": "easynet:///r/example/agent/alice.pages",
+            "descriptor_version": "1.0.0",
+            "surface_ref": "easynet:///r/example/resource/alice.docs",
+            "result": {
+                "state": "ready",
+                "ready": true,
+                "owner_ura": "easynet:///r/example/agent/alice.pages",
+                "page_count": 1,
+                "checks": [
+                    {"name": "manifest", "state": "ready", "ready": true, "latency_ms": 3}
+                ]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(health["kind"], "surface_health");
+        assert_eq!(health["ready"], true);
+        assert_eq!(health["page_count"], 1);
+        assert_eq!(health["checks"][0]["name"], "manifest");
+        assert_eq!(
+            health["descriptor_ref"],
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0"
+        );
     }
 }

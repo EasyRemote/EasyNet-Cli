@@ -787,6 +787,12 @@ int32_t easynet_surface_build_manifest_invocation(
     char** out_invocation_json
 );
 
+int32_t easynet_surface_build_health_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
 int32_t easynet_surface_project_page_record(
     EasynetHandle handle,
     const char* page_json,
@@ -816,24 +822,33 @@ int32_t easynet_surface_project_mutation_result(
     const char* result_json,
     char** out_result_json
 );
+
+int32_t easynet_surface_project_health(
+    EasynetHandle handle,
+    const char* health_json,
+    char** out_health_json
+);
 ```
 
 Surface functions are scoped to a live `EasynetHandle`, matching the SDK
 object graph's `SurfaceClient`. The carrier builders return complete
 Invocation JSON for daemon-owned `pages.list`, `pages.publish`, `pages.get`,
-and `pages.unpublish`. They require explicit caller, callee, subject,
-descriptor version, nonce, and causal context fields. Bindings submit returned
-carriers through Runtime Core; these helpers do not render HTML, call backend
-HTTP routes, or open page folders directly.
+`pages.unpublish`, and `pages.health`. They require explicit caller, callee,
+subject, descriptor version, nonce, and causal context fields. Bindings submit
+returned carriers through Runtime Core; these helpers do not render HTML, call
+backend HTTP routes, or open page folders directly.
 
 The projection helpers normalize daemon page facts into `PageRecord`,
-`Page<PageRecord>`, `SurfaceManifest`, `PublicPageRef`, and
-`SurfaceMutationResult` DTOs. Page identity is derived only from explicit page
-facts such as `project_ura`, `owner_ura`, `realm`, and `user`; public refs are
-product route references, not daemon transport endpoints. ABI v4 Surface
-support is `carrier_projection_partial`: backend route serving, browser auth,
-CDN/cache policy, content-management UX, and full surface status remain future
-daemon or product-profile work.
+`Page<PageRecord>`, `SurfaceManifest`, `PublicPageRef`,
+`SurfaceMutationResult`, and `SurfaceHealth` DTOs. Surface health reports the
+daemon Pages registry/project readiness exposed by `pages.health`; it is not a
+backend route, browser auth, CDN/cache, or public rendering health check. Page
+identity is derived only from explicit page facts such as `project_ura`,
+`owner_ura`, `realm`, and `user`; public refs are product route references, not
+daemon transport endpoints. ABI v4 Surface support is
+`carrier_projection_partial`: backend route serving, browser auth, CDN/cache
+policy, content-management UX, and end-to-end public surface status remain
+future daemon or product-profile work.
 
 ### 2.16 Compatibility Carriers And Projections
 

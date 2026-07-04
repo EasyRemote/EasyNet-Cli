@@ -693,6 +693,12 @@ int32_t easynet_surface_build_manifest_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_surface_build_health_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_surface_project_page_record(
     EasynetHandle handle,
     const char *page_json,
@@ -721,6 +727,12 @@ int32_t easynet_surface_project_mutation_result(
     EasynetHandle handle,
     const char *result_json,
     char **out_result_json
+);
+
+int32_t easynet_surface_project_health(
+    EasynetHandle handle,
+    const char *health_json,
+    char **out_health_json
 );
 
 int32_t easynet_compatibility_build_list_models_invocation(

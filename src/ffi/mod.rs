@@ -79,7 +79,8 @@
 //   `easynet_compatibility_project_*`: Compatibility carrier and OpenAI-shape
 //   model/chat/file projection helpers.
 // - `easynet_surface_build_*_invocation` and
-//   `easynet_surface_project_*`: Surface page carrier and projection helpers.
+//   `easynet_surface_project_*`: Surface page carrier, daemon pages health,
+//   and projection helpers.
 // - `easynet_wrappers_build_*_invocation` and
 //   `easynet_wrappers_project_*`: Convenience Wrapper file/session/media
 //   carrier and record projection helpers.
@@ -193,6 +194,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "admin_device_session_projection": true,
             "surface_carriers": true,
             "surface_projection": true,
+            "surface_health": true,
             "compatibility_carriers": true,
             "compatibility_projection": true,
             "compatibility_file_adapters": true,
@@ -383,6 +385,7 @@ mod tests {
         assert_eq!(json["symbols"]["admin_device_session_projection"], true);
         assert_eq!(json["symbols"]["surface_carriers"], true);
         assert_eq!(json["symbols"]["surface_projection"], true);
+        assert_eq!(json["symbols"]["surface_health"], true);
         assert_eq!(json["symbols"]["compatibility_carriers"], true);
         assert_eq!(json["symbols"]["compatibility_projection"], true);
         assert_eq!(json["symbols"]["compatibility_file_adapters"], true);

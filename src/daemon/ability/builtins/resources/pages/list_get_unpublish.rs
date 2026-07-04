@@ -106,6 +106,68 @@ pub fn handle_get(
     }))
 }
 
+/// `pages.health` — report daemon-owned Pages registry readiness.
+///
+/// This is deliberately narrower than backend/public-route health: it proves
+/// the daemon pages management ability family is loaded and, when requested,
+/// that one published project is present in the local registry.
+pub fn handle_health(user: &str, realm: &str, args: Value) -> anyhow::Result<Value> {
+    let project_id = args
+        .get("project_id")
+        .and_then(Value::as_str)
+        .or_else(|| project_id_from_surface_ref(user, args.get("surface_ref")?));
+    let mut page_count = 0usize;
+    let mut project_found = project_id.is_none();
+    for entry in PUBLISHED_PROJECTS.iter() {
+        let (entry_user, entry_project_id) = entry.key();
+        if entry_user != user {
+            continue;
+        }
+        page_count += 1;
+        if project_id.is_some_and(|target| target == entry_project_id) {
+            project_found = true;
+        }
+    }
+    let ready = project_found;
+    let state = if ready { "ready" } else { "degraded" };
+    let owner_ura = crate::core::ura::agent_ura(realm, user, "pages");
+    let surface_ref = project_id
+        .map(|project_id| {
+            crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/")
+        })
+        .unwrap_or_else(|| {
+            crate::core::ura::resource_dot_ura(realm, &format!("{user}.pages"), "/")
+        });
+    Ok(json!({
+        "state": state,
+        "ready": ready,
+        "owner_ura": owner_ura,
+        "surface_ref": surface_ref,
+        "page_count": page_count,
+        "checks": [
+            {
+                "name": "pages_registry",
+                "state": "ready",
+                "ready": true,
+                "message": null,
+                "latency_ms": 0,
+                "metadata": {"source": "PUBLISHED_PROJECTS"}
+            },
+            {
+                "name": "project",
+                "state": if project_found { "ready" } else { "missing" },
+                "ready": project_found,
+                "message": if project_found { Value::Null } else { json!("project is not published") },
+                "latency_ms": 0,
+                "metadata": {
+                    "project_id": project_id,
+                    "requested": project_id.is_some()
+                }
+            }
+        ]
+    }))
+}
+
 /// `pages.unpublish` — remove the project. Drops the
 /// `ProjectHandle` (releasing the folder fd) and removes the
 /// entry from `PUBLISHED_PROJECTS`, then rewrites the user's
@@ -153,4 +215,12 @@ fn handle_unpublish_inner(
         "project_id": project_id,
         "removed":    true,
     }))
+}
+
+fn project_id_from_surface_ref<'a>(user: &str, value: &'a Value) -> Option<&'a str> {
+    let raw = value.as_str()?;
+    let marker = format!("resource/{user}.");
+    let (_, tail) = raw.split_once(&marker)?;
+    let project = tail.split('/').next().unwrap_or(tail);
+    (!project.is_empty() && !project.contains('.')).then_some(project)
 }

@@ -73,7 +73,7 @@ Invocation carriers, C ABI-backed directory subscription execution through
 Runtime Core open_stream, device event history pages, and EventFrame
 cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers, C ABI-backed
-page list/create/delete/manifest execution through Runtime Core invoke, plus
+page list/create/delete/manifest/health execution through Runtime Core invoke, plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
 seams and close state seams. CompatibilityClient exposes
@@ -93,8 +93,8 @@ install and ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
 and cleanup adapters, mission event streams, concrete Admin trust/pairing carriers,
 device-session create/delete lifecycle,
-certificate policy, Events daemon filtering/live adapters, concrete surface health
-carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
+certificate policy, Events daemon filtering/live adapters,
+backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream/bidi execution adapters, and the actual EasyRemote
 repository cutover remain incomplete. See
