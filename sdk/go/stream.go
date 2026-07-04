@@ -77,6 +77,9 @@ type StreamEvent struct {
 	payloadContentType string
 	payloadBase64      string
 	payloadJSON        json.RawMessage
+	selectedNodeID     string
+	schedulingReason   string
+	elapsedMS          int64
 	errorJSON          json.RawMessage
 }
 
@@ -304,6 +307,18 @@ func (e StreamEvent) PayloadJSON() json.RawMessage {
 	return append(json.RawMessage(nil), e.payloadJSON...)
 }
 
+func (e StreamEvent) SelectedNodeID() string {
+	return e.selectedNodeID
+}
+
+func (e StreamEvent) SchedulingReason() string {
+	return e.schedulingReason
+}
+
+func (e StreamEvent) ElapsedMS() int64 {
+	return e.elapsedMS
+}
+
 func (e StreamEvent) ErrorJSON() json.RawMessage {
 	return append(json.RawMessage(nil), e.errorJSON...)
 }
@@ -336,10 +351,16 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		ContentType        string          `json:"content_type"`
 		PayloadBase64      string          `json:"payload_base64"`
 		PayloadJSON        json.RawMessage `json:"payload_json"`
+		SelectedNodeID     string          `json:"selected_node_id"`
+		SchedulingReason   string          `json:"scheduling_reason"`
+		ElapsedMS          int64           `json:"elapsed_ms"`
 		Error              json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("decode stream event JSON: %v", err), err)
+	}
+	if dto.ElapsedMS < 0 {
+		return StreamEvent{}, invalidRuntimePayload("elapsed_ms must be non-negative", nil)
 	}
 	kind := dto.Kind
 	if kind == "" {
@@ -360,6 +381,9 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		payloadContentType: contentType,
 		payloadBase64:      dto.PayloadBase64,
 		payloadJSON:        append(json.RawMessage(nil), dto.PayloadJSON...),
+		selectedNodeID:     dto.SelectedNodeID,
+		schedulingReason:   dto.SchedulingReason,
+		elapsedMS:          dto.ElapsedMS,
 		errorJSON:          append(json.RawMessage(nil), dto.Error...),
 	}, nil
 }
