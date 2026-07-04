@@ -15,6 +15,8 @@ from easynet_sdk import (
     IdentityClient,
     InvocationSignature,
     PrepareOptions,
+    ReceiptClient,
+    ReceiptFetchRequest,
     RuntimeClient,
     SDKError,
     StartConfig,
@@ -25,6 +27,7 @@ from easynet_sdk._cabi import (
     CABIDiscoveryTransport,
     CABIDaemonTransport,
     CABIIdentityTransport,
+    CABIReceiptTransport,
     CABIRuntimeTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
@@ -490,6 +493,8 @@ class FakeRawCABI:
         return self._write(out_ptr, self._profile_payload(symbol))
 
     def _profile_payload(self, symbol: str) -> bytes:
+        if symbol == "easynet_receipt_build_fetch_invocation":
+            return RECEIPT_FETCH_INVOCATION
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -634,6 +639,21 @@ CAUSAL_REF_PROJECTION = (
     b'{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1",'
     b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
     b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
+)
+
+RECEIPT_FETCH_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.invocation.history.get@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"key":{"request_id":"inv-example-1"}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"receipt",'
+    b'"system_ability":"invocation.history.get",'
+    b'"carrier_owner":"daemon_sdk"}}'
 )
 
 HOST_BINDING_PROJECTION = (
@@ -1011,6 +1031,51 @@ class CABITransportTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
         self.assertEqual(raw.runtime_requests[0], ("health", 7))
+        self.assertEqual(raw.buffers, {})
+
+    def test_receipt_fetch_uses_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = ReceiptClient(CABIReceiptTransport(lib, handle=7))
+
+        summary = client.fetch(
+            ReceiptFetchRequest(
+                caller_ura="easynet:///r/example/agent/alice.sdk",
+                callee_ura="easynet:///r/example/device/dev-a",
+                descriptor_ref=(
+                    "easynet:///r/example/ability/"
+                    "device.dev-a.invocation.history.get@1.0.0"
+                ),
+                subject_ura="easynet:///r/example/device/dev-a",
+                descriptor_version="1.0.0",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                request_id="inv-example-1",
+            )
+        )
+
+        self.assertEqual(summary.state, "completed")
+        self.assertEqual(summary.output, {"ok": True})
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_receipt_build_fetch_invocation", "easynet_receipt_project"],
+        )
+        self.assertEqual(raw.profile_requests[0][1], 7)
+        self.assertEqual(
+            raw.profile_requests[0][2]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+        )
+        self.assertEqual(raw.profile_requests[0][2]["request_id"], "inv-example-1")
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+        )
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "invocation.history.get",
+        )
+        self.assertEqual(raw.profile_requests[1][2]["terminal_state"], "Completed")
         self.assertEqual(raw.buffers, {})
 
     def test_runtime_transport_prepare_sign_submit_choreography(self) -> None:

@@ -30,7 +30,8 @@ read-model pages, list/resolve Invocation carrier builders, directory
 projection helpers, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
 Axon-delegated addressing helper facade, signing-key lifecycle, and
 signer-handle seams.
-It also exposes ReceiptClient fetch/project/verify/causal-ref projection and close state seams
+It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
+C ABI-backed fetch execution through Runtime Core invoke, and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
@@ -56,7 +57,7 @@ file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed concrete carrier builders,
 transport-backed helper close state seams, and record projections. Concrete daemon
 default UDS transport, directory live transport adapters, local signer implementations,
-Axon-backed receipt verification, live publication/host-binding/mission
+Axon-backed receipt verification, receipt URI construction, live publication/host-binding/mission
 execution adapters, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 live adapters, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,

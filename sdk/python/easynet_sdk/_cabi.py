@@ -774,7 +774,9 @@ class CABIReceiptTransport(_CABIProfileTransport):
     """Receipt carrier/projection transport backed by C ABI v4."""
 
     def fetch(self, request_json: bytes) -> bytes:
-        return self._missing("receipt fetch")
+        draft_json = self.build_fetch_invocation(request_json)
+        result_json = self.lib.invocation_invoke(self._require_open(), draft_json)
+        return self.project(result_json)
 
     def build_fetch_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_receipt_build_fetch_invocation", request_json)

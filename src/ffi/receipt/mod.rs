@@ -193,6 +193,7 @@ mod tests {
         let mut request = serde_json::json!({
             "caller_ura": "easynet:///r/example/agent/alice.sdk",
             "callee_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_ref": "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
             "subject_ura": "easynet:///r/example/device/dev-a",
             "descriptor_version": "1.0.0",
             "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",

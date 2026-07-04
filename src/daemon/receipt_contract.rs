@@ -33,7 +33,8 @@
 use serde_json::{json, Map, Value};
 
 use crate::daemon::sdk_contract::{
-    build_system_invocation, object, optional_string_field, SdkContractError,
+    build_system_invocation, object, optional_string_field, required_string, system_descriptor_ref,
+    SdkContractError,
 };
 
 const RECEIPT_PROFILE: &str = "receipt";
@@ -45,6 +46,7 @@ pub(crate) type ReceiptError = SdkContractError;
 pub(crate) fn build_fetch_invocation(request: &Value) -> Result<Value, ReceiptError> {
     let obj = object(request, "ReceiptFetchRequest")?;
     reject_unsupported_fields(obj, RECEIPT_FETCH_REQUEST_FIELDS)?;
+    validate_fetch_descriptor_ref(obj)?;
     let args = fetch_args(obj)?;
     build_system_invocation(obj, RECEIPT_PROFILE, ABILITY_INVOCATION_HISTORY_GET, args)
 }
@@ -72,6 +74,7 @@ pub(crate) fn project_causal_ref(input: &Value) -> Result<Value, ReceiptError> {
 const RECEIPT_FETCH_REQUEST_FIELDS: &[&str] = &[
     "caller_ura",
     "callee_ura",
+    "descriptor_ref",
     "subject_ura",
     "descriptor_version",
     "nonce_base64",
@@ -93,6 +96,26 @@ fn reject_unsupported_fields(
                 format!("unsupported field `{key}`"),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_fetch_descriptor_ref(obj: &Map<String, Value>) -> Result<(), ReceiptError> {
+    let descriptor_ref = required_string(obj, "descriptor_ref")?;
+    let callee_ura = required_string(obj, "callee_ura")?;
+    let descriptor_version = required_string(obj, "descriptor_version")?;
+    let expected = system_descriptor_ref(
+        callee_ura,
+        ABILITY_INVOCATION_HISTORY_GET,
+        descriptor_version,
+    )?;
+    if descriptor_ref != expected {
+        return Err(ReceiptError::InvalidField(
+            "descriptor_ref",
+            format!(
+                "must match daemon/Axon descriptor ref for {ABILITY_INVOCATION_HISTORY_GET}: {expected}"
+            ),
+        ));
     }
     Ok(())
 }
@@ -445,6 +468,7 @@ mod tests {
         let mut request = json!({
             "caller_ura": "easynet:///r/example/agent/alice.sdk",
             "callee_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_ref": "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
             "subject_ura": "easynet:///r/example/device/dev-a",
             "descriptor_version": "1.0.0",
             "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
@@ -491,6 +515,16 @@ mod tests {
         let err = build_fetch_invocation(&request).unwrap_err();
 
         assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn build_fetch_invocation_requires_descriptor_ref_from_request() {
+        let mut request = base_request(json!({"request_id": "req-123"}));
+        request.as_object_mut().unwrap().remove("descriptor_ref");
+
+        let err = build_fetch_invocation(&request).unwrap_err();
+
+        assert!(err.to_string().contains("descriptor_ref"));
     }
 
     #[test]
