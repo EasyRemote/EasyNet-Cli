@@ -53,9 +53,10 @@ method spelling.
   verification, fetched-record execution convenience, and language facades
   remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
-  carrier/resolved-ref projection guardrails, and Identity URA/DescriptorRef
-  projection guardrails exist for Rust/C ABI; subscribe convenience wrappers,
-  signer lifecycle, and language facades remain incomplete.
+  carrier/resolved-ref projection guardrails, Identity URA/DescriptorRef
+  projection guardrails, and identity signing-key register/list/revoke
+  builder/projection guardrails exist for Rust/C ABI; subscribe convenience
+  wrappers, signer construction, and language facades remain incomplete.
 - Publication ResourceRef/package validation/deploy-unpublish carrier guardrails
   exist for Rust/C ABI; daemon list/show/enable/disable read models, execution
   wrappers, and language facades remain incomplete.
@@ -110,8 +111,8 @@ method spelling.
   read-model pages with bounded pagination, directory subscription state seams,
   and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
   signing-key lifecycle, signer-handle projection, and close state seams; directory live transport
-  adapters, local signer implementations, concrete daemon carriers, and backend
-  route cutover remain incomplete.
+  adapters, signing-key live execution adapters, local signer implementations,
+  concrete daemon carriers, and backend route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   and close state seams over opaque receipt refs; Axon-backed cryptographic
@@ -200,12 +201,10 @@ method spelling.
   signing-key lifecycle and signer-handle projection seams, and close state
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
-  Runtime Core invoke, while
-  signing-key lifecycle live adapters still require a daemon/ABI key lifecycle
-  result contract rather than projecting `identity.register_pubkey` trust-anchor
-  acks into richer signing-key DTOs; directory buffered-event projection, local
-  signer implementations, and actual EasyRemote repository extraction remain
-  incomplete.
+  Runtime Core invoke, plus C ABI-backed signing-key register/list/revoke
+  execution through daemon identity abilities; directory buffered-event
+  projection, local signer implementations, and actual EasyRemote repository
+  extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   receipt-derived child `causal_context` adapters, typed `ReceiptRef` and

@@ -452,6 +452,22 @@ class FakeRawCABI:
                     }
                 ]
             }
+        if system_ability == "identity.register_pubkey":
+            return {"ok": True}
+        if system_ability == "identity.list_user_pubkeys":
+            return {
+                "agent_ura": "easynet:///r/example/agent/alice.sdk",
+                "keys": [
+                    {
+                        "public_key_b64": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                        "added_at_unix_ms": 1783100000123,
+                    }
+                ],
+                "rotation_epoch": 3,
+                "revoked_key_count": 1,
+            }
+        if system_ability == "identity.revoke_user_pubkey":
+            return {"ok": True, "removed": True}
         if system_ability == "meta.list_abilities":
             args = draft.get("args")
             if (
@@ -843,6 +859,12 @@ class FakeRawCABI:
             return IDENTITY_LIST_SIGNING_KEYS_INVOCATION
         if symbol == "easynet_identity_build_revoke_signing_key_invocation":
             return IDENTITY_REVOKE_SIGNING_KEY_INVOCATION
+        if symbol == "easynet_identity_project_signing_key_record":
+            return IDENTITY_SIGNING_KEY_RECORD
+        if symbol == "easynet_identity_project_signing_key_page":
+            return IDENTITY_SIGNING_KEY_PAGE
+        if symbol == "easynet_identity_project_signing_key_revoke_result":
+            return IDENTITY_SIGNING_KEY_REVOKE
         if symbol == "easynet_directory_build_list_devices_invocation":
             return DIRECTORY_LIST_DEVICES_INVOCATION
         if symbol == "easynet_directory_build_list_agents_invocation":
@@ -1348,6 +1370,35 @@ IDENTITY_REVOKE_SIGNING_KEY_INVOCATION = (
     b'"metadata":{"profile":"directory_identity",'
     b'"system_ability":"identity.revoke_user_pubkey",'
     b'"carrier_owner":"daemon_sdk"}}'
+)
+
+IDENTITY_SIGNING_KEY_RECORD = (
+    b'{"profile":"directory_identity","key_id":"alice-key-1",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"algorithm":"ed25519",'
+    b'"public_key_base64":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",'
+    b'"state":"active","usage":["invocation.sign"],'
+    b'"created_unix_ms":0,"revoked_unix_ms":0,'
+    b'"metadata":{"source":"identity.register_pubkey"}}'
+)
+
+IDENTITY_SIGNING_KEY_PAGE = (
+    b'{"profile":"directory_identity","items":['
+    b'{"profile":"directory_identity","key_id":"ed25519:derived",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"algorithm":"ed25519",'
+    b'"public_key_base64":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",'
+    b'"state":"active","usage":["invocation.sign"],'
+    b'"created_unix_ms":1783100000123,"revoked_unix_ms":0,'
+    b'"metadata":{"source":"identity.list_user_pubkeys"}}],'
+    b'"next_cursor":null,"limit":50,'
+    b'"metadata":{"source":"identity.list_user_pubkeys","rotation_epoch":3}}'
+)
+
+IDENTITY_SIGNING_KEY_REVOKE = (
+    b'{"profile":"directory_identity","key_id":"alice-key-1",'
+    b'"revoked":true,"state":"revoked",'
+    b'"metadata":{"source":"identity.revoke_user_pubkey","removed":true}}'
 )
 
 HOST_BINDING_PROJECTION = (
@@ -2157,49 +2208,55 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertEqual(raw.buffers, {})
 
-    def test_identity_transport_reports_missing_signing_key_cabi_contracts(self) -> None:
+    def test_identity_transport_executes_signing_key_lifecycle(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
         client = IdentityClient(CABIIdentityTransport(lib, handle=7))
 
-        with self.assertRaises(SDKError) as caught:
-            client.register_signing_key(
-                SigningKeyRegistrationRequest(
-                    owner_ura="easynet:///r/example/agent/alice.sdk",
-                    key_id="alice-key-1",
-                    algorithm="ed25519",
-                    public_key_base64="cHVibGljLWtleQ==",
-                    usage=("invocation.sign",),
-                )
+        record = client.register_signing_key(
+            SigningKeyRegistrationRequest(
+                owner_ura="easynet:///r/example/agent/alice.sdk",
+                key_id="alice-key-1",
+                algorithm="ed25519",
+                public_key_base64="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                usage=("invocation.sign",),
             )
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertIn(
-            "requires a daemon/ABI signing-key lifecycle contract",
-            caught.exception.message,
+        )
+        page = client.list_signing_keys(
+            SigningKeyListRequest(
+                owner_ura="easynet:///r/example/agent/alice.sdk",
+            )
+        )
+        revoked = client.revoke_signing_key(
+            SigningKeyRevokeRequest(
+                key_id="alice-key-1",
+                reason="rotation",
+                public_key_base64="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            )
         )
 
-        with self.assertRaises(SDKError) as caught:
-            client.list_signing_keys(
-                SigningKeyListRequest(
-                    owner_ura="easynet:///r/example/agent/alice.sdk",
-                )
-            )
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertIn(
-            "identity.register_pubkey trust-anchor carriers cannot be projected",
-            caught.exception.message,
+        self.assertEqual(record.key_id, "alice-key-1")
+        self.assertEqual(page.items[0].owner_ura, "easynet:///r/example/agent/alice.sdk")
+        self.assertTrue(revoked.revoked)
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests[-6:]],
+            [
+                "easynet_identity_build_register_signing_key_invocation",
+                "easynet_identity_project_signing_key_record",
+                "easynet_identity_build_list_signing_keys_invocation",
+                "easynet_identity_project_signing_key_page",
+                "easynet_identity_build_revoke_signing_key_invocation",
+                "easynet_identity_project_signing_key_revoke_result",
+            ],
         )
-
-        with self.assertRaises(SDKError) as caught:
-            client.revoke_signing_key(
-                SigningKeyRevokeRequest(
-                    key_id="alice-key-1",
-                    reason="rotation",
-                )
-            )
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertEqual(raw.profile_requests, [])
-        self.assertEqual(raw.runtime_requests, [])
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            [
+                "identity.register_pubkey",
+                "identity.list_user_pubkeys",
+                "identity.revoke_user_pubkey",
+            ],
+        )
 
         with self.assertRaises(SDKError) as caught:
             client.signer(

@@ -35,6 +35,9 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_identity_build_register_signing_key_invocation",
     "easynet_identity_build_list_signing_keys_invocation",
     "easynet_identity_build_revoke_signing_key_invocation",
+    "easynet_identity_project_signing_key_record",
+    "easynet_identity_project_signing_key_page",
+    "easynet_identity_project_signing_key_revoke_result",
     "easynet_directory_build_list_devices_invocation",
     "easynet_directory_build_list_agents_invocation",
     "easynet_directory_build_list_abilities_invocation",
@@ -752,13 +755,35 @@ class CABIIdentityTransport:
         )
 
     def register_signing_key(self, request_json: bytes) -> bytes:
-        return self._missing_signing_key_lifecycle("identity register signing key")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_identity_build_register_signing_key_invocation",
+            project_symbol="easynet_identity_project_signing_key_record",
+            projection_keys=(
+                "owner_ura",
+                "key_id",
+                "algorithm",
+                "public_key_base64",
+                "usage",
+                "role",
+            ),
+        )
 
     def list_signing_keys(self, request_json: bytes) -> bytes:
-        return self._missing_signing_key_lifecycle("identity list signing keys")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_identity_build_list_signing_keys_invocation",
+            project_symbol="easynet_identity_project_signing_key_page",
+            projection_keys=("owner_ura", "limit", "cursor"),
+        )
 
     def revoke_signing_key(self, request_json: bytes) -> bytes:
-        return self._missing_signing_key_lifecycle("identity revoke signing key")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_identity_build_revoke_signing_key_invocation",
+            project_symbol="easynet_identity_project_signing_key_revoke_result",
+            projection_keys=("key_id", "public_key_base64", "reason"),
+        )
 
     def signer(self, request_json: bytes) -> bytes:
         return self._missing("identity signer")
@@ -779,18 +804,33 @@ class CABIIdentityTransport:
             message=f"{method} is not exposed by the C ABI identity bridge",
         )
 
-    def _missing_signing_key_lifecycle(self, method: str) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message=(
-                f"{method} requires a daemon/ABI signing-key lifecycle contract; "
-                "identity.register_pubkey trust-anchor carriers cannot be "
-                "projected into SigningKeyRecord semantics"
-            ),
+    def _invoke_output_projected_with_request(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+        project_symbol: str,
+        projection_keys: tuple[str, ...],
+    ) -> bytes:
+        handle = self._require_open()
+        draft_json = self.lib.json_handle_output(build_symbol, handle, request_json)
+        output = self.lib.invocation_invoke(handle, draft_json)
+        output_json = _json_object(output, "identity invocation result")
+        result = output_json.get("output_json")
+        if not isinstance(result, dict):
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="identity invocation result is missing output_json",
+            )
+        projection_json = _projection_request_json(
+            request_json,
+            result,
+            passthrough_keys=projection_keys,
         )
+        return self.lib.json_handle_output(project_symbol, handle, projection_json)
 
     def _require_open(self) -> int:
         if self._closed:

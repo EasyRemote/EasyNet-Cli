@@ -41,7 +41,8 @@ AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ur
 `owner_ability_descriptor_ref`, and
 `canonical_ability_descriptor_ref` helpers plus an
 `AbilityAddress` projection for EasyRemote-style callee/subject ownership facts,
-IdentityClient descriptor/resource projection, signing-key lifecycle, and
+IdentityClient descriptor/resource projection, C ABI-backed signing-key
+register/list/revoke execution through daemon identity abilities, and
 signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
@@ -86,8 +87,7 @@ file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed record-returning file, terminal, remote desktop,
 browser, and media helper execution through Runtime Core invoke,
 transport-backed helper close state seams, and record projections. Direct daemon
-UDS transport, daemon/ABI-backed signing-key lifecycle result contracts,
-local signer implementations,
+UDS transport, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication plugin
 install and ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution

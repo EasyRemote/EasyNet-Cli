@@ -24,8 +24,10 @@
 //
 // Architectural Position
 // ----------------------
-// This is the first Directory + Identity projection slice. It intentionally
-// does not implement directory list/subscribe or signing-key lifecycle APIs.
+// This is the Directory + Identity projection boundary. URA/descriptor helpers
+// delegate protocol truth to Axon-facing core helpers, while signing-key
+// lifecycle functions build daemon identity ability carriers and project daemon
+// outputs into SDK DTOs.
 
 use std::os::raw::c_char;
 
@@ -39,7 +41,8 @@ use crate::core::ura::{
 };
 use crate::daemon::identity_contract::{
     build_list_signing_keys_invocation, build_register_signing_key_invocation,
-    build_revoke_signing_key_invocation, IdentitySdkError,
+    build_revoke_signing_key_invocation, project_signing_key_page, project_signing_key_record,
+    project_signing_key_revoke_result, IdentitySdkError,
 };
 use crate::ffi::client::handle::{get, EasynetHandle};
 use crate::ffi::errors::{
@@ -275,6 +278,72 @@ pub unsafe extern "C" fn easynet_identity_build_revoke_signing_key_invocation(
         "out_invocation_json",
         "request_json",
         build_revoke_signing_key_invocation,
+    )
+}
+
+/// Project daemon `identity.register_pubkey` output into a SigningKeyRecord DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_record_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_project_signing_key_record(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_record_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        result_json,
+        out_record_json,
+        "easynet_identity_project_signing_key_record",
+        "out_record_json",
+        "result_json",
+        project_signing_key_record,
+    )
+}
+
+/// Project daemon `identity.list_user_pubkeys` output into a SigningKeyPage DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_page_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_project_signing_key_page(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_page_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        result_json,
+        out_page_json,
+        "easynet_identity_project_signing_key_page",
+        "out_page_json",
+        "result_json",
+        project_signing_key_page,
+    )
+}
+
+/// Project daemon `identity.revoke_user_pubkey` output into a revoke DTO.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_project_signing_key_revoke_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_identity_project_signing_key_revoke_result",
+        "out_result_json",
+        "result_json",
+        project_signing_key_revoke_result,
     )
 }
 
@@ -974,6 +1043,86 @@ mod tests {
             "identity.revoke_user_pubkey"
         );
         assert_eq!(value["args"]["public_key_b64"], public_key);
+        release(handle);
+    }
+
+    #[test]
+    fn identity_project_signing_key_lifecycle_outputs_sdk_dtos() {
+        let handle = handle();
+        let public_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let register = CString::new(
+            serde_json::json!({
+                "request": {
+                    "owner_ura": "easynet:///r/example/user/alice",
+                    "key_id": "alice-key-1",
+                    "algorithm": "ed25519",
+                    "public_key_base64": public_key,
+                    "usage": ["invocation.sign"],
+                    "role": "user"
+                },
+                "result": {"ok": true}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let list = CString::new(
+            serde_json::json!({
+                "request": {
+                    "owner_ura": "easynet:///r/example/user/alice",
+                    "limit": 50
+                },
+                "result": {
+                    "agent_ura": "easynet:///r/example/user/alice",
+                    "keys": [{
+                        "public_key_b64": public_key,
+                        "added_at_unix_ms": 1783100000123u64
+                    }],
+                    "rotation_epoch": 3,
+                    "revoked_key_count": 1
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let revoke = CString::new(
+            serde_json::json!({
+                "request": {
+                    "key_id": "alice-key-1",
+                    "public_key_base64": public_key,
+                    "reason": "rotation"
+                },
+                "result": {"ok": true, "removed": true}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_identity_project_signing_key_record(handle, register.as_ptr(), &mut out)
+        };
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "directory_identity");
+        assert_eq!(value["key_id"], "alice-key-1");
+        assert_eq!(value["metadata"]["source"], "identity.register_pubkey");
+
+        let code =
+            unsafe { easynet_identity_project_signing_key_page(handle, list.as_ptr(), &mut out) };
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "directory_identity");
+        assert_eq!(value["items"].as_array().unwrap().len(), 1);
+        assert_eq!(value["metadata"]["rotation_epoch"], 3);
+
+        let code = unsafe {
+            easynet_identity_project_signing_key_revoke_result(handle, revoke.as_ptr(), &mut out)
+        };
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "directory_identity");
+        assert_eq!(value["key_id"], "alice-key-1");
+        assert_eq!(value["state"], "revoked");
         release(handle);
     }
 

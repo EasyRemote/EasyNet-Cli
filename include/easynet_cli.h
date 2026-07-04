@@ -381,6 +381,24 @@ int32_t easynet_identity_build_revoke_signing_key_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_identity_project_signing_key_record(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_record_json
+);
+
+int32_t easynet_identity_project_signing_key_page(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_page_json
+);
+
+int32_t easynet_identity_project_signing_key_revoke_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
 int32_t easynet_directory_build_list_devices_invocation(
     EasynetHandle handle,
     const char *request_json,

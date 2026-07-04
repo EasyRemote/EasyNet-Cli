@@ -305,6 +305,42 @@ int32_t easynet_identity_build_descriptor_ref(
     char** out_descriptor_json
 );
 
+int32_t easynet_identity_build_register_signing_key_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_identity_build_list_signing_keys_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_identity_build_revoke_signing_key_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_identity_project_signing_key_record(
+    EasynetHandle handle,
+    const char* result_json,
+    char** out_record_json
+);
+
+int32_t easynet_identity_project_signing_key_page(
+    EasynetHandle handle,
+    const char* result_json,
+    char** out_page_json
+);
+
+int32_t easynet_identity_project_signing_key_revoke_result(
+    EasynetHandle handle,
+    const char* result_json,
+    char** out_result_json
+);
+
 int32_t easynet_directory_build_list_devices_invocation(
     EasynetHandle handle,
     const char* request_json,
@@ -359,6 +395,13 @@ SDK object graph's `IdentityClient`. The functions delegate URA parsing and
 building to Axon-owned URA helpers through `crate::core::ura`; they do not
 define a second URA grammar. DescriptorRef projection/building delegates to
 Axon `canonical_ability_descriptor_ref` and related helper functions.
+Signing-key lifecycle builders return complete Invocation JSON for daemon
+`identity.register_pubkey`, `identity.list_user_pubkeys`, and
+`identity.revoke_user_pubkey`. Projection helpers normalize daemon acks and
+trust-anchor read snapshots into SDK `SigningKeyRecord`, `SigningKeyPage`, and
+revoke-result DTOs while preserving source ability metadata. They do not expose
+private key material or local signing authority; signer construction remains a
+separate daemon-authorized boundary.
 
 Directory read-model functions are scoped to the same live `EasynetHandle`,
 matching the SDK object graph's `DirectoryClient`. The carrier builders return
@@ -378,7 +421,7 @@ execute abilities, pick routes in the SDK, or fan out through
 `list_abilities` maps the public SDK `owner_ura` query to the daemon ability's
 historical `agent_ura` parameter, but it does not fan out across every agent by
 default. ABI v4 Directory support is `read_model_projection_partial`: directory
-subscribe convenience wrappers, signing-key lifecycle APIs, backend database
+subscribe convenience wrappers, signer construction, backend database
 projections, and language facades remain future work.
 
 ### 2.9 Receipt Fetch and Projection
