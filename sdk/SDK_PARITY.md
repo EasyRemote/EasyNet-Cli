@@ -196,11 +196,14 @@ method spelling.
   `canonical_ability_descriptor_ref` helper
   facades plus an `AbilityAddress` projection for owner/subject facts consumed
   by EasyRemote-style addressing, `IdentityClient` descriptor, identity, ResourceRef,
-  signing-key lifecycle, signer-handle projection, and close state
+  signing-key lifecycle and signer-handle projection seams, and close state
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, while
-  directory subscription live adapters, local signer implementations, and
+  signing-key lifecycle live adapters still require a daemon/ABI key lifecycle
+  result contract rather than projecting `identity.register_pubkey` trust-anchor
+  acks into richer signing-key DTOs; directory subscription live adapters,
+  local signer implementations, and
   actual EasyRemote repository extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,

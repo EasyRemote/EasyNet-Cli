@@ -83,7 +83,8 @@ file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed record-returning file, terminal, remote desktop,
 browser, and media helper execution through Runtime Core invoke,
 transport-backed helper close state seams, and record projections. Direct daemon
-UDS transport, directory subscription live adapters, local signer implementations,
+UDS transport, directory subscription live adapters, daemon/ABI-backed signing-key
+lifecycle result contracts, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication
 enable/disable and plugin lifecycle live adapters, warm host process execution
 and cleanup adapters, mission event streams, concrete Admin trust/session carriers,

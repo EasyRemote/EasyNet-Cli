@@ -747,13 +747,13 @@ class CABIIdentityTransport:
         )
 
     def register_signing_key(self, request_json: bytes) -> bytes:
-        return self._missing("identity register signing key")
+        return self._missing_signing_key_lifecycle("identity register signing key")
 
     def list_signing_keys(self, request_json: bytes) -> bytes:
-        return self._missing("identity list signing keys")
+        return self._missing_signing_key_lifecycle("identity list signing keys")
 
     def revoke_signing_key(self, request_json: bytes) -> bytes:
-        return self._missing("identity revoke signing key")
+        return self._missing_signing_key_lifecycle("identity revoke signing key")
 
     def signer(self, request_json: bytes) -> bytes:
         return self._missing("identity signer")
@@ -772,6 +772,19 @@ class CABIIdentityTransport:
             retry=RetryHint.NEVER,
             retryable=False,
             message=f"{method} is not exposed by the C ABI identity bridge",
+        )
+
+    def _missing_signing_key_lifecycle(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=(
+                f"{method} requires a daemon/ABI signing-key lifecycle contract; "
+                "identity.register_pubkey trust-anchor carriers cannot be "
+                "projected into SigningKeyRecord semantics"
+            ),
         )
 
     def _require_open(self) -> int:

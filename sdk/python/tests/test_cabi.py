@@ -2049,6 +2049,10 @@ class CABITransportTests(unittest.TestCase):
                 )
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertIn(
+            "requires a daemon/ABI signing-key lifecycle contract",
+            caught.exception.message,
+        )
 
         with self.assertRaises(SDKError) as caught:
             client.list_signing_keys(
@@ -2057,6 +2061,10 @@ class CABITransportTests(unittest.TestCase):
                 )
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertIn(
+            "identity.register_pubkey trust-anchor carriers cannot be projected",
+            caught.exception.message,
+        )
 
         with self.assertRaises(SDKError) as caught:
             client.revoke_signing_key(
@@ -2066,6 +2074,8 @@ class CABITransportTests(unittest.TestCase):
                 )
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(raw.profile_requests, [])
+        self.assertEqual(raw.runtime_requests, [])
 
         with self.assertRaises(SDKError) as caught:
             client.signer(
