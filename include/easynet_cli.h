@@ -495,6 +495,18 @@ int32_t easynet_publication_build_deploy_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_publication_build_list_abilities_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_publication_project_ability_page(
+    EasynetHandle handle,
+    const char *page_json,
+    char **out_page_json
+);
+
 int32_t easynet_publication_build_unpublish_invocation(
     EasynetHandle handle,
     const char *request_json,

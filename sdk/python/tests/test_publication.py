@@ -79,6 +79,22 @@ DEPLOY_INVOCATION_JSON = b"""{
   }
 }"""
 
+LIST_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"agent_ura": "easynet:///r/example/device/dev-a"},
+  "content_type": "application/json",
+  "metadata": {
+    "profile": "publication",
+    "system_ability": "meta.list_abilities",
+    "carrier_owner": "daemon_sdk"
+  }
+}"""
+
 UNPUBLISH_INVOCATION_JSON = b"""{
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
   "callee_ura": "easynet:///r/example/device/dev-a",
@@ -137,6 +153,7 @@ class MemoryPublicationTransport:
             b'"metadata":{}}'
         )
         self.seen_request: dict[str, object] | None = None
+        self.seen_projection: dict[str, object] | None = None
         self.close_calls = 0
 
     def _remember(self, request_json: bytes) -> None:
@@ -164,6 +181,14 @@ class MemoryPublicationTransport:
 
     def list_abilities(self, request_json: bytes) -> bytes:
         self._remember(request_json)
+        return self.list_json
+
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return LIST_INVOCATION_JSON
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        self.seen_projection = json.loads(page_json.decode("utf-8"))
         return self.list_json
 
     def show_ability(self, request_json: bytes) -> bytes:
@@ -340,6 +365,43 @@ class PublicationTests(unittest.TestCase):
             client.deploy_ability(deploy_request())
 
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_runtime_publication_transport_executes_list_via_runtime_core(self) -> None:
+        carrier = MemoryPublicationTransport()
+        runtime_transport = DeployRuntimeTransport(
+            output_json={
+                "abilities": [
+                    {
+                        "name": "weather",
+                        "ability_ura": (
+                            "easynet:///r/example/ability/device.dev-a.er.weather"
+                        ),
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "1.0.0",
+                        "schema_hash": "sha256:abc",
+                    }
+                ]
+            }
+        )
+        client = PublicationClient(
+            RuntimePublicationTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        page = client.list_abilities(ability_query())
+
+        self.assertEqual(page.limit, 50)
+        self.assertEqual(len(page.items), 1)
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "meta.list_abilities",
+        )
+        assert carrier.seen_projection is not None
+        self.assertEqual(carrier.seen_projection["limit"], 50)
+        self.assertIn("abilities", carrier.seen_projection["result"])
 
     def test_rejects_incomplete_deploy_carrier(self) -> None:
         client = PublicationClient(MemoryPublicationTransport())

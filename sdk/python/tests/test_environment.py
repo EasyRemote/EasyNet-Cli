@@ -27,6 +27,7 @@ from easynet_sdk import (
     LocalResourceRefRequest,
     MissionCarrierBase,
     MissionRunRequest,
+    PublishedAbilityQuery,
     ReceiptFetchRequest,
     RuntimeClient,
     RuntimeConnection,
@@ -337,6 +338,16 @@ class SdkEnvironmentTests(unittest.TestCase):
                 node_id="local",
             )
             publication.build_deploy_invocation(deploy_request)
+            publication.list_abilities(
+                PublishedAbilityQuery(
+                    caller_ura=_CALLER,
+                    callee_ura=_CALLEE,
+                    subject_ura=_SUBJECT,
+                    descriptor_version="1.0.0",
+                    nonce_base64=_NONCE,
+                    causal_context=_CAUSAL,
+                )
+            )
             binding = host.build_host_stream_binding(
                 HostStreamBindingRequest(
                     binding_id="binding-weather-1",
@@ -476,6 +487,8 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_receipt_build_fetch_invocation", symbols)
         self.assertIn("easynet_publication_build_resource_ref", symbols)
         self.assertIn("easynet_publication_build_deploy_invocation", symbols)
+        self.assertIn("easynet_publication_build_list_abilities_invocation", symbols)
+        self.assertIn("easynet_publication_project_ability_page", symbols)
         self.assertIn("easynet_host_binding_build", symbols)
         self.assertIn("easynet_mission_build_run_eal_invocation", symbols)
         self.assertIn("easynet_admin_build_agent_list_invocation", symbols)

@@ -33,19 +33,25 @@
 
 use std::path::{Component, Path};
 
-use serde_json::{json, Value};
+use easynet_axon::invocation::canonical_ability_descriptor_ref;
+use serde_json::{json, Map, Value};
 
 use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::core::ura;
 use crate::daemon::ability::builtins::device_control::ability_management::store::manifest_digest;
 use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
 use crate::daemon::sdk_contract::{
-    build_system_invocation, object, required_string, SdkContractError,
+    build_system_invocation, object, optional_string_field, required_string, validate_ura,
+    SdkContractError,
 };
 
 const SYSTEM_ABILITY_DEPLOY: &str = crate::daemon::ability::names::federation::ABILITY_DEPLOY;
 const SYSTEM_ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::federation::ABILITY_UNPUBLISH;
+const SYSTEM_ABILITY_LIST: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
 const PUBLICATION_PROFILE: &str = "publication";
+const PUBLICATION_SOURCE: &str = "read_model";
+const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: usize = 50;
+const MAX_PUBLISHED_ABILITY_PAGE_SIZE: usize = 500;
 const RESERVED_DEVICE_ABILITY_NAMESPACES: &[&str] = &[
     "ability", "device", "hub", "meta", "node", "remote", "system",
 ];
@@ -89,6 +95,42 @@ pub(crate) fn build_deploy_invocation(request: &Value) -> Result<Value, Publicat
     build_system_invocation(obj, PUBLICATION_PROFILE, SYSTEM_ABILITY_DEPLOY, args)
 }
 
+pub(crate) fn build_list_abilities_invocation(request: &Value) -> Result<Value, PublicationError> {
+    let obj = object(request, "PublishedAbilityQuery")?;
+    let _ = PageControls::from_request(obj)?;
+    let args = list_abilities_args(obj)?;
+    build_system_invocation(obj, PUBLICATION_PROFILE, SYSTEM_ABILITY_LIST, args)
+}
+
+pub(crate) fn project_published_ability_page(input: &Value) -> Result<Value, PublicationError> {
+    let page_input = PageInput::parse(input)?;
+    let rows = rows_from_value(
+        page_input.result,
+        "abilities",
+        "items",
+        "PublishedAbilityRows",
+    )?;
+    let page = page_input.controls.slice(rows)?;
+    let mut items = Vec::with_capacity(page.rows.len());
+    for row in page.rows {
+        items.push(project_published_ability(row)?);
+    }
+    Ok(json!({
+        "profile": PUBLICATION_PROFILE,
+        "kind": "published_ability_page",
+        "item_kind": "published_ability",
+        "items": items,
+        "next_cursor": page.next_cursor,
+        "limit": page_input.controls.limit,
+        "source": PUBLICATION_SOURCE,
+        "metadata": {
+            "profile": PUBLICATION_PROFILE,
+            "source_ability": SYSTEM_ABILITY_LIST,
+            "total_items": rows.len(),
+        },
+    }))
+}
+
 pub(crate) fn build_unpublish_invocation(request: &Value) -> Result<Value, PublicationError> {
     let obj = object(request, "UnpublishAbilityRequest")?;
     let ability_ura = required_string(obj, "ability_ura")?;
@@ -108,6 +150,263 @@ pub(crate) fn build_unpublish_invocation(request: &Value) -> Result<Value, Publi
             "ability_ura": ability_ura,
         }),
     )
+}
+
+fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, PublicationError> {
+    let mut args = Map::new();
+    if let Some(owner_ura) = optional_string_field(obj, "owner_ura")? {
+        validate_ura(&owner_ura, "owner_ura")?;
+        args.insert("agent_ura".to_string(), Value::String(owner_ura));
+    }
+    if let Some(ability_ura) = optional_string_field(obj, "ability_ura")? {
+        let parsed = ura::parse_ura(&ability_ura)
+            .map_err(|err| PublicationError::InvalidField("ability_ura", err.to_string()))?;
+        if parsed.kind != ura::URAKind::Ability {
+            return Err(PublicationError::InvalidField(
+                "ability_ura",
+                format!("must be an Ability URA, got {}", parsed.kind),
+            ));
+        }
+        args.insert("subject_ura".to_string(), Value::String(ability_ura));
+    }
+    Ok(Value::Object(args))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PageControls {
+    limit: usize,
+    offset: usize,
+}
+
+impl PageControls {
+    fn from_request(obj: &Map<String, Value>) -> Result<Self, PublicationError> {
+        let limit = optional_usize(obj, "limit")?.unwrap_or(DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE);
+        validate_limit(limit)?;
+        let offset = optional_cursor_offset(obj, "cursor")?.unwrap_or(0);
+        Ok(Self { limit, offset })
+    }
+
+    fn slice<'a, T>(&self, rows: &'a [T]) -> Result<PageSlice<'a, T>, PublicationError> {
+        if self.offset > rows.len() {
+            return Err(PublicationError::InvalidField(
+                "cursor",
+                "must not point past the current read-model snapshot".to_string(),
+            ));
+        }
+        let end = self.offset.saturating_add(self.limit).min(rows.len());
+        let next_cursor = if end < rows.len() {
+            Some(end.to_string())
+        } else {
+            None
+        };
+        Ok(PageSlice {
+            rows: &rows[self.offset..end],
+            next_cursor,
+        })
+    }
+}
+
+struct PageSlice<'a, T> {
+    rows: &'a [T],
+    next_cursor: Option<String>,
+}
+
+struct PageInput<'a> {
+    result: &'a Value,
+    controls: PageControls,
+}
+
+impl<'a> PageInput<'a> {
+    fn parse(input: &'a Value) -> Result<Self, PublicationError> {
+        let input = projection_payload(input);
+        let Some(obj) = input.as_object() else {
+            return Ok(Self {
+                result: input,
+                controls: PageControls {
+                    limit: DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE,
+                    offset: 0,
+                },
+            });
+        };
+        if let Some(result) = obj.get("result").filter(|value| !value.is_null()) {
+            return Ok(Self {
+                result,
+                controls: PageControls::from_request(obj)?,
+            });
+        }
+        Ok(Self {
+            result: input,
+            controls: PageControls::from_request(obj)?,
+        })
+    }
+}
+
+fn projection_payload(input: &Value) -> &Value {
+    input
+        .as_object()
+        .and_then(|obj| obj.get("output_json").filter(|value| !value.is_null()))
+        .unwrap_or(input)
+}
+
+fn rows_from_value<'a>(
+    input: &'a Value,
+    primary: &'static str,
+    fallback: &'static str,
+    label: &'static str,
+) -> Result<&'a Vec<Value>, PublicationError> {
+    let obj = object(input, label)?;
+    obj.get(primary)
+        .or_else(|| obj.get(fallback))
+        .and_then(Value::as_array)
+        .ok_or_else(|| PublicationError::InvalidField(primary, "must be an array".to_string()))
+}
+
+fn project_published_ability(row: &Value) -> Result<Value, PublicationError> {
+    let obj = object(row, "PublishedAbilityRow")?;
+    let descriptor = project_published_descriptor(obj)?;
+    let implementation = obj
+        .get("implementation")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut metadata = obj
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    metadata.insert(
+        "profile".to_string(),
+        Value::String(PUBLICATION_PROFILE.to_string()),
+    );
+    metadata.insert(
+        "source_ability".to_string(),
+        Value::String(SYSTEM_ABILITY_LIST.to_string()),
+    );
+    Ok(json!({
+        "descriptor": descriptor,
+        "implementation": implementation,
+        "metadata": Value::Object(metadata),
+    }))
+}
+
+fn project_published_descriptor(obj: &Map<String, Value>) -> Result<Value, PublicationError> {
+    let mut descriptor = obj
+        .get("descriptor")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_else(|| obj.clone());
+    let ability_ura = optional_string_field(&descriptor, "ability_ura")?
+        .or_else(|| optional_string_field(obj, "ability_ura").ok().flatten())
+        .ok_or(PublicationError::MissingField("ability_ura"))?;
+    let parsed = ura::parse_ura(&ability_ura)
+        .map_err(|err| PublicationError::InvalidField("ability_ura", err.to_string()))?;
+    if parsed.kind != ura::URAKind::Ability {
+        return Err(PublicationError::InvalidField(
+            "ability_ura",
+            format!("must be an Ability URA, got {}", parsed.kind),
+        ));
+    }
+    let descriptor_version = optional_string_field(&descriptor, "descriptor_version")?
+        .or_else(|| optional_string_field(&descriptor, "version").ok().flatten())
+        .or_else(|| {
+            optional_string_field(obj, "descriptor_version")
+                .ok()
+                .flatten()
+        })
+        .or_else(|| optional_string_field(obj, "version").ok().flatten())
+        .unwrap_or_else(|| crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string());
+    let descriptor_ref = optional_string_field(&descriptor, "descriptor_ref")?
+        .or_else(|| optional_string_field(obj, "descriptor_ref").ok().flatten())
+        .map(Ok)
+        .unwrap_or_else(|| {
+            canonical_ability_descriptor_ref(&format!("{ability_ura}@{descriptor_version}"))
+                .map_err(|err| PublicationError::InvalidField("descriptor_ref", err.to_string()))
+        })?;
+    if let Some(owner_ura) = optional_string_field(&descriptor, "owner_ura")?
+        .or_else(|| optional_string_field(obj, "owner_ura").ok().flatten())
+    {
+        validate_ura(&owner_ura, "owner_ura")?;
+        descriptor.insert("owner_ura".to_string(), Value::String(owner_ura));
+    }
+    descriptor.insert("ability_ura".to_string(), Value::String(ability_ura));
+    descriptor.insert(
+        "descriptor_version".to_string(),
+        Value::String(descriptor_version),
+    );
+    descriptor.insert("descriptor_ref".to_string(), Value::String(descriptor_ref));
+    if !descriptor.contains_key("schema_hash") {
+        if let Some(schema_hash) = optional_string_field(obj, "schema_hash")? {
+            descriptor.insert("schema_hash".to_string(), Value::String(schema_hash));
+        }
+    }
+    Ok(Value::Object(descriptor))
+}
+
+fn validate_limit(limit: usize) -> Result<(), PublicationError> {
+    if limit == 0 || limit > MAX_PUBLISHED_ABILITY_PAGE_SIZE {
+        return Err(PublicationError::InvalidField(
+            "limit",
+            format!("must be between 1 and {MAX_PUBLISHED_ABILITY_PAGE_SIZE}"),
+        ));
+    }
+    Ok(())
+}
+
+fn optional_usize(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<usize>, PublicationError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| PublicationError::InvalidField(field, "must be unsigned".to_string())),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .parse::<usize>()
+                .map(Some)
+                .map_err(|err| PublicationError::InvalidField(field, err.to_string()))
+        }
+        Some(_) => Err(PublicationError::InvalidField(
+            field,
+            "must be an integer or decimal string".to_string(),
+        )),
+    }
+}
+
+fn optional_cursor_offset(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<usize>, PublicationError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            if trimmed.starts_with('-') || !trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+                return Err(PublicationError::InvalidField(
+                    field,
+                    "must be a non-negative decimal offset cursor".to_string(),
+                ));
+            }
+            trimmed
+                .parse::<usize>()
+                .map(Some)
+                .map_err(|err| PublicationError::InvalidField(field, err.to_string()))
+        }
+        Some(_) => Err(PublicationError::InvalidField(
+            field,
+            "must be a cursor string".to_string(),
+        )),
+    }
 }
 
 struct AbilityPackage {
@@ -374,6 +673,70 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("ability.deploy@1.0.0"));
+    }
+
+    #[test]
+    fn build_list_abilities_invocation_returns_complete_tuple_for_catalog_read() {
+        let request = json!({
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_version": "1.0.0",
+            "nonce_base64": nonce(),
+            "causal_context": {"form": "none"},
+            "limit": 25,
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+        });
+
+        let invocation = build_list_abilities_invocation(&request).unwrap();
+
+        assert_eq!(
+            invocation["metadata"]["system_ability"],
+            SYSTEM_ABILITY_LIST
+        );
+        assert_eq!(
+            invocation["args"]["subject_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather"
+        );
+        assert!(invocation["descriptor_ref"]
+            .as_str()
+            .unwrap()
+            .contains("meta.list_abilities@1.0.0"));
+    }
+
+    #[test]
+    fn project_published_ability_page_bounds_and_stamps_descriptor_ref() {
+        let page = project_published_ability_page(&json!({
+            "result": {
+                "abilities": [
+                    {
+                        "name": "weather",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "1.0.0",
+                        "schema_hash": "sha256:abc"
+                    },
+                    {
+                        "name": "camera",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.er.camera",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "1.0.0",
+                        "schema_hash": "sha256:def"
+                    }
+                ]
+            },
+            "limit": 1
+        }))
+        .unwrap();
+
+        assert_eq!(page["profile"], PUBLICATION_PROFILE);
+        assert_eq!(page["limit"], 1);
+        assert_eq!(page["next_cursor"], "1");
+        assert_eq!(
+            page["items"][0]["descriptor"]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+        );
+        assert_eq!(page["items"][0]["implementation"], json!({}));
     }
 
     #[test]

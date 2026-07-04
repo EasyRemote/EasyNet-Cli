@@ -413,6 +413,22 @@ class SharedPublicationTransport:
             message="not used by shared publication conformance fixture test",
         )
 
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
     def show_ability(self, request_json: bytes) -> bytes:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,

@@ -21,6 +21,8 @@ from easynet_sdk import (
     IdentityClient,
     InvocationSignature,
     PrepareOptions,
+    PublicationClient,
+    PublishedAbilityQuery,
     ReceiptClient,
     ReceiptFetchRequest,
     ResolveQuery,
@@ -36,6 +38,7 @@ from easynet_sdk._cabi import (
     CABIDiscoveryTransport,
     CABIDaemonTransport,
     CABIIdentityTransport,
+    CABIPublicationTransport,
     CABIReceiptTransport,
     CABIRuntimeConnector,
     CABIRuntimeTransport,
@@ -570,6 +573,10 @@ class FakeRawCABI:
             return RECEIPT_FETCH_INVOCATION
         if symbol == "easynet_publication_build_deploy_invocation":
             return PUBLICATION_DEPLOY_INVOCATION
+        if symbol == "easynet_publication_build_list_abilities_invocation":
+            return PUBLICATION_LIST_INVOCATION
+        if symbol == "easynet_publication_project_ability_page":
+            return PUBLICATION_ABILITY_PAGE
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -710,6 +717,32 @@ PUBLICATION_DEPLOY_INVOCATION = (
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"publication","system_ability":"ability.deploy",'
     b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_LIST_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.meta.list_abilities@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"publication","system_ability":"meta.list_abilities",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_ABILITY_PAGE = (
+    b'{"profile":"publication","kind":"published_ability_page",'
+    b'"item_kind":"published_ability","items":[{"descriptor":{'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.fs.read@1.0.0",'
+    b'"descriptor_version":"1.0.0","schema_hash":"sha256:abc",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.fs.read"},'
+    b'"implementation":{},"metadata":{"source_ability":"meta.list_abilities"}}],'
+    b'"next_cursor":null,"limit":50,"source":"read_model",'
+    b'"metadata":{"profile":"publication","source_ability":"meta.list_abilities"}}'
 )
 
 RECEIPT_SUMMARY_PROJECTION = (
@@ -1438,6 +1471,44 @@ class CABITransportTests(unittest.TestCase):
             raw.profile_requests[7][2]["output_json"]["answerKind"],
             "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
         )
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_list_uses_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
+
+        page = client.list_abilities(
+            PublishedAbilityQuery(
+                caller_ura="easynet:///r/example/agent/alice.sdk",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/device/dev-a",
+                descriptor_version="1.0.0",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+            )
+        )
+
+        self.assertEqual(page.limit, 50)
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(
+            page.items[0].descriptor["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.fs.read@1.0.0",
+        )
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_publication_build_list_abilities_invocation",
+                "easynet_publication_project_ability_page",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "meta.list_abilities",
+        )
+        self.assertIn("result", raw.profile_requests[1][2])
+        self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
         self.assertEqual(raw.buffers, {})
 
     def test_runtime_transport_prepare_sign_submit_choreography(self) -> None:

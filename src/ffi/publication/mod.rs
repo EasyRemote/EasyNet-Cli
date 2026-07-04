@@ -32,7 +32,8 @@
 use std::os::raw::c_char;
 
 use crate::daemon::publication_contract::{
-    build_deploy_invocation, build_local_resource_ref, build_unpublish_invocation, validate_package,
+    build_deploy_invocation, build_list_abilities_invocation, build_local_resource_ref,
+    build_unpublish_invocation, project_published_ability_page, validate_package,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -100,6 +101,50 @@ pub unsafe extern "C" fn easynet_publication_build_deploy_invocation(
         "out_invocation_json",
         "request_json",
         build_deploy_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `meta.list_abilities`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_build_list_abilities_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_publication_build_list_abilities_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_list_abilities_invocation,
+    )
+}
+
+/// Project daemon `meta.list_abilities` output into a Publication ability page.
+///
+/// # Safety
+/// `page_json` must be a valid UTF-8 C string and `out_page_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_project_ability_page(
+    handle: EasynetHandle,
+    page_json: *const c_char,
+    out_page_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        page_json,
+        out_page_json,
+        "easynet_publication_project_ability_page",
+        "out_page_json",
+        "page_json",
+        project_published_ability_page,
     )
 }
 
@@ -263,6 +308,83 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("ability.deploy@1.0.0"));
+        release(handle);
+    }
+
+    #[test]
+    fn publication_build_list_abilities_invocation_projects_complete_tuple() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "descriptor_version": "1.0.0",
+                "nonce_base64": nonce(),
+                "causal_context": {"form": "none"},
+                "limit": 25,
+                "owner_ura": "easynet:///r/example/device/dev-a"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_publication_build_list_abilities_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "meta.list_abilities");
+        assert_eq!(
+            value["args"]["agent_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert!(value["descriptor_ref"]
+            .as_str()
+            .unwrap()
+            .contains("meta.list_abilities@1.0.0"));
+        release(handle);
+    }
+
+    #[test]
+    fn publication_project_ability_page_projects_daemon_catalog_rows() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "result": {
+                    "abilities": [{
+                        "name": "weather",
+                        "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                        "owner_ura": "easynet:///r/example/device/dev-a",
+                        "version": "1.0.0",
+                        "schema_hash": "sha256:abc",
+                        "metadata": {"source": "registry"}
+                    }]
+                },
+                "limit": 50
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_publication_project_ability_page(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "publication");
+        assert_eq!(value["item_kind"], "published_ability");
+        assert_eq!(
+            value["items"][0]["descriptor"]["descriptor_version"],
+            "1.0.0"
+        );
+        assert_eq!(
+            value["items"][0]["descriptor"]["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
+        );
         release(handle);
     }
 

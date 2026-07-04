@@ -51,6 +51,8 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_publication_build_resource_ref",
     "easynet_publication_validate_package",
     "easynet_publication_build_deploy_invocation",
+    "easynet_publication_build_list_abilities_invocation",
+    "easynet_publication_project_ability_page",
     "easynet_publication_build_unpublish_invocation",
     "easynet_mission_build_run_eal_invocation",
     "easynet_mission_build_run_file_invocation",
@@ -759,6 +761,29 @@ class _CABIProfileTransport:
         result_json = self.lib.invocation_invoke(handle, draft_json)
         return self.lib.json_handle_output(project_symbol, handle, result_json)
 
+    def _invoke_projected_with_controls(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+        project_symbol: str,
+    ) -> bytes:
+        handle = self._require_open()
+        draft_json = self.lib.json_handle_output(build_symbol, handle, request_json)
+        result_json = self.lib.invocation_invoke(handle, draft_json)
+        result = _json_object(result_json, "profile invocation result")
+        output = result.get("output_json")
+        if not isinstance(output, dict):
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="profile invocation output_json must be an object",
+            )
+        projection_json = _projection_request_json(request_json, output)
+        return self.lib.json_handle_output(project_symbol, handle, projection_json)
+
     def _missing(self, method: str) -> bytes:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,
@@ -901,7 +926,19 @@ class CABIPublicationTransport(_CABIProfileTransport):
         return self._missing("publication install plugin")
 
     def list_abilities(self, request_json: bytes) -> bytes:
-        return self._missing("publication list abilities")
+        return self._invoke_projected_with_controls(
+            request_json,
+            build_symbol="easynet_publication_build_list_abilities_invocation",
+            project_symbol="easynet_publication_project_ability_page",
+        )
+
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_build_list_abilities_invocation", request_json
+        )
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        return self._call("easynet_publication_project_ability_page", page_json)
 
     def show_ability(self, request_json: bytes) -> bytes:
         return self._missing("publication show ability")
@@ -2118,6 +2155,16 @@ def _optional_c_string(value: str) -> bytes | None:
 
 def _json_bytes(value: dict[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _projection_request_json(request_json: bytes, result: dict[str, object]) -> bytes:
+    request = _json_object(request_json, "profile projection request")
+    projection: dict[str, object] = {"result": result}
+    for key in ("limit", "cursor"):
+        value = request.get(key)
+        if value is not None:
+            projection[key] = value
+    return _json_bytes(projection)
 
 
 def _daemon_start_config_for_cabi(config_json: bytes) -> bytes:

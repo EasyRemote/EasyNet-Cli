@@ -403,6 +403,12 @@ class PublicationTransport(Protocol):
     def list_abilities(self, request_json: bytes) -> bytes:
         ...
 
+    def build_list_abilities_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def project_ability_page(self, page_json: bytes) -> bytes:
+        ...
+
     def show_ability(self, request_json: bytes) -> bytes:
         ...
 
@@ -460,7 +466,11 @@ class RuntimePublicationTransport:
         return self._delegate("install_plugin", request_json)
 
     def list_abilities(self, request_json: bytes) -> bytes:
-        return self._delegate("list_abilities", request_json)
+        return self._invoke_projected(
+            request_json,
+            build_method="build_list_abilities_invocation",
+            project_method="project_ability_page",
+        )
 
     def show_ability(self, request_json: bytes) -> bytes:
         return self._delegate("show_ability", request_json)
@@ -504,6 +514,31 @@ class RuntimePublicationTransport:
     def _delegate(self, method_name: str, request_json: bytes) -> bytes:
         self._require_open()
         return getattr(self.carrier, method_name)(request_json)
+
+    def _invoke_projected(
+        self,
+        request_json: bytes,
+        *,
+        build_method: str,
+        project_method: str,
+    ) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        result = self.runtime.invoke(draft)
+        if not result.ok:
+            raise SDKError(
+                code=ErrorCode.ABILITY_FAILED,
+                stage="publication",
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                message="publication read-model invocation failed",
+                cause=result.error,
+            )
+        output = result.output_json
+        if not isinstance(output, dict):
+            raise _invalid_publication("publication read-model output must be an object")
+        projection = _projection_request(request_json, output)
+        return getattr(self.carrier, project_method)(_json_bytes(projection))
 
     def _require_open(self) -> None:
         if self._closed:
@@ -758,6 +793,16 @@ def _published_ability(value: object) -> PublishedAbility:
         implementation=_required_mapping(value, "implementation"),
         metadata=_required_mapping(value, "metadata"),
     )
+
+
+def _projection_request(request_json: bytes, result: Mapping[str, object]) -> dict[str, object]:
+    request = _json_object(request_json, "publication projection request")
+    projection: dict[str, object] = {"result": dict(result)}
+    for key in ("limit", "cursor"):
+        value = request.get(key)
+        if value is not None:
+            projection[key] = value
+    return projection
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
