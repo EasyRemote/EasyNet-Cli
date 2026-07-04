@@ -30,4 +30,6 @@ expect:
   rejects_relative_path: true
   rejects_reserved_namespace: true
   rejects_incomplete_invocation_tuple: true
-  list_show_enable_disable_runtime: scaffold_only
+  plugin_install_lifecycle: c_abi_backed
+  list_show_runtime: c_abi_backed
+  ability_impl_enable_disable_runtime: requires_daemon_lifecycle_contract

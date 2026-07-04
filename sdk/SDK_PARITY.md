@@ -57,9 +57,10 @@ method spelling.
   projection guardrails, and identity signing-key register/list/revoke
   builder/projection guardrails exist for Rust/C ABI; subscribe convenience
   wrappers, signer construction, and language facades remain incomplete.
-- Publication ResourceRef/package validation/deploy-unpublish carrier guardrails
-  exist for Rust/C ABI; daemon list/show/enable/disable read models, execution
-  wrappers, and language facades remain incomplete.
+- Publication ResourceRef/package validation/plugin install/deploy-unpublish
+  carrier and lifecycle guardrails exist for Rust/C ABI; daemon
+  list/show/enable/disable read models, execution wrappers, and language
+  facades remain incomplete.
 - Host Binding codec/hash guardrails exist for Rust/C ABI, and Python exposes a
   conformance-pinned `LocalHostBindingTransport` facade plus EasyRemote audit
   checks against raw host-stream codecs; product host lifecycle, cleanup
@@ -241,15 +242,16 @@ method spelling.
   incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
+  C ABI-backed plugin install through the daemon plugin installer,
   C ABI-backed deploy-result projection,
   published-ability list/show execution through Runtime Core invoke, complete unpublish
   execution through Runtime Core invoke, deploy/show/unpublish Invocation carrier,
   deploy/show/unpublish result, published-ability read-model seams, and close
-  state seams; plugin install and ability implementation enable/disable live
-  adapters require daemon/ABI lifecycle result contracts rather than projecting
-  `plugin.reload/status` or published-ability read-model rows into mutation
-  DTOs, and host binding bridge, EasyRemote decorator/package extraction, and
-  plugin/skill lifecycle policy remain incomplete.
+  state seams; ability implementation enable/disable live adapters require
+  daemon/ABI lifecycle result contracts rather than projecting published-ability
+  read-model rows into mutation DTOs, and host binding bridge, EasyRemote
+  decorator/package extraction, and broader plugin/skill lifecycle policy
+  remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, typed cleanup/readiness/lifecycle ownership DTOs,
   item/error/terminal frame encoding, output-hash folding seams with shared

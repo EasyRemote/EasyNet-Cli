@@ -111,8 +111,8 @@ browser, and media helper execution through Runtime Core invoke, plus public
 record-project execution,
 transport-backed helper close state seams, and record projections. Product Invocation
 direct daemon UDS transport, Axon-backed receipt verification, receipt URI
-construction, publication plugin install and ability implementation lifecycle
-adapters that require daemon/ABI lifecycle result contracts, warm host process execution
+construction, ability implementation lifecycle adapters that require daemon/ABI
+lifecycle result contracts, warm host process execution
 and cleanup execution adapters, mission event streams, Admin hub lifecycle,
 pairing/credential lifecycle, and device-session create/delete adapters that
 require daemon/ABI lifecycle result contracts,

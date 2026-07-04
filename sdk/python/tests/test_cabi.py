@@ -896,6 +896,8 @@ class FakeRawCABI:
             return PUBLICATION_DEPLOY_INVOCATION
         if symbol == "easynet_publication_project_deploy_result":
             return PUBLICATION_DEPLOY_RESULT_PROJECTION
+        if symbol == "easynet_publication_install_plugin":
+            return PUBLICATION_PLUGIN_INSTALL_PROJECTION
         if symbol == "easynet_publication_build_list_abilities_invocation":
             return PUBLICATION_LIST_INVOCATION
         if symbol == "easynet_publication_project_ability_page":
@@ -1088,6 +1090,14 @@ PACKAGE_VALIDATION_PROJECTION = (
     b'"description":"Weather","exec_kind":"host_stream",'
     b'"timeout_seconds":null,"input_schema":{"type":"object"},'
     b'"output_schema":null},"errors":[],"metadata":{"profile":"publication"}}'
+)
+
+PUBLICATION_PLUGIN_INSTALL_PROJECTION = (
+    b'{"profile":"publication","kind":"plugin_install",'
+    b'"source":"file:///tmp/plugin","install_id":"test.plugin@0.1.0",'
+    b'"status":"installed","metadata":{"profile":"publication",'
+    b'"package_id":"test.plugin","version":"0.1.0",'
+    b'"hash":"sha256:abc","request_metadata":{}}}'
 )
 
 EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION = (
@@ -2863,19 +2873,28 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertEqual(raw.buffers, {})
 
-    def test_publication_reports_missing_plugin_lifecycle_cabi_contracts(self) -> None:
+    def test_publication_install_plugin_uses_cabi_lifecycle_contract(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
         client = PublicationClient(CABIPublicationTransport(lib, handle=7))
 
-        with self.assertRaises(SDKError) as caught:
-            client.install_plugin("file:///tmp/plugin")
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertIn(
-            "requires a daemon/ABI plugin install lifecycle contract",
-            caught.exception.message,
+        result = client.install_plugin("file:///tmp/plugin")
+
+        self.assertEqual(result.kind, "plugin_install")
+        self.assertEqual(result.install_id, "test.plugin@0.1.0")
+        self.assertEqual(result.status, "installed")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_publication_install_plugin"],
         )
-        self.assertIn("plugin.reload/status runtime abilities", caught.exception.message)
+        self.assertEqual(raw.profile_requests[0][2]["source"], "file:///tmp/plugin")
+        self.assertEqual(raw.runtime_requests, [])
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_reports_missing_ability_impl_lifecycle_cabi_contracts(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
 
         impl = AbilityImplID(
             ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",

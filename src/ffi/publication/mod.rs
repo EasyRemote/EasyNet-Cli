@@ -33,9 +33,9 @@ use std::os::raw::c_char;
 
 use crate::daemon::publication_contract::{
     build_deploy_invocation, build_list_abilities_invocation, build_local_resource_ref,
-    build_show_ability_invocation, build_unpublish_invocation, project_ability_deploy_result,
-    project_ability_unpublish_result, project_published_ability_page,
-    project_published_ability_record, validate_package,
+    build_show_ability_invocation, build_unpublish_invocation, install_plugin,
+    project_ability_deploy_result, project_ability_unpublish_result,
+    project_published_ability_page, project_published_ability_record, validate_package,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -81,6 +81,28 @@ pub unsafe extern "C" fn easynet_publication_validate_package(
         "out_validation_json",
         "request_json",
         validate_package,
+    )
+}
+
+/// Install an unpacked plugin package through the daemon plugin installer.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_install_plugin(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        request_json,
+        out_result_json,
+        "easynet_publication_install_plugin",
+        "out_result_json",
+        "request_json",
+        install_plugin,
     )
 }
 
@@ -323,6 +345,62 @@ mod tests {
         file.write_all(body.as_bytes()).unwrap();
     }
 
+    fn write_plugin_package(root: &std::path::Path, id: &str, version: &str, ability: &str) {
+        std::fs::create_dir_all(root.join("abilities")).expect("abilities dir");
+        std::fs::create_dir_all(root.join("bin")).expect("bin dir");
+        std::fs::write(
+            root.join("plugin.toml"),
+            format!(
+                r#"
+schema_version = "1"
+id = "{id}"
+version = "{version}"
+kind = "sidecar"
+entrypoint = "bin/echo-sidecar"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[[ability_metadata]]
+name = "{ability}"
+layer = "control"
+"#
+            ),
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join(format!("abilities/{ability}.ability.toml")),
+            format!(
+                r#"schema_version = "1"
+name = "{ability}"
+description = "test descriptor for {ability}"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#
+            ),
+        )
+        .expect("descriptor");
+        let executable = root.join("bin/echo-sidecar");
+        std::fs::write(&executable, "#!/bin/sh\n").expect("executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("executable metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("chmod executable");
+        }
+    }
+
     fn nonce() -> &'static str {
         "AQIDBAUGBwgJCgsMDQ4PEA=="
     }
@@ -343,6 +421,41 @@ mod tests {
         let value = read_json(out);
         assert_eq!(value["valid"], true);
         assert_eq!(value["manifest"]["wire_key"], "er.weather");
+        release(handle);
+    }
+
+    #[test]
+    fn publication_install_plugin_projects_transaction_result() {
+        let handle = handle();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+        let source = tempfile::tempdir().unwrap();
+        write_plugin_package(
+            source.path(),
+            "sdk.ffi.publication.test",
+            "0.1.0",
+            "sdk.ffi_publication_echo",
+        );
+        let raw = CString::new(
+            serde_json::json!({
+                "source": source.path().display().to_string(),
+                "metadata": {"request_id": "ffi-plugin-install-1"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe { easynet_publication_install_plugin(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "plugin_install");
+        assert_eq!(value["install_id"], "sdk.ffi.publication.test@0.1.0");
+        assert_eq!(value["status"], "installed");
+        assert!(home
+            .join(".easynet/plugins/installed/sdk.ffi.publication.test/0.1.0/plugin.toml")
+            .exists());
         release(handle);
     }
 

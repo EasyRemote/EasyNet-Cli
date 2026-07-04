@@ -60,6 +60,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_host_binding_fold_output_hash",
     "easynet_publication_build_resource_ref",
     "easynet_publication_validate_package",
+    "easynet_publication_install_plugin",
     "easynet_publication_build_deploy_invocation",
     "easynet_publication_project_deploy_result",
     "easynet_publication_build_list_abilities_invocation",
@@ -1147,7 +1148,7 @@ class CABIPublicationTransport(_CABIProfileTransport):
         return self._call("easynet_publication_project_deploy_result", result_json)
 
     def install_plugin(self, request_json: bytes) -> bytes:
-        return self._missing_plugin_lifecycle("publication install plugin")
+        return self._call("easynet_publication_install_plugin", request_json)
 
     def list_abilities(self, request_json: bytes) -> bytes:
         return self._invoke_projected_with_controls(
@@ -1200,19 +1201,6 @@ class CABIPublicationTransport(_CABIProfileTransport):
             build_symbol="easynet_publication_build_unpublish_invocation",
             project_symbol="easynet_publication_project_unpublish_result",
             projection_keys=("descriptor_version", "ability_ura"),
-        )
-
-    def _missing_plugin_lifecycle(self, method: str) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message=(
-                f"{method} requires a daemon/ABI plugin install lifecycle contract; "
-                "plugin.reload/status runtime abilities cannot be projected into "
-                "PluginInstallResult source/install_id/status semantics"
-            ),
         )
 
     def _missing_ability_impl_lifecycle(self, method: str) -> bytes:

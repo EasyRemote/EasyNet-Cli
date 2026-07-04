@@ -531,6 +531,12 @@ int32_t easynet_publication_validate_package(
     char **out_validation_json
 );
 
+int32_t easynet_publication_install_plugin(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_result_json
+);
+
 int32_t easynet_publication_build_deploy_invocation(
     EasynetHandle handle,
     const char *request_json,

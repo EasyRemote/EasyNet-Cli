@@ -8,9 +8,10 @@
 // Protocol Responsibility
 // -----------------------
 // Own the EasyNet-Cli SDK Publication DTO projection that turns local
-// implementation resources into daemon-submittable carrier objects. This
-// module does not execute publication, sign Invocations, verify receipts, or
-// introspect product host languages.
+// implementation resources into daemon-submittable carrier objects and
+// delegates plugin package lifecycle mutations to the daemon plugin installer.
+// This module does not sign Invocations, verify receipts, or introspect
+// product host languages.
 //
 // Implementation Approach
 // -----------------------
@@ -78,6 +79,37 @@ pub(crate) fn validate_package(request: &Value) -> Result<Value, PublicationErro
     let package = load_package(path)?;
     let valid = package.validation_json(path);
     Ok(valid)
+}
+
+pub(crate) fn install_plugin(request: &Value) -> Result<Value, PublicationError> {
+    let obj = object(request, "PluginInstallRequest")?;
+    let source = required_string(obj, "source")?;
+    let source_path = validate_local_source_path(source, "source")?;
+    if !source_path.is_dir() {
+        return Err(PublicationError::InvalidField(
+            "source",
+            "must be an unpacked plugin package directory".to_string(),
+        ));
+    }
+    let installed = crate::daemon::plugins::PluginInstaller::new(
+        crate::daemon::plugins::index::default_plugin_root(),
+    )
+    .install(source_path)
+    .map_err(|err| PublicationError::Contract(err.to_string()))?;
+    Ok(json!({
+        "profile": PUBLICATION_PROFILE,
+        "kind": "plugin_install",
+        "source": source,
+        "install_id": format!("{}@{}", installed.id, installed.version),
+        "status": "installed",
+        "metadata": {
+            "profile": PUBLICATION_PROFILE,
+            "package_id": installed.id,
+            "version": installed.version,
+            "hash": sdk_hash(&installed.hash),
+            "request_metadata": typed_metadata(obj)?,
+        },
+    }))
 }
 
 pub(crate) fn build_deploy_invocation(request: &Value) -> Result<Value, PublicationError> {
@@ -728,6 +760,33 @@ fn validate_absolute_path<'a>(
     Ok(path)
 }
 
+fn validate_local_source_path<'a>(
+    raw: &'a str,
+    field: &'static str,
+) -> Result<&'a Path, PublicationError> {
+    let path = raw.strip_prefix("file://").unwrap_or(raw);
+    validate_absolute_path(path, field)
+}
+
+fn typed_metadata(obj: &Map<String, Value>) -> Result<Value, PublicationError> {
+    match obj.get("metadata") {
+        None | Some(Value::Null) => Ok(json!({})),
+        Some(value @ Value::Object(_)) => Ok(value.clone()),
+        Some(_) => Err(PublicationError::InvalidField(
+            "metadata",
+            "must be an object or null".to_string(),
+        )),
+    }
+}
+
+fn sdk_hash(raw: &str) -> String {
+    if raw.starts_with("sha256:") {
+        raw.to_string()
+    } else {
+        format!("sha256:{raw}")
+    }
+}
+
 pub(crate) type PublicationError = SdkContractError;
 
 #[cfg(test)]
@@ -755,6 +814,62 @@ mod tests {
         );
         let mut file = std::fs::File::create(dir.join("ability.json")).unwrap();
         file.write_all(body.as_bytes()).unwrap();
+    }
+
+    fn write_plugin_package(root: &Path, id: &str, version: &str, ability: &str) {
+        std::fs::create_dir_all(root.join("abilities")).expect("abilities dir");
+        std::fs::create_dir_all(root.join("bin")).expect("bin dir");
+        std::fs::write(
+            root.join("plugin.toml"),
+            format!(
+                r#"
+schema_version = "1"
+id = "{id}"
+version = "{version}"
+kind = "sidecar"
+entrypoint = "bin/echo-sidecar"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[[ability_metadata]]
+name = "{ability}"
+layer = "control"
+"#
+            ),
+        )
+        .expect("manifest");
+        std::fs::write(
+            root.join(format!("abilities/{ability}.ability.toml")),
+            format!(
+                r#"schema_version = "1"
+name = "{ability}"
+description = "test descriptor for {ability}"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#
+            ),
+        )
+        .expect("descriptor");
+        let executable = root.join("bin/echo-sidecar");
+        std::fs::write(&executable, "#!/bin/sh\n").expect("executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("executable metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("chmod executable");
+        }
     }
 
     fn carrier_request(resource_ref: Value) -> Value {
@@ -798,6 +913,42 @@ mod tests {
         let err = validate_package(&json!({"path": dir.path().display().to_string()})).unwrap_err();
 
         assert!(format!("{err}").contains("reserved"));
+    }
+
+    #[test]
+    fn install_plugin_delegates_to_daemon_plugin_installer() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+        let source = tempfile::tempdir().unwrap();
+        write_plugin_package(
+            source.path(),
+            "sdk.publication.test",
+            "0.1.0",
+            "sdk.publication_echo",
+        );
+
+        let result = install_plugin(&json!({
+            "source": source.path().display().to_string(),
+            "metadata": {"request_id": "plugin-install-1"}
+        }))
+        .unwrap();
+
+        assert_eq!(result["profile"], PUBLICATION_PROFILE);
+        assert_eq!(result["kind"], "plugin_install");
+        assert_eq!(result["install_id"], "sdk.publication.test@0.1.0");
+        assert_eq!(result["status"], "installed");
+        assert_eq!(result["metadata"]["package_id"], "sdk.publication.test");
+        assert!(result["metadata"]["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert_eq!(
+            result["metadata"]["request_metadata"]["request_id"],
+            "plugin-install-1"
+        );
+        assert!(home
+            .join(".easynet/plugins/installed/sdk.publication.test/0.1.0/plugin.toml")
+            .exists());
     }
 
     #[test]
