@@ -61,6 +61,10 @@ pub(crate) fn project_receipt_verification(input: &Value) -> Result<Value, Recei
     Ok(ReceiptProjection::from_value_lossy(input)?.verification_json())
 }
 
+pub(crate) fn project_receipt_chain_verification(input: &Value) -> Result<Value, ReceiptError> {
+    ReceiptChainProjection::from_value(input)?.verification_json()
+}
+
 pub(crate) fn project_causal_ref(input: &Value) -> Result<Value, ReceiptError> {
     ReceiptProjection::from_value_lossy(input)?.causal_ref_json()
 }
@@ -139,6 +143,7 @@ struct ReceiptProjection {
     error: Value,
     causal_ref: Option<String>,
     receipt_hash_hex: Option<String>,
+    prev_receipt_hash_hex: Option<String>,
     metadata: Map<String, Value>,
 }
 
@@ -170,6 +175,8 @@ impl ReceiptProjection {
         let error = obj.get("error").cloned().unwrap_or(Value::Null);
         let causal_ref = optional_string(&obj, "causal_ref");
         let receipt_hash_hex = receipt_hash_hex(&obj);
+        let prev_receipt_hash_hex =
+            receipt_hash_value_hex(&obj, &["prev_receipt_hash_hex", "parent_receipt_hash_hex"]);
         let metadata = receipt_metadata(&obj, verified_input, receipt_hash_hex.as_deref());
         Self {
             receipt_ura,
@@ -180,6 +187,7 @@ impl ReceiptProjection {
             error,
             causal_ref,
             receipt_hash_hex,
+            prev_receipt_hash_hex,
             metadata,
         }
     }
@@ -200,13 +208,13 @@ impl ReceiptProjection {
     fn verification_json(&self) -> Value {
         json!({
             "verified": false,
-            "level": "summary_projection",
+            "method": "summary_projection",
             "reason": "Receipt profile projection does not perform Axon cryptographic receipt verification",
             "requires_full_receipt": true,
             "receipt_ura": self.receipt_ura,
             "invocation_id": self.invocation_id,
             "state": self.state,
-            "details": {
+            "metadata": {
                 "has_receipt_hash": self.receipt_hash_hex.is_some(),
                 "verified_input_downgraded": self.verified_input,
             },
@@ -240,7 +248,115 @@ impl ReceiptProjection {
     }
 }
 
-fn optional_string(obj: &Map<String, Value>, key: &'static str) -> Option<String> {
+#[derive(Debug)]
+struct ReceiptChainProjection {
+    items: Vec<ReceiptProjection>,
+}
+
+impl ReceiptChainProjection {
+    fn from_value(input: &Value) -> Result<Self, ReceiptError> {
+        let obj = object(input, "ReceiptChainVerificationRequest")?;
+        reject_unsupported_fields(obj, &["receipts", "metadata"])?;
+        let receipts = obj
+            .get("receipts")
+            .and_then(Value::as_array)
+            .ok_or(ReceiptError::MissingField("receipts"))?;
+        if receipts.is_empty() {
+            return Err(ReceiptError::InvalidField(
+                "receipts",
+                "must include at least one receipt".to_string(),
+            ));
+        }
+
+        let mut seen_hashes = std::collections::BTreeSet::new();
+        let mut items = Vec::with_capacity(receipts.len());
+        for receipt in receipts {
+            let projection = ReceiptProjection::from_value_lossy(receipt)?;
+            let hash = projection.receipt_hash_hex.as_deref().ok_or_else(|| {
+                ReceiptError::InvalidField(
+                    "receipt_hash",
+                    "each chain receipt must include self_hash_hex, receipt_hash_hex, or receipt_hash"
+                        .to_string(),
+                )
+            })?;
+            validate_hash_hex(hash)?;
+            if !seen_hashes.insert(hash.to_string()) {
+                return Err(ReceiptError::InvalidField(
+                    "receipts",
+                    "duplicate receipt hash in chain".to_string(),
+                ));
+            }
+            items.push(projection);
+        }
+
+        Ok(Self { items })
+    }
+
+    fn verification_json(&self) -> Result<Value, ReceiptError> {
+        let mut projected_items = Vec::with_capacity(self.items.len());
+        let mut continuous = true;
+        let mut previous_hash: Option<&str> = None;
+
+        for (index, item) in self.items.iter().enumerate() {
+            let receipt_ura = item
+                .receipt_ura
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or(ReceiptError::MissingField("receipt_ura"))?;
+            let receipt_hash_hex = item
+                .receipt_hash_hex
+                .as_deref()
+                .ok_or(ReceiptError::MissingField("receipt_hash"))?;
+            if let Some(parent_hash) = item.prev_receipt_hash_hex.as_deref() {
+                validate_hash_hex(parent_hash)?;
+            }
+            let item_continuous =
+                match (index, previous_hash, item.prev_receipt_hash_hex.as_deref()) {
+                    (0, _, _) => true,
+                    (_, Some(previous), Some(parent)) => parent == previous,
+                    _ => false,
+                };
+            if !item_continuous {
+                continuous = false;
+            }
+            projected_items.push(json!({
+                "index": index,
+                "receipt_ura": receipt_ura,
+                "invocation_id": item.invocation_id,
+                "receipt_hash_hex": receipt_hash_hex,
+                "prev_receipt_hash_hex": item.prev_receipt_hash_hex.as_deref(),
+                "continuous": item_continuous,
+                "metadata": item.metadata.clone(),
+            }));
+            previous_hash = Some(receipt_hash_hex);
+        }
+
+        let root_receipt_ura = self
+            .items
+            .first()
+            .and_then(|item| item.receipt_ura.as_deref());
+        let terminal_receipt_ura = self
+            .items
+            .last()
+            .and_then(|item| item.receipt_ura.as_deref());
+        Ok(json!({
+            "verified": false,
+            "continuous": continuous,
+            "method": "daemon_receipt_chain_continuity",
+            "reason": "Receipt chain continuity was projected by daemon receipt facts; Axon cryptographic verification requires full receipt authority",
+            "requires_full_receipt": true,
+            "root_receipt_ura": root_receipt_ura,
+            "terminal_receipt_ura": terminal_receipt_ura,
+            "receipt_count": self.items.len(),
+            "items": projected_items,
+            "metadata": {
+                "chain_projection": "hash_continuity",
+            },
+        }))
+    }
+}
+
+fn optional_string(obj: &Map<String, Value>, key: &str) -> Option<String> {
     obj.get(key)
         .and_then(Value::as_str)
         .map(str::trim)
@@ -249,7 +365,11 @@ fn optional_string(obj: &Map<String, Value>, key: &'static str) -> Option<String
 }
 
 fn receipt_hash_hex(obj: &Map<String, Value>) -> Option<String> {
-    for key in ["self_hash_hex", "receipt_hash_hex", "receipt_hash"] {
+    receipt_hash_value_hex(obj, &["self_hash_hex", "receipt_hash_hex", "receipt_hash"])
+}
+
+fn receipt_hash_value_hex(obj: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
         let Some(raw) = optional_string(obj, key) else {
             continue;
         };
@@ -411,8 +531,76 @@ mod tests {
         .unwrap();
 
         assert_eq!(verification["verified"], false);
-        assert_eq!(verification["level"], "summary_projection");
-        assert_eq!(verification["details"]["has_receipt_hash"], true);
+        assert_eq!(verification["method"], "summary_projection");
+        assert_eq!(verification["metadata"]["has_receipt_hash"], true);
+    }
+
+    #[test]
+    fn project_chain_verification_reports_continuity_without_crypto_upgrade() {
+        let verification = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                    "invocation_id": "inv-1",
+                    "state": "completed",
+                    "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                    "invocation_id": "inv-2",
+                    "state": "completed",
+                    "self_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "prev_receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], false);
+        assert_eq!(verification["continuous"], true);
+        assert_eq!(verification["method"], "daemon_receipt_chain_continuity");
+        assert_eq!(verification["receipt_count"], 2);
+        assert_eq!(verification["items"][1]["continuous"], true);
+    }
+
+    #[test]
+    fn project_chain_verification_marks_broken_parent_hash() {
+        let verification = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                    "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                    "self_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "prev_receipt_hash_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(verification["continuous"], false);
+        assert_eq!(verification["items"][1]["continuous"], false);
+    }
+
+    #[test]
+    fn project_chain_verification_rejects_duplicate_hash() {
+        let err = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                    "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                    "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+            ]
+        }))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("duplicate receipt hash"));
     }
 
     #[test]

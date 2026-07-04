@@ -202,6 +202,9 @@ from .runtime import (
 )
 from .receipt import (
     CausalRef,
+    ReceiptChainItemVerification,
+    ReceiptChainVerification,
+    ReceiptChainVerificationRequest,
     ReceiptClient,
     ReceiptFetchRequest,
     ReceiptSummary,
@@ -454,6 +457,9 @@ __all__ = [
     "PublishedAbilityPage",
     "PublishedAbilityQuery",
     "CausalRef",
+    "ReceiptChainItemVerification",
+    "ReceiptChainVerification",
+    "ReceiptChainVerificationRequest",
     "ReceiptClient",
     "ReceiptFetchRequest",
     "ReceiptSummary",

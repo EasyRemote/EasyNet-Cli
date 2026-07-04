@@ -7,12 +7,14 @@ import (
 )
 
 type memoryReceiptTransport struct {
-	fetchJSON      string
-	projectJSON    string
-	verifyJSON     string
-	causalRefJSON  string
-	seenRequest    map[string]any
-	seenReceiptRaw string
+	fetchJSON        string
+	projectJSON      string
+	verifyJSON       string
+	verifyChainJSON  string
+	causalRefJSON    string
+	seenRequest      map[string]any
+	seenChainRequest map[string]any
+	seenReceiptRaw   string
 }
 
 func (m *memoryReceiptTransport) Fetch(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -30,6 +32,13 @@ func (m *memoryReceiptTransport) Project(ctx context.Context, receiptJSON []byte
 func (m *memoryReceiptTransport) Verify(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 	m.seenReceiptRaw = string(receiptJSON)
 	return []byte(m.verifyJSON), nil
+}
+
+func (m *memoryReceiptTransport) VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenChainRequest); err != nil {
+		return nil, err
+	}
+	return []byte(m.verifyChainJSON), nil
 }
 
 func (m *memoryReceiptTransport) CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error) {
@@ -136,6 +145,60 @@ func TestReceiptVerifyAndCausalRefDecodeDaemonProjections(t *testing.T) {
 	}
 	if causal.CausalRef == "" || causal.Form != "scalar" {
 		t.Fatalf("unexpected causal ref: %#v", causal)
+	}
+}
+
+func TestReceiptVerifyChainPreservesReceiptBodiesAndDecodesContinuity(t *testing.T) {
+	transport := &memoryReceiptTransport{
+		verifyChainJSON: `{"verified":false,"continuous":true,"method":"daemon_receipt_chain_continuity","reason":"continuity only","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{}}],"metadata":{"chain_projection":"hash_continuity"}}`,
+	}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+
+	result, err := client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
+		Receipts: []json.RawMessage{
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-2","self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		},
+		Metadata: map[string]any{"request_id": "chain-1"},
+	})
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+
+	if result.Verified || !result.Continuous || result.Method != "daemon_receipt_chain_continuity" {
+		t.Fatalf("unexpected chain verification: %#v", result)
+	}
+	receipts, ok := transport.seenChainRequest["receipts"].([]any)
+	if !ok || len(receipts) != 2 {
+		t.Fatalf("receipt bodies not forwarded: %#v", transport.seenChainRequest)
+	}
+	first, ok := receipts[0].(map[string]any)
+	if !ok || first["receipt_ura"] != "easynet:///r/example/receipt/receipt-1" {
+		t.Fatalf("first receipt not preserved: %#v", receipts[0])
+	}
+}
+
+func TestReceiptVerifyChainRejectsDuplicateReceiptHash(t *testing.T) {
+	transport := &memoryReceiptTransport{}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+
+	_, err = client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
+		Receipts: []json.RawMessage{
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		},
+	})
+	if err == nil {
+		t.Fatalf("VerifyChain accepted duplicate receipt hash")
+	}
+	if transport.seenChainRequest != nil {
+		t.Fatalf("transport called despite invalid chain request")
 	}
 }
 

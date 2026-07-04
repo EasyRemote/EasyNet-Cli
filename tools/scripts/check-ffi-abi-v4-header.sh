@@ -142,6 +142,7 @@ expected_symbols=(
     easynet_receipt_build_fetch_invocation
     easynet_receipt_project
     easynet_receipt_verify
+    easynet_receipt_verify_chain
     easynet_receipt_causal_ref
     easynet_host_binding_build
     easynet_host_binding_decode_request
@@ -367,6 +368,7 @@ if require_file "$SPEC"; then
     require_literal "$SPEC" "easynet_directory_project_resolved_ref"
     require_literal "$SPEC" "easynet_receipt_build_fetch_invocation"
     require_literal "$SPEC" "easynet_receipt_project"
+    require_literal "$SPEC" "easynet_receipt_verify_chain"
     require_literal "$SPEC" "easynet_receipt_causal_ref"
     require_literal "$SPEC" "easynet_host_binding_build"
     require_literal "$SPEC" "easynet_host_binding_decode_request"

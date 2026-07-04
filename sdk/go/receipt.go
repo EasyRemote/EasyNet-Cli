@@ -2,9 +2,11 @@ package easynet
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ReceiptFetchRequest preserves the complete carrier context for receipt fetch.
@@ -21,6 +23,12 @@ type ReceiptFetchRequest struct {
 	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
+// ReceiptChainVerificationRequest preserves ordered receipt bodies for daemon/Axon continuity checks.
+type ReceiptChainVerificationRequest struct {
+	Receipts []json.RawMessage `json:"receipts"`
+	Metadata map[string]any    `json:"metadata,omitempty"`
+}
+
 // ReceiptSummary is the sdk/schemas/receipt.schema.json projection.
 type ReceiptSummary struct {
 	ReceiptURA   *string        `json:"receipt_ura"`
@@ -33,6 +41,18 @@ type ReceiptSummary struct {
 	Metadata     map[string]any `json:"metadata"`
 }
 
+// ReceiptChainItemVerification describes one daemon-projected chain edge.
+type ReceiptChainItemVerification struct {
+	Index              int            `json:"index"`
+	ReceiptURA         string         `json:"receipt_ura"`
+	InvocationID       *string        `json:"invocation_id"`
+	ReceiptHashHex     string         `json:"receipt_hash_hex"`
+	PrevReceiptHashHex *string        `json:"prev_receipt_hash_hex"`
+	Continuous         bool           `json:"continuous"`
+	Reason             string         `json:"reason,omitempty"`
+	Metadata           map[string]any `json:"metadata"`
+}
+
 // ReceiptVerification is a daemon/Axon verification projection.
 type ReceiptVerification struct {
 	Verified     bool           `json:"verified"`
@@ -41,6 +61,20 @@ type ReceiptVerification struct {
 	Method       string         `json:"method"`
 	Reason       string         `json:"reason,omitempty"`
 	Metadata     map[string]any `json:"metadata"`
+}
+
+// ReceiptChainVerification is a daemon/Axon receipt-chain continuity projection.
+type ReceiptChainVerification struct {
+	Verified            bool                           `json:"verified"`
+	Continuous          bool                           `json:"continuous"`
+	Method              string                         `json:"method"`
+	Reason              string                         `json:"reason,omitempty"`
+	RequiresFullReceipt bool                           `json:"requires_full_receipt"`
+	RootReceiptURA      *string                        `json:"root_receipt_ura"`
+	TerminalReceiptURA  *string                        `json:"terminal_receipt_ura"`
+	ReceiptCount        int                            `json:"receipt_count"`
+	Items               []ReceiptChainItemVerification `json:"items"`
+	Metadata            map[string]any                 `json:"metadata"`
 }
 
 // CausalRef is a daemon/Axon-returned causal reference for child invocations.
@@ -57,15 +91,17 @@ type ReceiptTransport interface {
 	Fetch(ctx context.Context, requestJSON []byte) ([]byte, error)
 	Project(ctx context.Context, receiptJSON []byte) ([]byte, error)
 	Verify(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error)
 }
 
 // ReceiptTransportFunc adapts functions into a ReceiptTransport.
 type ReceiptTransportFunc struct {
-	FetchFunc     func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	ProjectFunc   func(ctx context.Context, receiptJSON []byte) ([]byte, error)
-	VerifyFunc    func(ctx context.Context, receiptJSON []byte) ([]byte, error)
-	CausalRefFunc func(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	FetchFunc       func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ProjectFunc     func(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	VerifyFunc      func(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	VerifyChainFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	CausalRefFunc   func(ctx context.Context, receiptJSON []byte) ([]byte, error)
 }
 
 func (f ReceiptTransportFunc) Fetch(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -87,6 +123,13 @@ func (f ReceiptTransportFunc) Verify(ctx context.Context, receiptJSON []byte) ([
 		return nil, invalidRuntimeClient("receipt verify transport function is required")
 	}
 	return f.VerifyFunc(ctx, receiptJSON)
+}
+
+func (f ReceiptTransportFunc) VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.VerifyChainFunc == nil {
+		return nil, invalidRuntimeClient("receipt verify-chain transport function is required")
+	}
+	return f.VerifyChainFunc(ctx, requestJSON)
 }
 
 func (f ReceiptTransportFunc) CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error) {
@@ -152,6 +195,24 @@ func (c *ReceiptClient) Verify(ctx context.Context, receiptJSON []byte) (Receipt
 		return ReceiptVerification{}, wrapReceiptTransportError("receipt verify failed", err)
 	}
 	return NewReceiptVerificationFromJSON(raw)
+}
+
+func (c *ReceiptClient) VerifyChain(ctx context.Context, req ReceiptChainVerificationRequest) (ReceiptChainVerification, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return ReceiptChainVerification{}, err
+	}
+	if err := validateReceiptChainVerificationRequest(req); err != nil {
+		return ReceiptChainVerification{}, err
+	}
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		return ReceiptChainVerification{}, invalidRuntimePayload(fmt.Sprintf("encode receipt chain verification request: %v", err), err)
+	}
+	raw, err := c.transport.VerifyChain(ctx, requestJSON)
+	if err != nil {
+		return ReceiptChainVerification{}, wrapReceiptTransportError("receipt verify-chain failed", err)
+	}
+	return NewReceiptChainVerificationFromJSON(raw)
 }
 
 func (c *ReceiptClient) CausalRef(ctx context.Context, receiptJSON []byte) (CausalRef, error) {
@@ -236,6 +297,38 @@ func NewReceiptVerificationFromJSON(raw []byte) (ReceiptVerification, error) {
 	return result, nil
 }
 
+func NewReceiptChainVerificationFromJSON(raw []byte) (ReceiptChainVerification, error) {
+	var result ReceiptChainVerification
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return ReceiptChainVerification{}, invalidRuntimePayload(fmt.Sprintf("decode receipt chain verification JSON: %v", err), err)
+	}
+	if result.Method == "" {
+		return ReceiptChainVerification{}, invalidRuntimePayload("chain verification method is required", nil)
+	}
+	if result.ReceiptCount <= 0 || len(result.Items) == 0 {
+		return ReceiptChainVerification{}, invalidRuntimePayload("chain verification items are required", nil)
+	}
+	if result.ReceiptCount != len(result.Items) {
+		return ReceiptChainVerification{}, invalidRuntimePayload("receipt_count must match items length", nil)
+	}
+	for index := range result.Items {
+		item := &result.Items[index]
+		if item.Index != index {
+			return ReceiptChainVerification{}, invalidRuntimePayload("chain item index must match position", nil)
+		}
+		if item.ReceiptURA == "" || item.ReceiptHashHex == "" {
+			return ReceiptChainVerification{}, invalidRuntimePayload("chain item receipt_ura and receipt_hash_hex are required", nil)
+		}
+		if item.Metadata == nil {
+			item.Metadata = map[string]any{}
+		}
+	}
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	return result, nil
+}
+
 func NewCausalRefFromJSON(raw []byte) (CausalRef, error) {
 	var ref CausalRef
 	if err := json.Unmarshal(raw, &ref); err != nil {
@@ -271,6 +364,63 @@ func validateReceiptFetchRequest(req ReceiptFetchRequest) error {
 		return invalidRuntimePayload("exactly one receipt lookup key is required", nil)
 	}
 	return nil
+}
+
+func validateReceiptChainVerificationRequest(req ReceiptChainVerificationRequest) error {
+	if len(req.Receipts) == 0 {
+		return invalidRuntimePayload("at least one receipt is required", nil)
+	}
+	seenURAs := map[string]struct{}{}
+	seenHashes := map[string]struct{}{}
+	for index, raw := range req.Receipts {
+		if len(raw) == 0 {
+			return invalidRuntimePayload(fmt.Sprintf("receipt[%d] JSON is required", index), nil)
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return invalidRuntimePayload(fmt.Sprintf("decode receipt[%d] JSON: %v", index, err), err)
+		}
+		if ura, ok := receiptStringField(obj, "receipt_ura"); ok {
+			if _, exists := seenURAs[ura]; exists {
+				return invalidRuntimePayload("duplicate receipt_ura in chain request", nil)
+			}
+			seenURAs[ura] = struct{}{}
+		}
+		if hash, ok := receiptHashField(obj); ok {
+			if _, err := hex.DecodeString(hash); err != nil || len(hash) != 64 {
+				return invalidRuntimePayload("receipt hash must decode to exactly 32 bytes", err)
+			}
+			if _, exists := seenHashes[hash]; exists {
+				return invalidRuntimePayload("duplicate receipt hash in chain request", nil)
+			}
+			seenHashes[hash] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func receiptStringField(obj map[string]any, key string) (string, bool) {
+	value, ok := obj[key].(string)
+	if !ok {
+		return "", false
+	}
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
+func receiptHashField(obj map[string]any) (string, bool) {
+	for _, key := range []string{"self_hash_hex", "receipt_hash_hex", "receipt_hash"} {
+		value, ok := receiptStringField(obj, key)
+		if !ok {
+			continue
+		}
+		value = strings.TrimPrefix(value, "sha256:")
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func wrapReceiptTransportError(message string, cause error) error {

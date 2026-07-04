@@ -429,6 +429,12 @@ int32_t easynet_receipt_verify(
     char **out_verification_json
 );
 
+int32_t easynet_receipt_verify_chain(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_verification_json
+);
+
 int32_t easynet_receipt_causal_ref(
     EasynetHandle handle,
     const char *receipt_json,

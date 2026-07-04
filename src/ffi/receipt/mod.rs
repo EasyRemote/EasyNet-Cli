@@ -32,8 +32,8 @@
 use std::os::raw::c_char;
 
 use crate::daemon::receipt_contract::{
-    build_fetch_invocation, project_causal_ref, project_receipt_summary,
-    project_receipt_verification, ReceiptError,
+    build_fetch_invocation, project_causal_ref, project_receipt_chain_verification,
+    project_receipt_summary, project_receipt_verification, ReceiptError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -101,6 +101,28 @@ pub unsafe extern "C" fn easynet_receipt_verify(
         "out_verification_json",
         "receipt_json",
         project_receipt_verification,
+    )
+}
+
+/// Return a daemon/Axon-owned receipt chain continuity projection.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and
+/// `out_verification_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_receipt_verify_chain(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_verification_json: *mut *mut c_char,
+) -> i32 {
+    project_receipt_json(
+        handle,
+        request_json,
+        out_verification_json,
+        "easynet_receipt_verify_chain",
+        "out_verification_json",
+        "request_json",
+        project_receipt_chain_verification,
     )
 }
 
@@ -276,8 +298,40 @@ mod tests {
         assert_eq!(code, EASYNET_OK);
         let value = read_json(out);
         assert_eq!(value["verified"], false);
-        assert_eq!(value["level"], "summary_projection");
-        assert_eq!(value["details"]["has_receipt_hash"], true);
+        assert_eq!(value["method"], "summary_projection");
+        assert_eq!(value["metadata"]["has_receipt_hash"], true);
+        release(handle);
+    }
+
+    #[test]
+    fn receipt_verify_chain_projects_continuity() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "receipts": [
+                    {
+                        "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                        "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    },
+                    {
+                        "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                        "self_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "prev_receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe { easynet_receipt_verify_chain(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["verified"], false);
+        assert_eq!(value["continuous"], true);
+        assert_eq!(value["method"], "daemon_receipt_chain_continuity");
         release(handle);
     }
 

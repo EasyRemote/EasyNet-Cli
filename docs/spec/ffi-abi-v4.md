@@ -402,6 +402,12 @@ int32_t easynet_receipt_verify(
     char** out_verification_json
 );
 
+int32_t easynet_receipt_verify_chain(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_verification_json
+);
+
 int32_t easynet_receipt_causal_ref(
     EasynetHandle handle,
     const char* receipt_json,
@@ -418,8 +424,10 @@ file, fabricate receipt URAs, or use control frames for receipt reads.
 `project` normalizes receipt-like JSON into the shared `ReceiptSummary` DTO.
 `verify` is conservative in ABI v4: it returns typed JSON with
 `verified: false` for summary-only data and does not claim Axon cryptographic
-verification. `causal_ref` builds a scalar causal context only when the input
-contains an explicit non-empty `receipt_ura` and a valid 32-byte receipt hash
+verification. `verify_chain` accepts `{receipts:[...]}` and returns daemon
+receipt-chain continuity facts separately from cryptographic verification.
+`causal_ref` builds a scalar causal context only when the input contains an
+explicit non-empty `receipt_ura` and a valid 32-byte receipt hash
 (`self_hash_hex`, `receipt_hash_hex`, or `receipt_hash`).
 
 ### 2.10 Host Binding Codec
