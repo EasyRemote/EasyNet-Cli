@@ -350,6 +350,8 @@ from .transport import (
     DaemonFrameStream,
     DaemonInvocationTransport,
     EasyRemoteTransportAdapter,
+    EasyRemoteUnaryDispatchPool,
+    EasyRemoteUnaryTransport,
 )
 from .wrappers import (
     BrowserSessionRecord,
@@ -442,6 +444,8 @@ __all__ = [
     "EasyRemoteAdminAdapter",
     "EasyRemoteAgentRecord",
     "EasyRemoteAgentStartProjection",
+    "EasyRemoteUnaryDispatchPool",
+    "EasyRemoteUnaryTransport",
     "DaemonControl",
     "DaemonHandle",
     "DaemonBidiChannel",

@@ -197,7 +197,8 @@ method spelling.
   await/cancel/events/close observation, DaemonHandle-scoped Runtime/Profile client factories, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
-  stream, and bidi facade with RuntimeConnection-owned session lifecycle over C ABI v4;
+  stream, and bidi facade with RuntimeConnection-owned session lifecycle over C ABI v4, plus
+  SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   EasyRemote-style descriptor-ref and target-dispatch cutover tests; private C ABI v4 profile carrier/projection bridges for
@@ -270,7 +271,8 @@ method spelling.
   manifest checks for raw Axon/ABI package dependencies, with shared conformance
   cases for no-raw-FFI, no-raw-invocation-codec, addressing-helper ownership,
   host-stream-codec ownership, receipt-continuity ownership, context-causal
-  gates, and admin/mission carrier gates; EasyRemote transport, invocation,
+  gates, and admin/mission carrier gates; EasyRemote transport, unary
+  wait/retire lifecycle, invocation,
   addressing helpers, warm host frame/hash substrate, receipt continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, and page-based Pipeline event access now pass static gates, while

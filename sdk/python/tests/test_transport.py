@@ -1,5 +1,7 @@
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +10,7 @@ from easynet_sdk import (
     BidiState,
     DaemonInvocationTransport,
     EasyRemoteTransportAdapter,
+    EasyRemoteUnaryDispatchPool,
     ErrorCode,
     RuntimeClient,
     SDKError,
@@ -284,6 +287,109 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(runtime.seen_draft)
 
+    def test_easyremote_unary_pool_retires_timed_out_owned_transport(self) -> None:
+        first = _SlowUnaryTransport(delay=0.05)
+        second = _SlowUnaryTransport()
+        transports = [first, second]
+        pool = EasyRemoteUnaryDispatchPool(lambda: transports.pop(0))
+
+        with self.assertRaises(SDKError) as caught:
+            pool.invoke(complete_draft().to_json_dict(), timeout=0.001)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(caught.exception.details["reason"], "client_wait_timeout")
+        self.assertIsNone(pool.current_transport)
+
+        result = pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(transports, [])
+        self.assertIs(pool.current_transport, second)
+        _wait_until(lambda: first.closed)
+        self.assertTrue(first.closed)
+        self.assertFalse(second.closed)
+
+    def test_easyremote_unary_pool_queue_timeout_does_not_retire_active_transport(
+        self,
+    ) -> None:
+        first = _SlowUnaryTransport(delay=0.05)
+        second = _SlowUnaryTransport()
+        transports = [first, second]
+        pool = EasyRemoteUnaryDispatchPool(lambda: transports.pop(0))
+        result: list[dict[str, object]] = []
+        thread = threading.Thread(
+            target=lambda: result.append(
+                pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
+            ),
+            daemon=True,
+        )
+
+        thread.start()
+        self.assertTrue(first.started.wait(timeout=1.0))
+        with self.assertRaises(SDKError) as caught:
+            pool.invoke(complete_draft().to_json_dict(), timeout=0.001)
+        thread.join(timeout=1.0)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(result, [{"ok": True}])
+        self.assertEqual(len(first.invocations), 1)
+        self.assertFalse(first.closed)
+        self.assertIs(pool.current_transport, first)
+        self.assertEqual(transports, [second])
+
+    def test_easyremote_unary_pool_close_during_active_invoke_is_bounded(self) -> None:
+        transport = _SlowUnaryTransport(delay=0.05)
+        pool = EasyRemoteUnaryDispatchPool(lambda: transport)
+        result: list[dict[str, object]] = []
+        thread = threading.Thread(
+            target=lambda: result.append(
+                pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
+            ),
+            daemon=True,
+        )
+
+        thread.start()
+        self.assertTrue(transport.started.wait(timeout=1.0))
+        started = time.perf_counter()
+        pool.close()
+        elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 0.02)
+        self.assertIsNone(pool.current_transport)
+        thread.join(timeout=1.0)
+        self.assertEqual(result, [{"ok": True}])
+        self.assertTrue(transport.closed)
+
+    def test_easyremote_unary_pool_close_releases_and_reconnects(self) -> None:
+        first = _SlowUnaryTransport()
+        second = _SlowUnaryTransport()
+        transports = [first, second]
+        pool = EasyRemoteUnaryDispatchPool(lambda: transports.pop(0))
+
+        self.assertIs(pool.connected_transport(), first)
+        pool.close()
+        pool.close()
+        result = pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertTrue(first.closed)
+        self.assertFalse(second.closed)
+        self.assertIs(pool.current_transport, second)
+
+    def test_easyremote_unary_pool_does_not_close_external_transport(self) -> None:
+        transport = _SlowUnaryTransport(delay=0.02)
+        pool = EasyRemoteUnaryDispatchPool.from_transport(transport)
+
+        with self.assertRaises(SDKError):
+            pool.invoke(complete_draft().to_json_dict(), timeout=0.001)
+        pool.close()
+        _wait_until(lambda: len(transport.invocations) == 1)
+
+        self.assertFalse(transport.closed)
+        result = pool.invoke(complete_draft().to_json_dict(), timeout=1.0)
+        self.assertEqual(result, {"ok": True})
+        self.assertFalse(transport.closed)
+
 
 def _write_control_discovery(tmp: str, *, invocation_endpoint: str | None = None) -> Path:
     path = Path(tmp) / "control.json"
@@ -303,6 +409,30 @@ def _write_control_discovery(tmp: str, *, invocation_endpoint: str | None = None
         encoding="utf-8",
     )
     return path
+
+
+class _SlowUnaryTransport:
+    def __init__(self, *, delay: float = 0.0) -> None:
+        self.delay = delay
+        self.closed = False
+        self.started = threading.Event()
+        self.invocations: list[object] = []
+
+    def invoke(self, invocation):
+        self.started.set()
+        if self.delay:
+            time.sleep(self.delay)
+        self.invocations.append(invocation)
+        return {"ok": True}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _wait_until(predicate) -> None:
+    deadline = time.perf_counter() + 1.0
+    while not predicate() and time.perf_counter() < deadline:
+        time.sleep(0.01)
 
 
 if __name__ == "__main__":

@@ -8,9 +8,12 @@ semantics itself.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import queue
+import threading
 from dataclasses import dataclass
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping, Protocol, cast
 
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
 from .connection import (
@@ -177,6 +180,173 @@ class EasyRemoteTransportAdapter:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+
+class EasyRemoteUnaryTransport(Protocol):
+    """Minimal unary transport contract owned by the SDK dispatch pool."""
+
+    def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> Mapping[str, object]:
+        """Submit one EasyRemote-shaped unary Invocation."""
+
+    def close(self) -> None:
+        """Release the underlying daemon transport."""
+
+
+class EasyRemoteUnaryDispatchPool:
+    """SDK-owned single-flight unary wait/retire state machine.
+
+    Product facades may impose a client-side wait budget, but they must not own
+    daemon handle reuse or delayed close rules. This pool keeps one reusable
+    unary transport for owned daemon sessions, retires it after a timed-out
+    caller wait, and closes retired transports only after the active daemon call
+    returns.
+    """
+
+    def __init__(
+        self,
+        transport_factory: Callable[[], EasyRemoteUnaryTransport],
+        *,
+        owned: bool = True,
+    ) -> None:
+        self._transport_factory = transport_factory
+        self._owned = owned
+        self._lock = threading.Lock()
+        self._flight_lock = threading.Lock()
+        self._transport: EasyRemoteUnaryTransport | None = None
+        self._retired: set[int] = set()
+
+    @classmethod
+    def from_transport(
+        cls, transport: EasyRemoteUnaryTransport
+    ) -> "EasyRemoteUnaryDispatchPool":
+        """Wrap an externally-owned transport without closing or retiring it."""
+
+        return cls(lambda: transport, owned=False)
+
+    def invoke(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, object]:
+        result: queue.Queue[tuple[bool, Mapping[str, object] | BaseException]] = (
+            queue.Queue(maxsize=1)
+        )
+        timed_out = threading.Event()
+        active_transport: list[EasyRemoteUnaryTransport | None] = [None]
+
+        def invoke_on_transport() -> None:
+            transport: EasyRemoteUnaryTransport | None = None
+            try:
+                with self._flight_lock:
+                    if timed_out.is_set():
+                        return
+                    transport = self._connected()
+                    active_transport[0] = transport
+                    if timed_out.is_set():
+                        self._retire(transport)
+                        return
+                    result.put((True, transport.invoke(invocation)))
+            except BaseException as exc:
+                result.put((False, exc))
+            finally:
+                if transport is not None:
+                    active_transport[0] = None
+                    retired = self._take_retired(transport)
+                    if self._owned and (timed_out.is_set() or retired):
+                        with contextlib.suppress(BaseException):
+                            transport.close()
+
+        threading.Thread(
+            target=invoke_on_transport,
+            name="easynet-sdk-easyremote-unary",
+            daemon=True,
+        ).start()
+        try:
+            ok, payload = result.get(timeout=timeout)
+        except queue.Empty:
+            timed_out.set()
+            transport = active_transport[0]
+            if transport is not None:
+                self._retire(transport)
+            raise SDKError(
+                code=ErrorCode.TIMEOUT,
+                stage="easyremote_transport",
+                retry=RetryHint.SAFE,
+                retryable=True,
+                message=(
+                    f"no response within {timeout}s — the server-side execution "
+                    "is still governed by the ability's timeout_seconds"
+                ),
+                details={
+                    "reason": "client_wait_timeout",
+                    "timeout_seconds": timeout,
+                },
+            ) from None
+        if not ok:
+            assert isinstance(payload, BaseException)
+            raise payload
+        return dict(cast(Mapping[str, object], payload))
+
+    def close(self) -> None:
+        if not self._owned:
+            return
+        if self._flight_lock.acquire(blocking=False):
+            try:
+                self._close_idle()
+            finally:
+                self._flight_lock.release()
+            return
+        self._retire_active()
+
+    @property
+    def current_transport(self) -> EasyRemoteUnaryTransport | None:
+        """Return the current reusable transport for tests/diagnostics."""
+
+        with self._lock:
+            return self._transport
+
+    def connected_transport(self) -> EasyRemoteUnaryTransport:
+        """Return the current reusable transport, opening one if needed."""
+
+        return self._connected()
+
+    def _connected(self) -> EasyRemoteUnaryTransport:
+        if not self._owned:
+            return self._transport_factory()
+        with self._lock:
+            if self._transport is None:
+                self._transport = self._transport_factory()
+            return self._transport
+
+    def _close_idle(self) -> None:
+        with self._lock:
+            transport = self._transport
+            self._transport = None
+        if transport is not None:
+            transport.close()
+
+    def _retire_active(self) -> None:
+        with self._lock:
+            if self._transport is not None:
+                self._retired.add(id(self._transport))
+                self._transport = None
+
+    def _retire(self, transport: EasyRemoteUnaryTransport) -> None:
+        if not self._owned:
+            return
+        with self._lock:
+            if self._transport is transport:
+                self._transport = None
+            self._retired.add(id(transport))
+
+    def _take_retired(self, transport: EasyRemoteUnaryTransport) -> bool:
+        with self._lock:
+            transport_id = id(transport)
+            if transport_id not in self._retired:
+                return False
+            self._retired.remove(transport_id)
+            return True
 
 
 @dataclass
