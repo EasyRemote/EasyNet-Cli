@@ -19,6 +19,7 @@ from easynet_sdk import (
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     AbilityQuery,
+    AbilityDeployRequest,
     AgentQuery,
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -32,6 +33,7 @@ from easynet_sdk import (
     ErrorCode,
     HealthClient,
     IdentityClient,
+    ResourceRef,
     InvocationSignature,
     MissionCancelRequest,
     MissionCarrierBase,
@@ -2081,6 +2083,36 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertIn("result", raw.profile_requests[1][2])
         self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_deploy_uses_carrier_invoke(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
+
+        result = client.deploy_ability(
+            AbilityDeployRequest(
+                caller_ura="easynet:///r/example/agent/alice.sdk",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/device/dev-a",
+                descriptor_version="1.0.0",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                resource_ref=ResourceRef.from_json(RESOURCE_REF_PROJECTION),
+                node_id="local",
+            )
+        )
+
+        self.assertEqual(result.state, "enabled")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_publication_build_deploy_invocation"],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "ability.deploy",
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_admin_live_agent_methods_use_carrier_invoke_and_projection(self) -> None:

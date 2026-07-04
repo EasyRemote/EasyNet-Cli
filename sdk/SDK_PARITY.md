@@ -31,7 +31,7 @@ method spelling.
 | bidi | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
 | receipt | fetch/projection partial | fetch/projection partial | projection seam partial | projection seam partial | gap | gap | gap |
-| publication | carrier partial | carrier partial | carrier/read-model seam partial | carrier/read-model seam partial | gap | gap | gap |
+| publication | carrier partial | carrier/deploy partial | carrier/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | admin + gateway | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
@@ -207,7 +207,7 @@ method spelling.
   Axon-backed cryptographic verification, receipt URI construction after RFC-007,
   and actual EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
-  package-validation, C ABI-backed deploy execution through Runtime Core invoke,
+  package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   published-ability list execution through Runtime Core invoke, deploy/unpublish
   Invocation carrier, deploy-result, plugin install projection,
   published-ability read-model seams, and close state seams; concrete daemon

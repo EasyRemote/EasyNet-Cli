@@ -935,7 +935,13 @@ class CABIPublicationTransport(_CABIProfileTransport):
         return self._call("easynet_publication_validate_package", request_json)
 
     def deploy_ability(self, request_json: bytes) -> bytes:
-        return self._missing("publication deploy ability")
+        handle = self._require_open()
+        output = self._invoke_output_json(
+            handle,
+            "easynet_publication_build_deploy_invocation",
+            request_json,
+        )
+        return _json_bytes(output)
 
     def build_deploy_invocation(self, request_json: bytes) -> bytes:
         return self._call(

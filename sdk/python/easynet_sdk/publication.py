@@ -578,7 +578,7 @@ class PublicationClient:
             raise _invalid_publication("package path or manifest is required")
         value: dict[str, object] = {}
         if path:
-            value["package_path"] = path
+            value["path"] = path
         if options.manifest is not None:
             value["manifest"] = options.manifest.to_json_dict()
         if options.metadata:

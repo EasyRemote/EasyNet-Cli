@@ -307,7 +307,7 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(validation.valid)
         self.assertEqual(validation.manifest.wire_key, "er.weather")
         assert transport.seen_request is not None
-        self.assertEqual(transport.seen_request["package_path"], "/tmp/easynet-weather-package")
+        self.assertEqual(transport.seen_request["path"], "/tmp/easynet-weather-package")
 
     def test_deploy_and_build_deploy_invocation(self) -> None:
         transport = MemoryPublicationTransport()
