@@ -8,7 +8,7 @@ from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
-from .invocation import InvocationDraft
+from .invocation import InvocationBuilder, InvocationDraft
 from .stream import StreamHandle, StreamTransport
 from .signing import PreparedInvocation, SignedInvocation, SigningMaterial
 
@@ -291,6 +291,20 @@ class RuntimeClient:
             raise _transport_error("prepare transport failed", exc) from exc
         prepared = PreparedInvocation.from_json(raw)
         return prepared, prepared.signing_material
+
+    def prepare_builder(
+        self,
+        builder: InvocationBuilder,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> tuple[PreparedInvocation, SigningMaterial]:
+        """Prepare a builder and consume it only after prepare succeeds."""
+
+        if builder is None:
+            raise _invalid_runtime("invocation builder is required")
+        draft = builder.inspect()
+        prepared, material = self.prepare(draft, options)
+        builder._consume()
+        return prepared, material
 
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
         transport = self._require_open()

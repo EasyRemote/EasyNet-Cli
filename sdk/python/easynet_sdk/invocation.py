@@ -132,6 +132,7 @@ class InvocationBuilder:
         self._caller_signature: Optional[InvocationSignature] = None
         self._has_args = False
         self._has_arguments = False
+        self._consumed = False
 
     def with_caller_ura(self, value: str) -> "InvocationBuilder":
         self._caller_ura = value
@@ -182,6 +183,23 @@ class InvocationBuilder:
         return self
 
     def build(self) -> InvocationDraft:
+        draft = self._inspect_draft()
+        self._consumed = True
+        return draft
+
+    def inspect(self) -> InvocationDraft:
+        """Validate tuple completeness without consuming the builder handle."""
+
+        return self._inspect_draft()
+
+    def _consume(self) -> None:
+        if self._consumed:
+            raise _invalid_handle("invocation builder handle is consumed")
+        self._consumed = True
+
+    def _inspect_draft(self) -> InvocationDraft:
+        if self._consumed:
+            raise _invalid_handle("invocation builder handle is consumed")
         caller_ura = _required_builder_string(self._caller_ura, "caller_ura")
         callee_ura = _required_builder_string(self._callee_ura, "callee_ura")
         descriptor_ref = _required_builder_string(self._descriptor_ref, "descriptor_ref")
@@ -278,4 +296,14 @@ def _invalid_invocation(
         retryable=False,
         message=message,
         cause=cause,
+    )
+
+
+def _invalid_handle(message: str) -> SDKError:
+    return SDKError(
+        code=ErrorCode.INVALID_HANDLE,
+        stage="build",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
     )

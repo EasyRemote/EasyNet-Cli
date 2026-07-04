@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -165,6 +166,156 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	}
 	if timeout.Code != ErrTimeout || timeout.Retry != RetrySafe || !timeout.Retryable {
 		t.Fatalf("unexpected shared timeout error: %#v", timeout)
+	}
+}
+
+func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing.T) {
+	root := repositoryRoot(t)
+
+	builderCase := sharedCase(t, root, "invocation-builder-handle-state.yaml")
+	requireCaseID(t, builderCase, "invocation/builder_handle_state")
+	requireCaseAction(t, builderCase, "create_builder")
+	requireCaseAction(t, builderCase, "set_complete_tuple")
+	requireCaseAction(t, builderCase, "inspect_builder")
+	requireCaseAction(t, builderCase, "build_builder")
+	requireCaseExpectation(t, builderCase, "result: error_after_build")
+	requireCaseExpectation(t, builderCase, "build_consumes_handle: true")
+	requireCaseExpectation(t, builderCase, "error_code: InvalidHandle")
+
+	builder := sharedInvocationBuilder(t, root)
+	if _, err := builder.Inspect(); err != nil {
+		t.Fatalf("Inspect(shared builder): %v", err)
+	}
+	if _, err := builder.Build(); err != nil {
+		t.Fatalf("Build(shared builder): %v", err)
+	}
+	if _, err := builder.Inspect(); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("Inspect after Build(shared builder) = %v, want %s", err, ErrInvalidHandle)
+	}
+
+	canonicalCase := sharedCase(t, root, "invocation-canonical-material.yaml")
+	requireCaseID(t, canonicalCase, "invocation/canonical_material")
+	requireCaseAction(t, canonicalCase, "prepare")
+	requireCaseFixture(t, canonicalCase, "invocation.complete.v4.json")
+	requireCaseExpectation(t, canonicalCase, "material_owner: axon_delegated")
+	requireCaseExpectation(t, canonicalCase, "fixture: prepared.signing-material.v4.json")
+
+	preparedFixtureJSON := sharedFixture(t, root, "prepared.signing-material.v4.json")
+	var seenPreparedDraft []byte
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+			seenPreparedDraft = append([]byte(nil), draftJSON...)
+			return preparedFixtureJSON, nil
+		},
+		SubmitSignedFunc: func(ctx context.Context, signedJSON []byte) ([]byte, error) {
+			return []byte(`{"handle_id":7,"state":"Submitted","terminal":false,"events":[{"sequence":1,"kind":"submitted","state":"Submitted","terminal":false}],"result":null}`), nil
+		},
+		AwaitHandleFunc: func(ctx context.Context, handleID uint64) ([]byte, error) {
+			return []byte(fmt.Sprintf(`{"ok":true,"tuple":%s,"terminal_state":"Completed","output_content_type":"application/json","output_base64":"e30=","output_json":{},"elapsed_ms":1,"receipt":{"receipt_id":"receipt-1"},"error":null}`, sharedFixture(t, root, "invocation.complete.v4.json"))), nil
+		},
+		CancelHandleFunc: func(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
+			return []byte(`{"handle_id":7,"cancelled":false,"state":"Completed","terminal":true}`), nil
+		},
+		HandleEventsFunc: func(ctx context.Context, handleID uint64) ([]byte, error) {
+			return []byte(`{"handle_id":7,"state":"Completed","terminal":true,"events":[{"sequence":1,"kind":"completed","state":"Completed","terminal":true,"result":{"receipt_id":"receipt-1"}}],"result":{"receipt_id":"receipt-1"}}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient(shared invocation signing): %v", err)
+	}
+
+	prepared, material, err := client.Prepare(context.Background(), sharedInvocationDraft(t, root), PrepareOptions{})
+	if err != nil {
+		t.Fatalf("Prepare(shared canonical material): %v", err)
+	}
+	assertJSONEquivalent(t, seenPreparedDraft, sharedFixture(t, root, "invocation.complete.v4.json"))
+	if material.Algorithm() != "ed25519" || material.CanonicalBytesBase64() != "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=" {
+		t.Fatalf("unexpected shared signing material: %#v", material)
+	}
+	if prepared.SubmitReady() {
+		t.Fatalf("PreparedInvocation is submit-ready")
+	}
+
+	notSubmittableCase := sharedCase(t, root, "invocation-prepared-not-submittable.yaml")
+	requireCaseID(t, notSubmittableCase, "invocation/prepared_not_submittable")
+	requireCaseAction(t, notSubmittableCase, "submit_prepared")
+	requireCaseExpectation(t, notSubmittableCase, "error_code: InvalidArgument")
+	if prepared.SubmitReady() {
+		t.Fatalf("shared PreparedInvocation crossed submit boundary")
+	}
+
+	presignedCase := sharedCase(t, root, "invocation-presigned-submit.yaml")
+	requireCaseID(t, presignedCase, "invocation/presigned_submit")
+	requireCaseAction(t, presignedCase, "attach_signature")
+	requireCaseAction(t, presignedCase, "submit_signed")
+	requireCaseExpectation(t, presignedCase, "signature_preserved: true")
+
+	signed, err := prepared.SignWithCallerSignature(sharedInvocationSignature())
+	if err != nil {
+		t.Fatalf("SignWithCallerSignature(shared): %v", err)
+	}
+	var seenSigned map[string]any
+	signatureClient, err := NewRuntimeClient(RuntimeTransportFunc{
+		SubmitSignedFunc: func(ctx context.Context, signedJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(signedJSON, &seenSigned); err != nil {
+				t.Fatalf("decode shared signed JSON: %v", err)
+			}
+			return []byte(`{"handle_id":7,"state":"Submitted","terminal":false,"events":[{"sequence":1,"kind":"submitted","state":"Submitted","terminal":false}],"result":null}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient(shared presigned): %v", err)
+	}
+	handle, err := signatureClient.SubmitSigned(context.Background(), signed)
+	if err != nil {
+		t.Fatalf("SubmitSigned(shared presigned): %v", err)
+	}
+	if handle.HandleID() != 7 {
+		t.Fatalf("unexpected shared handle: %#v", handle)
+	}
+	if seenSigned["signature"].(map[string]any)["signature_base64"] != "c2lnbmF0dXJl" {
+		t.Fatalf("shared signature was not preserved: %#v", seenSigned)
+	}
+
+	localSigningCase := sharedCase(t, root, "invocation-local-daemon-signing-boundary.yaml")
+	requireCaseID(t, localSigningCase, "invocation/local_daemon_signing_boundary")
+	requireCaseAction(t, localSigningCase, "local_daemon_sign")
+	requireCaseExpectation(t, localSigningCase, "public_object: SignedInvocation")
+	if !signed.SubmitReady() || signed.Prepared().SubmitReady() {
+		t.Fatalf("local signing did not produce SignedInvocation boundary")
+	}
+
+	terminalCase := sharedCase(t, root, "invocation-handle-terminal-monotonicity.yaml")
+	requireCaseID(t, terminalCase, "invocation/handle_terminal_monotonicity")
+	for _, action := range []string{
+		"prepare_complete_tuple",
+		"sign_prepared",
+		"submit_signed_handle",
+		"await_handle_terminal",
+		"cancel_handle",
+		"read_handle_events",
+	} {
+		requireCaseAction(t, terminalCase, action)
+	}
+	requireCaseExpectation(t, terminalCase, "submit_consumes_signed: true")
+	requireCaseExpectation(t, terminalCase, "terminal_event_count: 1")
+	result, err := client.Await(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("Await(shared terminal): %v", err)
+	}
+	cancel, err := client.Cancel(context.Background(), handle, "after terminal")
+	if err != nil {
+		t.Fatalf("Cancel(shared terminal): %v", err)
+	}
+	events, err := client.Events(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("Events(shared terminal): %v", err)
+	}
+	if !result.OK() || result.TerminalState() != "Completed" || cancel.State() != "Completed" || !cancel.Terminal() {
+		t.Fatalf("terminal monotonicity not preserved: result=%#v cancel=%#v", result, cancel)
+	}
+	if !events.Terminal() || len(events.Events()) != 1 || !events.Events()[0].Terminal() {
+		t.Fatalf("unexpected shared terminal events: %#v", events.Events())
 	}
 }
 
@@ -2514,6 +2665,46 @@ func sharedFeatureDiscoveryJSON(t *testing.T, abiVersion uint32) []byte {
 		t.Fatalf("encode shared feature discovery: %v", err)
 	}
 	return raw
+}
+
+func sharedInvocationDraft(t *testing.T, root string) InvocationDraft {
+	t.Helper()
+	draft, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json"))
+	if err != nil {
+		t.Fatalf("decode shared invocation fixture: %v", err)
+	}
+	return draft
+}
+
+func sharedInvocationBuilder(t *testing.T, root string) *InvocationBuilder {
+	t.Helper()
+	draft := sharedInvocationDraft(t, root)
+	builder := NewInvocationBuilder().
+		WithCallerURA(draft.CallerURA()).
+		WithCalleeURA(draft.CalleeURA()).
+		WithDescriptorRef(draft.DescriptorRef()).
+		WithSubjectURA(draft.SubjectURA()).
+		WithNonceBase64(draft.NonceBase64()).
+		WithCausalContext(draft.CausalContext()).
+		WithContentType(draft.ContentType()).
+		WithMetadata(draft.Metadata())
+	if draft.HasJSONArgs() {
+		builder.WithJSONArgs(draft.JSONArgs())
+	} else {
+		builder.WithArgumentsBase64(draft.ArgumentsBase64())
+	}
+	if signature := draft.CallerSignature(); signature != nil {
+		builder.WithCallerSignature(*signature)
+	}
+	return builder
+}
+
+func sharedInvocationSignature() InvocationSignature {
+	return InvocationSignature{
+		Algorithm:       "ed25519",
+		SignatureBase64: "c2lnbmF0dXJl",
+		KeyIDHint:       "caller-key",
+	}
 }
 
 func sharedControlOnlyHealthJSON(t *testing.T, root string) []byte {

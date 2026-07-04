@@ -89,6 +89,67 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientPrepareBuilderConsumesOnlyAfterSuccess(t *testing.T) {
+	transportPrepareCalls := 0
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+			transportPrepareCalls++
+			return []byte(preparedFixture), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	builder := NewInvocationBuilder().
+		WithCallerURA("easynet:///r/example/agent/alice.sdk").
+		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithSubjectURA("easynet:///r/example/device/dev-a").
+		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+		WithCausalContext(map[string]any{"form": "none"}).
+		WithJSONArgs(map[string]any{}).
+		WithContentType("application/json")
+
+	prepared, material, err := client.PrepareBuilder(context.Background(), builder, PrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareBuilder: %v", err)
+	}
+	if prepared.PreparedID() == "" || material.CanonicalBytesBase64() == "" || transportPrepareCalls != 1 {
+		t.Fatalf("unexpected prepare-builder result: prepared=%#v material=%#v calls=%d", prepared, material, transportPrepareCalls)
+	}
+	if _, err := builder.Inspect(); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("Inspect after PrepareBuilder = %v, want %s", err, ErrInvalidHandle)
+	}
+}
+
+func TestRuntimeClientPrepareBuilderKeepsBuilderOnFailure(t *testing.T) {
+	down := errors.New("daemon unavailable")
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+			return nil, down
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	builder := NewInvocationBuilder().
+		WithCallerURA("easynet:///r/example/agent/alice.sdk").
+		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithSubjectURA("easynet:///r/example/device/dev-a").
+		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+		WithCausalContext(map[string]any{"form": "none"}).
+		WithJSONArgs(map[string]any{}).
+		WithContentType("application/json")
+
+	if _, _, err := client.PrepareBuilder(context.Background(), builder, PrepareOptions{}); !IsCode(err, ErrTransport) {
+		t.Fatalf("PrepareBuilder failure = %v, want %s", err, ErrTransport)
+	}
+	if _, err := builder.Inspect(); err != nil {
+		t.Fatalf("builder consumed after failed PrepareBuilder: %v", err)
+	}
+}
+
 func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	var seenSigned map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{

@@ -98,14 +98,14 @@ method spelling.
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
   detach/open-runtime/connect-local state seams, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
-  construction, prepared/signed Invocation DTOs, unary InvocationResult
+  construction with inspect/build handle consumption, prepared/signed Invocation DTOs, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
-  invoke/invoke-stream/open-bidi/prepare/submit-signed/close methods behind narrow JSON
+  invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
   transport seams; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
-  conformance action execution remain incomplete before backend cutover.
+  remaining profile conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, directory subscription state seams,
   and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
@@ -167,14 +167,14 @@ method spelling.
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
-  construction, prepared/signed Invocation DTOs, unary InvocationResult
+  construction with inspect/build handle consumption, prepared/signed Invocation DTOs, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
-  RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed/close methods behind narrow
+  RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
   transport protocols; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
-  error source refs, and conformance action execution remain incomplete before
+  error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, directory subscription state seams,

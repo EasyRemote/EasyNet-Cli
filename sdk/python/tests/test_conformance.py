@@ -52,7 +52,9 @@ from easynet_sdk import (
     IdentityClient,
     IdentityProjection,
     IdentityProjectionRequest,
+    InvocationBuilder,
     InvocationDraft,
+    InvocationSignature,
     LocalResourceRefRequest,
     MAX_DIRECTORY_PAGE_SIZE,
     MissionCancelRequest,
@@ -68,7 +70,9 @@ from easynet_sdk import (
     ReceiptVerification,
     ResourceRef,
     ResolveQuery,
+    RuntimeClient,
     RuntimeHealth,
+    PrepareOptions,
     RetryHint,
     SDKError,
     MAX_SURFACE_PAGE_SIZE,
@@ -1111,6 +1115,186 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(timeout.code, ErrorCode.TIMEOUT)
         self.assertEqual(timeout.retry, RetryHint.SAFE)
         self.assertTrue(timeout.retryable)
+
+    def test_python_runtime_core_executes_shared_invocation_signing_conformance_cases(self) -> None:
+        builder_case = shared_case("invocation-builder-handle-state.yaml")
+        self._require_case_id(builder_case, "invocation/builder_handle_state")
+        for action in (
+            "create_builder",
+            "set_complete_tuple",
+            "inspect_builder",
+            "build_builder",
+        ):
+            self._require_case_action(builder_case, action)
+        self._require_case_expectation(builder_case, "result: error_after_build")
+        self._require_case_expectation(builder_case, "build_consumes_handle: true")
+        self._require_case_expectation(builder_case, "error_code: InvalidHandle")
+
+        builder = shared_invocation_builder()
+        builder.inspect()
+        builder.build()
+        with self.assertRaises(SDKError) as builder_caught:
+            builder.inspect()
+        self.assertEqual(builder_caught.exception.code, ErrorCode.INVALID_HANDLE)
+
+        canonical_case = shared_case("invocation-canonical-material.yaml")
+        self._require_case_id(canonical_case, "invocation/canonical_material")
+        self._require_case_action(canonical_case, "prepare")
+        self._require_case_fixture(canonical_case, "invocation.complete.v4.json")
+        self._require_case_expectation(canonical_case, "material_owner: axon_delegated")
+        self._require_case_expectation(
+            canonical_case, "fixture: prepared.signing-material.v4.json"
+        )
+
+        class SharedInvocationSigningTransport:
+            def __init__(self) -> None:
+                self.seen_draft: bytes | None = None
+                self.seen_signed: dict[str, object] | None = None
+
+            def invoke(self, draft_json: bytes) -> bytes:
+                raise SDKError(
+                    code=ErrorCode.NOT_IMPLEMENTED,
+                    stage="test",
+                    retry=RetryHint.NEVER,
+                    message="not used by shared invocation signing conformance test",
+                )
+
+            def open_stream(self, draft_json: bytes):
+                raise SDKError(
+                    code=ErrorCode.NOT_IMPLEMENTED,
+                    stage="test",
+                    retry=RetryHint.NEVER,
+                    message="not used by shared invocation signing conformance test",
+                )
+
+            def open_bidi(self, draft_json: bytes, streams_json: bytes):
+                raise SDKError(
+                    code=ErrorCode.NOT_IMPLEMENTED,
+                    stage="test",
+                    retry=RetryHint.NEVER,
+                    message="not used by shared invocation signing conformance test",
+                )
+
+            def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
+                self.seen_draft = draft_json
+                return shared_fixture("prepared.signing-material.v4.json")
+
+            def submit_signed(self, signed_json: bytes) -> bytes:
+                self.seen_signed = json.loads(signed_json.decode("utf-8"))
+                return (
+                    b'{"handle_id":7,"state":"Submitted","terminal":false,'
+                    b'"events":[{"sequence":1,"kind":"submitted",'
+                    b'"state":"Submitted","terminal":false}],"result":null}'
+                )
+
+            def await_handle(self, handle_id: int) -> bytes:
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "tuple": json.loads(
+                            shared_fixture("invocation.complete.v4.json")
+                        ),
+                        "terminal_state": "Completed",
+                        "output_content_type": "application/json",
+                        "output_base64": "e30=",
+                        "output_json": {},
+                        "elapsed_ms": 1,
+                        "receipt": {"receipt_id": "receipt-1"},
+                        "error": None,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+
+            def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+                return (
+                    b'{"handle_id":7,"cancelled":false,'
+                    b'"state":"Completed","terminal":true}'
+                )
+
+            def handle_events(self, handle_id: int) -> bytes:
+                return (
+                    b'{"handle_id":7,"state":"Completed","terminal":true,'
+                    b'"events":[{"sequence":1,"kind":"completed",'
+                    b'"state":"Completed","terminal":true,'
+                    b'"result":{"receipt_id":"receipt-1"}}],'
+                    b'"result":{"receipt_id":"receipt-1"}}'
+                )
+
+            def free_handle(self, handle_id: int) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        transport = SharedInvocationSigningTransport()
+        client = RuntimeClient(transport)
+        prepared, material = client.prepare(shared_invocation_draft(), PrepareOptions())
+        assert transport.seen_draft is not None
+        assert_json_equivalent(
+            transport.seen_draft, shared_fixture("invocation.complete.v4.json")
+        )
+        self.assertEqual(material.algorithm, "ed25519")
+        self.assertEqual(
+            material.canonical_bytes_base64,
+            "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
+        )
+        self.assertFalse(prepared.submit_ready())
+
+        not_submittable_case = shared_case("invocation-prepared-not-submittable.yaml")
+        self._require_case_id(not_submittable_case, "invocation/prepared_not_submittable")
+        self._require_case_action(not_submittable_case, "submit_prepared")
+        self._require_case_expectation(not_submittable_case, "error_code: InvalidArgument")
+        self.assertFalse(prepared.submit_ready())
+
+        presigned_case = shared_case("invocation-presigned-submit.yaml")
+        self._require_case_id(presigned_case, "invocation/presigned_submit")
+        self._require_case_action(presigned_case, "attach_signature")
+        self._require_case_action(presigned_case, "submit_signed")
+        self._require_case_expectation(presigned_case, "signature_preserved: true")
+
+        signed = prepared.sign_with_caller_signature(shared_invocation_signature())
+        handle = client.submit_signed(signed)
+        self.assertEqual(handle.handle_id, 7)
+        assert transport.seen_signed is not None
+        self.assertEqual(
+            transport.seen_signed["signature"]["signature_base64"],
+            "c2lnbmF0dXJl",
+        )
+
+        local_signing_case = shared_case("invocation-local-daemon-signing-boundary.yaml")
+        self._require_case_id(
+            local_signing_case, "invocation/local_daemon_signing_boundary"
+        )
+        self._require_case_action(local_signing_case, "local_daemon_sign")
+        self._require_case_expectation(local_signing_case, "public_object: SignedInvocation")
+        self.assertTrue(signed.submit_ready())
+        self.assertFalse(signed.prepared.submit_ready())
+
+        terminal_case = shared_case("invocation-handle-terminal-monotonicity.yaml")
+        self._require_case_id(terminal_case, "invocation/handle_terminal_monotonicity")
+        for action in (
+            "prepare_complete_tuple",
+            "sign_prepared",
+            "submit_signed_handle",
+            "await_handle_terminal",
+            "cancel_handle",
+            "read_handle_events",
+        ):
+            self._require_case_action(terminal_case, action)
+        self._require_case_expectation(terminal_case, "submit_consumes_signed: true")
+        self._require_case_expectation(terminal_case, "terminal_event_count: 1")
+
+        result = client.await_result(handle)
+        cancel = client.cancel(handle, "after terminal")
+        events = client.events(handle)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.terminal_state, "Completed")
+        self.assertEqual(cancel.state, "Completed")
+        self.assertTrue(cancel.terminal)
+        self.assertTrue(events.terminal)
+        self.assertEqual(len(events.events), 1)
+        self.assertTrue(events.events[0].terminal)
 
     def test_python_runtime_core_executes_shared_stream_bidi_lifecycle_conformance_case(self) -> None:
         lifecycle_case = shared_case("stream-bidi-lifecycle-state.yaml")
@@ -2818,6 +3002,41 @@ def shared_feature_discovery_json(abi_version: int) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def shared_invocation_draft() -> InvocationDraft:
+    return InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
+
+
+def shared_invocation_builder() -> InvocationBuilder:
+    draft = shared_invocation_draft()
+    builder = (
+        InvocationBuilder()
+        .with_caller_ura(draft.caller_ura)
+        .with_callee_ura(draft.callee_ura)
+        .with_descriptor_ref(draft.descriptor_ref)
+        .with_subject_ura(draft.subject_ura)
+        .with_nonce_base64(draft.nonce_base64)
+        .with_causal_context(draft.causal_context)
+        .with_content_type(draft.content_type)
+        .with_metadata(draft.metadata)
+    )
+    if draft._has_args:
+        builder.with_json_args(draft.args)
+    else:
+        assert draft.arguments_base64 is not None
+        builder.with_arguments_base64(draft.arguments_base64)
+    if draft.caller_signature is not None:
+        builder.with_caller_signature(draft.caller_signature)
+    return builder
+
+
+def shared_invocation_signature() -> InvocationSignature:
+    return InvocationSignature(
+        algorithm="ed25519",
+        signature_base64="c2lnbmF0dXJl",
+        key_id_hint="caller-key",
+    )
 
 
 def shared_control_only_health_json() -> bytes:

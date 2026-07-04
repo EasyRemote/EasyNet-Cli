@@ -28,6 +28,33 @@ class InvocationTests(unittest.TestCase):
         self.assertNotIn("arguments_base64", payload)
         self.assertEqual(payload["caller_ura"], "easynet:///r/example/agent/alice.sdk")
 
+    def test_builder_inspect_does_not_consume_and_build_consumes(self) -> None:
+        builder = (
+            InvocationBuilder()
+            .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+            .with_subject_ura("easynet:///r/example/device/dev-a")
+            .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .with_causal_context({"form": "none"})
+            .with_json_args({})
+            .with_content_type("application/json")
+        )
+
+        builder.inspect()
+        builder.inspect()
+        builder.build()
+
+        with self.assertRaises(SDKError) as inspect_caught:
+            builder.inspect()
+        self.assertTrue(is_code(inspect_caught.exception, ErrorCode.INVALID_HANDLE))
+
+        with self.assertRaises(SDKError) as build_caught:
+            builder.build()
+        self.assertTrue(is_code(build_caught.exception, ErrorCode.INVALID_HANDLE))
+
     def test_draft_from_json_decodes_fixture_shape(self) -> None:
         draft = InvocationDraft.from_json(
             b"""{

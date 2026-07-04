@@ -235,6 +235,55 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
 
+    def test_prepare_builder_consumes_only_after_success(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        builder = (
+            InvocationBuilder()
+            .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+            .with_subject_ura("easynet:///r/example/device/dev-a")
+            .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .with_causal_context({"form": "none"})
+            .with_json_args({})
+            .with_content_type("application/json")
+        )
+
+        prepared, material = client.prepare_builder(builder)
+
+        self.assertEqual(prepared.prepared_id, "prepared-example-1")
+        self.assertTrue(material.canonical_bytes_base64)
+        with self.assertRaises(SDKError) as caught:
+            builder.inspect()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
+
+    def test_prepare_builder_keeps_builder_on_failure(self) -> None:
+        transport = MemoryRuntimeTransport()
+        transport.prepare_error = RuntimeError("daemon unavailable")
+        client = RuntimeClient(transport)
+        builder = (
+            InvocationBuilder()
+            .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+            .with_subject_ura("easynet:///r/example/device/dev-a")
+            .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .with_causal_context({"form": "none"})
+            .with_json_args({})
+            .with_content_type("application/json")
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.prepare_builder(builder)
+        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+
+        builder.inspect()
+
     def test_submit_signed_preserves_signature(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)

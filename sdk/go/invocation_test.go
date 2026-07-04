@@ -37,6 +37,34 @@ func TestInvocationBuilderBuildsCompleteTuple(t *testing.T) {
 	}
 }
 
+func TestInvocationBuilderInspectDoesNotConsumeAndBuildConsumes(t *testing.T) {
+	builder := NewInvocationBuilder().
+		WithCallerURA("easynet:///r/example/agent/alice.sdk").
+		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithSubjectURA("easynet:///r/example/device/dev-a").
+		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+		WithCausalContext(map[string]any{"form": "none"}).
+		WithJSONArgs(map[string]any{}).
+		WithContentType("application/json")
+
+	if _, err := builder.Inspect(); err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if _, err := builder.Inspect(); err != nil {
+		t.Fatalf("second Inspect: %v", err)
+	}
+	if _, err := builder.Build(); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if _, err := builder.Inspect(); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("Inspect after Build error = %v, want %s", err, ErrInvalidHandle)
+	}
+	if _, err := builder.Build(); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("Build after Build error = %v, want %s", err, ErrInvalidHandle)
+	}
+}
+
 func TestInvocationDraftFromJSONDecodesFixtureShape(t *testing.T) {
 	draft, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/agent/alice.sdk",

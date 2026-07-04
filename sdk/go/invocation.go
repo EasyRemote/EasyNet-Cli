@@ -183,6 +183,7 @@ type InvocationBuilder struct {
 	callerSignature *InvocationSignature
 	hasArgs         bool
 	hasArguments    bool
+	consumed        bool
 }
 
 // NewInvocationBuilder creates an empty Invocation builder.
@@ -249,8 +250,36 @@ func (b *InvocationBuilder) WithCallerSignature(value InvocationSignature) *Invo
 
 // Build validates tuple completeness and returns an immutable draft.
 func (b *InvocationBuilder) Build() (InvocationDraft, error) {
+	draft, err := b.inspectDraft()
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	b.consumed = true
+	return draft, nil
+}
+
+// Inspect validates tuple completeness without consuming the builder handle.
+func (b *InvocationBuilder) Inspect() (InvocationDraft, error) {
+	return b.inspectDraft()
+}
+
+func (b *InvocationBuilder) consume() error {
+	if b == nil {
+		return invalidInvocation("invocation builder is not initialized", nil)
+	}
+	if b.consumed {
+		return invalidInvocationHandle("invocation builder handle is consumed")
+	}
+	b.consumed = true
+	return nil
+}
+
+func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 	if b == nil {
 		return InvocationDraft{}, invalidInvocation("invocation builder is not initialized", nil)
+	}
+	if b.consumed {
+		return InvocationDraft{}, invalidInvocationHandle("invocation builder handle is consumed")
 	}
 	for _, field := range []struct {
 		name  string
@@ -359,6 +388,16 @@ func invalidInvocation(message string, cause error) error {
 		Retryable: RetryableForHint(RetryNever),
 		Message:   message,
 		Cause:     cause,
+	}
+}
+
+func invalidInvocationHandle(message string) error {
+	return &SDKError{
+		Code:      ErrInvalidHandle,
+		Stage:     "build",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   message,
 	}
 }
 

@@ -249,6 +249,26 @@ func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts
 	return prepared, prepared.SigningMaterial(), nil
 }
 
+// PrepareBuilder inspects a complete builder, prepares canonical signing
+// material, and consumes the builder only after prepare succeeds.
+func (c *RuntimeClient) PrepareBuilder(ctx context.Context, builder *InvocationBuilder, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) {
+	if builder == nil {
+		return PreparedInvocation{}, SigningMaterial{}, invalidRuntimePayload("invocation builder is required", nil)
+	}
+	draft, err := builder.Inspect()
+	if err != nil {
+		return PreparedInvocation{}, SigningMaterial{}, err
+	}
+	prepared, material, err := c.Prepare(ctx, draft, opts)
+	if err != nil {
+		return PreparedInvocation{}, SigningMaterial{}, err
+	}
+	if err := builder.consume(); err != nil {
+		return PreparedInvocation{}, SigningMaterial{}, err
+	}
+	return prepared, material, nil
+}
+
 // SubmitSigned submits an immutable signed envelope and returns an observation handle.
 func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocation) (InvocationHandle, error) {
 	transport, err := c.runtimeTransport(ctx)
