@@ -10,7 +10,7 @@ from .errors import ErrorCode, RetryHint, SDKError
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .stream import StreamHandle, StreamTransport
-from .signing import PreparedInvocation, SignedInvocation, SigningMaterial
+from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 
 
 @runtime_checkable
@@ -305,6 +305,19 @@ class RuntimeClient:
         prepared, material = self.prepare(draft, options)
         builder._consume()
         return prepared, material
+
+    def prepare_and_sign(
+        self,
+        draft: InvocationDraft,
+        signer: Signer,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> tuple[SignedInvocation, SigningMaterial]:
+        """Prepare canonical material and return an inspectable signed envelope."""
+
+        if signer is None:
+            raise _invalid_runtime("signer is required")
+        prepared, material = self.prepare(draft, options)
+        return signer.sign(prepared), material
 
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
         transport = self._require_open()

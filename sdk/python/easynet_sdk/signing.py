@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Protocol
 
 from .errors import ErrorCode, RetryHint, SDKError
+from .identity import SignerHandle
 from .invocation import InvocationDraft, InvocationSignature
 
 
@@ -116,6 +117,68 @@ class PreparedInvocation:
         )
 
 
+class SignatureProvider(Protocol):
+    """Produces caller signatures over daemon/Axon signing material."""
+
+    def sign(
+        self, material: SigningMaterial, handle: SignerHandle
+    ) -> InvocationSignature:
+        ...
+
+
+@dataclass(frozen=True)
+class StaticSignatureProvider:
+    """Adapter for already-produced signatures without exposing envelope logic."""
+
+    signature: InvocationSignature
+
+    def sign(
+        self, material: SigningMaterial, handle: SignerHandle
+    ) -> InvocationSignature:
+        _ = material
+        _ = handle
+        return self.signature
+
+
+@dataclass(frozen=True)
+class Signer:
+    """SDK signer workflow object over a daemon-authorized signer handle."""
+
+    handle: SignerHandle
+    provider: SignatureProvider
+
+    @classmethod
+    def from_signature(
+        cls, handle: SignerHandle, signature: InvocationSignature
+    ) -> "Signer":
+        return cls(handle=handle, provider=StaticSignatureProvider(signature))
+
+    def sign(self, prepared: PreparedInvocation) -> "SignedInvocation":
+        if prepared is None:
+            raise _invalid_prepared("prepared invocation is required")
+        if self.handle is None:
+            raise _invalid_prepared("signer handle is required")
+        if self.provider is None:
+            raise _invalid_prepared("signature provider is required")
+        signature = self.provider.sign(prepared.signing_material, self.handle)
+        if not isinstance(signature, InvocationSignature):
+            raise _invalid_prepared(
+                "signature provider must return InvocationSignature"
+            )
+        return self.sign_with_signature(prepared, signature)
+
+    def sign_with_signature(
+        self, prepared: PreparedInvocation, signature: InvocationSignature
+    ) -> "SignedInvocation":
+        _validate_signer_handle(self.handle)
+        _validate_prepared_policy(prepared, self.handle)
+        normalized = _normalize_signature(self.handle, signature)
+        signed = prepared.sign_with_caller_signature(normalized)
+        if signed.signer_id != self.handle.signer_id:
+            raise _invalid_prepared("signed invocation signer does not match handle")
+        return signed
+
+
 @dataclass(frozen=True)
 class SignedInvocation:
     prepared: PreparedInvocation
@@ -202,6 +265,54 @@ def _signer_policy(value: object) -> SignerPolicy:
             value.get("expires_at_unix_ms"), "expires_at_unix_ms"
         )
         or 0,
+    )
+
+
+def _validate_signer_handle(handle: SignerHandle) -> None:
+    if handle is None:
+        raise _invalid_prepared("signer handle is required")
+    if handle.signer_id.strip() == "":
+        raise _invalid_prepared("signer handle signer_id is required")
+    if handle.key_id.strip() == "":
+        raise _invalid_prepared("signer handle key_id is required")
+    if handle.owner_ura.strip() == "":
+        raise _invalid_prepared("signer handle owner_ura is required")
+
+
+def _validate_prepared_policy(
+    prepared: PreparedInvocation, handle: SignerHandle
+) -> None:
+    policy = prepared.signing_material.signer_policy
+    if policy is None:
+        return
+    if policy.signer_id and policy.signer_id != handle.signer_id:
+        raise _invalid_prepared("prepared signer policy does not match signer handle")
+    handle_mode = handle.policy.get("mode")
+    if (
+        policy.mode
+        and isinstance(handle_mode, str)
+        and handle_mode
+        and policy.mode != handle_mode
+    ):
+        raise _invalid_prepared("prepared signer policy mode does not match handle")
+
+
+def _normalize_signature(
+    handle: SignerHandle, signature: InvocationSignature
+) -> InvocationSignature:
+    algorithm = signature.algorithm or handle.algorithm
+    if algorithm.strip() == "":
+        raise _invalid_prepared("signature.algorithm is required")
+    if handle.algorithm and algorithm != handle.algorithm:
+        raise _invalid_prepared("signature algorithm does not match signer handle")
+    key_id_hint = signature.key_id_hint or handle.signer_id
+    if key_id_hint not in {handle.signer_id, handle.key_id}:
+        raise _invalid_prepared("signature key_id_hint does not match signer handle")
+    return InvocationSignature(
+        algorithm=algorithm,
+        signature_base64=signature.signature_base64,
+        key_id_hint=handle.signer_id,
+        signer_public_key_base64=signature.signer_public_key_base64,
     )
 
 

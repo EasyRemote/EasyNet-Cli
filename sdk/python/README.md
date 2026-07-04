@@ -22,9 +22,10 @@ status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local
 state seams, schema-backed SDK error projection, complete
 Invocation draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, StreamHandle state observation, BidiSession frame
-ordering, half-close, cancel, and terminal-close observation, InvocationHandle
-await/cancel/events/close observation, and RuntimeClient
-invoke/invoke-stream/open-bidi/prepare/submit-signed/close
+ordering, half-close, cancel, and terminal-close observation, signer workflow
+objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
+observation, and RuntimeClient
+invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
 methods behind narrow transport protocols with timeout-aware stream/bidi receive,
 plus public
 DaemonInvocationTransport dict/JSON unary, stream, and bidi facade over

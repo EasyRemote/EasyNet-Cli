@@ -80,6 +80,8 @@ from easynet_sdk import (
     PrepareOptions,
     RetryHint,
     SDKError,
+    Signer,
+    SignerHandle,
     MAX_SURFACE_PAGE_SIZE,
     BidiFrame,
     BidiSession,
@@ -1345,8 +1347,16 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_action(local_signing_case, "local_daemon_sign")
         self._require_case_expectation(local_signing_case, "public_object: SignedInvocation")
-        self.assertTrue(signed.submit_ready())
-        self.assertFalse(signed.prepared.submit_ready())
+        local_signed = Signer.from_signature(
+            shared_signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        ).sign(prepared)
+        self.assertTrue(local_signed.submit_ready())
+        self.assertFalse(local_signed.prepared.submit_ready())
+        self.assertIsInstance(local_signed, SignedInvocation)
 
         terminal_case = shared_case("invocation-handle-terminal-monotonicity.yaml")
         self._require_case_id(terminal_case, "invocation/handle_terminal_monotonicity")
@@ -2830,6 +2840,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "invoke_stream": "runtime_core.invocation.invoke_stream",
                     "open_bidi": "runtime_core.invocation.open_bidi",
                     "prepare": "runtime_core.invocation.prepare",
+                    "prepare_and_sign": "runtime_core.invocation.prepare_and_sign",
                     "prepare_builder": "runtime_core.invocation.prepare_builder",
                     "submit_signed": "runtime_core.invocation.submit_signed",
                 },
@@ -3151,7 +3162,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "runtime_core",
                 (
                     (DaemonControl, ("start", "attach", "connect_local")),
-                    (RuntimeClient, ("prepare", "submit_signed", "invoke", "invoke_stream", "open_bidi")),
+                    (RuntimeClient, ("prepare", "prepare_and_sign", "submit_signed", "invoke", "invoke_stream", "open_bidi")),
                 ),
             ),
             (
@@ -3320,6 +3331,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             InvocationBuilder,
             PreparedInvocation,
             SignedInvocation,
+            Signer,
             StreamHandle,
             BidiSession,
         )
@@ -3909,6 +3921,18 @@ def shared_invocation_signature() -> InvocationSignature:
         algorithm="ed25519",
         signature_base64="c2lnbmF0dXJl",
         key_id_hint="caller-key",
+    )
+
+
+def shared_signer_handle() -> SignerHandle:
+    return SignerHandle(
+        profile="directory_identity",
+        signer_id="signer-alice-key-1",
+        owner_ura="easynet:///r/example/agent/alice.sdk",
+        key_id="alice-key-1",
+        algorithm="ed25519",
+        policy={"mode": "local_daemon_signing", "usage": "invocation.sign"},
+        metadata={"source": "daemon_keyring"},
     )
 
 

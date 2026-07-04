@@ -5,6 +5,8 @@ from easynet_sdk import (
     InvocationSignature,
     PreparedInvocation,
     SDKError,
+    Signer,
+    SignerHandle,
     is_code,
 )
 
@@ -150,6 +152,83 @@ class SigningTests(unittest.TestCase):
         self.assertFalse(signed.prepared.submit_ready())
         self.assertEqual(signed.signer_id, "caller-key")
 
+    def test_signer_provider_signs_with_daemon_authorized_handle(self) -> None:
+        class MemorySignatureProvider:
+            def sign(self, material, handle):
+                self.material = material
+                self.handle = handle
+                return InvocationSignature(
+                    algorithm="",
+                    signature_base64="c2lnbmF0dXJl",
+                )
+
+        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
+        handle = signer_handle()
+        provider = MemorySignatureProvider()
+        signer = Signer(handle=handle, provider=provider)
+
+        signed = signer.sign(prepared)
+
+        self.assertTrue(signed.submit_ready())
+        self.assertEqual(signed.signer_id, handle.signer_id)
+        self.assertEqual(signed.signature.algorithm, handle.algorithm)
+        self.assertEqual(signed.signature.key_id_hint, handle.signer_id)
+        self.assertEqual(provider.material, prepared.signing_material)
+        self.assertEqual(provider.handle, handle)
+
+    def test_signer_rejects_policy_mismatch(self) -> None:
+        prepared = PreparedInvocation.from_json(
+            b"""{
+                "prepared_id": "prepared-example-1",
+                "tuple": {
+                    "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                    "subject_ura": "easynet:///r/example/device/dev-a",
+                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    "causal_context": {"form": "none"},
+                    "args": {},
+                    "content_type": "application/json"
+                },
+                "signing_material": {
+                    "canonical_bytes_base64": "ZXhhbXBsZQ==",
+                    "args_digest_hex": "00",
+                    "expires_at_unix_ms": 1783000000000,
+                    "signer_policy": {
+                        "mode": "local_daemon_signing",
+                        "signer_id": "other-signer"
+                    }
+                }
+            }"""
+        )
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            signer.sign(prepared)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_signer_rejects_algorithm_mismatch(self) -> None:
+        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="secp256k1",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            signer.sign(prepared)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_prepared_invocation_rejects_empty_signature(self) -> None:
         prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
 
@@ -159,6 +238,18 @@ class SigningTests(unittest.TestCase):
             )
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+
+def signer_handle() -> SignerHandle:
+    return SignerHandle(
+        profile="directory_identity",
+        signer_id="signer-alice-key-1",
+        owner_ura="easynet:///r/example/agent/alice.sdk",
+        key_id="alice-key-1",
+        algorithm="ed25519",
+        policy={"mode": "local_daemon_signing", "usage": "invocation.sign"},
+        metadata={"source": "daemon_keyring"},
+    )
 
 
 if __name__ == "__main__":

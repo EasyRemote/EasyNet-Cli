@@ -169,11 +169,12 @@ method spelling.
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
-  construction with inspect/build handle consumption, prepared/signed Invocation DTOs, unary InvocationResult
+  construction with inspect/build handle consumption, prepared/signed Invocation DTOs, signer workflow
+  objects over daemon-authorized handles, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
-  RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
+  RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
   stream, and bidi facade over RuntimeClient/C ABI v4;
   `SdkEnvironment.addressing_client()` for the

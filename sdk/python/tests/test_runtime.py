@@ -11,10 +11,11 @@ from easynet_sdk import (
     PreparedInvocation,
     RuntimeClient,
     SDKError,
+    Signer,
     is_code,
 )
 
-from test_signing import PREPARED_FIXTURE
+from test_signing import PREPARED_FIXTURE, signer_handle
 
 
 class MemoryRuntimeTransport:
@@ -234,6 +235,34 @@ class RuntimeTests(unittest.TestCase):
             "easynet:///r/example/agent/alice.sdk",
         )
         self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
+
+    def test_prepare_and_sign_returns_inspectable_signed_envelope(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        signed, material = client.prepare_and_sign(
+            complete_draft(),
+            signer,
+            PrepareOptions(expires_in_ms=60000),
+        )
+
+        self.assertTrue(signed.submit_ready())
+        self.assertTrue(material.canonical_bytes_base64)
+        self.assertIsNone(transport.seen_signed)
+        self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
+
+        handle = client.submit_signed(signed)
+
+        self.assertEqual(handle.handle_id, 7)
+        assert transport.seen_signed is not None
+        self.assertEqual(transport.seen_signed["signer_id"], "signer-alice-key-1")
 
     def test_prepare_builder_consumes_only_after_success(self) -> None:
         transport = MemoryRuntimeTransport()

@@ -238,9 +238,12 @@ from .publication import (
 )
 from .signing import (
     PreparedInvocation,
+    SignatureProvider,
     SignedInvocation,
+    Signer,
     SignerPolicy,
     SigningMaterial,
+    StaticSignatureProvider,
 )
 from .stream import (
     MAX_STREAM_BUFFERED_EVENTS,
