@@ -292,6 +292,66 @@ class MissionRun:
 MissionCancelResult = MissionStatus
 
 
+@dataclass(frozen=True)
+class EasyRemoteMissionRunProjection:
+    """EasyRemote-facing projection of daemon `mission.run`."""
+
+    run_id: str
+    run_dir: str
+    outputs: Mapping[str, object]
+    raw: Mapping[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_run(cls, run: MissionRun) -> "EasyRemoteMissionRunProjection":
+        status = run.status
+        return cls(
+            run_id=status.mission_id,
+            run_dir=_mission_run_dir(status),
+            outputs=_mission_outputs(status),
+            raw=_status_projection(status),
+        )
+
+
+class EasyRemoteMissionAdapter:
+    """SDK-owned Mission cutover adapter for EasyRemote-like callers."""
+
+    def __init__(self, client: "MissionClient", base: MissionCarrierBase) -> None:
+        self._client = client
+        self._base = base
+
+    def run_eal(
+        self, source: str, *, label: str | None = None
+    ) -> EasyRemoteMissionRunProjection:
+        source_text = _validated_easyremote_source(source)
+        mission_label = _validated_easyremote_label(label)
+        run = self._client.run_eal(
+            MissionRunRequest(
+                base=self._base,
+                source=source_text,
+                label=mission_label or "",
+            )
+        )
+        return EasyRemoteMissionRunProjection.from_run(run)
+
+    def track(self, run_id: str) -> Mapping[str, object]:
+        status = self._client.track(
+            MissionTrackRequest(
+                base=self._base,
+                mission_id=_validated_easyremote_run_id(run_id),
+            )
+        )
+        return _status_projection(status)
+
+    def cancel(self, run_id: str) -> Mapping[str, object]:
+        status = self._client.cancel(
+            MissionCancelRequest(
+                base=self._base,
+                mission_id=_validated_easyremote_run_id(run_id),
+            )
+        )
+        return _status_projection(status)
+
+
 @runtime_checkable
 class MissionTransport(Protocol):
     """Concrete Mission operations supplied by the integration layer."""
@@ -616,6 +676,104 @@ def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, o
     if not isinstance(value, dict):
         raise _invalid_mission(f"{field_name} must be an object or null")
     return dict(value)
+
+
+def _validated_easyremote_source(source: str) -> str:
+    if not isinstance(source, str):
+        raise _invalid_mission(
+            f"EAL source must be a string, got {type(source).__name__}"
+        )
+    if not source.strip():
+        raise _invalid_mission("EAL source must not be empty")
+    return source
+
+
+def _validated_easyremote_label(label: str | None) -> str | None:
+    if label is None:
+        return None
+    trimmed = label.strip()
+    if not trimmed:
+        raise _invalid_mission("mission label must not be empty")
+    return trimmed
+
+
+def _validated_easyremote_run_id(value: str) -> str:
+    run_id = value.strip()
+    if not run_id:
+        raise _invalid_mission("mission run_id must not be empty")
+    return run_id
+
+
+def _mission_run_dir(status: MissionStatus) -> str:
+    for output in status.output_refs:
+        if output.kind == "run_dir" and output.path:
+            return output.path
+    run_dir = status.metadata.get("run_dir")
+    if isinstance(run_dir, str):
+        return run_dir
+    return ""
+
+
+def _mission_outputs(status: MissionStatus) -> Mapping[str, object]:
+    outputs = status.metadata.get("outputs")
+    if isinstance(outputs, Mapping):
+        return dict(outputs)
+    projected: dict[str, object] = {}
+    for output in status.output_refs:
+        if output.path:
+            projected[output.kind] = output.path
+        elif output.metadata:
+            projected[output.kind] = dict(output.metadata)
+    return projected
+
+
+def _status_projection(status: MissionStatus) -> dict[str, object]:
+    return {
+        "run_id": status.mission_id,
+        "mission_id": status.mission_id,
+        "state": status.state,
+        "terminal": status.terminal,
+        "partial_failures": status.partial_failures,
+        "cancelled": status.cancelled,
+        "parent_invocation_id": status.parent_invocation_id,
+        "parent_receipt_ura": status.parent_receipt_ura,
+        "run_dir": _mission_run_dir(status),
+        "outputs": dict(_mission_outputs(status)),
+        "child_invocations": [
+            {
+                "step_id": child.step_id,
+                "request_id": child.request_id,
+                "trace_id": child.trace_id,
+                "ability": child.ability,
+                "invocation_ura": child.invocation_ura,
+                "caller_ura": child.caller_ura,
+                "callee_ura": child.callee_ura,
+                "subject_ura": child.subject_ura,
+                "metadata_state": child.metadata_state,
+                "ledger_state": child.ledger_state,
+                "receipt": child.receipt,
+            }
+            for child in status.child_invocations
+        ],
+        "child_receipts": [
+            {
+                "step_id": receipt.step_id,
+                "invocation_ura": receipt.invocation_ura,
+                "receipt_ura": receipt.receipt_ura,
+                "receipt_hash": receipt.receipt_hash,
+            }
+            for receipt in status.child_receipts
+        ],
+        "output_refs": [
+            {
+                "kind": output.kind,
+                "path": output.path,
+                "metadata": dict(output.metadata),
+            }
+            for output in status.output_refs
+        ],
+        "metadata": dict(status.metadata),
+    }
 
 
 def _invalid_mission(message: str, cause: BaseException | None = None) -> SDKError:

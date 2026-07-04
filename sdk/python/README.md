@@ -78,12 +78,14 @@ through the client plus per-call HostStreamSession state seams. Python also
 ships `LocalHostBindingTransport` for product-host frame/hash facade execution
 against the shared Host Binding conformance fixtures. The package also exposes
 EasyRemote cutover audit helpers that reject raw FFI/Axon imports, raw
-Invocation JSON codecs, raw host-stream frame/hash codecs, and raw lower-layer
-Axon/ABI dependencies in consumer manifests.
+Invocation JSON codecs, raw host-stream frame/hash codecs, raw admin/mission
+carrier strings, and raw lower-layer Axon/ABI dependencies in consumer
+manifests.
 MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
-seams and close state seams. AdminClient
+seams, an EasyRemote Mission cutover adapter over typed Mission profile
+requests, and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
 Core invoke, C ABI-backed session-list execution through Runtime Core invoke,

@@ -265,18 +265,22 @@ method spelling.
   conformance remain incomplete.
 - Python EasyRemote cutover audit helpers expose source-tree checks for raw
   FFI/Axon imports, raw C ABI symbols, raw Invocation JSON codecs, and raw
-  host-stream frame/hash codecs, raw receipt-chain continuity checks, plus
-  manifest checks for raw Axon/ABI package dependencies, with shared conformance
-  cases for no-raw-FFI, no-raw-invocation-codec, host-stream-codec ownership,
-  receipt-continuity ownership, and context-causal gates; EasyRemote transport,
-  invocation, warm host frame/hash substrate, and receipt continuity extraction
-  now pass static gates, while Context child dispatch, publication/mission/admin
-  product extraction, and full receipt verification remain incomplete.
+  host-stream frame/hash codecs, raw receipt-chain continuity checks, and raw
+  admin/mission carrier strings, plus manifest checks for raw Axon/ABI package
+  dependencies, with shared conformance cases for no-raw-FFI,
+  no-raw-invocation-codec, host-stream-codec ownership, receipt-continuity
+  ownership, context-causal gates, and admin/mission carrier gates; EasyRemote
+  transport, invocation, warm host frame/hash substrate, receipt continuity,
+  hosted-agent admin, and Mission transport extraction now pass static gates,
+  while Context child dispatch, publication product extraction, full Pipeline
+  cutover, full AgentControl/Server cutover, and full receipt verification
+  remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
-  through Runtime Core invoke, plus daemon `MissionStatus` and
-  `MissionEventPage` projection seams and close state seams; concrete live-tail adapters,
-  child Invocation behavior conformance,
+  through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
+  projection seams, an SDK-owned EasyRemote Mission cutover adapter, raw mission
+  carrier audit gate for `mission.run/track/cancel`, and close state seams;
+  concrete live-tail adapters, child Invocation behavior conformance, full
   EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders,

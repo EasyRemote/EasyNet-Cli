@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from easynet_sdk import ErrorCode, SDKError, is_code
+from easynet_sdk import EasyRemoteMissionAdapter, ErrorCode, SDKError, is_code
 from easynet_sdk.mission import (
     MissionCancelRequest,
     MissionCarrierBase,
@@ -85,6 +85,57 @@ MISSION_STATUS_JSON = b"""{
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }"""
 
+EASYREMOTE_RUN_STATUS_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_status",
+  "mission_id": "run-1",
+  "state": "running",
+  "terminal": false,
+  "partial_failures": 0,
+  "cancelled": false,
+  "parent_invocation_id": "invoke-run-1",
+  "parent_receipt_ura": null,
+  "parent_invocation": null,
+  "child_invocations": [],
+  "child_receipts": [],
+  "output_refs": [{"kind": "run_dir", "path": "/tmp/run-1", "metadata": {}}],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk", "outputs": {"a": 1}}
+}"""
+
+EASYREMOTE_TRACK_STATUS_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_status",
+  "mission_id": "run-1",
+  "state": "running",
+  "terminal": false,
+  "partial_failures": 0,
+  "cancelled": false,
+  "parent_invocation_id": "invoke-run-1",
+  "parent_receipt_ura": null,
+  "parent_invocation": null,
+  "child_invocations": [],
+  "child_receipts": [],
+  "output_refs": [{"kind": "run_dir", "path": "/tmp/run-1", "metadata": {}}],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
+EASYREMOTE_CANCEL_STATUS_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_status",
+  "mission_id": "run-1",
+  "state": "cancelled",
+  "terminal": true,
+  "partial_failures": 0,
+  "cancelled": true,
+  "parent_invocation_id": "invoke-run-1",
+  "parent_receipt_ura": null,
+  "parent_invocation": null,
+  "child_invocations": [],
+  "child_receipts": [],
+  "output_refs": [{"kind": "run_dir", "path": "/tmp/run-1", "metadata": {}}],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
 MISSION_EVENT_PAGE_JSON = b"""{
   "profile": "mission",
   "kind": "mission_event_page",
@@ -129,48 +180,54 @@ class MemoryMissionTransport:
         self.run_file_invocation_json = MISSION_RUN_INVOCATION_JSON
         self.track_invocation_json = MISSION_TRACK_INVOCATION_JSON
         self.cancel_invocation_json = MISSION_CANCEL_INVOCATION_JSON
-        self.status_json = MISSION_STATUS_JSON
+        self.run_status_json = MISSION_STATUS_JSON
+        self.run_file_status_json = MISSION_STATUS_JSON
+        self.track_status_json = MISSION_STATUS_JSON
+        self.cancel_status_json = MISSION_STATUS_JSON
         self.events_json = MISSION_EVENT_PAGE_JSON
+        self.seen: dict[str, dict[str, object]] = {}
         self.seen_request: dict[str, object] | None = None
         self.close_calls = 0
 
-    def _remember(self, request_json: bytes) -> None:
-        self.seen_request = json.loads(request_json.decode("utf-8"))
+    def _remember(self, name: str, request_json: bytes) -> None:
+        decoded = json.loads(request_json.decode("utf-8"))
+        self.seen[name] = decoded
+        self.seen_request = decoded
 
     def build_run_eal_invocation(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
+        self._remember("build_run_eal_invocation", request_json)
         return self.run_invocation_json
 
     def build_run_file_invocation(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
+        self._remember("build_run_file_invocation", request_json)
         return self.run_file_invocation_json
 
     def build_track_invocation(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
+        self._remember("build_track_invocation", request_json)
         return self.track_invocation_json
 
     def build_cancel_invocation(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
+        self._remember("build_cancel_invocation", request_json)
         return self.cancel_invocation_json
 
     def run_eal(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
-        return self.status_json
+        self._remember("run_eal", request_json)
+        return self.run_status_json
 
     def run_file(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
-        return self.status_json
+        self._remember("run_file", request_json)
+        return self.run_file_status_json
 
     def track(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
-        return self.status_json
+        self._remember("track", request_json)
+        return self.track_status_json
 
     def cancel(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
-        return self.status_json
+        self._remember("cancel", request_json)
+        return self.cancel_status_json
 
     def events(self, request_json: bytes) -> bytes:
-        self._remember(request_json)
+        self._remember("events", request_json)
         return self.events_json
 
     def close(self) -> None:
@@ -190,6 +247,32 @@ def base() -> MissionCarrierBase:
 
 
 class MissionTests(unittest.TestCase):
+    def test_easyremote_adapter_runs_tracks_and_cancels_missions(self) -> None:
+        transport = MemoryMissionTransport()
+        transport.run_status_json = EASYREMOTE_RUN_STATUS_JSON
+        transport.track_status_json = EASYREMOTE_TRACK_STATUS_JSON
+        transport.cancel_status_json = EASYREMOTE_CANCEL_STATUS_JSON
+        client = MissionClient(transport)
+        adapter = EasyRemoteMissionAdapter(client, base())
+
+        run = adapter.run_eal('mission "nightly" {}\n', label="nightly")
+        tracked = adapter.track("run-1")
+        cancelled = adapter.cancel("run-1")
+
+        self.assertEqual(run.run_id, "run-1")
+        self.assertEqual(run.run_dir, "/tmp/run-1")
+        self.assertEqual(run.outputs, {"a": 1})
+        self.assertEqual(tracked["state"], "running")
+        self.assertEqual(cancelled["cancelled"], True)
+        self.assertEqual(
+            transport.seen["run_eal"]["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(transport.seen["run_eal"]["source"], 'mission "nightly" {}\n')
+        self.assertEqual(transport.seen["run_eal"]["label"], "nightly")
+        self.assertEqual(transport.seen["track"]["mission_id"], "run-1")
+        self.assertEqual(transport.seen["cancel"]["mission_id"], "run-1")
+
     def test_builds_run_track_cancel_invocations(self) -> None:
         client = MissionClient(MemoryMissionTransport())
 

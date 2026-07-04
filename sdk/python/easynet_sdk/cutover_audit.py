@@ -121,6 +121,7 @@ class EasyRemoteCutoverAuditor:
         violations.extend(_audit_receipt_chain_semantics(relative, text))
         violations.extend(_audit_publication_carrier_semantics(relative, text))
         violations.extend(_audit_admin_carrier_semantics(relative, text))
+        violations.extend(_audit_mission_carrier_semantics(relative, text))
         return tuple(violations)
 
     def _audit_manifest(
@@ -406,6 +407,17 @@ def _audit_admin_carrier_semantics(
         text,
         rule="raw_admin_carrier",
         values={"agent.start", "agent.list", "agent.refresh"},
+    )
+
+
+def _audit_mission_carrier_semantics(
+    path: str, text: str
+) -> tuple[CutoverViolation, ...]:
+    return _audit_string_literals(
+        path,
+        text,
+        rule="raw_mission_carrier",
+        values={"mission.run", "mission.track", "mission.cancel"},
     )
 
 

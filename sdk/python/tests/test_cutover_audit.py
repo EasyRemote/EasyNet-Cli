@@ -273,6 +273,28 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("raw_admin_carrier", _rules(result))
 
+    def test_flags_raw_mission_carrier_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "mission.py").write_text(
+                textwrap.dedent(
+                    '''
+                    def run(client):
+                        """A docstring can mention mission.run safely."""
+                        return client.invoke("mission.run", source="mission x {}")
+
+                    def cancel(client):
+                        return client.invoke("mission.cancel", run_id="run-1")
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_mission_carrier", _rules(result))
+
     def test_ignores_comments_and_docstrings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

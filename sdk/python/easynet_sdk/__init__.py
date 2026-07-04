@@ -235,6 +235,8 @@ from .invocation import (
     InvocationSignature,
 )
 from .mission import (
+    EasyRemoteMissionAdapter,
+    EasyRemoteMissionRunProjection,
     MissionCancelRequest,
     MissionCarrierBase,
     MissionChildInvocation,
@@ -550,6 +552,8 @@ __all__ = [
     "MAX_STREAM_BUFFERED_EVENTS",
     "MAX_SURFACE_PAGE_SIZE",
     "MediaSessionRecord",
+    "EasyRemoteMissionAdapter",
+    "EasyRemoteMissionRunProjection",
     "MissionCancelRequest",
     "MissionCarrierBase",
     "MissionChildInvocation",
