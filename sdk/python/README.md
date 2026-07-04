@@ -35,8 +35,10 @@ InvocationResult and non-verifying terminal receipt projection, StreamHandle sta
 ordering, half-close, cancel, and terminal-close observation, object-bound
 Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
-observation, SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state
-and stream value projection for terminal/timeout/error/payload frames plus
+observation, SDK-owned EasyRemote signed unary prepare/sign/submit/await/
+free-handle transport path with explicit signer-boundary errors, SDK-owned
+EasyRemote unary wait/timeout/retire/close transport-pool state and stream value
+projection for terminal/timeout/error/payload frames plus
 EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection,
 DaemonHandle-scoped Runtime/Profile client factories, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
@@ -128,8 +130,11 @@ builders, including C ABI-backed record-returning file, terminal, remote desktop
 browser, and media helper execution through Runtime Core invoke, plus public
 `RuntimeWrapperTransport` composition for carrier-build/runtime-invoke/
 record-project execution,
-transport-backed helper close state seams, and record projections. Product Invocation
-direct daemon UDS transport, Axon-backed receipt verification, receipt URA
+transport-backed helper close state seams, and record projections. EasyRemote
+signed unary dispatch now flows through Runtime Core
+prepare/sign/submit/await/free when a daemon-authorized SDK signer is supplied.
+Product Invocation direct daemon UDS transport, daemon-owned signer
+acquisition/keyring policy, Axon-backed receipt verification, receipt URA
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
 and cleanup execution adapters, mission event live streams, Admin hub lifecycle,

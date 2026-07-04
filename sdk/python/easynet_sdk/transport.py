@@ -24,7 +24,8 @@ from .connection import (
 )
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
-from .runtime import InvocationFailure, InvocationResult, RuntimeClient
+from .runtime import InvocationFailure, InvocationResult, PrepareOptions, RuntimeClient
+from .signing import Signer
 from .stream import StreamCancel, StreamEvent, StreamHandle
 
 
@@ -83,6 +84,31 @@ class DaemonInvocationTransport:
 
         result = self._require_open().invoke(_coerce_draft(invocation))
         return _invocation_result_dict(result)
+
+    def invoke_signed(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        signer: Signer | None,
+        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+    ) -> dict[str, object]:
+        """Prepare, sign, submit, await, and release one signed Invocation."""
+
+        if signer is None:
+            raise _missing_easyremote_signer()
+        runtime = self._require_open()
+        signed, _material = runtime.prepare_and_sign(
+            _coerce_draft(invocation),
+            signer,
+            options,
+        )
+        handle = runtime.submit_signed(signed)
+        try:
+            result = runtime.await_result(handle)
+            return _invocation_result_dict(result)
+        finally:
+            with contextlib.suppress(Exception):
+                runtime.close_handle(handle)
 
     def stream(
         self, invocation: Mapping[str, object] | InvocationDraft
@@ -160,6 +186,19 @@ class EasyRemoteTransportAdapter:
 
         return _easyremote_response_dict(self.transport.invoke(invocation))
 
+    def invoke_signed(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        signer: Signer | None,
+        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+    ) -> dict[str, object]:
+        """Submit a signed Invocation and return EasyRemote's result shape."""
+
+        return _easyremote_response_dict(
+            self.transport.invoke_signed(invocation, signer=signer, options=options)
+        )
+
     def stream(
         self, invocation: Mapping[str, object] | InvocationDraft
     ) -> "DaemonFrameStream":
@@ -188,6 +227,15 @@ class EasyRemoteUnaryTransport(Protocol):
 
     def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> Mapping[str, object]:
         """Submit one EasyRemote-shaped unary Invocation."""
+
+    def invoke_signed(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        signer: Signer | None,
+        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+    ) -> Mapping[str, object]:
+        """Submit one EasyRemote-shaped signed unary Invocation."""
 
     def close(self) -> None:
         """Release the underlying daemon transport."""
@@ -230,6 +278,34 @@ class EasyRemoteUnaryDispatchPool:
         *,
         timeout: float | None = None,
     ) -> dict[str, object]:
+        return self._invoke_with_transport(
+            lambda transport: transport.invoke(invocation),
+            timeout=timeout,
+        )
+
+    def invoke_signed(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        *,
+        signer: Signer | None,
+        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+        timeout: float | None = None,
+    ) -> dict[str, object]:
+        return self._invoke_with_transport(
+            lambda transport: transport.invoke_signed(
+                invocation,
+                signer=signer,
+                options=options,
+            ),
+            timeout=timeout,
+        )
+
+    def _invoke_with_transport(
+        self,
+        operation: Callable[[EasyRemoteUnaryTransport], Mapping[str, object]],
+        *,
+        timeout: float | None,
+    ) -> dict[str, object]:
         result: queue.Queue[tuple[bool, Mapping[str, object] | BaseException]] = (
             queue.Queue(maxsize=1)
         )
@@ -247,7 +323,7 @@ class EasyRemoteUnaryDispatchPool:
                     if timed_out.is_set():
                         self._retire(transport)
                         return
-                    result.put((True, transport.invoke(invocation)))
+                    result.put((True, operation(transport)))
             except BaseException as exc:
                 result.put((False, exc))
             finally:
@@ -913,6 +989,19 @@ def _invalid_transport(message: str) -> SDKError:
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+    )
+
+
+def _missing_easyremote_signer() -> SDKError:
+    return SDKError(
+        code=ErrorCode.NOT_IMPLEMENTED,
+        stage="easyremote_signing",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=(
+            "EasyRemote signed invocation requires a daemon-authorized SDK Signer"
+        ),
+        details={"reason": "signing_path_pending"},
     )
 
 

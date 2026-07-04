@@ -199,8 +199,9 @@ method spelling.
   await/cancel/events/close observation, DaemonHandle-scoped Runtime/Profile client factories, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
-  stream, and bidi facade with RuntimeConnection-owned session lifecycle over C ABI v4, plus
-  SDK-owned EasyRemote unary wait/timeout/retire/close transport-pool state and
+  stream, bidi, and signed unary prepare/sign/submit/await/free-handle facade
+  with RuntimeConnection-owned session lifecycle over C ABI v4, plus
+  SDK-owned EasyRemote signed unary signer-boundary errors and unary wait/timeout/retire/close transport-pool state and
   EasyRemote stream value projection for terminal/timeout/error/payload frames plus
   EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection;
   `SdkEnvironment.addressing_client()` and package-level functions for the
@@ -287,10 +288,13 @@ method spelling.
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
   Pipeline event access/live-tail plus publication product catalogue extraction and
   Server/Gateway hub-config/lifecycle/fingerprint projection plus Pipeline step
-  planning/EAL rendering/child Invocation fact conformance projection now pass
-  static gates, while daemon-backed Pipeline child Invocation execution behavior,
-  full AgentControl cutover, daemon/ABI-backed Server pairing/hub lifecycle
-  cutover, and full receipt verification remain incomplete.
+  planning/EAL rendering/child Invocation fact conformance projection, plus
+  EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
+  prepare/sign/submit/await/free with an explicit SDK signer now pass static
+  gates, while daemon-owned signer acquisition/keyring policy, daemon-backed
+  Pipeline child Invocation execution behavior, full AgentControl cutover,
+  daemon/ABI-backed Server pairing/hub lifecycle cutover, and full receipt
+  verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`

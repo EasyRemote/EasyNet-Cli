@@ -15,9 +15,11 @@ from easynet_sdk import (
     EasyRemoteTransportAdapter,
     EasyRemoteUnaryDispatchPool,
     ErrorCode,
+    InvocationSignature,
     RetryHint,
     RuntimeClient,
     SDKError,
+    Signer,
     StreamState,
     is_code,
 )
@@ -25,6 +27,7 @@ from easynet_sdk._cabi import CLILibrary
 
 from test_cabi import FakeRawCABI
 from test_runtime import MemoryRuntimeTransport, complete_draft
+from test_signing import signer_handle
 
 
 def _load_patch(raw: FakeRawCABI):
@@ -87,6 +90,40 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["elapsed_ms"], 12)
         self.assertEqual(result["admission_receipt"], {"invocation_id": "inv-1"})
         self.assertEqual(result["sdk_runtime_result"]["terminal_state"], "Completed")
+
+    def test_easyremote_adapter_requires_sdk_signer_for_signed_invocation(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        adapter = EasyRemoteTransportAdapter.from_runtime_client(RuntimeClient(runtime))
+
+        with self.assertRaises(SDKError) as caught:
+            adapter.invoke_signed(complete_draft().to_json_dict(), signer=None)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(caught.exception.stage, "easyremote_signing")
+        self.assertEqual(caught.exception.details["reason"], "signing_path_pending")
+        self.assertIsNone(runtime.seen_draft)
+
+    def test_easyremote_adapter_submits_signed_invocation_through_runtime(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        adapter = EasyRemoteTransportAdapter.from_runtime_client(RuntimeClient(runtime))
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        result = adapter.invoke_signed(complete_draft().to_json_dict(), signer=signer)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["terminal_state"], "Completed")
+        self.assertEqual(result["state"], 5)
+        self.assertEqual(runtime.seen_options, {"require_user_sig": True})
+        self.assertEqual(runtime.seen_await_id, 7)
+        self.assertEqual(runtime.seen_free_id, 7)
+        assert runtime.seen_signed is not None
+        self.assertEqual(runtime.seen_signed["signer_id"], "signer-alice-key-1")
 
     def test_invoke_projects_runtime_receipt_summary_to_dict(self) -> None:
         class ReceiptRuntimeTransport(MemoryRuntimeTransport):
@@ -391,6 +428,27 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(first.closed)
         self.assertFalse(second.closed)
 
+    def test_easyremote_unary_pool_signed_dispatch_reuses_wait_state(self) -> None:
+        transport = _SlowUnaryTransport()
+        pool = EasyRemoteUnaryDispatchPool.from_transport(transport)
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+
+        result = pool.invoke_signed(
+            complete_draft().to_json_dict(),
+            signer=signer,
+            timeout=1.0,
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(len(transport.invocations), 1)
+        self.assertEqual(transport.signed_signers, [signer])
+
     def test_easyremote_unary_pool_queue_timeout_does_not_retire_active_transport(
         self,
     ) -> None:
@@ -598,12 +656,21 @@ class _SlowUnaryTransport:
         self.closed = False
         self.started = threading.Event()
         self.invocations: list[object] = []
+        self.signed_signers: list[object] = []
 
     def invoke(self, invocation):
         self.started.set()
         if self.delay:
             time.sleep(self.delay)
         self.invocations.append(invocation)
+        return {"ok": True}
+
+    def invoke_signed(self, invocation, *, signer=None, options=None):
+        self.started.set()
+        if self.delay:
+            time.sleep(self.delay)
+        self.invocations.append(invocation)
+        self.signed_signers.append(signer)
         return {"ok": True}
 
     def close(self) -> None:
