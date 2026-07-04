@@ -239,12 +239,13 @@ method spelling.
   event history pages plus close state seams; daemon-side filtering, live stream transport adapters,
   and product cutovers remain incomplete.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest
-  Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
+  Invocation carrier builders, C ABI-backed page list/create/delete/manifest
+  execution through Runtime Core, plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
   projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams and
-  close state seams;
-  backend route serving, browser auth, CDN/cache policy, content-management UX,
-  concrete surface health carriers, and product cutovers remain incomplete.
+  close state seams; concrete surface health carriers, backend route serving,
+  browser auth, CDN/cache policy, content-management UX, and product cutovers
+  remain incomplete.
 - Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
   stream-chat, and file upload/get/delete Invocation carrier builders plus
   model, chat, stream, file, file-delete projection seams, and close state

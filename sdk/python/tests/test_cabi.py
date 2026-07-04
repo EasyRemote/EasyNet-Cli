@@ -43,6 +43,12 @@ from easynet_sdk import (
     SDKError,
     StartConfig,
     StreamState,
+    SurfaceCarrierBase,
+    SurfaceClient,
+    SurfaceCreatePageRequest,
+    SurfaceDeletePageRequest,
+    SurfaceListPagesRequest,
+    SurfaceManifestRequest,
     is_code,
 )
 from easynet_sdk._cabi import (
@@ -56,6 +62,7 @@ from easynet_sdk._cabi import (
     CABIReceiptTransport,
     CABIRuntimeConnector,
     CABIRuntimeTransport,
+    CABISurfaceTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
     _JSON_HANDLE_OUTPUT_SYMBOLS,
@@ -407,6 +414,30 @@ class FakeRawCABI:
                     "steps_failed": 0,
                 },
             }
+        if system_ability == "pages.list":
+            return {
+                "projects": [
+                    {
+                        "page_id": "docs",
+                        "owner_ura": "easynet:///r/example/agent/alice.pages",
+                        "surface_ref": "easynet:///r/example/resource/alice.docs",
+                        "public_ref": "https://example/web/alice/docs/",
+                        "status": "published",
+                        "metadata": {"project_id": "docs"},
+                    }
+                ]
+            }
+        if system_ability in {"pages.publish", "pages.get"}:
+            return {
+                "page_id": "docs",
+                "owner_ura": "easynet:///r/example/agent/alice.pages",
+                "surface_ref": "easynet:///r/example/resource/alice.docs",
+                "public_ref": "https://example/web/alice/docs/",
+                "status": "published",
+                "metadata": {"project_id": "docs"},
+            }
+        if system_ability == "pages.unpublish":
+            return {"project_id": "docs", "removed": True}
         if system_ability == "namespace.resolve":
             return {
                 "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
@@ -640,6 +671,14 @@ class FakeRawCABI:
             return MISSION_TRACK_INVOCATION
         if symbol == "easynet_mission_build_cancel_invocation":
             return MISSION_CANCEL_INVOCATION
+        if symbol == "easynet_surface_build_list_pages_invocation":
+            return SURFACE_LIST_PAGES_INVOCATION
+        if symbol == "easynet_surface_build_create_page_invocation":
+            return SURFACE_CREATE_PAGE_INVOCATION
+        if symbol == "easynet_surface_build_delete_page_invocation":
+            return SURFACE_DELETE_PAGE_INVOCATION
+        if symbol == "easynet_surface_build_manifest_invocation":
+            return SURFACE_MANIFEST_INVOCATION
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -1137,36 +1176,108 @@ ADMIN_REFRESH_RESULT_PROJECTION = (
     b'"runtime_catalog_not_ready":false,"metadata":{}}'
 )
 
+SURFACE_LIST_PAGES_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.list@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"surface","system_ability":"pages.list",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+SURFACE_CREATE_PAGE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.publish@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"project_id":"docs","folder":"/tmp/easynet-pages-docs",'
+    b'"visibility":"public"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"surface","system_ability":"pages.publish",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+SURFACE_DELETE_PAGE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"project_id":"docs"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"surface","system_ability":"pages.unpublish",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+SURFACE_MANIFEST_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.get@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"project_id":"docs"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"surface","system_ability":"pages.get",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 SURFACE_PAGE_RECORD_PROJECTION = (
-    b'{"profile":"surface","kind":"page_record","page_id":"page-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","project_id":"proj",'
-    b'"folder":"/tmp/site","visibility":"public","state":"ready",'
-    b'"metadata":{}}'
+    b'{"profile":"surface","kind":"page_record","page_id":"docs",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"surface_ref":"easynet:///r/example/resource/alice.docs",'
+    b'"public_ref":"https://example/web/alice/docs/","status":"published",'
+    b'"metadata":{"profile":"surface","source_ability":"pages.get",'
+    b'"project_id":"docs"}}'
 )
 
 SURFACE_PAGE_PAGE_PROJECTION = (
-    b'{"profile":"surface","kind":"page_page","item_kind":"page_record",'
-    b'"items":[],"next_cursor":null,"limit":50,"source":"pages_read_model",'
-    b'"metadata":{}}'
+    b'{"profile":"surface","kind":"surface_page_page","item_kind":"page_record",'
+    b'"items":[{"profile":"surface","kind":"page_record","page_id":"docs",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"surface_ref":"easynet:///r/example/resource/alice.docs",'
+    b'"public_ref":"https://example/web/alice/docs/","status":"published",'
+    b'"metadata":{"profile":"surface","source_ability":"pages.get",'
+    b'"project_id":"docs"}}],"next_cursor":null,"limit":50,'
+    b'"source":"pages_read_model","metadata":{"profile":"surface",'
+    b'"source_ability":"pages.list","total_available":1}}'
 )
 
 SURFACE_MANIFEST_PROJECTION = (
-    b'{"profile":"surface","kind":"surface_manifest","page_id":"page-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a","surface_ref":"surface:page-1",'
-    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.surface.page@1.0.0",'
-    b'"descriptor_version":"1.0.0","files":[],"routes":[],"metadata":{}}'
+    b'{"profile":"surface","kind":"surface_manifest","page_id":"docs",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"surface_ref":"easynet:///r/example/resource/alice.docs",'
+    b'"public_ref":"https://example/web/alice/docs/",'
+    b'"page":{"profile":"surface","kind":"page_record","page_id":"docs",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"surface_ref":"easynet:///r/example/resource/alice.docs",'
+    b'"public_ref":"https://example/web/alice/docs/","status":"published",'
+    b'"metadata":{"profile":"surface","source_ability":"pages.get",'
+    b'"project_id":"docs"}},'
+    b'"entrypoint":{"kind":"public_page_ref",'
+    b'"href":"https://example/web/alice/docs/"},'
+    b'"metadata":{"profile":"surface","source_ability":"pages.get"}}'
 )
 
 SURFACE_PUBLIC_REF_PROJECTION = (
-    b'{"profile":"surface","kind":"public_page_ref","page_id":"page-1",'
-    b'"owner_ura":"easynet:///r/example/device/dev-a",'
-    b'"surface_ref":"surface:page-1","public_ref":"https://hub.example/page-1",'
-    b'"route_kind":"hub_web","metadata":{}}'
+    b'{"profile":"surface","kind":"public_page_ref","page_id":"docs",'
+    b'"owner_ura":"easynet:///r/example/agent/alice.pages",'
+    b'"surface_ref":"easynet:///r/example/resource/alice.docs",'
+    b'"public_ref":"https://example/web/alice/docs/",'
+    b'"route_kind":"hub_web","metadata":{"profile":"surface"}}'
 )
 
 SURFACE_MUTATION_PROJECTION = (
     b'{"profile":"surface","kind":"surface_mutation_result","operation":"delete",'
-    b'"page_id":"page-1","removed":true,"state":"deleted","metadata":{}}'
+    b'"page_id":"docs","removed":true,"state":"deleted",'
+    b'"metadata":{"profile":"surface","source_ability":"pages.unpublish"}}'
 )
 
 COMPAT_MODEL_PAGE_PROJECTION = (
@@ -1739,6 +1850,69 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertTrue(raw.profile_requests[5][2]["ack"])
         self.assertEqual(raw.profile_requests[7][2]["agents_scanned"], 1)
+        self.assertEqual(raw.buffers, {})
+
+    def test_surface_live_methods_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = SurfaceClient(CABISurfaceTransport(lib, handle=7))
+        base = SurfaceCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/agent/alice.pages",
+            subject_ura="easynet:///r/example/agent/alice.pages",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        pages = client.list_pages(SurfaceListPagesRequest(base=base, limit=50))
+        created = client.create_page(
+            SurfaceCreatePageRequest(
+                base=base,
+                project_id="docs",
+                folder="/tmp/easynet-pages-docs",
+                visibility="public",
+            )
+        )
+        manifest = client.surface_manifest(
+            SurfaceManifestRequest(base=base, project_id="docs")
+        )
+        public_ref = client.public_page_ref(created)
+        deleted = client.delete_page(
+            SurfaceDeletePageRequest(base=base, project_id="docs")
+        )
+
+        self.assertEqual(pages.items[0].page_id, "docs")
+        self.assertEqual(created.surface_ref, "easynet:///r/example/resource/alice.docs")
+        self.assertEqual(manifest.page.page_id, "docs")
+        self.assertEqual(public_ref.route_kind, "hub_web")
+        self.assertEqual(deleted.state, "deleted")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_surface_build_list_pages_invocation",
+                "easynet_surface_project_page_page",
+                "easynet_surface_build_create_page_invocation",
+                "easynet_surface_project_page_record",
+                "easynet_surface_build_manifest_invocation",
+                "easynet_surface_project_manifest",
+                "easynet_surface_project_public_page_ref",
+                "easynet_surface_build_delete_page_invocation",
+                "easynet_surface_project_mutation_result",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            ["pages.list", "pages.publish", "pages.get", "pages.unpublish"],
+        )
+        self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
+        self.assertEqual(
+            raw.profile_requests[1][2]["result"]["projects"][0]["page_id"],
+            "docs",
+        )
+        self.assertEqual(raw.profile_requests[3][2]["page_id"], "docs")
+        self.assertEqual(raw.profile_requests[5][2]["public_ref"], "https://example/web/alice/docs/")
+        self.assertEqual(raw.profile_requests[8][2]["project_id"], "docs")
         self.assertEqual(raw.buffers, {})
 
     def test_mission_live_methods_use_carrier_invoke_and_projection(self) -> None:

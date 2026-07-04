@@ -35,7 +35,9 @@ from easynet_sdk import (
     SDKError,
     SdkEnvironment,
     SurfaceCarrierBase,
+    SurfaceCreatePageRequest,
     SurfaceListPagesRequest,
+    SurfaceManifestRequest,
     WrapperBrowserSessionRequest,
     WrapperBrowserStartRequest,
     WrapperCarrierBase,
@@ -379,6 +381,18 @@ class SdkEnvironmentTests(unittest.TestCase):
             surface.build_list_pages_invocation(
                 SurfaceListPagesRequest(base=_surface_base())
             )
+            surface.list_pages(SurfaceListPagesRequest(base=_surface_base()))
+            surface.create_page(
+                SurfaceCreatePageRequest(
+                    base=_surface_base(),
+                    project_id="docs",
+                    folder="/tmp/easynet-pages-docs",
+                    visibility="public",
+                )
+            )
+            surface.surface_manifest(
+                SurfaceManifestRequest(base=_surface_base(), project_id="docs")
+            )
             compatibility.build_list_models_invocation(
                 CompatibilityListModelsRequest(base=_compatibility_base())
             )
@@ -509,6 +523,11 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_events_build_directory_subscription_invocation", symbols)
         self.assertIn("easynet_directory_build_list_devices_invocation", symbols)
         self.assertIn("easynet_surface_build_list_pages_invocation", symbols)
+        self.assertIn("easynet_surface_project_page_page", symbols)
+        self.assertIn("easynet_surface_build_create_page_invocation", symbols)
+        self.assertIn("easynet_surface_project_page_record", symbols)
+        self.assertIn("easynet_surface_build_manifest_invocation", symbols)
+        self.assertIn("easynet_surface_project_manifest", symbols)
         self.assertIn("easynet_compatibility_build_list_models_invocation", symbols)
         self.assertIn("easynet_compatibility_build_file_upload_invocation", symbols)
         self.assertIn("easynet_compatibility_build_file_retrieve_invocation", symbols)
@@ -527,6 +546,9 @@ class SdkEnvironmentTests(unittest.TestCase):
         ]
         self.assertIn("agent.list", runtime_abilities)
         self.assertIn("agent.start", runtime_abilities)
+        self.assertIn("pages.list", runtime_abilities)
+        self.assertIn("pages.publish", runtime_abilities)
+        self.assertIn("pages.get", runtime_abilities)
 
     def test_publication_deploy_uses_cabi_carrier_and_runtime_core(self) -> None:
         raw = FakeRawCABI()

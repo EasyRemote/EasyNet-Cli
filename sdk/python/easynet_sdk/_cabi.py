@@ -1209,19 +1209,35 @@ class CABISurfaceTransport(_CABIProfileTransport):
         return self._missing("surface health carrier")
 
     def list_pages(self, request_json: bytes) -> bytes:
-        return self._missing("surface list pages")
+        return self._invoke_projected_with_controls(
+            request_json,
+            build_symbol="easynet_surface_build_list_pages_invocation",
+            project_symbol="easynet_surface_project_page_page",
+        )
 
     def create_page(self, request_json: bytes) -> bytes:
-        return self._missing("surface create page")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_surface_build_create_page_invocation",
+            project_symbol="easynet_surface_project_page_record",
+        )
 
     def delete_page(self, request_json: bytes) -> bytes:
-        return self._missing("surface delete page")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_surface_build_delete_page_invocation",
+            project_symbol="easynet_surface_project_mutation_result",
+        )
 
     def surface_manifest(self, request_json: bytes) -> bytes:
-        return self._missing("surface manifest")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_surface_build_manifest_invocation",
+            project_symbol="easynet_surface_project_manifest",
+        )
 
     def public_page_ref(self, request_json: bytes) -> bytes:
-        return self._missing("surface public page ref")
+        return self._call("easynet_surface_project_public_page_ref", request_json)
 
     def surface_health(self, request_json: bytes) -> bytes:
         return self._missing("surface health")
