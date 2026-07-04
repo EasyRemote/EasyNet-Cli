@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
@@ -92,24 +97,24 @@ class AdminAgentStartRequest:
             value["agent_type"] = self.agent_type
         if self.entry is not None:
             value["entry"] = dict(self.entry)
-        for key, raw in (
+        for text_key, text_value in (
             ("model", self.model),
             ("label", self.label),
             ("command", self.command),
             ("root_path", self.root_path),
         ):
-            if raw:
-                value[key] = raw
+            if text_value:
+                value[text_key] = text_value
         if self.command_args:
             value["command_args"] = list(self.command_args)
-        for key, raw in (
+        for flag_key, flag_value in (
             ("model_present", self.model_present),
             ("materialize_directory", self.materialize_directory),
             ("update_existing_spec", self.update_existing_spec),
             ("project_workspace", self.project_workspace),
         ):
-            if raw is not None:
-                value[key] = raw
+            if flag_value is not None:
+                value[flag_key] = flag_value
         return _json_bytes(value)
 
 
@@ -744,6 +749,142 @@ class EasyRemoteAdminAdapter:
         return _raw_result(result.metadata)
 
 
+class EasyRemoteGatewayState(Enum):
+    """EasyRemote-facing gateway lifecycle state."""
+
+    IDLE = "idle"
+    RUNNING = "running"
+
+
+@runtime_checkable
+class EasyRemoteGatewayDaemonHandle(Protocol):
+    """Minimal daemon handle required by the EasyRemote gateway facade."""
+
+    def stop(self) -> None:
+        ...
+
+
+@dataclass(frozen=True)
+class EasyRemoteGatewayConfig:
+    """Hub listener configuration projected by the SDK gateway facade."""
+
+    port: int
+    realm: str
+    home_dir: str
+    tls_cert_path: str
+    tls_key_path: str
+    hostname: str = ""
+
+    def normalized(self) -> "EasyRemoteGatewayConfig":
+        realm = self.realm.strip() or "localhost"
+        if self.port <= 0 or self.port > 65535:
+            raise _invalid_admin("gateway port must be between 1 and 65535")
+        if not self.home_dir.strip():
+            raise _invalid_admin("gateway home_dir must not be empty")
+        cert = _existing_file(self.tls_cert_path, "TLS certificate")
+        key = _existing_file(self.tls_key_path, "TLS private key")
+        return EasyRemoteGatewayConfig(
+            port=self.port,
+            realm=realm,
+            home_dir=str(Path(self.home_dir)),
+            tls_cert_path=str(cert),
+            tls_key_path=str(key),
+            hostname=self.hostname.strip(),
+        )
+
+    @property
+    def config_path(self) -> Path:
+        return Path(self.home_dir) / "daemon-config.toml"
+
+    @property
+    def endpoint(self) -> str:
+        host = self.hostname.strip() or "localhost"
+        return f"{host}:{self.port}"
+
+
+@dataclass(frozen=True)
+class EasyRemoteGatewayRuntime:
+    """One running EasyRemote gateway process projection."""
+
+    state: EasyRemoteGatewayState
+    endpoint: str
+    fingerprint: str
+    config_path: str
+    daemon: EasyRemoteGatewayDaemonHandle
+
+
+class EasyRemoteGatewayFacade:
+    """SDK-owned Server/Gateway lifecycle and hub-config facade.
+
+    Pairing, trust, session mutation, and public listener readiness remain daemon
+    contracts. This class only owns the reusable mechanics needed before the
+    daemon starts: TLS file validation, create-once hub config materialization,
+    local lifecycle state, and certificate fingerprint projection.
+    """
+
+    def __init__(
+        self,
+        daemon_starter: Callable[[str], EasyRemoteGatewayDaemonHandle],
+    ) -> None:
+        self._daemon_starter = daemon_starter
+        self._state = EasyRemoteGatewayState.IDLE
+        self._runtime: EasyRemoteGatewayRuntime | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def state(self) -> EasyRemoteGatewayState:
+        return self._state
+
+    @property
+    def runtime(self) -> EasyRemoteGatewayRuntime | None:
+        return self._runtime
+
+    def start(self, config: EasyRemoteGatewayConfig) -> EasyRemoteGatewayRuntime:
+        normalized = config.normalized()
+        with self._lock:
+            if self._state is EasyRemoteGatewayState.RUNNING:
+                if self._runtime is None:
+                    raise _invalid_admin("gateway runtime state is inconsistent")
+                return self._runtime
+            self._ensure_hub_config(normalized)
+            daemon = self._daemon_starter(normalized.realm)
+            runtime = EasyRemoteGatewayRuntime(
+                state=EasyRemoteGatewayState.RUNNING,
+                endpoint=normalized.endpoint,
+                fingerprint=certificate_fingerprint(normalized.tls_cert_path),
+                config_path=str(normalized.config_path),
+                daemon=daemon,
+            )
+            self._runtime = runtime
+            self._state = EasyRemoteGatewayState.RUNNING
+            return runtime
+
+    def stop(self) -> None:
+        with self._lock:
+            runtime = self._runtime
+            self._runtime = None
+            self._state = EasyRemoteGatewayState.IDLE
+        if runtime is not None:
+            runtime.daemon.stop()
+
+    def _ensure_hub_config(self, config: EasyRemoteGatewayConfig) -> None:
+        path = config.config_path
+        if path.exists():
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# Auto-generated by easyremote Server (hub). Edit by hand to add\n"
+            "# [daemon.federated_peers] or override the UDS path.\n"
+            "[daemon]\n"
+            'mode = "hub"\n'
+            f"realm = {_toml_string(config.realm)}\n"
+            f"listen_tcp = {_toml_string(f'0.0.0.0:{config.port}')}\n"
+            f"tls_cert_pem = {_toml_string(config.tls_cert_path)}\n"
+            f"tls_key_pem = {_toml_string(config.tls_key_path)}\n",
+            encoding="utf-8",
+        )
+
+
 @runtime_checkable
 class AdminTransport(Protocol):
     """Concrete Admin + Gateway operations supplied by the integration layer."""
@@ -1245,6 +1386,40 @@ def _string_array(value: object, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise _invalid_admin(f"{field_name} must be an array of strings")
     return tuple(value)
+
+
+def certificate_fingerprint(cert_path: str) -> str:
+    """Return the SHA-256 DER fingerprint for a PEM certificate."""
+
+    cert = _existing_file(cert_path, "TLS certificate")
+    der = _pem_to_der(cert.read_bytes())
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[index : index + 2] for index in range(0, len(digest), 2))
+
+
+def _pem_to_der(pem: bytes) -> bytes:
+    try:
+        lines = [
+            line
+            for line in pem.decode("ascii", errors="strict").splitlines()
+            if line and not line.startswith("-----")
+        ]
+        return base64.b64decode("".join(lines), validate=True)
+    except Exception as exc:
+        raise _invalid_admin("TLS certificate must be PEM encoded", exc) from exc
+
+
+def _existing_file(value: str, label: str) -> Path:
+    if not value or not value.strip():
+        raise _invalid_admin(f"{label} path must not be empty")
+    path = Path(value)
+    if not path.exists() or not path.is_file():
+        raise _invalid_admin(f"{label} file not found: {path}")
+    return path
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value)
 
 
 def _raw_result(metadata: Mapping[str, object]) -> dict[str, object]:

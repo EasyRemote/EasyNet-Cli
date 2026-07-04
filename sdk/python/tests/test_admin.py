@@ -1,7 +1,19 @@
+import hashlib
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from easynet_sdk import EasyRemoteAdminAdapter, ErrorCode, SDKError, is_code
+from easynet_sdk import (
+    EasyRemoteAdminAdapter,
+    EasyRemoteGatewayConfig,
+    EasyRemoteGatewayFacade,
+    EasyRemoteGatewayState,
+    ErrorCode,
+    SDKError,
+    certificate_fingerprint,
+    is_code,
+)
 from easynet_sdk.admin import (
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -467,7 +479,132 @@ def admin_base() -> AdminCarrierBase:
     )
 
 
+class FakeGatewayDaemon:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def write_gateway_pem(root: Path) -> tuple[Path, Path]:
+    cert = root / "cert.pem"
+    key = root / "key.pem"
+    cert.write_text(
+        "-----BEGIN CERTIFICATE-----\nAAECAwQFBgc=\n-----END CERTIFICATE-----\n",
+        encoding="utf-8",
+    )
+    key.write_text(
+        "-----BEGIN PRIVATE KEY-----\nAAA=\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    return cert, key
+
+
 class AdminClientTests(unittest.TestCase):
+    def test_easyremote_gateway_facade_materializes_hub_config_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cert, key = write_gateway_pem(root)
+            started: list[str] = []
+
+            def starter(realm: str) -> FakeGatewayDaemon:
+                started.append(realm)
+                return FakeGatewayDaemon()
+
+            facade = EasyRemoteGatewayFacade(starter)
+
+            runtime = facade.start(
+                EasyRemoteGatewayConfig(
+                    port=8443,
+                    realm='ac"me',
+                    home_dir=str(root),
+                    tls_cert_path=str(cert),
+                    tls_key_path=str(key),
+                    hostname="hub.example",
+                )
+            )
+            second = facade.start(
+                EasyRemoteGatewayConfig(
+                    port=9443,
+                    realm="ignored",
+                    home_dir=str(root),
+                    tls_cert_path=str(cert),
+                    tls_key_path=str(key),
+                )
+            )
+
+            config = (root / "daemon-config.toml").read_text(encoding="utf-8")
+            self.assertIs(runtime, second)
+            self.assertEqual(started, ['ac"me'])
+            self.assertEqual(facade.state, EasyRemoteGatewayState.RUNNING)
+            self.assertIn('realm = "ac\\"me"', config)
+            self.assertIn('listen_tcp = "0.0.0.0:8443"', config)
+            self.assertIn(f'tls_cert_pem = "{cert}"', config)
+            self.assertEqual(runtime.endpoint, "hub.example:8443")
+            expected = hashlib.sha256(bytes(range(8))).hexdigest().upper()
+            self.assertEqual(runtime.fingerprint.replace(":", ""), expected)
+
+    def test_easyremote_gateway_facade_preserves_operator_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cert, key = write_gateway_pem(root)
+            existing = root / "daemon-config.toml"
+            existing.write_text("# operator-authored\n[daemon]\nmode = \"hub\"\n")
+
+            facade = EasyRemoteGatewayFacade(lambda _realm: FakeGatewayDaemon())
+            facade.start(
+                EasyRemoteGatewayConfig(
+                    port=8443,
+                    realm="acme",
+                    home_dir=str(root),
+                    tls_cert_path=str(cert),
+                    tls_key_path=str(key),
+                )
+            )
+
+            self.assertTrue(existing.read_text(encoding="utf-8").startswith("# operator"))
+
+    def test_easyremote_gateway_facade_stops_daemon_and_validates_tls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cert, key = write_gateway_pem(root)
+            daemon = FakeGatewayDaemon()
+            facade = EasyRemoteGatewayFacade(lambda _realm: daemon)
+            facade.start(
+                EasyRemoteGatewayConfig(
+                    port=8443,
+                    realm="acme",
+                    home_dir=str(root),
+                    tls_cert_path=str(cert),
+                    tls_key_path=str(key),
+                )
+            )
+
+            facade.stop()
+
+            self.assertTrue(daemon.stopped)
+            self.assertEqual(facade.state, EasyRemoteGatewayState.IDLE)
+            with self.assertRaises(SDKError) as caught:
+                EasyRemoteGatewayFacade(lambda _realm: FakeGatewayDaemon()).start(
+                    EasyRemoteGatewayConfig(
+                        port=8443,
+                        realm="acme",
+                        home_dir=str(root),
+                        tls_cert_path=str(root / "missing.pem"),
+                        tls_key_path=str(key),
+                    )
+                )
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_certificate_fingerprint_rejects_non_pem(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cert = Path(tmp) / "bad.pem"
+            cert.write_text("not pem", encoding="utf-8")
+            with self.assertRaises(SDKError) as caught:
+                certificate_fingerprint(str(cert))
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_easyremote_adapter_controls_hosted_agents(self) -> None:
         transport = MemoryAdminTransport()
         transport.start_result = ADMIN_START_RESULT

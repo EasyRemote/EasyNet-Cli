@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
 from .connection import ConnectOptions
 from .daemon_profiles import DaemonHandleProfiles
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
+
+if TYPE_CHECKING:
+    from .transport import EasyRemoteTransportAdapter
 
 
 class DaemonMode(StrEnum):
@@ -140,6 +143,115 @@ class StopOptions:
                 "force": self.force,
             }
         )
+
+
+@dataclass(frozen=True)
+class EasyRemoteDaemonStartConfig:
+    """EasyRemote-facing daemon start facade over SDK ``StartConfig``.
+
+    EasyRemote historically exposes ``node_id`` and a ``detach`` wire field.
+    The SDK owns that legacy projection here while the real daemon lifecycle
+    still flows through the typed Runtime Core ``StartConfig``.
+    """
+
+    mode: DaemonMode
+    realm: str = ""
+    node_id: str = ""
+    env: Mapping[str, str] = field(default_factory=dict)
+    log_path: str = ""
+    detached: bool | None = None
+
+    @classmethod
+    def hub(
+        cls,
+        realm: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        log_path: str = "",
+        detached: bool | None = None,
+    ) -> "EasyRemoteDaemonStartConfig":
+        return cls.from_legacy(
+            mode="hub",
+            realm=realm,
+            env=env,
+            log_path=log_path,
+            detached=detached,
+        )
+
+    @classmethod
+    def device(
+        cls,
+        node_id: str | None = None,
+        *,
+        env: Mapping[str, str] | None = None,
+        log_path: str = "",
+        detached: bool | None = None,
+    ) -> "EasyRemoteDaemonStartConfig":
+        return cls.from_legacy(
+            mode="device",
+            node_id=node_id or "",
+            env=env,
+            log_path=log_path,
+            detached=detached,
+        )
+
+    @classmethod
+    def from_legacy(
+        cls,
+        *,
+        mode: str,
+        realm: str = "",
+        node_id: str = "",
+        env: Mapping[str, str] | None = None,
+        log_path: str = "",
+        detached: bool | None = None,
+    ) -> "EasyRemoteDaemonStartConfig":
+        mode_value = _easyremote_daemon_mode(mode)
+        normalized_realm = realm.strip()
+        normalized_node = node_id.strip()
+        if mode_value == DaemonMode.HUB and not normalized_realm:
+            raise _easyremote_daemon_invalid("hub realm must not be empty", "empty_realm")
+        if mode_value == DaemonMode.DEVICE and not normalized_node:
+            raise _easyremote_daemon_invalid(
+                "device daemon start requires a node_id",
+                "missing_node_id",
+            )
+        return cls(
+            mode=mode_value,
+            realm=normalized_realm,
+            node_id=normalized_node,
+            env=dict(env or {}),
+            log_path=log_path,
+            detached=detached,
+        )
+
+    def to_start_config(self) -> StartConfig:
+        """Project the EasyRemote lifecycle config into SDK Runtime Core."""
+
+        return StartConfig(
+            mode=self.mode,
+            realm=self.realm,
+            device_id=self.node_id,
+            log_path=self.log_path,
+            detached=bool(self.detached),
+            env=dict(self.env),
+        )
+
+    def to_wire_dict(self) -> dict[str, object]:
+        """Return EasyRemote's historical start wire shape."""
+
+        value: dict[str, object] = {"mode": self.mode.value}
+        if self.realm:
+            value["realm"] = self.realm
+        if self.node_id:
+            value["node_id"] = self.node_id
+        if self.env:
+            value["env"] = dict(self.env)
+        if self.log_path:
+            value["log_path"] = self.log_path
+        if self.detached is not None:
+            value["detach"] = self.detached
+        return value
 
 
 @dataclass(frozen=True)
@@ -324,6 +436,59 @@ class DaemonControl:
             raise
         handle.detach()
         return client
+
+
+@dataclass(frozen=True)
+class EasyRemoteDaemonLifecycleFacade:
+    """EasyRemote daemon lifecycle facade over ``DaemonControl``."""
+
+    control: DaemonControl
+
+    def start(
+        self, config: EasyRemoteDaemonStartConfig
+    ) -> "EasyRemoteDaemonHandleFacade":
+        if config is None:
+            raise _easyremote_daemon_invalid(
+                "daemon start config is required", "missing_start_config"
+            )
+        return EasyRemoteDaemonHandleFacade(
+            self.control.start(config.to_start_config())
+        )
+
+
+@dataclass(frozen=True)
+class EasyRemoteDaemonHandleFacade:
+    """EasyRemote-facing daemon handle projection."""
+
+    handle: "DaemonHandle"
+
+    def status_dict(self) -> dict[str, Any]:
+        status = self.handle.status()
+        return {
+            "state": status.state.value,
+            "handle_id": status.handle_id,
+            "mode": status.mode.value if status.mode is not None else "",
+            "pid": status.pid,
+            "version": status.version,
+            "message": status.message,
+            "endpoints": {
+                "control_endpoint": status.endpoints.control_endpoint,
+                "invocation_endpoint": status.endpoints.invocation_endpoint,
+                "public_endpoint": status.endpoints.public_endpoint,
+            },
+            "diagnostics": list(status.diagnostics),
+        }
+
+    def invocation_endpoint(self) -> str:
+        return self.handle.invocation_endpoint()
+
+    def open_transport_adapter(self) -> "EasyRemoteTransportAdapter":
+        from .transport import EasyRemoteTransportAdapter
+
+        return EasyRemoteTransportAdapter.from_runtime_client(self.handle.open_runtime())
+
+    def stop(self) -> None:
+        self.handle.stop()
 
 
 @dataclass
@@ -537,6 +702,37 @@ def _runtime_ready(state: DaemonLifecycleState) -> bool:
         DaemonLifecycleState.INVOCATION_READY,
         DaemonLifecycleState.RUNNING,
     }
+
+
+def _easyremote_daemon_mode(value: str) -> DaemonMode:
+    try:
+        mode = DaemonMode(value.strip())
+    except ValueError as exc:
+        raise _easyremote_daemon_invalid(
+            f"unsupported daemon mode {value!r}", "invalid_daemon_mode", exc
+        ) from exc
+    if mode not in {DaemonMode.DEVICE, DaemonMode.HUB}:
+        raise _easyremote_daemon_invalid(
+            f"unsupported daemon mode {value!r}", "invalid_daemon_mode"
+        )
+    return mode
+
+
+def _easyremote_daemon_invalid(
+    message: str,
+    reason: str,
+    cause: BaseException | None = None,
+) -> SDKError:
+    return SDKError(
+        code=ErrorCode.INVALID_ARGUMENT,
+        stage="easyremote_daemon",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
+        details={"reason": reason},
+        cause=cause,
+    )
+
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     compact = {key: item for key, item in value.items() if item not in ("", 0, False)}

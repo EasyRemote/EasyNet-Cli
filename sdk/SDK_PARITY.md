@@ -183,7 +183,9 @@ method spelling.
   `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC and private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed handshake, runtime
   connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
-  facts, schema-backed typed SDK error projection, complete Invocation draft
+  facts, SDK-owned `EasyRemoteDaemonStartConfig` and
+  `EasyRemoteDaemonLifecycleFacade` legacy start-wire/status/open-client
+  projection, schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, `AbilityInvocationClient`
   descriptor-delegated complete tuple build/invoke/stream/bidi facade plus
   EasyRemote-style target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and
@@ -206,7 +208,7 @@ method spelling.
   EasyRemote-style descriptor-ref and target-dispatch cutover tests; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; product Invocation direct daemon UDS transport,
-  live profile execution adapters, actual EasyRemote repository extraction, per-profile
+  live profile execution adapters, remaining EasyRemote repository extraction, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
@@ -283,9 +285,11 @@ method spelling.
   addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
-  Pipeline event access/live-tail plus publication product catalogue extraction now pass
-  static gates, while Pipeline child Invocation execution conformance, full AgentControl/Server
-  cutover, and full receipt verification remain incomplete.
+  Pipeline event access/live-tail plus publication product catalogue extraction and
+  Server/Gateway hub-config/lifecycle/fingerprint projection now pass
+  static gates, while Pipeline child Invocation execution conformance, full AgentControl
+  cutover, daemon/ABI-backed Server pairing/hub lifecycle cutover, and full receipt
+  verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
@@ -304,12 +308,15 @@ method spelling.
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, and C ABI-backed typed device-session page projection plus close
   state seams, with an SDK-owned EasyRemote hosted-agent Admin adapter,
-  SDK-owned EasyRemote profile bridge dispatch/projection glue, and raw
+  SDK-owned EasyRemote profile bridge dispatch/projection glue, SDK-owned
+  EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file
+  validation, endpoint projection, certificate fingerprint projection, and raw
   admin carrier cutover audit gate for `agent.start/list/refresh`; C ABI
   transport reports explicit semantic-boundary errors for hub
   join/leave, pairing/credential trust lifecycle, and device-session
-  create/delete until daemon/ABI lifecycle contracts exist. Certificate policy and
-  full EasyRemote Server/AgentControl extraction remain incomplete.
+  create/delete until daemon/ABI lifecycle contracts exist. Certificate policy,
+  daemon-backed Server pairing/hub lifecycle contracts, and full EasyRemote
+  AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory and session
   subscription execution through Runtime Core open_stream, plus `EventFrame`

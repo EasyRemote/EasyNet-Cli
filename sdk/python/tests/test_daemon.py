@@ -7,10 +7,13 @@ from easynet_sdk import (
     AdminClient,
     CompatibilityClient,
     ConnectOptions,
+    DaemonControl,
     DaemonLifecycleState,
     DaemonMode,
     DiscoverOptions,
     DirectoryClient,
+    EasyRemoteDaemonLifecycleFacade,
+    EasyRemoteDaemonStartConfig,
     ErrorCode,
     EventClient,
     HealthClient,
@@ -188,6 +191,93 @@ def ready_status() -> bytes:
 
 
 class DaemonTests(unittest.TestCase):
+    def test_easyremote_start_config_preserves_legacy_wire_shape(self) -> None:
+        config = EasyRemoteDaemonStartConfig.hub(
+            " acme ",
+            env={"RUST_LOG": "info"},
+            log_path="/tmp/daemon.log",
+            detached=True,
+        )
+        foreground = EasyRemoteDaemonStartConfig.device(
+            "dev-a",
+            detached=False,
+        )
+
+        self.assertEqual(
+            config.to_wire_dict(),
+            {
+                "mode": "hub",
+                "realm": "acme",
+                "env": {"RUST_LOG": "info"},
+                "log_path": "/tmp/daemon.log",
+                "detach": True,
+            },
+        )
+        self.assertEqual(
+            foreground.to_wire_dict(),
+            {"mode": "device", "node_id": "dev-a", "detach": False},
+        )
+        self.assertNotIn(
+            "detach",
+            EasyRemoteDaemonStartConfig.device("dev-a").to_wire_dict(),
+        )
+
+    def test_easyremote_start_config_projects_to_runtime_core_start_config(self) -> None:
+        config = EasyRemoteDaemonStartConfig.device(
+            " dev-a ",
+            env={"RUST_LOG": "debug"},
+            log_path="/tmp/daemon.log",
+            detached=True,
+        ).to_start_config()
+
+        self.assertEqual(config.mode, DaemonMode.DEVICE)
+        self.assertEqual(config.device_id, "dev-a")
+        self.assertEqual(config.realm, "")
+        self.assertEqual(config.log_path, "/tmp/daemon.log")
+        self.assertTrue(config.detached)
+        self.assertEqual(config.env, {"RUST_LOG": "debug"})
+
+    def test_easyremote_start_config_rejects_invalid_inputs(self) -> None:
+        with self.assertRaises(SDKError) as missing_realm:
+            EasyRemoteDaemonStartConfig.hub(" ")
+        self.assertEqual(missing_realm.exception.details["reason"], "empty_realm")
+
+        with self.assertRaises(SDKError) as missing_node:
+            EasyRemoteDaemonStartConfig.device()
+        self.assertEqual(missing_node.exception.details["reason"], "missing_node_id")
+
+        with self.assertRaises(SDKError) as invalid_mode:
+            EasyRemoteDaemonStartConfig.from_legacy(mode="both", realm="acme")
+        self.assertEqual(invalid_mode.exception.details["reason"], "invalid_daemon_mode")
+
+    def test_easyremote_lifecycle_facade_starts_and_projects_status(self) -> None:
+        transport = MemoryDaemonTransport()
+        facade = EasyRemoteDaemonLifecycleFacade(DaemonControl(transport))
+
+        handle = facade.start(EasyRemoteDaemonStartConfig.hub("acme"))
+        status = handle.status_dict()
+
+        assert transport.seen_start is not None
+        self.assertEqual(transport.seen_start["mode"], "hub")
+        self.assertEqual(transport.seen_start["realm"], "acme")
+        self.assertEqual(status["state"], "Running")
+        self.assertEqual(status["handle_id"], "daemon-1")
+        self.assertEqual(status["mode"], "hub")
+        self.assertEqual(status["pid"], 42)
+        endpoints = status["endpoints"]
+        self.assertIsInstance(endpoints, dict)
+        self.assertEqual(endpoints["invocation_endpoint"], "unix:///tmp/daemon.sock")
+
+    def test_easyremote_handle_facade_opens_transport_adapter(self) -> None:
+        transport = MemoryDaemonTransport()
+        facade = EasyRemoteDaemonLifecycleFacade(DaemonControl(transport))
+        handle = facade.start(EasyRemoteDaemonStartConfig.hub("acme"))
+
+        adapter = handle.open_transport_adapter()
+
+        self.assertEqual(transport.open_calls, 1)
+        self.assertTrue(hasattr(adapter, "invoke"))
+
     def test_start_returns_runtime_ready_handle(self) -> None:
         transport = MemoryDaemonTransport()
 

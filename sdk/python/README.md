@@ -22,7 +22,9 @@ Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
 Wrapper carrier/projection records, runtime connection
 state, runtime health readiness facts, DaemonHandle lifecycle
 status/endpoints/invocation-endpoint lookup/start/attach/discover/stop/detach/open-runtime/connect-local
-state seams, schema-backed SDK error projection, complete
+state seams, SDK-owned `EasyRemoteDaemonStartConfig` and
+`EasyRemoteDaemonLifecycleFacade` legacy start-wire/status/open-client projection,
+schema-backed SDK error projection, complete
 Invocation draft construction, AbilityInvocationClient descriptor-delegated
 complete tuple build/invoke/stream/bidi convenience facade plus EasyRemote-style
 target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and explicit
@@ -102,7 +104,9 @@ C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page projection plus close state seams,
 with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
-requests and SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue.
+requests, SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue, and
+SDK-owned EasyRemote Server/Gateway hub-config materialization, lifecycle state,
+TLS file validation, endpoint projection, and certificate fingerprint projection.
 EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, C ABI-backed directory and session subscription execution
 through Runtime Core open_stream, device event history pages, and EventFrame
@@ -133,6 +137,6 @@ certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream execution adapters, EasyRemote Pipeline child Invocation
-execution conformance, and full
-EasyRemote AgentControl/Server product cutover remain incomplete. See
+execution conformance, full EasyRemote AgentControl product cutover, and
+daemon/ABI-backed Server pairing/hub lifecycle product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.
