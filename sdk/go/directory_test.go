@@ -7,11 +7,20 @@ import (
 )
 
 type memoryDirectoryTransport struct {
-	resolveJSON   string
-	devicesJSON   string
-	agentsJSON    string
-	abilitiesJSON string
-	seenRequest   map[string]any
+	subscriptionInvocationJSON string
+	subscriptionJSON           string
+	resolveJSON                string
+	devicesJSON                string
+	agentsJSON                 string
+	abilitiesJSON              string
+	seenRequest                map[string]any
+}
+
+func (m *memoryDirectoryTransport) BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenRequest); err != nil {
+		return nil, err
+	}
+	return []byte(m.subscriptionInvocationJSON), nil
 }
 
 func (m *memoryDirectoryTransport) Resolve(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -42,6 +51,13 @@ func (m *memoryDirectoryTransport) ListAbilities(ctx context.Context, requestJSO
 	return []byte(m.abilitiesJSON), nil
 }
 
+func (m *memoryDirectoryTransport) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenRequest); err != nil {
+		return nil, err
+	}
+	return []byte(m.subscriptionJSON), nil
+}
+
 func baseDirectoryQuery() DirectoryQueryBase {
 	return DirectoryQueryBase{
 		CallerURA:         "easynet:///r/example/agent/alice.sdk",
@@ -53,6 +69,66 @@ func baseDirectoryQuery() DirectoryQueryBase {
 		Cursor:            "0",
 		Metadata:          map[string]any{"request_id": "directory-test"},
 	}
+}
+
+func TestDirectorySubscriptionBuildsInvocationAndStateProjection(t *testing.T) {
+	transport := &memoryDirectoryTransport{
+		subscriptionInvocationJSON: directorySubscriptionInvocationJSON,
+		subscriptionJSON:           directorySubscriptionJSON,
+	}
+	client, err := NewDirectoryClient(transport)
+	if err != nil {
+		t.Fatalf("NewDirectoryClient: %v", err)
+	}
+	base := baseDirectoryQuery()
+	base.Metadata = map[string]any{"request_id": "directory-subscribe"}
+
+	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), DirectorySubscriptionRequest{
+		DirectoryQueryBase: base,
+		OwnerURA:           "easynet:///r/example/device/dev-a",
+		ItemKind:           "ability",
+		ResumeCursor:       ptrDirectoryCursor(NewDirectorySubscriptionCursor(1)),
+	})
+	if err != nil {
+		t.Fatalf("BuildDirectorySubscriptionInvocation: %v", err)
+	}
+	if draft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0" {
+		t.Fatalf("descriptor = %q", draft.DescriptorRef())
+	}
+	if transport.seenRequest["stream"] != "directory" {
+		t.Fatalf("stream not normalized: %#v", transport.seenRequest)
+	}
+	if transport.seenRequest["resume_cursor"].(map[string]any)["token"] != "directory:1" {
+		t.Fatalf("resume cursor not forwarded: %#v", transport.seenRequest)
+	}
+
+	subscription, err := client.SubscribeDirectory(context.Background(), DirectorySubscriptionRequest{
+		DirectoryQueryBase: base,
+		DeviceURA:          "easynet:///r/example/device/dev-a",
+		ItemKind:           "ability",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeDirectory: %v", err)
+	}
+	if subscription.State != DirectorySubscriptionLive || subscription.ResumeToken != "directory:3" || len(subscription.Events) != 3 {
+		t.Fatalf("unexpected subscription: %#v", subscription)
+	}
+	if subscription.Events[2].Phase != "live" || subscription.Events[2].ItemKind != "ability" {
+		t.Fatalf("unexpected live event: %#v", subscription.Events[2])
+	}
+}
+
+func TestDirectorySubscriptionRejectsInvalidStateTransitions(t *testing.T) {
+	if _, err := NewDirectorySubscriptionFromJSON([]byte(directorySubscriptionLiveBeforeSnapshotJSON)); err == nil {
+		t.Fatalf("expected live-before-snapshot rejection")
+	}
+	if _, err := NewDirectorySubscriptionFromJSON([]byte(directorySubscriptionDuplicateEventJSON)); err == nil {
+		t.Fatalf("expected duplicate event rejection")
+	}
+}
+
+func ptrDirectoryCursor(cursor DirectorySubscriptionCursor) *DirectorySubscriptionCursor {
+	return &cursor
 }
 
 func TestDirectoryListDevicesDefaultsBoundedPageSize(t *testing.T) {
@@ -83,6 +159,123 @@ func TestDirectoryListDevicesDefaultsBoundedPageSize(t *testing.T) {
 		t.Fatalf("default limit not sent to transport: %#v", transport.seenRequest)
 	}
 }
+
+const directorySubscriptionInvocationJSON = `{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"stream": "directory", "item_kind": "ability"},
+  "content_type": "application/json",
+  "metadata": {"request_id": "directory-subscribe", "profile": "directory_identity", "system_ability": "directory.subscribe", "carrier_owner": "daemon_sdk"}
+}`
+
+const directorySubscriptionJSON = `{
+  "profile": "directory_identity",
+  "kind": "directory_subscription",
+  "stream": "directory",
+  "state": "Live",
+  "cursor": {"stream": "directory", "sequence": 3, "token": "directory:3"},
+  "resume_token": "directory:3",
+  "drop_count": 0,
+  "events": [
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "snapshot_start",
+      "event_id": "evt-1",
+      "phase": "snapshot_start",
+      "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+      "resume_token": "directory:1",
+      "terminal": false,
+      "metadata": {"source": "directory.subscribe"}
+    },
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "snapshot_complete",
+      "event_id": "evt-2",
+      "phase": "snapshot_complete",
+      "cursor": {"stream": "directory", "sequence": 2, "token": "directory:2"},
+      "resume_token": "directory:2",
+      "terminal": false,
+      "metadata": {"source": "directory.subscribe"}
+    },
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "upsert",
+      "event_id": "evt-3",
+      "phase": "live",
+      "item_kind": "ability",
+      "item": {"ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list"},
+      "cursor": {"stream": "directory", "sequence": 3, "token": "directory:3"},
+      "resume_token": "directory:3",
+      "terminal": false,
+      "metadata": {"source": "directory.subscribe"}
+    }
+  ],
+  "metadata": {"source": "directory.subscribe"}
+}`
+
+const directorySubscriptionLiveBeforeSnapshotJSON = `{
+  "profile": "directory_identity",
+  "kind": "directory_subscription",
+  "stream": "directory",
+  "state": "Live",
+  "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+  "resume_token": "directory:1",
+  "drop_count": 0,
+  "events": [{
+    "profile": "directory_identity",
+    "stream": "directory",
+    "kind": "upsert",
+    "event_id": "evt-1",
+    "phase": "live",
+    "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+    "resume_token": "directory:1",
+    "terminal": false,
+    "metadata": {}
+  }],
+  "metadata": {}
+}`
+
+const directorySubscriptionDuplicateEventJSON = `{
+  "profile": "directory_identity",
+  "kind": "directory_subscription",
+  "stream": "directory",
+  "state": "Live",
+  "cursor": {"stream": "directory", "sequence": 2, "token": "directory:2"},
+  "resume_token": "directory:2",
+  "drop_count": 0,
+  "events": [
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "snapshot_complete",
+      "event_id": "evt-1",
+      "phase": "snapshot_complete",
+      "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+      "resume_token": "directory:1",
+      "terminal": false,
+      "metadata": {}
+    },
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "upsert",
+      "event_id": "evt-1",
+      "phase": "live",
+      "cursor": {"stream": "directory", "sequence": 2, "token": "directory:2"},
+      "resume_token": "directory:2",
+      "terminal": false,
+      "metadata": {}
+    }
+  ],
+  "metadata": {}
+}`
 
 func TestDirectoryListRejectsOverMaxLimitBeforeTransport(t *testing.T) {
 	transport := &memoryDirectoryTransport{}

@@ -11,8 +11,18 @@ from .errors import ErrorCode, RetryHint, SDKError
 
 DEFAULT_DIRECTORY_PAGE_SIZE = 50
 MAX_DIRECTORY_PAGE_SIZE = 500
+MAX_DIRECTORY_SUBSCRIPTION_BUFFERED_EVENTS = 1024
 _PROFILE = "directory_identity"
 _READ_MODEL = "read_model"
+_DIRECTORY_STREAM = "directory"
+_DIRECTORY_SUBSCRIPTION_STATES = {
+    "Opening",
+    "CatchingUp",
+    "Live",
+    "Resuming",
+    "Closed",
+    "Failed",
+}
 
 
 @dataclass(frozen=True)
@@ -108,9 +118,145 @@ class AbilityQuery:
         return _json_bytes(value)
 
 
+@dataclass(frozen=True)
+class DirectorySubscriptionCursor:
+    stream: str
+    sequence: int
+    token: str = ""
+
+    def resume_token(self) -> str:
+        return self.token or f"{self.stream}:{self.sequence}"
+
+    def to_json_dict(self) -> dict[str, object]:
+        _validate_subscription_cursor(self)
+        value: dict[str, object] = {
+            "stream": self.stream,
+            "sequence": self.sequence,
+            "token": self.resume_token(),
+        }
+        return value
+
+
+@dataclass(frozen=True)
+class DirectorySubscriptionRequest:
+    base: DirectoryQueryBase
+    stream: str = ""
+    realm: str = ""
+    owner_ura: str = ""
+    device_ura: str = ""
+    agent_ura: str = ""
+    ability_ura: str = ""
+    item_kind: str = ""
+    resume_cursor: Optional[DirectorySubscriptionCursor] = None
+    heartbeat_interval_ms: int = 0
+
+    def to_json_bytes(self) -> bytes:
+        _validate_base(self.base, require_limit=False)
+        stream = self.stream or _DIRECTORY_STREAM
+        if stream != _DIRECTORY_STREAM:
+            raise _invalid_directory("directory subscription stream mismatch")
+        value = self.base.to_json_dict()
+        value["stream"] = stream
+        for key, raw in (
+            ("realm", self.realm),
+            ("owner_ura", self.owner_ura),
+            ("device_ura", self.device_ura),
+            ("agent_ura", self.agent_ura),
+            ("ability_ura", self.ability_ura),
+            ("item_kind", self.item_kind),
+        ):
+            if raw:
+                if raw.strip() != raw:
+                    raise _invalid_directory(f"{key} must not contain surrounding whitespace")
+                value[key] = raw
+        if self.resume_cursor is not None:
+            value["resume_cursor"] = self.resume_cursor.to_json_dict()
+        if self.heartbeat_interval_ms < 0:
+            raise _invalid_directory("heartbeat_interval_ms must be non-negative")
+        if self.heartbeat_interval_ms:
+            value["heartbeat_interval_ms"] = self.heartbeat_interval_ms
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
+class DirectorySubscriptionEvent:
+    profile: str
+    stream: str
+    kind: str
+    event_id: str
+    phase: str
+    cursor: DirectorySubscriptionCursor
+    resume_token: str
+    terminal: bool
+    metadata: Mapping[str, object]
+    item_kind: str = ""
+    item: Optional[Mapping[str, object]] = None
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, object]) -> "DirectorySubscriptionEvent":
+        cursor = _subscription_cursor_from_json(raw.get("cursor"))
+        event = cls(
+            profile=_required_string(raw, "profile"),
+            stream=_required_string(raw, "stream"),
+            kind=_required_string(raw, "kind"),
+            event_id=_required_string(raw, "event_id"),
+            phase=_required_string(raw, "phase"),
+            item_kind=_optional_string(raw.get("item_kind"), "item_kind") or "",
+            item=_optional_mapping(raw.get("item"), "item"),
+            cursor=cursor,
+            resume_token=_optional_string(raw.get("resume_token"), "resume_token")
+            or cursor.resume_token(),
+            terminal=_required_bool(raw, "terminal"),
+            metadata=_required_mapping(raw, "metadata"),
+        )
+        _validate_subscription_event(event)
+        return event
+
+
+@dataclass(frozen=True)
+class DirectorySubscription:
+    profile: str
+    kind: str
+    stream: str
+    state: str
+    cursor: DirectorySubscriptionCursor
+    resume_token: str
+    events: tuple[DirectorySubscriptionEvent, ...]
+    drop_count: int
+    metadata: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DirectorySubscription":
+        decoded = _json_object(raw, "directory subscription")
+        cursor = _subscription_cursor_from_json(decoded.get("cursor"))
+        events_raw = decoded.get("events", [])
+        if not isinstance(events_raw, list):
+            raise _invalid_directory("directory subscription events must be a list")
+        if len(events_raw) > MAX_DIRECTORY_SUBSCRIPTION_BUFFERED_EVENTS:
+            raise _invalid_directory("directory subscription buffered events exceeds bounds")
+        events = tuple(DirectorySubscriptionEvent.from_mapping(_mapping_object(item, "event")) for item in events_raw)
+        subscription = cls(
+            profile=_required_string(decoded, "profile"),
+            kind=_required_string(decoded, "kind"),
+            stream=_required_string(decoded, "stream"),
+            state=_required_string(decoded, "state"),
+            cursor=cursor,
+            resume_token=_optional_string(decoded.get("resume_token"), "resume_token")
+            or cursor.resume_token(),
+            events=events,
+            drop_count=_required_non_negative_int(decoded, "drop_count"),
+            metadata=_required_mapping(decoded, "metadata"),
+        )
+        _validate_subscription(subscription)
+        return subscription
+
+
 @runtime_checkable
 class DirectoryTransport(Protocol):
     """Concrete directory operations supplied by the integration layer."""
+
+    def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
+        ...
 
     def resolve(self, request_json: bytes) -> bytes:
         ...
@@ -122,6 +268,9 @@ class DirectoryTransport(Protocol):
         ...
 
     def list_abilities(self, request_json: bytes) -> bytes:
+        ...
+
+    def subscribe_directory(self, request_json: bytes) -> bytes:
         ...
 
 
@@ -231,6 +380,28 @@ class DirectoryClient:
         if self.transport is None:
             raise _invalid_directory("directory transport is required")
 
+    def build_directory_subscription_invocation(
+        self, request: DirectorySubscriptionRequest
+    ):
+        from .invocation import InvocationDraft
+
+        try:
+            raw = self.transport.build_directory_subscription_invocation(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("directory subscription invocation failed", exc) from exc
+        return InvocationDraft.from_json(raw)
+
+    def subscribe_directory(self, request: DirectorySubscriptionRequest) -> DirectorySubscription:
+        try:
+            raw = self.transport.subscribe_directory(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("directory subscribe failed", exc) from exc
+        return DirectorySubscription.from_json(raw)
+
     def resolve(self, query: ResolveQuery) -> ResolvedRef:
         try:
             raw = self.transport.resolve(query.to_json_bytes())
@@ -304,6 +475,67 @@ def _validate_base(base: DirectoryQueryBase, *, require_limit: bool) -> None:
         raise _invalid_directory("directory page limit exceeds bounds")
 
 
+def _validate_subscription(subscription: DirectorySubscription) -> None:
+    if (
+        subscription.profile != _PROFILE
+        or subscription.kind != "directory_subscription"
+        or subscription.stream != _DIRECTORY_STREAM
+        or subscription.state not in _DIRECTORY_SUBSCRIPTION_STATES
+    ):
+        raise _invalid_directory("invalid directory subscription projection")
+    _validate_subscription_cursor(subscription.cursor)
+    if subscription.resume_token != subscription.cursor.resume_token():
+        raise _invalid_directory("directory subscription resume token mismatch")
+    if subscription.drop_count < 0:
+        raise _invalid_directory("directory subscription drop_count must be non-negative")
+    seen: set[str] = set()
+    snapshot_complete = False
+    last_sequence = -1
+    for event in subscription.events:
+        if event.event_id in seen:
+            raise _invalid_directory("duplicate directory subscription event id")
+        seen.add(event.event_id)
+        if event.cursor.sequence <= last_sequence:
+            raise _invalid_directory("directory subscription event sequence must increase")
+        last_sequence = event.cursor.sequence
+        if event.phase == "live" and not snapshot_complete:
+            raise _invalid_directory("directory live event before snapshot_complete")
+        if event.phase == "snapshot_complete":
+            snapshot_complete = True
+
+
+def _validate_subscription_event(event: DirectorySubscriptionEvent) -> None:
+    if event.profile != _PROFILE or event.stream != _DIRECTORY_STREAM:
+        raise _invalid_directory("invalid directory subscription event projection")
+    _validate_subscription_cursor(event.cursor)
+    if event.resume_token != event.cursor.resume_token():
+        raise _invalid_directory("directory subscription event resume token mismatch")
+
+
+def _validate_subscription_cursor(cursor: DirectorySubscriptionCursor) -> None:
+    if cursor.stream != _DIRECTORY_STREAM:
+        raise _invalid_directory("directory subscription cursor stream mismatch")
+    if cursor.sequence < 0:
+        raise _invalid_directory("directory subscription cursor sequence must be non-negative")
+    token = cursor.resume_token()
+    if not token or any(ch.isspace() for ch in token):
+        raise _invalid_directory("directory subscription cursor token is invalid")
+    if token != f"{cursor.stream}:{cursor.sequence}":
+        raise _invalid_directory("directory subscription cursor token mismatch")
+
+
+def _subscription_cursor_from_json(value: object) -> DirectorySubscriptionCursor:
+    if not isinstance(value, dict):
+        raise _invalid_directory("directory subscription cursor must be an object")
+    cursor = DirectorySubscriptionCursor(
+        stream=_required_string(value, "stream"),
+        sequence=_required_non_negative_int(value, "sequence"),
+        token=_optional_string(value.get("token"), "token") or "",
+    )
+    _validate_subscription_cursor(cursor)
+    return cursor
+
+
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -324,6 +556,19 @@ def _required_mapping(decoded: Mapping[str, object], field_name: str) -> Mapping
     if not isinstance(value, dict):
         raise _invalid_directory(f"{field_name} must be an object")
     return dict(value)
+
+
+def _mapping_object(value: object, field_name: str) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        raise _invalid_directory(f"{field_name} must be an object")
+    return dict(value)
+
+
+def _required_string(decoded: Mapping[str, object], field_name: str) -> str:
+    value = decoded.get(field_name)
+    if not isinstance(value, str) or value.strip() == "":
+        raise _invalid_directory(f"{field_name} is required")
+    return value
 
 
 def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:
@@ -352,6 +597,20 @@ def _required_positive_int(decoded: Mapping[str, object], field_name: str) -> in
     value = decoded.get(field_name)
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise _invalid_directory(f"{field_name} is required")
+    return value
+
+
+def _required_non_negative_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_directory(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:
+    value = decoded.get(field_name)
+    if not isinstance(value, bool):
+        raise _invalid_directory(f"{field_name} must be a boolean")
     return value
 
 

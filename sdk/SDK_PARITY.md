@@ -107,10 +107,11 @@ method spelling.
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
-  read-model pages with bounded pagination plus `IdentityClient` descriptor,
-  identity, ResourceRef, signing-key lifecycle, and signer-handle projection
-  seams; directory subscriptions, local signer implementations, concrete daemon
-  carriers, and backend route cutover remain incomplete.
+  read-model pages with bounded pagination and directory subscription state
+  seams plus `IdentityClient` descriptor, identity, ResourceRef, signing-key
+  lifecycle, and signer-handle projection seams; directory live transport
+  adapters, local signer implementations, concrete daemon carriers, and backend
+  route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection seams over opaque receipt refs; Axon-backed cryptographic
   verification, concrete daemon carrier execution, receipt URI construction
@@ -173,10 +174,11 @@ method spelling.
   error source refs, and conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
-  read-model pages with bounded pagination plus `IdentityClient` descriptor,
-  identity, ResourceRef, signing-key lifecycle, and signer-handle projection
-  seams; directory subscriptions, local signer implementations, concrete daemon
-  carriers, and EasyRemote extraction remain incomplete.
+  read-model pages with bounded pagination and directory subscription state
+  seams plus `IdentityClient` descriptor, identity, ResourceRef, signing-key
+  lifecycle, and signer-handle projection seams; directory live transport
+  adapters, local signer implementations, concrete daemon carriers, and
+  EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection seams over opaque receipt refs; Axon-backed cryptographic
   verification, concrete daemon carrier execution, receipt URI construction

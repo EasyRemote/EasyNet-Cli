@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -12,8 +13,22 @@ const (
 	MaxDirectoryPageSize     = 500
 )
 
+const MaxDirectorySubscriptionBufferedEvents = 1024
+
 const directoryIdentityProfile = "directory_identity"
 const directoryReadModelSource = "read_model"
+const directorySubscriptionStream = "directory"
+
+type DirectorySubscriptionState string
+
+const (
+	DirectorySubscriptionOpening    DirectorySubscriptionState = "Opening"
+	DirectorySubscriptionCatchingUp DirectorySubscriptionState = "CatchingUp"
+	DirectorySubscriptionLive       DirectorySubscriptionState = "Live"
+	DirectorySubscriptionResuming   DirectorySubscriptionState = "Resuming"
+	DirectorySubscriptionClosed     DirectorySubscriptionState = "Closed"
+	DirectorySubscriptionFailed     DirectorySubscriptionState = "Failed"
+)
 
 // DirectoryQueryBase is the complete carrier context for directory read-model requests.
 type DirectoryQueryBase struct {
@@ -55,20 +70,98 @@ type AbilityQuery struct {
 	AbilityURA string `json:"ability_ura,omitempty"`
 }
 
+// DirectorySubscriptionCursor identifies a committed directory stream position.
+type DirectorySubscriptionCursor struct {
+	Stream   string `json:"stream"`
+	Sequence uint64 `json:"sequence"`
+	Token    string `json:"token,omitempty"`
+}
+
+func NewDirectorySubscriptionCursor(sequence uint64) DirectorySubscriptionCursor {
+	return DirectorySubscriptionCursor{
+		Stream:   directorySubscriptionStream,
+		Sequence: sequence,
+		Token:    fmt.Sprintf("%s:%d", directorySubscriptionStream, sequence),
+	}
+}
+
+func (c DirectorySubscriptionCursor) ResumeToken() string {
+	if c.Token != "" {
+		return c.Token
+	}
+	if c.Stream == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", c.Stream, c.Sequence)
+}
+
+// DirectorySubscriptionRequest asks the daemon for snapshot plus live directory deltas.
+type DirectorySubscriptionRequest struct {
+	DirectoryQueryBase
+	Stream              string                       `json:"stream,omitempty"`
+	Realm               string                       `json:"realm,omitempty"`
+	OwnerURA            string                       `json:"owner_ura,omitempty"`
+	DeviceURA           string                       `json:"device_ura,omitempty"`
+	AgentURA            string                       `json:"agent_ura,omitempty"`
+	AbilityURA          string                       `json:"ability_ura,omitempty"`
+	ItemKind            string                       `json:"item_kind,omitempty"`
+	ResumeCursor        *DirectorySubscriptionCursor `json:"resume_cursor,omitempty"`
+	HeartbeatIntervalMS int                          `json:"heartbeat_interval_ms,omitempty"`
+}
+
+// DirectorySubscriptionEvent is a bounded, typed directory stream event.
+type DirectorySubscriptionEvent struct {
+	Profile     string                      `json:"profile"`
+	Stream      string                      `json:"stream"`
+	Kind        string                      `json:"kind"`
+	EventID     string                      `json:"event_id"`
+	Phase       string                      `json:"phase"`
+	ItemKind    string                      `json:"item_kind,omitempty"`
+	Item        map[string]any              `json:"item,omitempty"`
+	Cursor      DirectorySubscriptionCursor `json:"cursor"`
+	ResumeToken string                      `json:"resume_token"`
+	Terminal    bool                        `json:"terminal"`
+	Metadata    map[string]any              `json:"metadata"`
+}
+
+// DirectorySubscription is the Directory profile subscription state seam.
+type DirectorySubscription struct {
+	Profile     string                       `json:"profile"`
+	Kind        string                       `json:"kind"`
+	Stream      string                       `json:"stream"`
+	State       DirectorySubscriptionState   `json:"state"`
+	Cursor      DirectorySubscriptionCursor  `json:"cursor"`
+	ResumeToken string                       `json:"resume_token"`
+	Events      []DirectorySubscriptionEvent `json:"events"`
+	DropCount   int                          `json:"drop_count"`
+	Metadata    map[string]any               `json:"metadata"`
+}
+
 // DirectoryTransport supplies read-model operations behind the SDK facade.
 type DirectoryTransport interface {
+	BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	Resolve(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListDevices(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAbilities(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 // DirectoryTransportFunc adapts functions into a DirectoryTransport.
 type DirectoryTransportFunc struct {
-	ResolveFunc       func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	ListDevicesFunc   func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	ListAgentsFunc    func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	ListAbilitiesFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildDirectorySubscriptionInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ResolveFunc                              func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListDevicesFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListAgentsFunc                           func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListAbilitiesFunc                        func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeDirectoryFunc                   func(ctx context.Context, requestJSON []byte) ([]byte, error)
+}
+
+func (f DirectoryTransportFunc) BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildDirectorySubscriptionInvocationFunc == nil {
+		return nil, invalidRuntimeClient("directory subscription invocation transport function is required")
+	}
+	return f.BuildDirectorySubscriptionInvocationFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) Resolve(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -99,6 +192,13 @@ func (f DirectoryTransportFunc) ListAbilities(ctx context.Context, requestJSON [
 	return f.ListAbilitiesFunc(ctx, requestJSON)
 }
 
+func (f DirectoryTransportFunc) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.SubscribeDirectoryFunc == nil {
+		return nil, invalidRuntimeClient("directory subscribe transport function is required")
+	}
+	return f.SubscribeDirectoryFunc(ctx, requestJSON)
+}
+
 // DirectoryClient is the Directory + Identity read-model facade.
 type DirectoryClient struct {
 	transport DirectoryTransport
@@ -109,6 +209,36 @@ func NewDirectoryClient(transport DirectoryTransport) (*DirectoryClient, error) 
 		return nil, invalidRuntimeClient("directory transport is required")
 	}
 	return &DirectoryClient{transport: transport}, nil
+}
+
+func (c *DirectoryClient) BuildDirectorySubscriptionInvocation(ctx context.Context, req DirectorySubscriptionRequest) (InvocationDraft, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return InvocationDraft{}, err
+	}
+	requestJSON, err := marshalDirectorySubscriptionRequest(req)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	raw, err := c.transport.BuildDirectorySubscriptionInvocation(ctx, requestJSON)
+	if err != nil {
+		return InvocationDraft{}, wrapDirectoryTransportError("directory subscription invocation failed", err)
+	}
+	return NewInvocationDraftFromJSON(raw)
+}
+
+func (c *DirectoryClient) SubscribeDirectory(ctx context.Context, req DirectorySubscriptionRequest) (DirectorySubscription, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return DirectorySubscription{}, err
+	}
+	requestJSON, err := marshalDirectorySubscriptionRequest(req)
+	if err != nil {
+		return DirectorySubscription{}, err
+	}
+	raw, err := c.transport.SubscribeDirectory(ctx, requestJSON)
+	if err != nil {
+		return DirectorySubscription{}, wrapDirectoryTransportError("directory subscribe failed", err)
+	}
+	return NewDirectorySubscriptionFromJSON(raw)
 }
 
 func (c *DirectoryClient) Resolve(ctx context.Context, query ResolveQuery) (ResolvedRef, error) {
@@ -340,6 +470,29 @@ func NewAbilityPageFromJSON(raw []byte) (AbilityPage, error) {
 	return page, nil
 }
 
+func NewDirectorySubscriptionFromJSON(raw []byte) (DirectorySubscription, error) {
+	var subscription DirectorySubscription
+	if err := json.Unmarshal(raw, &subscription); err != nil {
+		return DirectorySubscription{}, invalidRuntimePayload(fmt.Sprintf("decode directory subscription JSON: %v", err), err)
+	}
+	if err := validateDirectorySubscription(&subscription); err != nil {
+		return DirectorySubscription{}, err
+	}
+	return subscription, nil
+}
+
+func marshalDirectorySubscriptionRequest(req DirectorySubscriptionRequest) ([]byte, error) {
+	normalized, err := normalizeDirectorySubscriptionRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode directory subscription request: %v", err), err)
+	}
+	return raw, nil
+}
+
 func marshalDirectoryPageQuery(query DirectoryQueryBase) ([]byte, error) {
 	query = normalizeDirectoryPageQuery(query)
 	if err := validateDirectoryQueryBase(query, true); err != nil {
@@ -350,6 +503,39 @@ func marshalDirectoryPageQuery(query DirectoryQueryBase) ([]byte, error) {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode directory page query: %v", err), err)
 	}
 	return raw, nil
+}
+
+func normalizeDirectorySubscriptionRequest(req DirectorySubscriptionRequest) (DirectorySubscriptionRequest, error) {
+	if req.Stream == "" {
+		req.Stream = directorySubscriptionStream
+	}
+	if req.Stream != directorySubscriptionStream {
+		return DirectorySubscriptionRequest{}, invalidRuntimePayload("directory subscription stream mismatch", nil)
+	}
+	if err := validateDirectoryQueryBase(req.DirectoryQueryBase, false); err != nil {
+		return DirectorySubscriptionRequest{}, err
+	}
+	for field, value := range map[string]string{
+		"realm":       req.Realm,
+		"owner_ura":   req.OwnerURA,
+		"device_ura":  req.DeviceURA,
+		"agent_ura":   req.AgentURA,
+		"ability_ura": req.AbilityURA,
+		"item_kind":   req.ItemKind,
+	} {
+		if strings.TrimSpace(value) != value {
+			return DirectorySubscriptionRequest{}, invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+		}
+	}
+	if req.ResumeCursor != nil {
+		if err := validateDirectorySubscriptionCursor(*req.ResumeCursor); err != nil {
+			return DirectorySubscriptionRequest{}, err
+		}
+	}
+	if req.HeartbeatIntervalMS < 0 {
+		return DirectorySubscriptionRequest{}, invalidRuntimePayload("heartbeat_interval_ms must be non-negative", nil)
+	}
+	return req, nil
 }
 
 func normalizeDirectoryPageQuery(query DirectoryQueryBase) DirectoryQueryBase {
@@ -372,6 +558,93 @@ func validateDirectoryQueryBase(query DirectoryQueryBase, requireLimit bool) err
 		}
 	}
 	return nil
+}
+
+func validateDirectorySubscription(subscription *DirectorySubscription) error {
+	if subscription.Profile != directoryIdentityProfile || subscription.Kind != "directory_subscription" ||
+		subscription.Stream != directorySubscriptionStream || subscription.Metadata == nil {
+		return invalidRuntimePayload("invalid directory subscription projection", nil)
+	}
+	if !validDirectorySubscriptionState(subscription.State) {
+		return invalidRuntimePayload("invalid directory subscription state", nil)
+	}
+	if err := validateDirectorySubscriptionCursor(subscription.Cursor); err != nil {
+		return err
+	}
+	if subscription.ResumeToken == "" {
+		subscription.ResumeToken = subscription.Cursor.ResumeToken()
+	}
+	if subscription.ResumeToken != subscription.Cursor.ResumeToken() {
+		return invalidRuntimePayload("directory subscription resume token mismatch", nil)
+	}
+	if subscription.DropCount < 0 {
+		return invalidRuntimePayload("directory subscription drop_count must be non-negative", nil)
+	}
+	if len(subscription.Events) > MaxDirectorySubscriptionBufferedEvents {
+		return invalidRuntimePayload("directory subscription buffered events exceeds bounds", nil)
+	}
+	return validateDirectorySubscriptionEvents(subscription.Events)
+}
+
+func validateDirectorySubscriptionEvents(events []DirectorySubscriptionEvent) error {
+	seen := map[string]struct{}{}
+	snapshotComplete := false
+	lastSequence := uint64(0)
+	for idx := range events {
+		event := &events[idx]
+		if event.Profile != directoryIdentityProfile || event.Stream != directorySubscriptionStream ||
+			event.Kind == "" || event.EventID == "" || event.Phase == "" || event.Metadata == nil {
+			return invalidRuntimePayload("invalid directory subscription event projection", nil)
+		}
+		if _, ok := seen[event.EventID]; ok {
+			return invalidRuntimePayload("duplicate directory subscription event id", nil)
+		}
+		seen[event.EventID] = struct{}{}
+		if err := validateDirectorySubscriptionCursor(event.Cursor); err != nil {
+			return err
+		}
+		if idx > 0 && event.Cursor.Sequence <= lastSequence {
+			return invalidRuntimePayload("directory subscription event sequence must increase", nil)
+		}
+		lastSequence = event.Cursor.Sequence
+		if event.ResumeToken == "" {
+			event.ResumeToken = event.Cursor.ResumeToken()
+		}
+		if event.ResumeToken != event.Cursor.ResumeToken() {
+			return invalidRuntimePayload("directory subscription event resume token mismatch", nil)
+		}
+		if event.Phase == "live" && !snapshotComplete {
+			return invalidRuntimePayload("directory live event before snapshot_complete", nil)
+		}
+		if event.Phase == "snapshot_complete" {
+			snapshotComplete = true
+		}
+	}
+	return nil
+}
+
+func validateDirectorySubscriptionCursor(cursor DirectorySubscriptionCursor) error {
+	if cursor.Stream != directorySubscriptionStream {
+		return invalidRuntimePayload("directory subscription cursor stream mismatch", nil)
+	}
+	token := cursor.ResumeToken()
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return invalidRuntimePayload("directory subscription cursor token is invalid", nil)
+	}
+	if token != fmt.Sprintf("%s:%d", cursor.Stream, cursor.Sequence) {
+		return invalidRuntimePayload("directory subscription cursor token mismatch", nil)
+	}
+	return nil
+}
+
+func validDirectorySubscriptionState(state DirectorySubscriptionState) bool {
+	switch state {
+	case DirectorySubscriptionOpening, DirectorySubscriptionCatchingUp, DirectorySubscriptionLive,
+		DirectorySubscriptionResuming, DirectorySubscriptionClosed, DirectorySubscriptionFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDirectoryPage(profile string, kind string, itemKind string, source string, limit int, wantKind string, wantItem string) error {
