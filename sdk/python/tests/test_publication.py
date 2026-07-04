@@ -4,12 +4,14 @@ import unittest
 from easynet_sdk import (
     AbilityDeployRequest,
     AbilityImplID,
+    ErrorCode,
     LocalResourceRefRequest,
     PublicationClient,
     PublishedAbilityQuery,
     ResourceRef,
     SDKError,
     UnpublishAbilityRequest,
+    is_code,
 )
 
 
@@ -131,6 +133,7 @@ class MemoryPublicationTransport:
             b'"metadata":{}}'
         )
         self.seen_request: dict[str, object] | None = None
+        self.close_calls = 0
 
     def _remember(self, request_json: bytes) -> None:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -178,6 +181,9 @@ class MemoryPublicationTransport:
     def unpublish_ability(self, request_json: bytes) -> bytes:
         self._remember(request_json)
         return self.unpublish_json
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def resource_ref() -> ResourceRef:
@@ -319,6 +325,24 @@ class PublicationTests(unittest.TestCase):
                     ability_ura="",
                 )
             )
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryPublicationTransport()
+        client = PublicationClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_local_resource_ref(
+                LocalResourceRefRequest(
+                    path="/tmp/easynet-weather-package",
+                    capability="read",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
 
 
 if __name__ == "__main__":

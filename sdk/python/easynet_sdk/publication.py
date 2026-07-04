@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .identity import LocalResourceRefRequest, ResourceRef
 from .invocation import InvocationDraft
@@ -421,12 +422,15 @@ class PublicationClient:
     """Publication profile facade."""
 
     transport: PublicationTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_publication("publication transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("publication"))
 
     def build_local_resource_ref(self, request: LocalResourceRefRequest) -> ResourceRef:
+        self._require_open()
         try:
             raw = self.transport.build_resource_ref(request.to_json_bytes())
         except SDKError:
@@ -438,6 +442,7 @@ class PublicationClient:
     def validate_package(
         self, path: str = "", options: Optional[ValidatePackageOptions] = None
     ) -> PackageValidation:
+        self._require_open()
         options = options or ValidatePackageOptions()
         if not path and options.manifest is None:
             raise _invalid_publication("package path or manifest is required")
@@ -457,6 +462,7 @@ class PublicationClient:
         return PackageValidation.from_json(raw)
 
     def deploy_ability(self, request: AbilityDeployRequest) -> AbilityDeployResult:
+        self._require_open()
         try:
             raw = self.transport.deploy_ability(request.to_json_bytes())
         except SDKError:
@@ -466,6 +472,7 @@ class PublicationClient:
         return AbilityDeployResult.from_json(raw)
 
     def build_deploy_invocation(self, request: AbilityDeployRequest) -> InvocationDraft:
+        self._require_open()
         try:
             raw = self.transport.build_deploy_invocation(request.to_json_bytes())
         except SDKError:
@@ -477,6 +484,7 @@ class PublicationClient:
     def install_plugin(
         self, source: str, options: Optional[InstallOptions] = None
     ) -> PluginInstallResult:
+        self._require_open()
         options = options or InstallOptions()
         if not source:
             raise _invalid_publication("plugin source is required")
@@ -492,6 +500,7 @@ class PublicationClient:
         return PluginInstallResult.from_json(raw)
 
     def list_abilities(self, query: PublishedAbilityQuery) -> PublishedAbilityPage:
+        self._require_open()
         try:
             raw = self.transport.list_abilities(query.to_json_bytes())
         except SDKError:
@@ -501,6 +510,7 @@ class PublicationClient:
         return PublishedAbilityPage.from_json(raw)
 
     def show_ability(self, descriptor_ref: str) -> PublishedAbility:
+        self._require_open()
         if not descriptor_ref:
             raise _invalid_publication("descriptor_ref is required")
         try:
@@ -512,6 +522,7 @@ class PublicationClient:
         return PublishedAbility.from_json(raw)
 
     def enable_ability_impl(self, impl_id: AbilityImplID) -> None:
+        self._require_open()
         self._expect_record(
             self.transport.enable_ability_impl,
             impl_id.to_json_bytes(),
@@ -520,6 +531,7 @@ class PublicationClient:
         )
 
     def disable_ability_impl(self, impl_id: AbilityImplID) -> None:
+        self._require_open()
         self._expect_record(
             self.transport.disable_ability_impl,
             impl_id.to_json_bytes(),
@@ -530,6 +542,7 @@ class PublicationClient:
     def build_unpublish_invocation(
         self, request: UnpublishAbilityRequest
     ) -> InvocationDraft:
+        self._require_open()
         try:
             raw = self.transport.build_unpublish_invocation(request.to_json_bytes())
         except SDKError:
@@ -539,6 +552,7 @@ class PublicationClient:
         return InvocationDraft.from_json(raw)
 
     def unpublish_ability(self, descriptor_ref: str) -> None:
+        self._require_open()
         if not descriptor_ref:
             raise _invalid_publication("descriptor_ref is required")
         self._expect_record(
@@ -564,6 +578,12 @@ class PublicationClient:
         record = PublicationRecord.from_json(raw)
         if record.kind != expected_kind:
             raise _invalid_publication("invalid publication record projection")
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_deploy_request(request: AbilityDeployRequest) -> None:

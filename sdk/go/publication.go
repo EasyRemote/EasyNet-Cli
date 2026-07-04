@@ -280,6 +280,7 @@ func (f PublicationTransportFunc) UnpublishAbility(ctx context.Context, requestJ
 // PublicationClient is the Publication profile facade.
 type PublicationClient struct {
 	transport PublicationTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewPublicationClient(transport PublicationTransport) (*PublicationClient, error) {
@@ -480,14 +481,18 @@ func (c *PublicationClient) UnpublishAbility(ctx context.Context, ref Descriptor
 	return validatePublicationRecord(raw, "ability_unpublished")
 }
 
+func (c *PublicationClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("publication client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "publication")
+}
+
 func (c *PublicationClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("publication client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "publication")
 }
 
 func NewPackageValidationFromJSON(raw []byte) (PackageValidation, error) {

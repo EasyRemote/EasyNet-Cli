@@ -19,6 +19,7 @@ type memoryPublicationTransport struct {
 	unpublishInvocationJSON string
 	unpublishJSON           string
 	seenRequest             map[string]any
+	closeCalls              int
 }
 
 func (m *memoryPublicationTransport) remember(requestJSON []byte) {
@@ -78,6 +79,11 @@ func (m *memoryPublicationTransport) BuildUnpublishInvocation(ctx context.Contex
 func (m *memoryPublicationTransport) UnpublishAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember(requestJSON)
 	return []byte(m.unpublishJSON), nil
+}
+
+func (m *memoryPublicationTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func newMemoryPublicationTransport() *memoryPublicationTransport {
@@ -269,6 +275,33 @@ func TestPublicationBuildUnpublishInvocation(t *testing.T) {
 	req.AbilityURA = ""
 	if _, err := client.BuildUnpublishInvocation(context.Background(), req); err == nil {
 		t.Fatalf("unpublish carrier without ability_ura accepted")
+	}
+}
+
+func TestPublicationClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := newMemoryPublicationTransport()
+	client, err := NewPublicationClient(transport)
+	if err != nil {
+		t.Fatalf("NewPublicationClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildLocalResourceRef(context.Background(), LocalResourceRefRequest{Path: "/tmp/easynet-weather-package", Capability: "read"})
+	if err == nil {
+		t.Fatalf("BuildLocalResourceRef after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }
 

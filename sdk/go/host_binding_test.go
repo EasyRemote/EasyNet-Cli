@@ -14,6 +14,7 @@ type memoryHostBindingTransport struct {
 	terminalJSON string
 	hashJSON     string
 	seenRequest  map[string]any
+	closeCalls   int
 }
 
 func (m *memoryHostBindingTransport) remember(requestJSON []byte) {
@@ -48,6 +49,11 @@ func (m *memoryHostBindingTransport) EncodeTerminal(ctx context.Context, request
 func (m *memoryHostBindingTransport) FoldOutputHash(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember(requestJSON)
 	return []byte(m.hashJSON), nil
+}
+
+func (m *memoryHostBindingTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func newMemoryHostBindingTransport() *memoryHostBindingTransport {
@@ -183,6 +189,33 @@ func TestHostBindingFoldOutputHashRejectsSequenceGap(t *testing.T) {
 
 	if _, err := client.FoldOutputHash(context.Background(), state, 2, map[string]any{"token": "skip"}); err == nil {
 		t.Fatalf("hash sequence gap accepted")
+	}
+}
+
+func TestHostBindingClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := newMemoryHostBindingTransport()
+	client, err := NewHostBindingClient(transport)
+	if err != nil {
+		t.Fatalf("NewHostBindingClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.EncodeItem(context.Background(), 0, map[string]any{"token": "hello"})
+	if err == nil {
+		t.Fatalf("EncodeItem after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }
 

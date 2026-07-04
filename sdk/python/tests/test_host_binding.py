@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from easynet_sdk import ErrorCode, RetryHint, SDKError
+from easynet_sdk import ErrorCode, RetryHint, SDKError, is_code
 from easynet_sdk.host_binding import (
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
@@ -98,6 +98,7 @@ class MemoryHostBindingTransport:
         self.terminal_json = TERMINAL_FRAME_JSON
         self.hash_json = HASH_STATE_JSON
         self.seen_request: dict[str, object] | None = None
+        self.close_calls = 0
 
     def _remember(self, request_json: bytes) -> None:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -125,6 +126,9 @@ class MemoryHostBindingTransport:
     def fold_output_hash(self, request_json: bytes) -> bytes:
         self._remember(request_json)
         return self.hash_json
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class HostBindingTests(unittest.TestCase):
@@ -223,6 +227,19 @@ class HostBindingTests(unittest.TestCase):
 
         with self.assertRaises(SDKError):
             client.fold_output_hash(state, 2, {"token": "skip"})
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryHostBindingTransport()
+        client = HostBindingClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.encode_item(0, {"token": "hello"})
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
 
 
 if __name__ == "__main__":

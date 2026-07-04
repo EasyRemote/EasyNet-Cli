@@ -118,18 +118,18 @@ method spelling.
   after RFC-007, and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
-  install projection, and published-ability read-model seams; concrete daemon
+  install projection, published-ability read-model seams, and close state seams; concrete daemon
   carriers, list/show/enable/disable runtime execution, host binding bridge,
   plugin/skill lifecycle policy, and backend publication cutover remain
   incomplete.
 - Go Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, item/error/terminal frame encoding, and output-hash folding seams over
-  schema-backed transport projections; product host readiness execution,
+  schema-backed transport projections plus close state seams; product host readiness execution,
   cleanup execution, local canonical JSON/hash implementation, EasyRemote host
   process integration, and behavior-executing conformance remain incomplete.
 - Go Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders plus daemon `MissionStatus` and
-  `MissionEventPage` projection seams; daemon mission execution carriers,
+  `MissionEventPage` projection seams and close state seams; daemon mission execution carriers,
   concrete live-tail adapters, child Invocation behavior conformance,
   scheduler/retry policy, and backend automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh
@@ -186,18 +186,18 @@ method spelling.
   after RFC-007, and EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
-  install projection, and published-ability read-model seams; concrete daemon
+  install projection, published-ability read-model seams, and close state seams; concrete daemon
   carriers, list/show/enable/disable runtime execution, host binding bridge,
   EasyRemote decorator/package extraction, and plugin/skill lifecycle policy
   remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, item/error/terminal frame encoding, and output-hash folding seams over
-  schema-backed transport projections; product host readiness execution,
+  schema-backed transport projections plus close state seams; product host readiness execution,
   cleanup execution, local canonical JSON/hash implementation, EasyRemote warm
   host integration, and behavior-executing conformance remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders plus daemon `MissionStatus` and
-  `MissionEventPage` projection seams; daemon mission execution carriers,
+  `MissionEventPage` projection seams and close state seams; daemon mission execution carriers,
   concrete live-tail adapters, child Invocation behavior conformance,
   EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent

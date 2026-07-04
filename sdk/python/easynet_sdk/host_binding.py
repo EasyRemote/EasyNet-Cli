@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 
 
@@ -244,14 +245,17 @@ class HostBindingClient:
     """Host Binding profile facade."""
 
     transport: HostBindingTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_host_binding("host binding transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("host binding"))
 
     def build_host_stream_binding(
         self, request: HostStreamBindingRequest
     ) -> HostStreamBinding:
+        self._require_open()
         try:
             raw = self.transport.build_host_stream_binding(request.to_json_bytes())
         except SDKError:
@@ -261,6 +265,7 @@ class HostBindingClient:
         return HostStreamBinding.from_json(raw)
 
     def decode_request(self, envelope: HostStreamEnvelope) -> HostStreamRequest:
+        self._require_open()
         try:
             raw = self.transport.decode_request(envelope.to_json_bytes())
         except SDKError:
@@ -270,6 +275,7 @@ class HostBindingClient:
         return HostStreamRequest.from_json(raw)
 
     def encode_item(self, seq: int, value: object) -> HostStreamFrame:
+        self._require_open()
         if seq < 0:
             raise _invalid_host_binding("seq must be non-negative")
         try:
@@ -281,6 +287,7 @@ class HostBindingClient:
         return HostStreamFrame.from_json(raw)
 
     def encode_error(self, error: BaseException) -> HostStreamFrame:
+        self._require_open()
         if error is None:
             raise _invalid_host_binding("error is required")
         try:
@@ -296,6 +303,7 @@ class HostBindingClient:
     def encode_terminal(
         self, summary: HostStreamTerminalSummary
     ) -> HostStreamFrame:
+        self._require_open()
         try:
             raw = self.transport.encode_terminal(
                 _json_bytes({"summary": summary.to_json_dict()})
@@ -309,6 +317,7 @@ class HostBindingClient:
     def fold_output_hash(
         self, state: HostStreamHashState, seq: int, value: object
     ) -> HostStreamHashState:
+        self._require_open()
         if seq < 0:
             raise _invalid_host_binding("seq must be non-negative")
         _validate_hash_fold(state, seq)
@@ -321,6 +330,12 @@ class HostBindingClient:
         except Exception as exc:
             raise _transport_error("host binding hash fold failed", exc) from exc
         return HostStreamHashState.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_binding_request(request: HostStreamBindingRequest) -> None:

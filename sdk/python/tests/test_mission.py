@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from easynet_sdk import SDKError
+from easynet_sdk import ErrorCode, SDKError, is_code
 from easynet_sdk.mission import (
     MissionCancelRequest,
     MissionCarrierBase,
@@ -132,6 +132,7 @@ class MemoryMissionTransport:
         self.status_json = MISSION_STATUS_JSON
         self.events_json = MISSION_EVENT_PAGE_JSON
         self.seen_request: dict[str, object] | None = None
+        self.close_calls = 0
 
     def _remember(self, request_json: bytes) -> None:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -171,6 +172,9 @@ class MemoryMissionTransport:
     def events(self, request_json: bytes) -> bytes:
         self._remember(request_json)
         return self.events_json
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def base() -> MissionCarrierBase:
@@ -285,6 +289,25 @@ class MissionTests(unittest.TestCase):
                     cursor_sequence=-1,
                 )
             )
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryMissionTransport()
+        client = MissionClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.build_run_eal_invocation(
+                MissionRunRequest(
+                    base=base(),
+                    source="mission weather\nlet r = local.observe_health()",
+                    label="weather",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
+from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
 
@@ -320,12 +321,15 @@ class MissionClient:
     """Mission profile facade."""
 
     transport: MissionTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_mission("mission transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("mission"))
 
     def build_run_eal_invocation(self, request: MissionRunRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_run_eal_invocation,
@@ -333,6 +337,7 @@ class MissionClient:
         )
 
     def build_run_file_invocation(self, request: MissionRunFileRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_run_file_invocation,
@@ -340,6 +345,7 @@ class MissionClient:
         )
 
     def build_track_invocation(self, request: MissionTrackRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_track_invocation,
@@ -347,6 +353,7 @@ class MissionClient:
         )
 
     def build_cancel_invocation(self, request: MissionCancelRequest) -> InvocationDraft:
+        self._require_open()
         return self._invocation(
             request.to_json_bytes(),
             self.transport.build_cancel_invocation,
@@ -354,11 +361,13 @@ class MissionClient:
         )
 
     def run_eal(self, request: MissionRunRequest) -> MissionRun:
+        self._require_open()
         return MissionRun(
             self._status(request.to_json_bytes(), self.transport.run_eal, "mission run failed")
         )
 
     def run_file(self, path: str, request: MissionRunFileRequest) -> MissionRun:
+        self._require_open()
         request = request.with_path(path)
         return MissionRun(
             self._status(
@@ -369,12 +378,15 @@ class MissionClient:
         )
 
     def track(self, request: MissionTrackRequest) -> MissionStatus:
+        self._require_open()
         return self._status(request.to_json_bytes(), self.transport.track, "mission track failed")
 
     def cancel(self, request: MissionCancelRequest) -> MissionStatus:
+        self._require_open()
         return self._status(request.to_json_bytes(), self.transport.cancel, "mission cancel failed")
 
     def events(self, request: MissionEventListRequest) -> MissionEventPage:
+        self._require_open()
         try:
             raw = self.transport.events(request.to_json_bytes())
         except SDKError:
@@ -404,6 +416,12 @@ class MissionClient:
         except Exception as exc:
             raise _transport_error(label, exc) from exc
         return MissionStatus.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_base(base: MissionCarrierBase) -> None:

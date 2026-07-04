@@ -148,6 +148,7 @@ func (f HostBindingTransportFunc) FoldOutputHash(ctx context.Context, requestJSO
 // HostBindingClient is the Host Binding profile facade.
 type HostBindingClient struct {
 	transport HostBindingTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewHostBindingClient(transport HostBindingTransport) (*HostBindingClient, error) {
@@ -262,14 +263,18 @@ func (c *HostBindingClient) FoldOutputHash(ctx context.Context, state HostStream
 	return NewHostStreamHashStateFromJSON(raw)
 }
 
+func (c *HostBindingClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("host binding client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "host binding")
+}
+
 func (c *HostBindingClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("host binding client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "host binding")
 }
 
 func NewHostStreamBindingFromJSON(raw []byte) (HostStreamBinding, error) {

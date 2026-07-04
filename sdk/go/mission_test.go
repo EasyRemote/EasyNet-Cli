@@ -14,6 +14,7 @@ type memoryMissionTransport struct {
 	statusJSON            string
 	eventsJSON            string
 	seenRequest           map[string]any
+	closeCalls            int
 }
 
 func (m *memoryMissionTransport) remember(requestJSON []byte) {
@@ -63,6 +64,11 @@ func (m *memoryMissionTransport) Cancel(ctx context.Context, requestJSON []byte)
 func (m *memoryMissionTransport) Events(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember(requestJSON)
 	return []byte(m.eventsJSON), nil
+}
+
+func (m *memoryMissionTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func newMemoryMissionTransport() *memoryMissionTransport {
@@ -201,6 +207,37 @@ func TestMissionRejectsIncompleteCarrierAndPathLikeMissionID(t *testing.T) {
 	}
 	if _, err := client.Events(context.Background(), MissionEventListRequest{MissionCarrierBase: baseMissionCarrier(), MissionID: "2026-07-04_010203_weather", CursorSequence: -1}); err == nil {
 		t.Fatalf("negative mission event cursor accepted")
+	}
+}
+
+func TestMissionClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.BuildRunEALInvocation(context.Background(), MissionRunRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		Source:             "mission weather\nlet r = local.observe_health()",
+		Label:              "weather",
+	})
+	if err == nil {
+		t.Fatalf("BuildRunEALInvocation after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }
 

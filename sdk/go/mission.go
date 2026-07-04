@@ -229,6 +229,7 @@ func (f MissionTransportFunc) Events(ctx context.Context, requestJSON []byte) ([
 // MissionClient is the Mission profile facade.
 type MissionClient struct {
 	transport MissionTransport
+	lifecycle profileClientLifecycle
 }
 
 func NewMissionClient(transport MissionTransport) (*MissionClient, error) {
@@ -318,14 +319,18 @@ func (c *MissionClient) statusOperation(ctx context.Context, req any, validate f
 	return NewMissionStatusFromJSON(raw)
 }
 
+func (c *MissionClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("mission client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, "mission")
+}
+
 func (c *MissionClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("mission client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	return nil
+	return c.lifecycle.RequireOpen(ctx, "mission")
 }
 
 func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
