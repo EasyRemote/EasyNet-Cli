@@ -30,6 +30,6 @@ Go and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
 shipped local DTO/actions and projection-only profile behavior, including
 Runtime Core, Directory + Identity, Mission, Admin + Gateway, Publication,
-Events, Surface, Receipt, Host Binding, and Wrapper profile adapters. Inline
-samples may remain as focused unit tests, but they do not replace the shared
-case-aware parity gate.
+Events, Surface, Compatibility, Receipt, Host Binding, and Wrapper profile
+adapters. Inline samples may remain as focused unit tests, but they do not
+replace the shared case-aware parity gate.

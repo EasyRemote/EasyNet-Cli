@@ -239,10 +239,10 @@ method spelling.
   Invocation/health, Directory + Identity read-model/projection behavior,
   Mission carrier/status behavior, Publication ResourceRef/package/carrier
   behavior, Admin + Gateway carrier/status behavior, Events directory-stream
-  behavior, Surface page carrier/projection behavior, Host Binding codec/hash
-  behavior, Receipt projection, and Wrapper record projection. Daemon-backed
-  behavior-executing action adapters over the full case manifest remain
-  incomplete.
+  behavior, Surface page carrier/projection behavior, Compatibility OpenAI
+  carrier/projection behavior, Host Binding codec/hash behavior, Receipt
+  projection, and Wrapper record projection. Daemon-backed behavior-executing
+  action adapters over the full case manifest remain incomplete.
 
 ## Stability Levels
 

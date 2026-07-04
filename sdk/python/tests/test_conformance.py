@@ -15,6 +15,14 @@ from easynet_sdk import (
     AdminGatewayStatusRequest,
     AdminSessionListRequest,
     AgentQuery,
+    CompatibilityCarrierBase,
+    CompatibilityChatCompletionRequest,
+    CompatibilityClient,
+    CompatibilityFileDeleteRequest,
+    CompatibilityFileRequest,
+    CompatibilityFileUploadRequest,
+    CompatibilityListModelsRequest,
+    CompatibilityStreamChatCompletionRequest,
     DescriptorRefRequest,
     DeviceQuery,
     DirectoryClient,
@@ -763,6 +771,103 @@ class SharedSurfaceTransport:
             stage="test",
             retry=RetryHint.NEVER,
             message="not used by shared surface conformance fixture test",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class SharedCompatibilityTransport:
+    def __init__(self) -> None:
+        self.expected_list_request = shared_fixture(
+            "compatibility-list-models-request.v4.json"
+        )
+        self.expected_chat_request = shared_fixture(
+            "compatibility-chat-completion-request.v4.json"
+        )
+        self.list_invocation_json = shared_fixture(
+            "compatibility-list-models-invocation.v4.json"
+        )
+        self.chat_invocation_json = shared_fixture(
+            "compatibility-chat-completion-invocation.v4.json"
+        )
+        self.stream_invocation_json = shared_fixture(
+            "compatibility-stream-chat-completion-invocation.v4.json"
+        )
+        self.model_page_json = shared_fixture("compatibility-model-page.v4.json")
+        self.chat_completion_json = shared_fixture("compatibility-chat-completion.v4.json")
+        self.chat_stream_json = shared_fixture("compatibility-chat-stream.v4.json")
+
+    def build_list_models_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_list_request)
+        return self.list_invocation_json
+
+    def build_chat_completion_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_chat_request)
+        return self.chat_invocation_json
+
+    def build_stream_chat_completion_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, shared_compatibility_stream_request_json())
+        return self.stream_invocation_json
+
+    def build_file_upload_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared compatibility conformance fixture test",
+        )
+
+    def build_file_retrieve_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared compatibility conformance fixture test",
+        )
+
+    def build_file_delete_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared compatibility conformance fixture test",
+        )
+
+    def list_models(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_list_request)
+        return self.model_page_json
+
+    def create_chat_completion(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_chat_request)
+        return self.chat_completion_json
+
+    def stream_chat_completion(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, shared_compatibility_stream_request_json())
+        return self.chat_stream_json
+
+    def upload_file(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared compatibility conformance fixture test",
+        )
+
+    def retrieve_file(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared compatibility conformance fixture test",
+        )
+
+    def delete_file(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared compatibility conformance fixture test",
         )
 
     def close(self) -> None:
@@ -1703,6 +1808,159 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             SurfaceManifest.from_json(shared_surface_manifest_without_entrypoint())
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_compatibility_executes_shared_openai_carrier_conformance_case(self) -> None:
+        compatibility_case = shared_case("compatibility-openai-carrier-projection.yaml")
+        self._require_case_id(
+            compatibility_case, "compatibility/openai_carrier_projection"
+        )
+        for action in (
+            "build_list_models_invocation",
+            "build_chat_completion_invocation",
+            "build_stream_chat_completion_invocation",
+            "project_model_page",
+            "project_chat_completion",
+            "project_chat_stream",
+            "project_file_upload",
+            "project_file",
+            "project_file_delete_result",
+        ):
+            self._require_case_action(compatibility_case, action)
+        for fixture in (
+            "compatibility-list-models-request.v4.json",
+            "compatibility-list-models-invocation.v4.json",
+            "compatibility-chat-completion-request.v4.json",
+            "compatibility-chat-completion-invocation.v4.json",
+            "compatibility-stream-chat-completion-request.v4.json",
+            "compatibility-stream-chat-completion-invocation.v4.json",
+            "compatibility-model-page.v4.json",
+            "compatibility-chat-completion.v4.json",
+            "compatibility-chat-stream.v4.json",
+            "compatibility-file-upload-request.v4.json",
+            "compatibility-file-request.v4.json",
+            "compatibility-file.v4.json",
+            "compatibility-file-delete-request.v4.json",
+            "compatibility-file-delete-result.v4.json",
+        ):
+            self._require_case_fixture(compatibility_case, fixture)
+        for expectation in (
+            "rejects_provider_nickname_models: true",
+            "rejects_unary_stream_true: true",
+            "files_api: file_wrapper_projection",
+            "openai_files_daemon_ability_required: false",
+            "product_http_auth_and_sse_fanout: product_owned",
+        ):
+            self._require_case_expectation(compatibility_case, expectation)
+
+        compatibility = CompatibilityClient(SharedCompatibilityTransport())
+
+        list_draft = compatibility.build_list_models_invocation(
+            shared_compatibility_list_models_request()
+        )
+        self.assertEqual(
+            list_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.openai.list_models@1.0.0",
+        )
+        self.assertEqual(list_draft.metadata["system_ability"], "openai.list_models")
+
+        chat_draft = compatibility.build_chat_completion_invocation(
+            shared_compatibility_chat_completion_request()
+        )
+        self.assertEqual(
+            chat_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0",
+        )
+        self.assertEqual(
+            chat_draft.metadata["system_ability"], "openai.chat_completions"
+        )
+
+        stream_draft = compatibility.build_stream_chat_completion_invocation(
+            shared_compatibility_stream_chat_completion_request()
+        )
+        self.assertEqual(
+            stream_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0",
+        )
+        self.assertEqual(
+            stream_draft.metadata["system_ability"], "openai.chat_completions"
+        )
+
+        models = compatibility.list_models(shared_compatibility_list_models_request())
+        self.assertEqual(models.kind, "model_page")
+        self.assertEqual(len(models.data), 1)
+        self.assertEqual(
+            models.data[0].ability_ref,
+            "easynet:///r/example/ability/alice.codex.chat",
+        )
+
+        chat = compatibility.create_chat_completion(
+            shared_compatibility_chat_completion_request()
+        )
+        self.assertEqual(chat.kind, "chat_completion")
+        self.assertEqual(chat.model, "easynet:///r/example/ability/alice.codex.chat")
+        self.assertEqual(len(chat.choices), 1)
+
+        stream = compatibility.stream_chat_completion(
+            shared_compatibility_stream_chat_completion_request()
+        )
+        self.assertEqual(stream.kind, "chat_completion_stream")
+        self.assertTrue(stream.stream)
+        self.assertEqual(stream.done_sentinel, "[DONE]")
+        self.assertEqual(len(stream.items), 1)
+
+        uploaded = compatibility.project_file_upload(
+            shared_compatibility_file_upload_request()
+        )
+        assert_json_equivalent(
+            json.dumps(uploaded.__dict__, separators=(",", ":"), sort_keys=True).encode(
+                "utf-8"
+            ),
+            shared_fixture("compatibility-file.v4.json"),
+        )
+
+        file = compatibility.project_file(shared_compatibility_file_request())
+        assert_json_equivalent(
+            json.dumps(file.__dict__, separators=(",", ":"), sort_keys=True).encode(
+                "utf-8"
+            ),
+            shared_fixture("compatibility-file.v4.json"),
+        )
+
+        deleted = compatibility.project_file_delete_result(
+            shared_compatibility_file_delete_request()
+        )
+        assert_json_equivalent(
+            json.dumps(deleted.__dict__, separators=(",", ":"), sort_keys=True).encode(
+                "utf-8"
+            ),
+            shared_fixture("compatibility-file-delete-result.v4.json"),
+        )
+
+        nickname_model = shared_compatibility_chat_completion_request()
+        with self.assertRaises(SDKError) as caught:
+            compatibility.build_chat_completion_invocation(
+                CompatibilityChatCompletionRequest(
+                    nickname_model.base,
+                    {
+                        **dict(nickname_model.request),
+                        "model": "gpt-4o-mini",
+                    },
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        unary_stream = shared_compatibility_chat_completion_request()
+        with self.assertRaises(SDKError) as caught:
+            compatibility.build_chat_completion_invocation(
+                CompatibilityChatCompletionRequest(
+                    unary_stream.base,
+                    {
+                        **dict(unary_stream.request),
+                        "stream": True,
+                    },
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -2147,6 +2405,91 @@ def shared_surface_manifest_without_entrypoint() -> bytes:
     manifest = json.loads(shared_fixture("surface-manifest.v4.json"))
     del manifest["entrypoint"]
     return json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_compatibility_base(fixture: str) -> CompatibilityCarrierBase:
+    decoded = json.loads(shared_fixture(fixture))
+    return CompatibilityCarrierBase(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        auth_token=decoded.get("auth_token", ""),
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_compatibility_list_models_request() -> CompatibilityListModelsRequest:
+    return CompatibilityListModelsRequest(
+        shared_compatibility_base("compatibility-list-models-request.v4.json")
+    )
+
+
+def shared_compatibility_chat_completion_request() -> CompatibilityChatCompletionRequest:
+    decoded = json.loads(shared_fixture("compatibility-chat-completion-request.v4.json"))
+    return CompatibilityChatCompletionRequest(
+        shared_compatibility_base("compatibility-chat-completion-request.v4.json"),
+        decoded["request"],
+    )
+
+
+def shared_compatibility_stream_chat_completion_request() -> CompatibilityStreamChatCompletionRequest:
+    decoded = json.loads(
+        shared_fixture("compatibility-stream-chat-completion-request.v4.json")
+    )
+    return CompatibilityStreamChatCompletionRequest(
+        shared_compatibility_base("compatibility-stream-chat-completion-request.v4.json"),
+        decoded["request"],
+    )
+
+
+def shared_compatibility_file_upload_request() -> CompatibilityFileUploadRequest:
+    decoded = json.loads(shared_fixture("compatibility-file-upload-request.v4.json"))
+    return CompatibilityFileUploadRequest(
+        id=decoded["id"],
+        file_ref=decoded["file_ref"],
+        owner_ura=decoded["owner_ura"],
+        filename=decoded["filename"],
+        purpose=decoded["purpose"],
+        content_type=decoded["content_type"],
+        content_hash=decoded["content_hash"],
+        size_bytes=decoded["size_bytes"],
+        created_at=decoded["created_at"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_compatibility_file_request() -> CompatibilityFileRequest:
+    decoded = json.loads(shared_fixture("compatibility-file-request.v4.json"))
+    return CompatibilityFileRequest(
+        id=decoded["id"],
+        file_ref=decoded["file_ref"],
+        owner_ura=decoded["owner_ura"],
+        filename=decoded["filename"],
+        purpose=decoded["purpose"],
+        content_type=decoded["content_type"],
+        content_hash=decoded["content_hash"],
+        size_bytes=decoded["size_bytes"],
+        created_at=decoded["created_at"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_compatibility_file_delete_request() -> CompatibilityFileDeleteRequest:
+    decoded = json.loads(shared_fixture("compatibility-file-delete-request.v4.json"))
+    return CompatibilityFileDeleteRequest(
+        id=decoded["id"],
+        deleted=decoded["deleted"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_compatibility_stream_request_json() -> bytes:
+    request = json.loads(shared_fixture("compatibility-stream-chat-completion-request.v4.json"))
+    request["request"]["stream"] = True
+    return json.dumps(request, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 def shared_ability_query() -> AbilityQuery:

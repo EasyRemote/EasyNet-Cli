@@ -921,6 +921,160 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 	}
 }
 
+func TestGoCompatibilityFacadeExecutesSharedOpenAICarrierConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	compatibilityCase := sharedCase(t, root, "compatibility-openai-carrier-projection.yaml")
+	requireCaseID(t, compatibilityCase, "compatibility/openai_carrier_projection")
+	for _, action := range []string{
+		"build_list_models_invocation",
+		"build_chat_completion_invocation",
+		"build_stream_chat_completion_invocation",
+		"project_model_page",
+		"project_chat_completion",
+		"project_chat_stream",
+		"project_file_upload",
+		"project_file",
+		"project_file_delete_result",
+	} {
+		requireCaseAction(t, compatibilityCase, action)
+	}
+	for _, fixture := range []string{
+		"compatibility-list-models-request.v4.json",
+		"compatibility-list-models-invocation.v4.json",
+		"compatibility-chat-completion-request.v4.json",
+		"compatibility-chat-completion-invocation.v4.json",
+		"compatibility-stream-chat-completion-request.v4.json",
+		"compatibility-stream-chat-completion-invocation.v4.json",
+		"compatibility-model-page.v4.json",
+		"compatibility-chat-completion.v4.json",
+		"compatibility-chat-stream.v4.json",
+		"compatibility-file-upload-request.v4.json",
+		"compatibility-file-request.v4.json",
+		"compatibility-file.v4.json",
+		"compatibility-file-delete-request.v4.json",
+		"compatibility-file-delete-result.v4.json",
+	} {
+		requireCaseFixture(t, compatibilityCase, fixture)
+	}
+	requireCaseExpectation(t, compatibilityCase, "rejects_provider_nickname_models: true")
+	requireCaseExpectation(t, compatibilityCase, "rejects_unary_stream_true: true")
+	requireCaseExpectation(t, compatibilityCase, "files_api: file_wrapper_projection")
+	requireCaseExpectation(t, compatibilityCase, "openai_files_daemon_ability_required: false")
+	requireCaseExpectation(t, compatibilityCase, "product_http_auth_and_sse_fanout: product_owned")
+
+	compatibility, err := NewCompatibilityClient(&sharedCompatibilityTransport{
+		t:                   t,
+		expectedListRequest: sharedFixture(t, root, "compatibility-list-models-request.v4.json"),
+		expectedChatRequest: sharedFixture(t, root, "compatibility-chat-completion-request.v4.json"),
+		expectedStreamRequest: sharedFixture(t, root,
+			"compatibility-stream-chat-completion-request.v4.json"),
+		listInvocationJSON:   sharedFixture(t, root, "compatibility-list-models-invocation.v4.json"),
+		chatInvocationJSON:   sharedFixture(t, root, "compatibility-chat-completion-invocation.v4.json"),
+		streamInvocationJSON: sharedFixture(t, root, "compatibility-stream-chat-completion-invocation.v4.json"),
+		modelPageJSON:        sharedFixture(t, root, "compatibility-model-page.v4.json"),
+		chatCompletionJSON:   sharedFixture(t, root, "compatibility-chat-completion.v4.json"),
+		chatStreamJSON:       sharedFixture(t, root, "compatibility-chat-stream.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewCompatibilityClient: %v", err)
+	}
+
+	listDraft, err := compatibility.BuildListModelsInvocation(context.Background(), sharedCompatibilityListModelsRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildListModelsInvocation(shared fixture): %v", err)
+	}
+	if listDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.list_models@1.0.0" ||
+		listDraft.Metadata()["system_ability"] != "openai.list_models" {
+		t.Fatalf("unexpected shared compatibility list invocation: %#v", listDraft)
+	}
+
+	chatDraft, err := compatibility.BuildChatCompletionInvocation(context.Background(), sharedCompatibilityChatCompletionRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildChatCompletionInvocation(shared fixture): %v", err)
+	}
+	if chatDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0" ||
+		chatDraft.Metadata()["system_ability"] != "openai.chat_completions" {
+		t.Fatalf("unexpected shared compatibility chat invocation: %#v", chatDraft)
+	}
+
+	streamDraft, err := compatibility.BuildStreamChatCompletionInvocation(context.Background(), sharedCompatibilityStreamChatCompletionRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildStreamChatCompletionInvocation(shared fixture): %v", err)
+	}
+	if streamDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0" ||
+		streamDraft.Metadata()["system_ability"] != "openai.chat_completions" {
+		t.Fatalf("unexpected shared compatibility stream invocation: %#v", streamDraft)
+	}
+
+	models, err := compatibility.ListModels(context.Background(), sharedCompatibilityListModelsRequest(t, root))
+	if err != nil {
+		t.Fatalf("ListModels(shared fixture): %v", err)
+	}
+	if models.Kind != "model_page" || len(models.Data) != 1 ||
+		models.Data[0].AbilityRef != "easynet:///r/example/ability/alice.codex.chat" {
+		t.Fatalf("unexpected shared compatibility model page: %#v", models)
+	}
+
+	chat, err := compatibility.CreateChatCompletion(context.Background(), sharedCompatibilityChatCompletionRequest(t, root))
+	if err != nil {
+		t.Fatalf("CreateChatCompletion(shared fixture): %v", err)
+	}
+	if chat.Kind != "chat_completion" || chat.Model != "easynet:///r/example/ability/alice.codex.chat" ||
+		len(chat.Choices) != 1 {
+		t.Fatalf("unexpected shared compatibility chat completion: %#v", chat)
+	}
+
+	stream, err := compatibility.StreamChatCompletion(context.Background(), sharedCompatibilityStreamChatCompletionRequest(t, root))
+	if err != nil {
+		t.Fatalf("StreamChatCompletion(shared fixture): %v", err)
+	}
+	if stream.Kind != "chat_completion_stream" || !stream.Stream || stream.DoneSentinel != "[DONE]" ||
+		len(stream.Items) != 1 {
+		t.Fatalf("unexpected shared compatibility chat stream: %#v", stream)
+	}
+
+	uploaded, err := compatibility.ProjectFileUpload(sharedCompatibilityFileUploadRequest(t, root))
+	if err != nil {
+		t.Fatalf("ProjectFileUpload(shared fixture): %v", err)
+	}
+	uploadedJSON, err := json.Marshal(uploaded)
+	if err != nil {
+		t.Fatalf("encode shared compatibility uploaded file: %v", err)
+	}
+	assertJSONEquivalent(t, uploadedJSON, sharedFixture(t, root, "compatibility-file.v4.json"))
+
+	file, err := compatibility.ProjectFile(sharedCompatibilityFileRequest(t, root))
+	if err != nil {
+		t.Fatalf("ProjectFile(shared fixture): %v", err)
+	}
+	fileJSON, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("encode shared compatibility file: %v", err)
+	}
+	assertJSONEquivalent(t, fileJSON, sharedFixture(t, root, "compatibility-file.v4.json"))
+
+	deleted, err := compatibility.ProjectFileDeleteResult(sharedCompatibilityFileDeleteRequest(t, root))
+	if err != nil {
+		t.Fatalf("ProjectFileDeleteResult(shared fixture): %v", err)
+	}
+	deletedJSON, err := json.Marshal(deleted)
+	if err != nil {
+		t.Fatalf("encode shared compatibility file delete result: %v", err)
+	}
+	assertJSONEquivalent(t, deletedJSON, sharedFixture(t, root, "compatibility-file-delete-result.v4.json"))
+
+	nicknameModel := sharedCompatibilityChatCompletionRequest(t, root)
+	nicknameModel.Request["model"] = "gpt-4o-mini"
+	if _, err := compatibility.BuildChatCompletionInvocation(context.Background(), nicknameModel); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("provider nickname model did not produce InvalidArgument: %v", err)
+	}
+	unaryStream := sharedCompatibilityChatCompletionRequest(t, root)
+	unaryStream.Request["stream"] = true
+	if _, err := compatibility.BuildChatCompletionInvocation(context.Background(), unaryStream); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("unary stream=true did not produce InvalidArgument: %v", err)
+	}
+}
+
 func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
@@ -1295,6 +1449,75 @@ func (t *sharedSurfaceTransport) PublicPageRef(context.Context, []byte) ([]byte,
 }
 
 func (t *sharedSurfaceTransport) SurfaceHealth(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+type sharedCompatibilityTransport struct {
+	t                     *testing.T
+	expectedListRequest   []byte
+	expectedChatRequest   []byte
+	expectedStreamRequest []byte
+	listInvocationJSON    []byte
+	chatInvocationJSON    []byte
+	streamInvocationJSON  []byte
+	modelPageJSON         []byte
+	chatCompletionJSON    []byte
+	chatStreamJSON        []byte
+}
+
+func (t *sharedCompatibilityTransport) BuildListModelsInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedListRequest)
+	return t.listInvocationJSON, nil
+}
+
+func (t *sharedCompatibilityTransport) BuildChatCompletionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedChatRequest)
+	return t.chatInvocationJSON, nil
+}
+
+func (t *sharedCompatibilityTransport) BuildStreamChatCompletionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	expectedStreamRequest := sharedCompatibilityStreamRequestJSON(t.t, t.expectedStreamRequest)
+	assertJSONEquivalent(t.t, requestJSON, expectedStreamRequest)
+	return t.streamInvocationJSON, nil
+}
+
+func (t *sharedCompatibilityTransport) BuildFileUploadInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedCompatibilityTransport) BuildFileRetrieveInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedCompatibilityTransport) BuildFileDeleteInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedCompatibilityTransport) ListModels(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedListRequest)
+	return t.modelPageJSON, nil
+}
+
+func (t *sharedCompatibilityTransport) CreateChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedChatRequest)
+	return t.chatCompletionJSON, nil
+}
+
+func (t *sharedCompatibilityTransport) StreamChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
+	expectedStreamRequest := sharedCompatibilityStreamRequestJSON(t.t, t.expectedStreamRequest)
+	assertJSONEquivalent(t.t, requestJSON, expectedStreamRequest)
+	return t.chatStreamJSON, nil
+}
+
+func (t *sharedCompatibilityTransport) UploadFile(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedCompatibilityTransport) RetrieveFile(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedCompatibilityTransport) DeleteFile(context.Context, []byte) ([]byte, error) {
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
@@ -1957,6 +2180,75 @@ func sharedSurfaceManifestWithoutEntrypoint(t *testing.T, root string) []byte {
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatalf("encode surface manifest without entrypoint: %v", err)
+	}
+	return raw
+}
+
+func sharedCompatibilityListModelsRequest(t *testing.T, root string) CompatibilityListModelsRequest {
+	t.Helper()
+	var request CompatibilityListModelsRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "compatibility-list-models-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared compatibility list-models request: %v", err)
+	}
+	return request
+}
+
+func sharedCompatibilityChatCompletionRequest(t *testing.T, root string) CompatibilityChatCompletionRequest {
+	t.Helper()
+	var request CompatibilityChatCompletionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "compatibility-chat-completion-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared compatibility chat-completion request: %v", err)
+	}
+	return request
+}
+
+func sharedCompatibilityStreamChatCompletionRequest(t *testing.T, root string) CompatibilityStreamChatCompletionRequest {
+	t.Helper()
+	var request CompatibilityStreamChatCompletionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "compatibility-stream-chat-completion-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared compatibility stream-chat-completion request: %v", err)
+	}
+	return request
+}
+
+func sharedCompatibilityFileUploadRequest(t *testing.T, root string) CompatibilityFileUploadRequest {
+	t.Helper()
+	var request CompatibilityFileUploadRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "compatibility-file-upload-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared compatibility file-upload request: %v", err)
+	}
+	return request
+}
+
+func sharedCompatibilityFileRequest(t *testing.T, root string) CompatibilityFileRequest {
+	t.Helper()
+	var request CompatibilityFileRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "compatibility-file-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared compatibility file request: %v", err)
+	}
+	return request
+}
+
+func sharedCompatibilityFileDeleteRequest(t *testing.T, root string) CompatibilityFileDeleteRequest {
+	t.Helper()
+	var request CompatibilityFileDeleteRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "compatibility-file-delete-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared compatibility file-delete request: %v", err)
+	}
+	return request
+}
+
+func sharedCompatibilityStreamRequestJSON(t *testing.T, requestJSON []byte) []byte {
+	t.Helper()
+	request := map[string]any{}
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
+		t.Fatalf("decode shared compatibility stream request: %v", err)
+	}
+	chatRequest := request["request"].(map[string]any)
+	chatRequest["stream"] = true
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("encode shared compatibility stream request: %v", err)
 	}
 	return raw
 }
