@@ -105,6 +105,36 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["receipt_summary"]["invocation_id"], "inv-1")
         self.assertTrue(result["receipt_summary"]["has_causal_anchor"])
 
+    def test_easyremote_adapter_raises_on_non_ok_runtime_result(self) -> None:
+        class FailedRuntimeTransport(MemoryRuntimeTransport):
+            def invoke(self, draft_json: bytes) -> bytes:
+                draft = json.loads(draft_json.decode("utf-8"))
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "tuple": draft,
+                        "terminal_state": "Failed",
+                        "error": {
+                            "code": "ABILITY_FAILED",
+                            "stage": "runtime",
+                            "message": "ability failed",
+                            "retryable": False,
+                        },
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+
+        adapter = EasyRemoteTransportAdapter.from_runtime_client(
+            RuntimeClient(FailedRuntimeTransport())
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            adapter.invoke(complete_draft())
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
+        self.assertEqual(caught.exception.message, "ability failed")
+
     def test_connect_owns_runtime_connection_lifecycle(self) -> None:
         raw = FakeRawCABI()
         with tempfile.TemporaryDirectory() as tmp:
@@ -146,6 +176,25 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
         self.assertTrue(event["terminal"])
         self.assertEqual(event["kind"], "terminal")
+
+    def test_easyremote_adapter_delegates_stream_and_bidi(self) -> None:
+        runtime = MemoryRuntimeTransport()
+        adapter = EasyRemoteTransportAdapter.from_runtime_client(RuntimeClient(runtime))
+
+        stream = adapter.stream(complete_draft().to_json_dict())
+        event = stream.recv()
+        channel = adapter.bidi(
+            complete_draft().to_json_dict(),
+            [{"stream_id": 1, "content_type": "application/json"}],
+        )
+        ack = channel.send({"sequence": 1, "kind": "data", "stream_id": 1})
+        channel.cancel("done")
+        adapter.close()
+        adapter.close()
+
+        self.assertTrue(event["terminal"])
+        self.assertEqual(ack["sequence"], 1)
+        self.assertEqual(runtime.close_calls, 1)
 
     def test_stream_timeout_is_forwarded_without_state_mutation(self) -> None:
         class TimeoutRuntimeTransport(MemoryRuntimeTransport):
@@ -233,6 +282,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(runtime.seen_draft)
+
 
 def _write_control_discovery(tmp: str, *, invocation_endpoint: str | None = None) -> Path:
     path = Path(tmp) / "control.json"
