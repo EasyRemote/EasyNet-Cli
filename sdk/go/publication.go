@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 )
 
 const (
@@ -297,6 +299,9 @@ func (c *PublicationClient) BuildLocalResourceRef(ctx context.Context, req Local
 	if req.Path == "" || req.Capability == "" {
 		return ResourceRef{}, invalidRuntimePayload("path and capability are required", nil)
 	}
+	if !filepath.IsAbs(req.Path) {
+		return ResourceRef{}, invalidRuntimePayload("absolute resource path is required", nil)
+	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
 		return ResourceRef{}, invalidRuntimePayload(fmt.Sprintf("encode resource-ref request: %v", err), err)
@@ -569,16 +574,27 @@ func marshalAbilityDeployRequest(req AbilityDeployRequest) ([]byte, error) {
 		req.CausalContext == nil {
 		return nil, invalidRuntimePayload("complete deploy invocation carrier is required", nil)
 	}
-	if req.ResourceRef.ResourceURA == "" || req.ResourceRef.OwnerURA == "" ||
-		req.ResourceRef.Namespace == "" || req.ResourceRef.Capability == "" ||
-		req.ResourceRef.Revision == "" {
-		return nil, invalidRuntimePayload("valid resource_ref is required", nil)
+	if err := validatePublicationResourceRef(req.ResourceRef); err != nil {
+		return nil, err
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode ability deploy request: %v", err), err)
 	}
 	return requestJSON, nil
+}
+
+func validatePublicationResourceRef(ref ResourceRef) error {
+	if ref.ResourceURA == "" || ref.OwnerURA == "" ||
+		ref.Namespace == "" || ref.Capability == "" ||
+		ref.Revision == "" {
+		return invalidRuntimePayload("valid resource_ref is required", nil)
+	}
+	switch strings.ToLower(ref.Namespace) {
+	case "axon", "daemon", "easynet", "internal", "system":
+		return invalidRuntimePayload("resource_ref namespace is reserved", nil)
+	}
+	return nil
 }
 
 func marshalAbilityImplID(id AbilityImplID) ([]byte, error) {

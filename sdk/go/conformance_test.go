@@ -358,6 +358,102 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	}
 }
 
+func TestGoPublicationFacadeExecutesSharedCarrierConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	publicationCase := sharedCase(t, root, "publication-resource-carriers.yaml")
+	requireCaseID(t, publicationCase, "publication/resource_carriers")
+	for _, action := range []string{
+		"build_resource_ref",
+		"validate_package",
+		"build_deploy_invocation",
+		"build_unpublish_invocation",
+	} {
+		requireCaseAction(t, publicationCase, action)
+	}
+	for _, fixture := range []string{
+		"local-resource-ref-request.v4.json",
+		"ability-package-manifest.v4.json",
+		"ability-deploy-request.v4.json",
+	} {
+		requireCaseFixture(t, publicationCase, fixture)
+	}
+	requireCaseExpectation(t, publicationCase, "resource_ref_fixture: resource-ref.local-fs.v4.json")
+	requireCaseExpectation(t, publicationCase, "package_validation_fixture: package-validation.v4.json")
+	requireCaseExpectation(t, publicationCase, "deploy_invocation_fixture: publication-deploy-invocation.v4.json")
+	requireCaseExpectation(t, publicationCase, "unpublish_invocation_fixture: publication-unpublish-invocation.v4.json")
+	requireCaseExpectation(t, publicationCase, "deploy_system_ability: ability.deploy")
+	requireCaseExpectation(t, publicationCase, "unpublish_system_ability: ability.unpublish")
+	requireCaseExpectation(t, publicationCase, "rejects_relative_path: true")
+	requireCaseExpectation(t, publicationCase, "rejects_reserved_namespace: true")
+	requireCaseExpectation(t, publicationCase, "rejects_incomplete_invocation_tuple: true")
+
+	publication, err := NewPublicationClient(&sharedPublicationTransport{
+		t:                       t,
+		expectedResourceRequest: sharedFixture(t, root, "local-resource-ref-request.v4.json"),
+		expectedValidateRequest: sharedPublicationValidatePackageRequest(t, root),
+		expectedDeployRequest:   sharedFixture(t, root, "ability-deploy-request.v4.json"),
+		resourceJSON:            sharedFixture(t, root, "resource-ref.local-fs.v4.json"),
+		validationJSON:          sharedFixture(t, root, "package-validation.v4.json"),
+		deployInvocationJSON:    sharedFixture(t, root, "publication-deploy-invocation.v4.json"),
+		unpublishInvocationJSON: sharedFixture(t, root, "publication-unpublish-invocation.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewPublicationClient: %v", err)
+	}
+
+	resourceReq := sharedLocalResourceRefRequest(t, root)
+	resource, err := publication.BuildLocalResourceRef(context.Background(), resourceReq)
+	if err != nil {
+		t.Fatalf("BuildLocalResourceRef(shared fixture): %v", err)
+	}
+	if resource.Namespace != "fs" || resource.Capability != "read" || resource.Revision != "fs-local-mapping-v1" {
+		t.Fatalf("unexpected shared resource ref: %#v", resource)
+	}
+	if _, err := publication.BuildLocalResourceRef(context.Background(), LocalResourceRefRequest{
+		Path:       "tmp/easynet-weather-package",
+		Capability: "read",
+	}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("relative publication resource path did not produce InvalidArgument: %v", err)
+	}
+
+	manifest := sharedAbilityPackageManifest(t, root)
+	validation, err := publication.ValidatePackage(context.Background(), "", ValidatePackageOptions{Manifest: &manifest})
+	if err != nil {
+		t.Fatalf("ValidatePackage(shared manifest): %v", err)
+	}
+	if !validation.Valid || validation.Manifest.WireKey != "er.weather" || validation.Metadata["frame_contract_owner"] != "daemon_sdk" {
+		t.Fatalf("unexpected shared package validation: %#v", validation)
+	}
+
+	deployReq := sharedAbilityDeployRequest(t, root)
+	deploy, err := publication.BuildDeployInvocation(context.Background(), deployReq)
+	if err != nil {
+		t.Fatalf("BuildDeployInvocation(shared fixture): %v", err)
+	}
+	if deploy.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0" ||
+		deploy.Metadata()["system_ability"] != "ability.deploy" {
+		t.Fatalf("unexpected shared deploy invocation: %#v", deploy)
+	}
+	deployReq.ResourceRef.Namespace = "system"
+	if _, err := publication.BuildDeployInvocation(context.Background(), deployReq); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("reserved publication resource namespace did not produce InvalidArgument: %v", err)
+	}
+	deployReq = sharedAbilityDeployRequest(t, root)
+	deployReq.CallerURA = ""
+	if _, err := publication.BuildDeployInvocation(context.Background(), deployReq); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete publication deploy carrier did not produce InvalidArgument: %v", err)
+	}
+
+	unpublish, err := publication.BuildUnpublishInvocation(context.Background(), sharedUnpublishAbilityRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildUnpublishInvocation(shared fixture): %v", err)
+	}
+	if unpublish.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0" ||
+		unpublish.Metadata()["system_ability"] != "ability.unpublish" {
+		t.Fatalf("unexpected shared unpublish invocation: %#v", unpublish)
+	}
+}
+
 func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
@@ -439,6 +535,76 @@ func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	}); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("missing wrapper session state did not produce InvalidArgument: %v", err)
 	}
+}
+
+type sharedPublicationTransport struct {
+	t                       *testing.T
+	expectedResourceRequest []byte
+	expectedValidateRequest []byte
+	expectedDeployRequest   []byte
+	resourceJSON            []byte
+	validationJSON          []byte
+	deployInvocationJSON    []byte
+	unpublishInvocationJSON []byte
+}
+
+func (t *sharedPublicationTransport) BuildResourceRef(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedResourceRequest)
+	return t.resourceJSON, nil
+}
+
+func (t *sharedPublicationTransport) ValidatePackage(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedValidateRequest)
+	return t.validationJSON, nil
+}
+
+func (t *sharedPublicationTransport) DeployAbility(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) BuildDeployInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDeployRequest)
+	return t.deployInvocationJSON, nil
+}
+
+func (t *sharedPublicationTransport) InstallPlugin(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) ListAbilities(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) ShowAbility(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) EnableAbilityImpl(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) DisableAbilityImpl(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) BuildUnpublishInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	var request UnpublishAbilityRequest
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
+		t.t.Fatalf("decode unpublish request: %v", err)
+	}
+	if request.AbilityURA != "easynet:///r/example/ability/device.dev-a.er.weather" ||
+		request.CallerURA != "easynet:///r/example/agent/alice.sdk" {
+		t.t.Fatalf("unexpected unpublish request: %#v", request)
+	}
+	return t.unpublishInvocationJSON, nil
+}
+
+func (t *sharedPublicationTransport) UnpublishAbility(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedPublicationTransport) Close(context.Context) error {
+	return nil
 }
 
 type sharedDirectoryTransport struct {
@@ -639,6 +805,60 @@ func sharedTerminalFrameFixture(t *testing.T, root string) []byte {
 		t.Fatalf("build shared terminal frame fixture: %v", err)
 	}
 	return raw
+}
+
+func sharedLocalResourceRefRequest(t *testing.T, root string) LocalResourceRefRequest {
+	t.Helper()
+	var request LocalResourceRefRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "local-resource-ref-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared local resource-ref request: %v", err)
+	}
+	return request
+}
+
+func sharedAbilityPackageManifest(t *testing.T, root string) AbilityPackageManifest {
+	t.Helper()
+	var manifest AbilityPackageManifest
+	if err := json.Unmarshal(sharedFixture(t, root, "ability-package-manifest.v4.json"), &manifest); err != nil {
+		t.Fatalf("decode shared ability package manifest: %v", err)
+	}
+	return manifest
+}
+
+func sharedPublicationValidatePackageRequest(t *testing.T, root string) []byte {
+	t.Helper()
+	manifest := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "ability-package-manifest.v4.json"), &manifest); err != nil {
+		t.Fatalf("decode shared publication manifest request: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{"manifest": manifest})
+	if err != nil {
+		t.Fatalf("encode shared publication validation request: %v", err)
+	}
+	return raw
+}
+
+func sharedAbilityDeployRequest(t *testing.T, root string) AbilityDeployRequest {
+	t.Helper()
+	var request AbilityDeployRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "ability-deploy-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared ability deploy request: %v", err)
+	}
+	return request
+}
+
+func sharedUnpublishAbilityRequest(t *testing.T, root string) UnpublishAbilityRequest {
+	t.Helper()
+	deploy := sharedAbilityDeployRequest(t, root)
+	return UnpublishAbilityRequest{
+		CallerURA:         deploy.CallerURA,
+		CalleeURA:         deploy.CalleeURA,
+		SubjectURA:        deploy.SubjectURA,
+		DescriptorVersion: deploy.DescriptorVersion,
+		NonceBase64:       deploy.NonceBase64,
+		CausalContext:     deploy.CausalContext,
+		AbilityURA:        "easynet:///r/example/ability/device.dev-a.er.weather",
+	}
 }
 
 func sharedDeviceQuery(t *testing.T, root string) DeviceQuery {

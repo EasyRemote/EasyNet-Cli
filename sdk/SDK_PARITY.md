@@ -236,10 +236,11 @@ method spelling.
   conformance, and P1 language facades remain incomplete.
 - Go and Python now consume shared SDK conformance cases and fixtures for
   selected local facade/projection actions covering Runtime Core
-  Invocation/health, Directory + Identity read-model/projection behavior, Host
-  Binding codec/hash behavior, Receipt projection, and Wrapper record
-  projection. Daemon-backed behavior-executing action adapters over the full
-  case manifest remain incomplete.
+  Invocation/health, Directory + Identity read-model/projection behavior,
+  Publication ResourceRef/package/carrier behavior, Host Binding codec/hash
+  behavior, Receipt projection, and Wrapper record projection. Daemon-backed
+  behavior-executing action adapters over the full case manifest remain
+  incomplete.
 
 ## Stability Levels
 

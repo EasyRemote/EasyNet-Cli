@@ -4,6 +4,8 @@ import unittest
 
 from easynet_sdk import (
     AbilityQuery,
+    AbilityDeployRequest,
+    AbilityPackageManifest,
     AgentQuery,
     DescriptorRefRequest,
     DeviceQuery,
@@ -22,10 +24,13 @@ from easynet_sdk import (
     IdentityProjection,
     IdentityProjectionRequest,
     InvocationDraft,
+    LocalResourceRefRequest,
     MAX_DIRECTORY_PAGE_SIZE,
     PreparedInvocation,
+    PublicationClient,
     ReceiptSummary,
     ReceiptVerification,
+    ResourceRef,
     ResolveQuery,
     RuntimeHealth,
     RetryHint,
@@ -39,6 +44,8 @@ from easynet_sdk import (
     WrapperTerminalSessionRecord,
     WrapperTerminalSessionRequest,
     CausalRef,
+    UnpublishAbilityRequest,
+    ValidatePackageOptions,
 )
 
 
@@ -218,6 +225,98 @@ class SharedIdentityTransport:
             stage="test",
             retry=RetryHint.NEVER,
             message="not used by shared identity conformance fixture test",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class SharedPublicationTransport:
+    def __init__(self) -> None:
+        self.expected_resource_request = shared_fixture("local-resource-ref-request.v4.json")
+        self.expected_validate_request = shared_publication_validate_package_request()
+        self.expected_deploy_request = shared_fixture("ability-deploy-request.v4.json")
+        self.resource_json = shared_fixture("resource-ref.local-fs.v4.json")
+        self.validation_json = shared_fixture("package-validation.v4.json")
+        self.deploy_invocation_json = shared_fixture("publication-deploy-invocation.v4.json")
+        self.unpublish_invocation_json = shared_fixture(
+            "publication-unpublish-invocation.v4.json"
+        )
+
+    def build_resource_ref(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_resource_request)
+        return self.resource_json
+
+    def validate_package(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_validate_request)
+        return self.validation_json
+
+    def deploy_ability(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def build_deploy_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_deploy_request)
+        return self.deploy_invocation_json
+
+    def install_plugin(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def list_abilities(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def show_ability(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def enable_ability_impl(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def disable_ability_impl(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
+        )
+
+    def build_unpublish_invocation(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        if request.get("ability_ura") != "easynet:///r/example/ability/device.dev-a.er.weather":
+            raise AssertionError(f"unexpected unpublish request: {request}")
+        if request.get("caller_ura") != "easynet:///r/example/agent/alice.sdk":
+            raise AssertionError(f"unexpected unpublish caller: {request}")
+        return self.unpublish_invocation_json
+
+    def unpublish_ability(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared publication conformance fixture test",
         )
 
     def close(self) -> None:
@@ -544,6 +643,131 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             identity.project_identity(IdentityProjectionRequest())
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_publication_executes_shared_carrier_conformance_case(self) -> None:
+        publication_case = shared_case("publication-resource-carriers.yaml")
+        self._require_case_id(publication_case, "publication/resource_carriers")
+        for action in (
+            "build_resource_ref",
+            "validate_package",
+            "build_deploy_invocation",
+            "build_unpublish_invocation",
+        ):
+            self._require_case_action(publication_case, action)
+        for fixture in (
+            "local-resource-ref-request.v4.json",
+            "ability-package-manifest.v4.json",
+            "ability-deploy-request.v4.json",
+        ):
+            self._require_case_fixture(publication_case, fixture)
+        self._require_case_expectation(
+            publication_case, "resource_ref_fixture: resource-ref.local-fs.v4.json"
+        )
+        self._require_case_expectation(
+            publication_case,
+            "package_validation_fixture: package-validation.v4.json",
+        )
+        self._require_case_expectation(
+            publication_case,
+            "deploy_invocation_fixture: publication-deploy-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            publication_case,
+            "unpublish_invocation_fixture: publication-unpublish-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            publication_case, "deploy_system_ability: ability.deploy"
+        )
+        self._require_case_expectation(
+            publication_case, "unpublish_system_ability: ability.unpublish"
+        )
+        self._require_case_expectation(publication_case, "rejects_relative_path: true")
+        self._require_case_expectation(
+            publication_case, "rejects_reserved_namespace: true"
+        )
+        self._require_case_expectation(
+            publication_case, "rejects_incomplete_invocation_tuple: true"
+        )
+
+        publication = PublicationClient(SharedPublicationTransport())
+
+        resource_ref = publication.build_local_resource_ref(
+            shared_local_resource_ref_request()
+        )
+        self.assertEqual(resource_ref.namespace, "fs")
+        self.assertEqual(resource_ref.capability, "read")
+        self.assertEqual(resource_ref.revision, "fs-local-mapping-v1")
+
+        with self.assertRaises(SDKError) as caught:
+            publication.build_local_resource_ref(
+                LocalResourceRefRequest("tmp/easynet-weather-package", "read")
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        validation = publication.validate_package(
+            options=ValidatePackageOptions(manifest=shared_ability_package_manifest())
+        )
+        self.assertTrue(validation.valid)
+        self.assertEqual(validation.manifest.wire_key, "er.weather")
+        self.assertEqual(validation.metadata["frame_contract_owner"], "daemon_sdk")
+
+        deploy_request = shared_ability_deploy_request()
+        deploy = publication.build_deploy_invocation(deploy_request)
+        self.assertEqual(
+            deploy.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0",
+        )
+        self.assertEqual(deploy.metadata["system_ability"], "ability.deploy")
+
+        reserved_ref = ResourceRef(
+            resource_ura=deploy_request.resource_ref.resource_ura,
+            owner_ura=deploy_request.resource_ref.owner_ura,
+            namespace="system",
+            capability=deploy_request.resource_ref.capability,
+            revision=deploy_request.resource_ref.revision,
+            expires_unix_ms=deploy_request.resource_ref.expires_unix_ms,
+            display_path=deploy_request.resource_ref.display_path,
+        )
+        with self.assertRaises(SDKError) as caught:
+            publication.build_deploy_invocation(
+                AbilityDeployRequest(
+                    caller_ura=deploy_request.caller_ura,
+                    callee_ura=deploy_request.callee_ura,
+                    subject_ura=deploy_request.subject_ura,
+                    descriptor_version=deploy_request.descriptor_version,
+                    nonce_base64=deploy_request.nonce_base64,
+                    causal_context=deploy_request.causal_context,
+                    resource_ref=reserved_ref,
+                    node_id=deploy_request.node_id,
+                    metadata=deploy_request.metadata,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            publication.build_deploy_invocation(
+                AbilityDeployRequest(
+                    caller_ura="",
+                    callee_ura=deploy_request.callee_ura,
+                    subject_ura=deploy_request.subject_ura,
+                    descriptor_version=deploy_request.descriptor_version,
+                    nonce_base64=deploy_request.nonce_base64,
+                    causal_context=deploy_request.causal_context,
+                    resource_ref=deploy_request.resource_ref,
+                    node_id=deploy_request.node_id,
+                    metadata=deploy_request.metadata,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        unpublish = publication.build_unpublish_invocation(
+            shared_unpublish_ability_request()
+        )
+        self.assertEqual(
+            unpublish.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0",
+        )
+        self.assertEqual(unpublish.metadata["system_ability"], "ability.unpublish")
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -646,6 +870,58 @@ def shared_directory_query_base(fixture: str) -> DirectoryQueryBase:
         cursor=decoded.get("cursor", ""),
         limit=decoded.get("limit", 0),
         metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_local_resource_ref_request() -> LocalResourceRefRequest:
+    decoded = json.loads(shared_fixture("local-resource-ref-request.v4.json"))
+    return LocalResourceRefRequest(decoded["path"], decoded["capability"])
+
+
+def shared_ability_package_manifest() -> AbilityPackageManifest:
+    decoded = json.loads(shared_fixture("ability-package-manifest.v4.json"))
+    return AbilityPackageManifest(
+        name=decoded["name"],
+        namespace=decoded["namespace"],
+        description=decoded["description"],
+        input_schema=decoded["input_schema"],
+        exec=decoded["exec"],
+    )
+
+
+def shared_publication_validate_package_request() -> bytes:
+    return json.dumps(
+        {"manifest": json.loads(shared_fixture("ability-package-manifest.v4.json"))},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def shared_ability_deploy_request() -> AbilityDeployRequest:
+    decoded = json.loads(shared_fixture("ability-deploy-request.v4.json"))
+    return AbilityDeployRequest(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        resource_ref=ResourceRef.from_json(json.dumps(decoded["resource_ref"])),
+        node_id=decoded["node_id"],
+        metadata=decoded["metadata"],
+    )
+
+
+def shared_unpublish_ability_request() -> UnpublishAbilityRequest:
+    deploy = shared_ability_deploy_request()
+    return UnpublishAbilityRequest(
+        caller_ura=deploy.caller_ura,
+        callee_ura=deploy.callee_ura,
+        subject_ura=deploy.subject_ura,
+        descriptor_version=deploy.descriptor_version,
+        nonce_base64=deploy.nonce_base64,
+        causal_context=deploy.causal_context,
+        ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
     )
 
 

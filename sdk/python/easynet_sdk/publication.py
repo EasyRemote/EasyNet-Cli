@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
@@ -431,6 +432,8 @@ class PublicationClient:
 
     def build_local_resource_ref(self, request: LocalResourceRefRequest) -> ResourceRef:
         self._require_open()
+        if not os.path.isabs(request.path):
+            raise _invalid_publication("absolute resource path is required")
         try:
             raw = self.transport.build_resource_ref(request.to_json_bytes())
         except SDKError:
@@ -636,6 +639,8 @@ def _validate_resource_ref(ref: ResourceRef) -> None:
         or not ref.revision
     ):
         raise _invalid_publication("valid resource_ref is required")
+    if ref.namespace.lower() in {"axon", "daemon", "easynet", "internal", "system"}:
+        raise _invalid_publication("resource_ref namespace is reserved")
 
 
 def _resource_ref_dict(ref: ResourceRef) -> dict[str, object]:
