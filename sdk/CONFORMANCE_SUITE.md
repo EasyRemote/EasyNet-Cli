@@ -116,6 +116,7 @@ swift test --package-path sdk/swift
   transport ownership
 - profile ownership exclusivity
 - first-class consumer coverage through declared profiles
+- Runtime Core no-bloat boundary
 
 The scaffold in `cases/` names the first shared cases. A profile must add its
 full case set before it can be marked profile-ready.

@@ -350,6 +350,7 @@ case_files=(
   directory-resolve.yaml
   memc-profile-exclusivity.yaml
   memc-consumer-coverage.yaml
+  memc-no-core-bloat.yaml
 )
 
 for case_file in "${case_files[@]}"; do
@@ -380,6 +381,8 @@ require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedProfileExclu
 require_literal sdk/go/conformance_test.go "memc/profile_exclusivity"
 require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedConsumerCoverageConformanceCase"
 require_literal sdk/go/conformance_test.go "memc/consumer_coverage"
+require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedNoCoreBloatConformanceCase"
+require_literal sdk/go/conformance_test.go "memc/no_core_bloat"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/cases"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/fixtures"
 require_literal sdk/python/tests/test_conformance.py "SharedConformanceFixtureTests"
@@ -395,6 +398,8 @@ require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_
 require_literal sdk/python/tests/test_conformance.py "memc/profile_exclusivity"
 require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_consumer_coverage_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "memc/consumer_coverage"
+require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_no_core_bloat_conformance_case"
+require_literal sdk/python/tests/test_conformance.py "memc/no_core_bloat"
 require_literal sdk/go/client.go "DiscoveryTransport"
 require_literal sdk/go/daemon.go "DaemonHandle"
 require_literal sdk/go/daemon.go "DaemonLifecycleState"

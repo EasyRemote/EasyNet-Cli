@@ -67,6 +67,7 @@ from easynet_sdk import (
     MissionStatus,
     MissionTrackRequest,
     PreparedInvocation,
+    SignedInvocation,
     PublicationClient,
     ReceiptClient,
     ReceiptFetchRequest,
@@ -3037,6 +3038,79 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual([], missing)
         self.assertEqual([], duplicates)
 
+    def test_python_memc_executes_shared_no_core_bloat_conformance_case(self) -> None:
+        no_bloat_case = shared_case("memc-no-core-bloat.yaml")
+        self._require_case_id(no_bloat_case, "memc/no_core_bloat")
+        self._require_case_action(no_bloat_case, "inspect_runtime_core_surface")
+        for expectation in (
+            "publication_package_building: false",
+            "python_decorators: false",
+            "backend_dtos: false",
+            "cli_command_text: false",
+            "one_method_per_ability_required_api: false",
+        ):
+            self._require_case_expectation(no_bloat_case, expectation)
+        for scope in (
+            "lifecycle",
+            "invocation",
+            "signing_material",
+            "unary_stream_bidi",
+            "health_error",
+            "process_safe_client_behavior",
+        ):
+            self._require_case_literal(no_bloat_case, f"- {scope}")
+
+        forbidden_tokens = (
+            "Publication",
+            "DeployAbility",
+            "ValidatePackage",
+            "InstallPlugin",
+            "HostBinding",
+            "Mission",
+            "Admin",
+            "Gateway",
+            "Surface",
+            "Compatibility",
+            "Wrapper",
+            "Backend",
+            "CLICommand",
+            "Decorator",
+            "InvokeAbility",
+            "CallAbility",
+        )
+        for token in forbidden_tokens:
+            self._require_case_literal(no_bloat_case, f"- {token}")
+
+        surfaces = (
+            Client,
+            DaemonControl,
+            DaemonHandle,
+            RuntimeClient,
+            HealthClient,
+            InvocationBuilder,
+            PreparedInvocation,
+            SignedInvocation,
+            StreamHandle,
+            BidiSession,
+        )
+        core_files = (
+            "client.py",
+            "runtime.py",
+            "daemon.py",
+            "health.py",
+            "invocation.py",
+            "signing.py",
+            "stream.py",
+            "bidi.py",
+            "errors.py",
+        )
+        violations = audit_shared_no_core_bloat(
+            surfaces,
+            tuple(ROOT.joinpath("sdk/python/easynet_sdk", name) for name in core_files),
+            forbidden_tokens,
+        )
+        self.assertEqual([], violations)
+
     def _require_case_id(self, raw: str, case_id: str) -> None:
         self._require_case_literal(raw, f"id: {case_id}")
 
@@ -3097,6 +3171,25 @@ def audit_shared_consumer_coverage(requirements):
                 if method not in public_methods:
                     missing.append(f"{key} missing {cls.__name__}.{method}")
     return sorted(missing), sorted(duplicates)
+
+
+def audit_shared_no_core_bloat(surfaces, core_files, forbidden_tokens):
+    violations = []
+    for cls in surfaces:
+        for name, _ in inspect.getmembers(cls, inspect.isfunction):
+            if name.startswith("_"):
+                continue
+            for token in forbidden_tokens:
+                if token in name:
+                    violations.append(
+                        f"{cls.__name__}.{name} contains forbidden token {token}"
+                    )
+    for path in core_files:
+        body = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            if token in body:
+                violations.append(f"{path} contains forbidden token {token}")
+    return sorted(violations)
 
 
 def shared_directory_query_base(fixture: str) -> DirectoryQueryBase:

@@ -2160,6 +2160,116 @@ func auditSharedConsumerCoverage(requirements []sharedConsumerCoverageRequiremen
 	return missing, duplicates
 }
 
+func TestGoMEMCExecutesSharedNoCoreBloatConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	noBloatCase := sharedCase(t, root, "memc-no-core-bloat.yaml")
+	requireCaseID(t, noBloatCase, "memc/no_core_bloat")
+	requireCaseAction(t, noBloatCase, "inspect_runtime_core_surface")
+	for _, expectation := range []string{
+		"publication_package_building: false",
+		"python_decorators: false",
+		"backend_dtos: false",
+		"cli_command_text: false",
+		"one_method_per_ability_required_api: false",
+	} {
+		requireCaseExpectation(t, noBloatCase, expectation)
+	}
+	for _, scope := range []string{
+		"lifecycle",
+		"invocation",
+		"signing_material",
+		"unary_stream_bidi",
+		"health_error",
+		"process_safe_client_behavior",
+	} {
+		requireCaseLiteral(t, noBloatCase, "- "+scope)
+	}
+
+	forbiddenTokens := []string{
+		"Publication",
+		"DeployAbility",
+		"ValidatePackage",
+		"InstallPlugin",
+		"HostBinding",
+		"Mission",
+		"Admin",
+		"Gateway",
+		"Surface",
+		"Compatibility",
+		"Wrapper",
+		"Backend",
+		"CLICommand",
+		"Decorator",
+		"InvokeAbility",
+		"CallAbility",
+	}
+	for _, token := range forbiddenTokens {
+		requireCaseLiteral(t, noBloatCase, "- "+token)
+	}
+
+	surfaces := []sharedNoCoreBloatSurface{
+		{Name: "Client", Type: reflect.TypeOf((*Client)(nil))},
+		{Name: "DaemonControl", Type: reflect.TypeOf((*DaemonControl)(nil))},
+		{Name: "DaemonHandle", Type: reflect.TypeOf((*DaemonHandle)(nil))},
+		{Name: "RuntimeClient", Type: reflect.TypeOf((*RuntimeClient)(nil))},
+		{Name: "HealthClient", Type: reflect.TypeOf((*HealthClient)(nil))},
+		{Name: "InvocationBuilder", Type: reflect.TypeOf((*InvocationBuilder)(nil))},
+		{Name: "StreamHandle", Type: reflect.TypeOf((*StreamHandle)(nil))},
+		{Name: "BidiSession", Type: reflect.TypeOf((*BidiSession)(nil))},
+		{Name: "PreparedInvocation", Type: reflect.TypeOf((*PreparedInvocation)(nil))},
+		{Name: "SignedInvocation", Type: reflect.TypeOf((*SignedInvocation)(nil))},
+	}
+	coreFiles := []string{
+		"sdk/go/client.go",
+		"sdk/go/runtime.go",
+		"sdk/go/daemon.go",
+		"sdk/go/health.go",
+		"sdk/go/invocation.go",
+		"sdk/go/signing.go",
+		"sdk/go/stream.go",
+		"sdk/go/bidi.go",
+		"sdk/go/errors.go",
+	}
+	violations := auditSharedNoCoreBloat(t, root, surfaces, coreFiles, forbiddenTokens)
+	if len(violations) > 0 {
+		t.Fatalf("Runtime Core exposes profile/product bloat:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+type sharedNoCoreBloatSurface struct {
+	Name string
+	Type reflect.Type
+}
+
+func auditSharedNoCoreBloat(t *testing.T, root string, surfaces []sharedNoCoreBloatSurface, coreFiles []string, forbiddenTokens []string) []string {
+	t.Helper()
+	var violations []string
+	for _, surface := range surfaces {
+		for i := 0; i < surface.Type.NumMethod(); i++ {
+			method := surface.Type.Method(i)
+			for _, token := range forbiddenTokens {
+				if strings.Contains(method.Name, token) {
+					violations = append(violations, fmt.Sprintf("%s.%s contains forbidden token %s", surface.Name, method.Name, token))
+				}
+			}
+		}
+	}
+	for _, file := range coreFiles {
+		raw, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil {
+			t.Fatalf("read core source %s: %v", file, err)
+		}
+		body := string(raw)
+		for _, token := range forbiddenTokens {
+			if strings.Contains(body, token) {
+				violations = append(violations, fmt.Sprintf("%s contains forbidden token %s", file, token))
+			}
+		}
+	}
+	sort.Strings(violations)
+	return violations
+}
+
 type sharedMissionTransport struct {
 	t                      *testing.T
 	expectedRunRequest     []byte

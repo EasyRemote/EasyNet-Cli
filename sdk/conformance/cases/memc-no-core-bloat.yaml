@@ -1,0 +1,44 @@
+id: memc/no_core_bloat
+profile: memc
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Runtime Core contains no profile or product facade bloat.
+steps:
+  - action: inspect_runtime_core_surface
+expect:
+  result: ok
+  runtime_core_scope:
+    - lifecycle
+    - invocation
+    - signing_material
+    - unary_stream_bidi
+    - health_error
+    - process_safe_client_behavior
+  forbidden_core_api_tokens:
+    - Publication
+    - DeployAbility
+    - ValidatePackage
+    - InstallPlugin
+    - HostBinding
+    - Mission
+    - Admin
+    - Gateway
+    - Surface
+    - Compatibility
+    - Wrapper
+    - Backend
+    - CLICommand
+    - Decorator
+    - InvokeAbility
+    - CallAbility
+  publication_package_building: false
+  python_decorators: false
+  backend_dtos: false
+  cli_command_text: false
+  one_method_per_ability_required_api: false
