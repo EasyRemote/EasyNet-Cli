@@ -21,7 +21,7 @@ carrier/projection transports for Receipt, Directory, Publication, Host
 Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
 Wrapper carrier/projection records, runtime connection
 state, runtime health readiness facts, DaemonHandle lifecycle
-status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local
+status/endpoints/invocation-endpoint lookup/start/attach/discover/stop/detach/open-runtime/connect-local
 state seams, schema-backed SDK error projection, complete
 Invocation draft construction, AbilityInvocationClient descriptor-delegated
 complete tuple build/invoke/stream/bidi convenience facade plus EasyRemote-style

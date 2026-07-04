@@ -162,6 +162,7 @@ class FakeRawCABI:
         self.daemon_stops: list[int] = []
         self.daemon_detaches: list[int] = []
         self.daemon_open_clients: list[int] = []
+        self.daemon_invocation_endpoint_calls: list[int] = []
         self.stream_events = [
             b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
             b'"payload_json":{"step":1}}',
@@ -185,6 +186,9 @@ class FakeRawCABI:
         self.easynet_daemon_detach = FakeSymbol(self._daemon_detach)
         self.easynet_daemon_status = FakeSymbol(self._daemon_status)
         self.easynet_daemon_endpoints = FakeSymbol(self._daemon_endpoints)
+        self.easynet_daemon_invocation_endpoint = FakeSymbol(
+            self._daemon_invocation_endpoint
+        )
         self.easynet_daemon_open_client = FakeSymbol(self._daemon_open_client)
         self.easynet_identity_project_ura = FakeSymbol(self._identity_project_ura)
         self.easynet_identity_build_ura = FakeSymbol(self._identity_build_ura)
@@ -332,6 +336,10 @@ class FakeRawCABI:
             b'"invocation_endpoint":"unix:///tmp/daemon.sock",'
             b'"public_endpoint":null}',
         )
+
+    def _daemon_invocation_endpoint(self, daemon_handle, out_ptr) -> int:
+        self.daemon_invocation_endpoint_calls.append(int(daemon_handle.value))
+        return self._write(out_ptr, b"unix:///tmp/daemon.sock")
 
     def _daemon_open_client(self, daemon_handle, out_handle) -> int:
         self.daemon_open_clients.append(int(daemon_handle.value))
@@ -2367,6 +2375,21 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.daemon_stops, [606])
         self.assertEqual(raw.daemon_detaches, [707])
         self.assertIsNotNone(runtime)
+
+    def test_daemon_transport_exposes_invocation_endpoint_without_status_parse(
+        self,
+    ) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        transport = CABIDaemonTransport(lib)
+        control = DaemonControl(transport)
+
+        handle = control.attach(
+            AttachOptions(control_endpoint="unix:///tmp/control.sock")
+        )
+
+        self.assertEqual(handle.invocation_endpoint(), "unix:///tmp/daemon.sock")
+        self.assertEqual(raw.daemon_invocation_endpoint_calls, [707])
 
     def test_runtime_connector_resolves_handshakes_detaches_and_closes(
         self,

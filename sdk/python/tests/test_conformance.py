@@ -3004,6 +3004,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "health": "runtime_core.daemon_handle.health",
                     "host_binding": "host_binding.daemon_handle.host_binding",
                     "identity": "directory_identity.daemon_handle.identity",
+                    "invocation_endpoint": "runtime_core.daemon_handle.invocation_endpoint",
                     "missions": "mission.daemon_handle.missions",
                     "open_runtime": "runtime_core.daemon_handle.open_runtime",
                     "publication": "publication.daemon_handle.publication",

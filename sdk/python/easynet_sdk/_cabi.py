@@ -233,6 +233,22 @@ class CLILibrary:
             ctypes.c_uint64(daemon_handle),
         )
 
+    def daemon_invocation_endpoint(self, daemon_handle: int) -> str:
+        raw = self._call_output(
+            self._raw.easynet_daemon_invocation_endpoint,
+            ctypes.c_uint64(daemon_handle),
+        )
+        endpoint = raw.decode("utf-8")
+        if not endpoint:
+            raise SDKError(
+                code=ErrorCode.CONTROL_ONLY,
+                stage="cabi",
+                retry=RetryHint.SAFE,
+                retryable=True,
+                message="daemon did not advertise invocation_endpoint",
+            )
+        return endpoint
+
     def daemon_open_client(self, daemon_handle: int) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
@@ -491,6 +507,11 @@ class CLILibrary:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._raw.easynet_daemon_endpoints.restype = ctypes.c_int32
+        self._raw.easynet_daemon_invocation_endpoint.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_daemon_invocation_endpoint.restype = ctypes.c_int32
         self._raw.easynet_daemon_open_client.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_uint64),
@@ -1865,6 +1886,17 @@ class CABIDaemonTransport:
         status = _daemon_status_from_cabi(handle_id, self.lib.daemon_status(daemon_handle))
         self._status_cache[handle_id] = status
         return _json_bytes(status)
+
+    def invocation_endpoint(self, handle_id: str) -> str:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        endpoint = self.lib.daemon_invocation_endpoint(daemon_handle)
+        status = dict(self._status_cache.get(handle_id, {}))
+        cached_endpoints = status.get("endpoints", {})
+        endpoints = dict(cached_endpoints) if isinstance(cached_endpoints, dict) else {}
+        endpoints["invocation_endpoint"] = endpoint
+        status["endpoints"] = endpoints
+        self._status_cache[handle_id] = status
+        return endpoint
 
     def open_runtime(
         self, handle_id: str, options_json: bytes

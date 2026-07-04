@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Mapping, Protocol, runtime_checkable
 
@@ -235,6 +235,9 @@ class DaemonTransport(Protocol):
     def status(self, handle_id: str) -> bytes:
         ...
 
+    def invocation_endpoint(self, handle_id: str) -> str:
+        ...
+
     def open_runtime(
         self, handle_id: str, options_json: bytes
     ) -> tuple[RuntimeTransport, bytes]:
@@ -348,6 +351,31 @@ class DaemonHandle(DaemonHandleProfiles):
     @property
     def endpoints(self) -> Endpoints:
         return self._status.endpoints
+
+    def invocation_endpoint(self) -> str:
+        """Return the current daemon Invocation endpoint for this handle."""
+
+        self._require_attached()
+        if not _runtime_ready(self.state):
+            raise _invalid_daemon("daemon invocation endpoint is not ready")
+        try:
+            endpoint = self.transport.invocation_endpoint(self.handle_id)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(
+                "daemon invocation endpoint lookup failed", exc
+            ) from exc
+        if not endpoint:
+            raise _invalid_daemon("invocation_endpoint is required")
+        self._status = replace(
+            self._status,
+            endpoints=replace(
+                self._status.endpoints,
+                invocation_endpoint=endpoint,
+            ),
+        )
+        return endpoint
 
     def status(self) -> DaemonStatus:
         self._require_attached()

@@ -63,6 +63,7 @@ class MemoryDaemonTransport:
         self.stop_calls = 0
         self.detach_calls = 0
         self.open_calls = 0
+        self.invocation_endpoint_calls = 0
         self.profile_opens: list[tuple[str, dict[str, object]]] = []
         self.open_error: Exception | None = None
         self.seen_start: dict[str, object] | None = None
@@ -83,6 +84,10 @@ class MemoryDaemonTransport:
 
     def status(self, handle_id: str) -> bytes:
         return self.status_json
+
+    def invocation_endpoint(self, handle_id: str) -> str:
+        self.invocation_endpoint_calls += 1
+        return "unix:///tmp/live-daemon.sock"
 
     def open_runtime(self, handle_id: str, options_json: bytes):
         self.open_calls += 1
@@ -160,6 +165,9 @@ class LifecycleOnlyDaemonTransport:
     def status(self, handle_id: str) -> bytes:
         return self.inner.status(handle_id)
 
+    def invocation_endpoint(self, handle_id: str) -> str:
+        return self.inner.invocation_endpoint(handle_id)
+
     def open_runtime(self, handle_id: str, options_json: bytes):
         return self.inner.open_runtime(handle_id, options_json)
 
@@ -198,6 +206,21 @@ class DaemonTests(unittest.TestCase):
         assert transport.seen_start is not None
         self.assertEqual(transport.seen_start["listen_tcp"], "127.0.0.1:9443")
         self.assertEqual(handle.endpoints.invocation_endpoint, "unix:///tmp/daemon.sock")
+
+    def test_handle_invocation_endpoint_uses_lifecycle_transport(self) -> None:
+        transport = MemoryDaemonTransport()
+        handle = start_daemon(transport, StartConfig(mode=DaemonMode.HUB))
+
+        endpoint = handle.invocation_endpoint()
+
+        self.assertEqual(endpoint, "unix:///tmp/live-daemon.sock")
+        self.assertEqual(handle.endpoints.invocation_endpoint, endpoint)
+        self.assertEqual(transport.invocation_endpoint_calls, 1)
+
+        handle.detach()
+        with self.assertRaises(SDKError) as caught:
+            handle.invocation_endpoint()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
 
     def test_start_rejects_unsafe_mode_policy_before_transport(self) -> None:
         transport = MemoryDaemonTransport()
