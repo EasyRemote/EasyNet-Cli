@@ -1888,6 +1888,32 @@ class CABIDaemonTransport:
             owns_handle=True,
         )
 
+    def open_profile(self, handle_id: str, profile: str, options_json: bytes) -> object:
+        openers = {
+            "runtime": self.open_runtime_transport,
+            "directory": self.open_directory_transport,
+            "identity": self.open_identity_transport,
+            "receipt": self.open_receipt_transport,
+            "publication": self.open_publication_transport,
+            "host_binding": self.open_host_binding_transport,
+            "mission": self.open_mission_transport,
+            "admin": self.open_admin_transport,
+            "events": self.open_events_transport,
+            "surface": self.open_surface_transport,
+            "compatibility": self.open_compatibility_transport,
+            "wrapper": self.open_wrapper_transport,
+        }
+        opener = openers.get(profile)
+        if opener is None:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=f"unsupported daemon profile: {profile}",
+            )
+        return opener(handle_id, options_json)
+
     def open_directory_transport(self, handle_id: str, options_json: bytes) -> object:
         _ = options_json
         return self._open_profile_transport(handle_id, "directory", CABIDirectoryTransport)

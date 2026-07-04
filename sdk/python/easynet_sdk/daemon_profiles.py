@@ -25,49 +25,32 @@ class DaemonHandleProfiles:
     def directory(self, options: ConnectOptions = ConnectOptions()) -> DirectoryClient:
         """Open a Directory profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return DirectoryClient(
-            self._open_profile("directory", factory.open_directory_transport, options)
-        )
+        return DirectoryClient(self._open_profile("directory", options))
 
     def identity(self, options: ConnectOptions = ConnectOptions()) -> IdentityClient:
         """Open an Identity profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return IdentityClient(
-            self._open_profile("identity", factory.open_identity_transport, options)
-        )
+        return IdentityClient(self._open_profile("identity", options))
 
     def addressing(
         self, options: ConnectOptions = ConnectOptions()
     ) -> AddressingClient:
         """Open the Axon-delegated addressing helper facade."""
 
-        factory = self._require_profile_factory()
-        return AddressingClient(
-            self._open_profile("identity", factory.open_identity_transport, options)
-        )
+        return AddressingClient(self._open_profile("identity", options))
 
     def receipts(self, options: ConnectOptions = ConnectOptions()) -> ReceiptClient:
         """Open a Receipt profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return ReceiptClient(
-            self._open_profile("receipt", factory.open_receipt_transport, options)
-        )
+        return ReceiptClient(self._open_profile("receipt", options))
 
     def publication(
         self, options: ConnectOptions = ConnectOptions()
     ) -> PublicationClient:
         """Open a Publication profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        carrier = self._open_profile(
-            "publication", factory.open_publication_transport, options
-        )
-        runtime_transport = self._open_profile(
-            "runtime", factory.open_runtime_transport, options
-        )
+        carrier = self._open_profile("publication", options)
+        runtime_transport = self._open_profile("runtime", options)
         return PublicationClient(
             RuntimePublicationTransport(
                 carrier=carrier,
@@ -80,84 +63,51 @@ class DaemonHandleProfiles:
     ) -> HostBindingClient:
         """Open a Host Binding profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return HostBindingClient(
-            self._open_profile(
-                "host_binding", factory.open_host_binding_transport, options
-            )
-        )
+        return HostBindingClient(self._open_profile("host_binding", options))
 
     def missions(self, options: ConnectOptions = ConnectOptions()) -> MissionClient:
         """Open a Mission profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return MissionClient(
-            self._open_profile("mission", factory.open_mission_transport, options)
-        )
+        return MissionClient(self._open_profile("mission", options))
 
     def admin(self, options: ConnectOptions = ConnectOptions()) -> AdminClient:
         """Open an Admin + Gateway profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return AdminClient(
-            self._open_profile("admin", factory.open_admin_transport, options)
-        )
+        return AdminClient(self._open_profile("admin", options))
 
     def events(self, options: ConnectOptions = ConnectOptions()) -> EventClient:
         """Open an Events profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return EventClient(
-            self._open_profile("events", factory.open_events_transport, options)
-        )
+        return EventClient(self._open_profile("events", options))
 
     def surfaces(self, options: ConnectOptions = ConnectOptions()) -> SurfaceClient:
         """Open a Surface profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return SurfaceClient(
-            self._open_profile("surface", factory.open_surface_transport, options)
-        )
+        return SurfaceClient(self._open_profile("surface", options))
 
     def compatibility(
         self, options: ConnectOptions = ConnectOptions()
     ) -> CompatibilityClient:
         """Open a Compatibility profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return CompatibilityClient(
-            self._open_profile(
-                "compatibility", factory.open_compatibility_transport, options
-            )
-        )
+        return CompatibilityClient(self._open_profile("compatibility", options))
 
     def wrappers(self, options: ConnectOptions = ConnectOptions()) -> WrapperClient:
         """Open a Convenience Wrapper profile client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return WrapperClient(
-            self._open_profile("wrapper", factory.open_wrapper_transport, options)
-        )
+        return WrapperClient(self._open_profile("wrapper", options))
 
     def health(self, options: ConnectOptions = ConnectOptions()) -> HealthClient:
         """Open a runtime health client scoped to this daemon handle."""
 
-        factory = self._require_profile_factory()
-        return HealthClient(
-            self._open_profile("runtime", factory.open_runtime_transport, options)
-        )
+        return HealthClient(self._open_profile("runtime", options))
 
     def ability_invocation(
         self, options: ConnectOptions = ConnectOptions()
     ) -> AbilityInvocationClient:
         """Open the ability Invocation convenience facade for this daemon handle."""
 
-        factory = self._require_profile_factory()
         return AbilityInvocationClient(
-            runtime=RuntimeClient(
-                self._open_profile("runtime", factory.open_runtime_transport, options)
-            ),
-            addressing=AddressingClient(
-                self._open_profile("identity", factory.open_identity_transport, options)
-            ),
+            runtime=RuntimeClient(self._open_profile("runtime", options)),
+            addressing=AddressingClient(self._open_profile("identity", options)),
         )

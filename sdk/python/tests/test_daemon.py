@@ -94,6 +94,9 @@ class MemoryDaemonTransport:
     def open_runtime_transport(self, handle_id: str, options_json: bytes):
         return self._open_profile_transport("runtime", options_json)
 
+    def open_profile(self, handle_id: str, profile: str, options_json: bytes):
+        return self._open_profile_transport(profile, options_json)
+
     def open_directory_transport(self, handle_id: str, options_json: bytes):
         return self._open_profile_transport("directory", options_json)
 
