@@ -126,7 +126,7 @@ method spelling.
   projection, `invocation.history.get` fetch Invocation carrier construction,
   optional C ABI v4 concrete transport for fetch/project/verify/verify-chain/
   causal-ref over Runtime Core invoke, and close state seams over opaque receipt
-  refs; Axon-backed cryptographic verification, receipt URI construction after
+  refs; Axon-backed cryptographic verification, receipt URA construction after
   RFC-007, and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
@@ -246,7 +246,7 @@ method spelling.
   execution through Runtime Core invoke, and close state seams over opaque receipt refs.
   EasyRemote receipt summary verification, hash-chain continuity, and
   parent-receipt-anchored Context child dispatch now delegate to SDK Receipt.
-  Axon-backed cryptographic verification and receipt URI construction after
+  Axon-backed cryptographic verification and receipt URA construction after
   RFC-007 remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
@@ -286,10 +286,11 @@ method spelling.
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
   Pipeline event access/live-tail plus publication product catalogue extraction and
-  Server/Gateway hub-config/lifecycle/fingerprint projection now pass
-  static gates, while Pipeline child Invocation execution conformance, full AgentControl
-  cutover, daemon/ABI-backed Server pairing/hub lifecycle cutover, and full receipt
-  verification remain incomplete.
+  Server/Gateway hub-config/lifecycle/fingerprint projection plus Pipeline step
+  planning/EAL rendering/child Invocation fact conformance projection now pass
+  static gates, while daemon-backed Pipeline child Invocation execution behavior,
+  full AgentControl cutover, daemon/ABI-backed Server pairing/hub lifecycle
+  cutover, and full receipt verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
@@ -297,10 +298,11 @@ method spelling.
   event-page projection, SDK-owned EasyRemote profile bridge dispatch/projection
   glue, EasyRemote `MissionControl`/`MissionRun` page-based
   event access, SDK-owned bounded Mission event tailing for EasyRemote Pipeline
-  live updates, raw mission carrier audit gate for
+  live updates, SDK-owned EasyRemote Pipeline step planning/EAL rendering and
+  child Invocation fact conformance projection, raw mission carrier audit gate for
   `mission.run/track/cancel/events`, and close state seams;
-  daemon stream-backed live adapters, child Invocation behavior conformance,
-  Pipeline execution conformance, and scheduler/retry policy remain incomplete.
+  daemon stream-backed live adapters, daemon-backed child Invocation execution
+  behavior conformance, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders,
   C ABI-backed agent list/start/stop/refresh and session-list execution through Runtime Core,
