@@ -148,7 +148,7 @@ pub fn handle_publish(
 /// project_id grammar: URA-safe segment per RFC-006-B v0.6 §2.1.
 /// `[a-zA-Z0-9_-]+`, max 64 chars. Forbid '.' so `<user>.<project>`
 /// always has exactly two dot-separated components.
-fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
+pub(super) fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
     if project_id.is_empty() {
         anyhow::bail!("project_id is empty");
     }

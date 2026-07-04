@@ -112,10 +112,17 @@ pub fn handle_get(
 /// the daemon pages management ability family is loaded and, when requested,
 /// that one published project is present in the local registry.
 pub fn handle_health(user: &str, realm: &str, args: Value) -> anyhow::Result<Value> {
+    let surface_ref = args.get("surface_ref").and_then(Value::as_str);
     let project_id = args
         .get("project_id")
         .and_then(Value::as_str)
-        .or_else(|| project_id_from_surface_ref(user, args.get("surface_ref")?));
+        .or_else(|| surface_ref.and_then(|value| project_id_from_surface_ref(user, value)));
+    if surface_ref.is_some() && project_id.is_none() {
+        anyhow::bail!("surface_ref does not target this user's pages resource");
+    }
+    if let Some(project_id) = project_id {
+        super::publish::validate_project_id(project_id)?;
+    }
     let mut page_count = 0usize;
     let mut project_found = project_id.is_none();
     for entry in PUBLISHED_PROJECTS.iter() {
@@ -217,10 +224,59 @@ fn handle_unpublish_inner(
     }))
 }
 
-fn project_id_from_surface_ref<'a>(user: &str, value: &'a Value) -> Option<&'a str> {
-    let raw = value.as_str()?;
+fn project_id_from_surface_ref<'a>(user: &str, raw: &'a str) -> Option<&'a str> {
     let marker = format!("resource/{user}.");
     let (_, tail) = raw.split_once(&marker)?;
     let project = tail.split('/').next().unwrap_or(tail);
     (!project.is_empty() && !project.contains('.')).then_some(project)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn handle_health_reports_aggregate_ready_without_projects() {
+        let health = handle_health("health-aggregate-user", "example", json!({})).unwrap();
+
+        assert_eq!(health["state"], "ready");
+        assert_eq!(health["ready"], true);
+        assert_eq!(
+            health["owner_ura"],
+            "easynet:///r/example/agent/health-aggregate-user.pages"
+        );
+    }
+
+    #[test]
+    fn handle_health_reports_missing_project_as_degraded() {
+        let health = handle_health(
+            "health-missing-user",
+            "example",
+            json!({"project_id": "docs"}),
+        )
+        .unwrap();
+
+        assert_eq!(health["state"], "degraded");
+        assert_eq!(health["ready"], false);
+        assert_eq!(
+            health["surface_ref"],
+            "easynet:///r/example/resource/health-missing-user.docs"
+        );
+    }
+
+    #[test]
+    fn handle_health_rejects_foreign_surface_ref() {
+        let err = handle_health(
+            "alice",
+            "example",
+            json!({"surface_ref": "easynet:///r/example/resource/bob.docs/"}),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("surface_ref"),
+            "wrong error: {err}"
+        );
+    }
 }
