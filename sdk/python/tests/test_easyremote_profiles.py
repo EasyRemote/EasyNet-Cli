@@ -29,6 +29,7 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
             args=("run",),
         )
         records = bridge.admin_facade().list_agents()
+        stopped = bridge.admin_facade().stop_agent("assistant")
 
         self.assertEqual(started.name, "assistant")
         self.assertEqual(started.runtime, "codex")
@@ -37,9 +38,12 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         self.assertTrue(started.replaced_prior)
         self.assertEqual(records[0].name, "assistant")
         self.assertEqual(records[0].runtime, "codex")
+        self.assertEqual(stopped.name, "assistant")
+        self.assertTrue(stopped.stopped)
         self.assertEqual(dispatcher.calls[0][0], "agent.start")
         self.assertEqual(dispatcher.calls[0][1]["command_args"], ["run"])
         self.assertEqual(dispatcher.calls[1], ("agent.list", {}))
+        self.assertEqual(dispatcher.calls[2], ("agent.stop", {"name": "assistant"}))
 
     def test_mission_facade_dispatches_run_track_cancel_and_events(self) -> None:
         dispatcher = MemoryProfileDispatcher()
@@ -147,6 +151,12 @@ class MemoryProfileDispatcher:
                         },
                     }
                 ]
+            }
+        if ability == "agent.stop":
+            return {
+                "state": "ok",
+                "stopped": True,
+                "agent_ura": "easynet:///r/example/agent/assistant",
             }
         if ability == "mission.run":
             return {

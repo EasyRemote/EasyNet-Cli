@@ -378,6 +378,7 @@ class MemoryAdminTransport:
         self.seen: dict[str, dict[str, object]] = {}
         self.close_calls = 0
         self.start_result = ADMIN_LIFECYCLE_RESULT
+        self.stop_result = ADMIN_LIFECYCLE_RESULT
         self.refresh_result = ADMIN_LIFECYCLE_RESULT
 
     def _remember(self, name: str, request_json: bytes) -> None:
@@ -417,7 +418,7 @@ class MemoryAdminTransport:
 
     def agent_stop(self, request_json: bytes) -> bytes:
         self._remember("agent_stop", request_json)
-        return ADMIN_LIFECYCLE_RESULT
+        return self.stop_result
 
     def agent_refresh(self, request_json: bytes) -> bytes:
         self._remember("agent_refresh", request_json)
@@ -608,6 +609,15 @@ class AdminClientTests(unittest.TestCase):
     def test_easyremote_adapter_controls_hosted_agents(self) -> None:
         transport = MemoryAdminTransport()
         transport.start_result = ADMIN_START_RESULT
+        transport.stop_result = (
+            b'{"profile":"admin_gateway","kind":"agent_lifecycle_result",'
+            b'"operation":"agent.stop","state":"ok",'
+            b'"agent_ura":"easynet:///r/example/agent/alice.codex",'
+            b'"ack":true,"runtime_not_ready":false,'
+            b'"runtime_catalog_not_ready":false,'
+            b'"metadata":{"raw_result":{"stopped":true,'
+            b'"agent_ura":"easynet:///r/example/agent/alice.codex"}}}'
+        )
         transport.refresh_result = ADMIN_REFRESH_RESULT
         client = AdminClient(transport)
         adapter = EasyRemoteAdminAdapter(client, admin_base())
@@ -621,6 +631,7 @@ class AdminClientTests(unittest.TestCase):
             args=("--ask",),
         )
         records = adapter.list_agents()
+        stopped = adapter.stop_agent("codex")
         refreshed = adapter.refresh_agents("codex")
 
         self.assertEqual(started.name, "codex")
@@ -628,6 +639,8 @@ class AdminClientTests(unittest.TestCase):
         self.assertTrue(started.replaced_prior)
         self.assertEqual(records[0].root_path, "/tmp/easynet/agents/codex")
         self.assertEqual(records[0].timeout_secs, 600)
+        self.assertEqual(stopped.name, "codex")
+        self.assertTrue(stopped.stopped)
         self.assertEqual(refreshed["agents_scanned"], 1)
         self.assertEqual(
             transport.seen["agent_start"]["caller_ura"],
@@ -663,6 +676,7 @@ class AdminClientTests(unittest.TestCase):
             },
         )
         self.assertEqual(transport.seen["list_agents"]["callee_ura"], admin_base().callee_ura)
+        self.assertEqual(transport.seen["agent_stop"]["name"], "codex")
         self.assertEqual(transport.seen["agent_refresh"]["name"], "codex")
 
     def test_builds_agent_and_session_invocations(self) -> None:

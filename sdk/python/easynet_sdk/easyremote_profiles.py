@@ -26,6 +26,7 @@ _MISSION_PROFILE = "mission"
 _DESCRIPTOR_VERSION = "1.0.0"
 _AGENT_START = AdminSystemAbility.AGENT_START
 _AGENT_LIST = AdminSystemAbility.AGENT_LIST
+_AGENT_STOP = AdminSystemAbility.AGENT_STOP
 _AGENT_REFRESH = AdminSystemAbility.AGENT_REFRESH
 _MISSION_RUN = MissionSystemAbility.RUN
 _MISSION_TRACK = MissionSystemAbility.TRACK
@@ -187,7 +188,16 @@ class _EasyRemoteAdminProfileTransport:
         return _admin_result_json(_AGENT_REFRESH, response)
 
     def agent_stop(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("agent_stop")
+        request = _json_object(
+            request_json, "EasyRemote agent stop request", _invalid_admin
+        )
+        payload: dict[str, object] = {}
+        if request.get("name"):
+            payload["name"] = _required_admin_string(request, "name")
+        if request.get("agent_ura"):
+            payload["agent_ura"] = _required_admin_string(request, "agent_ura")
+        response = self._invoke(_AGENT_STOP, **payload)
+        return _admin_result_json(_AGENT_STOP, response)
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
         return _unsupported_admin_profile("list_device_sessions")

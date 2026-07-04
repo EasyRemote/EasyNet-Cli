@@ -292,9 +292,9 @@ method spelling.
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
   gates, while daemon-owned signer acquisition/keyring policy, daemon-backed
-  Pipeline child Invocation execution behavior, full AgentControl cutover,
-  daemon/ABI-backed Server pairing/hub lifecycle cutover, and full receipt
-  verification remain incomplete.
+  Pipeline child Invocation execution behavior, daemon/ABI-backed Server
+  pairing/hub lifecycle cutover, and full receipt verification remain
+  incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
@@ -313,16 +313,16 @@ method spelling.
   C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, and C ABI-backed typed device-session page projection plus close
-  state seams, with an SDK-owned EasyRemote hosted-agent Admin adapter,
+  state seams, with an SDK-owned EasyRemote hosted-agent add/list/stop/refresh
+  Admin adapter,
   SDK-owned EasyRemote profile bridge dispatch/projection glue, SDK-owned
   EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file
   validation, endpoint projection, certificate fingerprint projection, and raw
-  admin carrier cutover audit gate for `agent.start/list/refresh`; C ABI
+  admin carrier cutover audit gate for `agent.start/list/stop/refresh`; C ABI
   transport reports explicit semantic-boundary errors for hub
   join/leave, pairing/credential trust lifecycle, and device-session
-  create/delete until daemon/ABI lifecycle contracts exist. Certificate policy,
-  daemon-backed Server pairing/hub lifecycle contracts, and full EasyRemote
-  AgentControl extraction remain incomplete.
+  create/delete until daemon/ABI lifecycle contracts exist. Certificate policy
+  and daemon-backed Server pairing/hub lifecycle contracts remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory and session
   subscription execution through Runtime Core open_stream, plus `EventFrame`

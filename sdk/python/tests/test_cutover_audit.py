@@ -420,6 +420,9 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
 
                     def refresh(client):
                         return client.invoke("agent.refresh")
+
+                    def stop(client):
+                        return client.invoke("agent.stop")
                     '''
                 ),
                 encoding="utf-8",

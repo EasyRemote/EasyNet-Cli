@@ -692,6 +692,30 @@ class EasyRemoteAgentStartProjection:
         )
 
 
+@dataclass(frozen=True)
+class EasyRemoteAgentStopProjection:
+    """EasyRemote-facing projection of daemon `agent.stop`."""
+
+    name: str
+    agent_ura: Optional[str]
+    stopped: bool
+    raw: Mapping[str, object] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_result(
+        cls, result: AdminGatewayResult, *, name: str
+    ) -> "EasyRemoteAgentStopProjection":
+        raw = _raw_result(result.metadata)
+        agent_ura = _optional_string(raw.get("agent_ura"), "agent_ura")
+        stopped = bool(raw.get("stopped", raw.get("ack", result.ack)))
+        return cls(
+            name=name,
+            agent_ura=agent_ura,
+            stopped=stopped,
+            raw=raw,
+        )
+
+
 class EasyRemoteAdminAdapter:
     """SDK-owned Admin/Gateway cutover adapter for EasyRemote-like callers."""
 
@@ -736,6 +760,14 @@ class EasyRemoteAdminAdapter:
     def list_agents(self) -> tuple[EasyRemoteAgentRecord, ...]:
         page = self._client.list_agents(AdminAgentListRequest(self._base))
         return tuple(EasyRemoteAgentRecord.from_record(record) for record in page.items)
+
+    def stop_agent(self, name: str) -> EasyRemoteAgentStopProjection:
+        agent_name = _required_clean_string(name, "agent name")
+        _validate_agent_name(agent_name, "name")
+        result = self._client.agent_stop(
+            AdminAgentStopRequest(self._base, name=agent_name)
+        )
+        return EasyRemoteAgentStopProjection.from_result(result, name=agent_name)
 
     def refresh_agents(self, name: str | None = None) -> Mapping[str, object]:
         agent_name = name.strip() if name is not None else None

@@ -13,6 +13,7 @@ from enum import Enum
 class AdminSystemAbility(str, Enum):
     AGENT_START = "agent.start"
     AGENT_LIST = "agent.list"
+    AGENT_STOP = "agent.stop"
     AGENT_REFRESH = "agent.refresh"
 
 

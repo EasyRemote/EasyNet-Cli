@@ -108,7 +108,8 @@ C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page projection plus close state seams,
 with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
-requests, SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue, and
+requests for add/list/stop/refresh, SDK-owned `EasyRemoteProfileBridge`
+dispatch/projection glue, and
 SDK-owned EasyRemote Server/Gateway hub-config materialization, lifecycle state,
 TLS file validation, endpoint projection, and certificate fingerprint projection.
 EventClient exposes directory/device/session/invocation subscription
@@ -144,6 +145,6 @@ certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream execution adapters, daemon-backed EasyRemote Pipeline child
-Invocation execution behavior, full EasyRemote AgentControl product cutover,
-and daemon/ABI-backed Server pairing/hub lifecycle product cutover remain incomplete. See
+Invocation execution behavior, and daemon/ABI-backed Server pairing/hub lifecycle
+product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.
