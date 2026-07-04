@@ -169,7 +169,8 @@ method spelling.
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
-  construction with inspect/build handle consumption, prepared/signed Invocation DTOs, signer workflow
+  construction with inspect/build handle consumption, `AbilityInvocationClient`
+  descriptor-delegated complete tuple build/invoke/stream/bidi facade, prepared/signed Invocation DTOs, signer workflow
   objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
   receipt projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle

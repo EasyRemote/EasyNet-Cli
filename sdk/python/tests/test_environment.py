@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 from easynet_sdk import (
     AbilityDeployRequest,
+    AbilityCallRequest,
+    AbilityInvocationClient,
     AddressingClient,
     AdminAgentListRequest,
     AdminCarrierBase,
@@ -276,6 +278,34 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["terminal_state"], "Completed")
         self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_ability_invocation_client_uses_cabi_runtime_and_identity(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            client = env.ability_invocation_client()
+            self.assertIsInstance(client, AbilityInvocationClient)
+            result = client.invoke(
+                AbilityCallRequest(
+                    caller_ura="easynet:///r/example/agent/alice.sdk",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/device/dev-a",
+                    nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                    causal_context={"form": "none"},
+                    ability_name="observe.health",
+                    args={},
+                )
+            )
+            env.close()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(raw.init_paths, ["/tmp/control.json", "/tmp/control.json"])
+        self.assertEqual(
+            [entry[0] for entry in raw.identity_requests],
+            ["build_ura", "project_ura", "build_descriptor_ref"],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(raw.shutdown_handles, [42, 42])
 
     def test_profile_factories_delegate_carriers_to_private_cabi(self) -> None:
         raw = FakeRawCABI()

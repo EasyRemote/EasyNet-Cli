@@ -21,7 +21,8 @@ Wrapper carrier/projection records, runtime connection
 state, runtime health readiness facts, DaemonHandle lifecycle
 status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local
 state seams, schema-backed SDK error projection, complete
-Invocation draft construction, prepared/signed Invocation DTOs, unary
+Invocation draft construction, AbilityInvocationClient descriptor-delegated
+complete tuple build/invoke/stream/bidi convenience facade, prepared/signed Invocation DTOs, unary
 InvocationResult and non-verifying terminal receipt projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close

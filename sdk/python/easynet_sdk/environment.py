@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, TypeVar
 
+from .ability_invocation import AbilityInvocationClient
 from .client import Client, FeatureSet
 from .admin import AdminClient
 from .compatibility import CompatibilityClient
@@ -128,6 +129,27 @@ class SdkEnvironment:
             library_path=self.library_path,
         )
         return self._track(DaemonInvocationTransport(RuntimeClient(transport)))
+
+    def ability_invocation_client(self) -> AbilityInvocationClient:
+        """Open the ability Invocation convenience facade."""
+
+        self._require_open()
+        from . import _cabi
+
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=self.control_path,
+            library_path=self.library_path,
+        )
+        identity_transport = _cabi.open_cabi_identity_transport(
+            control_path=self.control_path,
+            library_path=self.library_path,
+        )
+        return self._track(
+            AbilityInvocationClient(
+                runtime=RuntimeClient(runtime_transport),
+                addressing=AddressingClient(identity_transport),
+            )
+        )
 
     def health_client(self) -> HealthClient:
         """Open a health facade for the configured control path."""

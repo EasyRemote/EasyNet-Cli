@@ -4,6 +4,7 @@ The public package exposes SDK DTOs and typed errors. It intentionally does not
 expose ctypes, raw C ABI handles, Axon protobufs, or daemon-internal modules.
 """
 
+from .ability_invocation import AbilityCallRequest, AbilityInvocationClient
 from .client import Client, DiscoveryTransport, FeatureSet, Version
 from .compatibility import (
     ChatCompletionRequest,
@@ -337,6 +338,8 @@ __all__ = [
     "AbilityDeployRequest",
     "AbilityDeployResult",
     "AbilityImplID",
+    "AbilityCallRequest",
+    "AbilityInvocationClient",
     "AbilityPackageManifest",
     "AdminAgentListRequest",
     "AdminAgentPage",
