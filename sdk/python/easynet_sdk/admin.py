@@ -694,6 +694,13 @@ class EasyRemoteAdminAdapter:
         self._client = client
         self._base = base
 
+    @classmethod
+    def from_easyremote_client(cls, client: object) -> "EasyRemoteAdminAdapter":
+        return cls(
+            AdminClient(_EasyRemoteAdminTransport(client)),
+            _easyremote_admin_base(client),
+        )
+
     def start_agent(
         self,
         name: str,
@@ -742,6 +749,92 @@ class EasyRemoteAdminAdapter:
             AdminAgentRefreshRequest(self._base, name=agent_name or "")
         )
         return _raw_result(result.metadata)
+
+
+class _EasyRemoteAdminTransport:
+    """Narrow Admin transport projection over an EasyRemote invocation client."""
+
+    def __init__(self, client: object) -> None:
+        self._client = client
+
+    def list_agents(self, request_json: bytes) -> bytes:
+        _json_object(request_json, "EasyRemote agent list request")
+        response = self._invoke("agent.list")
+        agents = response.get("agents") or []
+        if not isinstance(agents, list):
+            raise _invalid_admin("agent.list response field 'agents' must be an array")
+        return _json_bytes(
+            {
+                "profile": _PROFILE,
+                "kind": "agent_records",
+                "state": "ok",
+                "items": [_easyremote_agent_record(row) for row in agents],
+                "next_cursor": None,
+                "metadata": {
+                    "profile": _PROFILE,
+                    "source": "agent.list",
+                    "count": len(agents),
+                    "raw_result": dict(response),
+                },
+            }
+        )
+
+    def agent_start(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "EasyRemote agent start request")
+        response = self._invoke(
+            "agent.start",
+            name=_required_string(request, "name"),
+            agent_type=_required_string(request, "agent_type"),
+            model=request.get("model"),
+            model_present=request.get("model_present", True),
+            label=request.get("label"),
+            command=request.get("command"),
+            command_args=list(
+                _string_array(request.get("command_args", []), "command_args")
+            ),
+            materialize_directory=request.get("materialize_directory", True),
+            update_existing_spec=request.get("update_existing_spec", False),
+            project_workspace=request.get("project_workspace", True),
+        )
+        return self._lifecycle_result("agent.start", response)
+
+    def agent_refresh(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "EasyRemote agent refresh request")
+        payload: dict[str, object] = {}
+        if request.get("name"):
+            payload["name"] = _required_string(request, "name")
+        response = self._invoke("agent.refresh", **payload)
+        return self._lifecycle_result("agent.refresh", response)
+
+    def close(self) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
+
+    def _invoke(self, ability: str, **kwargs: object) -> dict[str, object]:
+        invocation = _call_method(self._client, "invoke", ability, **kwargs)
+        return _mapping(_call_method(invocation, "result"), "admin response")
+
+    def _lifecycle_result(self, operation: str, response: Mapping[str, object]) -> bytes:
+        return _json_bytes(
+            {
+                "profile": _PROFILE,
+                "kind": "agent_lifecycle_result",
+                "operation": operation,
+                "state": str(response.get("state") or "ok"),
+                "agent_ura": _optional_string(response.get("agent_ura"), "agent_ura"),
+                "ack": _optional_bool(response.get("ack"), "ack"),
+                "runtime_not_ready": bool(response.get("runtime_not_ready", False)),
+                "runtime_catalog_not_ready": bool(
+                    response.get("runtime_catalog_not_ready", False)
+                ),
+                "metadata": {
+                    "profile": _PROFILE,
+                    "source": operation,
+                    "raw_result": dict(response),
+                },
+            }
+        )
 
 
 @runtime_checkable
@@ -1048,6 +1141,51 @@ def _validate_base(base: AdminCarrierBase) -> None:
         raise _invalid_admin("complete admin invocation carrier is required")
 
 
+def _easyremote_admin_base(client: object) -> AdminCarrierBase:
+    identity = _call_method(client, "_who")
+    device_ura = _required_object_attr(identity, "device_ura")
+    return AdminCarrierBase(
+        caller_ura=device_ura,
+        callee_ura=device_ura,
+        subject_ura=device_ura,
+        descriptor_version="1.0.0",
+        nonce_base64="AAAAAAAAAAAAAAAAAAAAAA==",
+        causal_context={"form": "none"},
+        metadata={"profile": _PROFILE, "source": "easyremote_adapter"},
+    )
+
+
+def _easyremote_agent_record(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_admin("agent.list item must be an object")
+    raw = dict(value)
+    name = raw.get("name")
+    runtime = raw.get("runtime") or raw.get("kind")
+    if not isinstance(name, str) or not name.strip():
+        raise _invalid_admin("agent.list item field 'name' is required")
+    if not isinstance(runtime, str) or not runtime.strip():
+        raise _invalid_admin("agent.list item field 'runtime' is required")
+    metadata = raw.get("metadata")
+    merged_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+    for key in ("root_path", "root_exists", "timeout_secs"):
+        if key in raw and key not in merged_metadata:
+            merged_metadata[key] = raw[key]
+    merged_metadata.setdefault("profile", _PROFILE)
+    merged_metadata.setdefault("source", "agent.list")
+    return {
+        "name": name,
+        "agent_ura": raw.get("agent_ura"),
+        "owner_ura": raw.get("owner_ura"),
+        "device_ura": raw.get("device_ura"),
+        "state": raw.get("state") if isinstance(raw.get("state"), str) else "registered",
+        "runtime": runtime,
+        "model": raw.get("model"),
+        "label": raw.get("label"),
+        "abilities": raw.get("abilities") if isinstance(raw.get("abilities"), list) else [],
+        "metadata": merged_metadata,
+    }
+
+
 def _validate_admin_identifier(value: str, field_name: str) -> str:
     if not value or not value.strip():
         raise _invalid_admin(f"{field_name} is required")
@@ -1252,6 +1390,33 @@ def _raw_result(metadata: Mapping[str, object]) -> dict[str, object]:
     if isinstance(raw, Mapping):
         return dict(raw)
     return dict(metadata)
+
+
+def _required_object_attr(value: object, attr: str) -> str:
+    candidate = getattr(value, attr, None)
+    if not isinstance(candidate, str) or not candidate.strip():
+        raise _invalid_admin(f"EasyRemote client identity field {attr!r} is required")
+    return candidate
+
+
+def _call_method(
+    target: object, method_name: str, *args: object, **kwargs: object
+) -> object:
+    method = getattr(target, method_name, None)
+    if not callable(method):
+        raise _invalid_admin(f"EasyRemote client does not expose {method_name}()")
+    try:
+        return method(*args, **kwargs)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _transport_error(f"EasyRemote client {method_name}() failed", exc) from exc
+
+
+def _mapping(value: object, field_name: str) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_admin(f"{field_name} must be an object")
+    return dict(value)
 
 
 def _invalid_admin(message: str, cause: BaseException | None = None) -> SDKError:
