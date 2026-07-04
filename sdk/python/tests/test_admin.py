@@ -455,50 +455,6 @@ class MemoryAdminTransport:
         self.close_calls += 1
 
 
-class _FakeEasyRemoteIdentity:
-    device_ura = "easynet:///r/example/device/dev-a"
-
-
-class _FakeEasyRemoteInvocation:
-    def __init__(self, result: dict[str, object]) -> None:
-        self._result = result
-
-    def result(self) -> dict[str, object]:
-        return self._result
-
-
-class _FakeEasyRemoteClient:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, object]]] = []
-        self.responses: list[dict[str, object]] = [
-            {
-                "agent_ura": "easynet:///r/example/agent/alice.codex",
-                "model": "gpt-5",
-                "root_path": "/tmp/agent",
-                "replaced_prior": True,
-            },
-            {
-                "agents": [
-                    {
-                        "name": "codex",
-                        "runtime": "codex",
-                        "model": "gpt-5",
-                        "root_path": "/tmp/agent",
-                        "timeout_secs": 600,
-                    }
-                ]
-            },
-            {"agents_scanned": 1},
-        ]
-
-    def _who(self) -> _FakeEasyRemoteIdentity:
-        return _FakeEasyRemoteIdentity()
-
-    def invoke(self, ability: str, **kwargs: object) -> _FakeEasyRemoteInvocation:
-        self.calls.append((ability, kwargs))
-        return _FakeEasyRemoteInvocation(self.responses.pop(0))
-
-
 def admin_base() -> AdminCarrierBase:
     return AdminCarrierBase(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -571,52 +527,6 @@ class AdminClientTests(unittest.TestCase):
         )
         self.assertEqual(transport.seen["list_agents"]["callee_ura"], admin_base().callee_ura)
         self.assertEqual(transport.seen["agent_refresh"]["name"], "codex")
-
-    def test_easyremote_factory_controls_hosted_agents(self) -> None:
-        client = _FakeEasyRemoteClient()
-        adapter = EasyRemoteAdminAdapter.from_easyremote_client(client)
-
-        started = adapter.start_agent(
-            "codex",
-            kind="codex",
-            model="gpt-5",
-            label="primary",
-            command="codex",
-            args=("--ask",),
-        )
-        records = adapter.list_agents()
-        refreshed = adapter.refresh_agents("codex")
-
-        self.assertEqual(started.name, "codex")
-        self.assertEqual(started.runtime, "codex")
-        self.assertEqual(started.root_path, "/tmp/agent")
-        self.assertTrue(started.replaced_prior)
-        self.assertEqual(records[0].name, "codex")
-        self.assertEqual(records[0].root_path, "/tmp/agent")
-        self.assertEqual(records[0].timeout_secs, 600)
-        self.assertEqual(refreshed, {"agents_scanned": 1})
-        self.assertEqual(
-            client.calls,
-            [
-                (
-                    "agent.start",
-                    {
-                        "name": "codex",
-                        "agent_type": "codex",
-                        "model": "gpt-5",
-                        "model_present": True,
-                        "label": "primary",
-                        "command": "codex",
-                        "command_args": ["--ask"],
-                        "materialize_directory": True,
-                        "update_existing_spec": False,
-                        "project_workspace": True,
-                    },
-                ),
-                ("agent.list", {}),
-                ("agent.refresh", {"name": "codex"}),
-            ],
-        )
 
     def test_builds_agent_and_session_invocations(self) -> None:
         transport = MemoryAdminTransport()

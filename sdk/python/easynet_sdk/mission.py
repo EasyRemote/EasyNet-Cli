@@ -319,13 +319,6 @@ class EasyRemoteMissionAdapter:
         self._client = client
         self._base = base
 
-    @classmethod
-    def from_easyremote_client(cls, client: object) -> "EasyRemoteMissionAdapter":
-        return cls(
-            MissionClient(_EasyRemoteMissionTransport(client)),
-            _easyremote_mission_base(client),
-        )
-
     def run_eal(
         self, source: str, *, label: str | None = None
     ) -> EasyRemoteMissionRunProjection:
@@ -357,42 +350,6 @@ class EasyRemoteMissionAdapter:
             )
         )
         return _status_projection(status)
-
-
-class _EasyRemoteMissionTransport:
-    """Narrow Mission transport projection over an EasyRemote invocation client."""
-
-    def __init__(self, client: object) -> None:
-        self._client = client
-
-    def run_eal(self, request_json: bytes) -> bytes:
-        request = _json_object(request_json, "EasyRemote mission run request")
-        payload: dict[str, object] = {"source": _required_string(request, "source")}
-        if request.get("label"):
-            payload["label"] = _required_string(request, "label")
-        response = self._invoke("mission.run", **payload)
-        return _easyremote_status_json("mission.run", response)
-
-    def track(self, request_json: bytes) -> bytes:
-        request = _json_object(request_json, "EasyRemote mission track request")
-        run_id = _required_string(request, "mission_id")
-        response = self._invoke("mission.track", run_id=run_id)
-        return _easyremote_status_json("mission.track", response, mission_id=run_id)
-
-    def cancel(self, request_json: bytes) -> bytes:
-        request = _json_object(request_json, "EasyRemote mission cancel request")
-        run_id = _required_string(request, "mission_id")
-        response = self._invoke("mission.cancel", run_id=run_id)
-        return _easyremote_status_json("mission.cancel", response, mission_id=run_id)
-
-    def close(self) -> None:
-        close = getattr(self._client, "close", None)
-        if callable(close):
-            close()
-
-    def _invoke(self, ability: str, **kwargs: object) -> dict[str, object]:
-        invocation = _call_method(self._client, "invoke", ability, **kwargs)
-        return _mapping(_call_method(invocation, "result"), "mission response")
 
 
 @runtime_checkable
@@ -545,20 +502,6 @@ def _validate_base(base: MissionCarrierBase) -> None:
         or base.causal_context is None
     ):
         raise _invalid_mission("complete mission invocation carrier is required")
-
-
-def _easyremote_mission_base(client: object) -> MissionCarrierBase:
-    identity = _call_method(client, "_who")
-    device_ura = _required_object_attr(identity, "device_ura")
-    return MissionCarrierBase(
-        caller_ura=device_ura,
-        callee_ura=device_ura,
-        subject_ura=device_ura,
-        descriptor_version="1.0.0",
-        nonce_base64="AAAAAAAAAAAAAAAAAAAAAA==",
-        causal_context={"form": "none"},
-        metadata={"profile": _PROFILE, "source": "easyremote_adapter"},
-    )
 
 
 def _validate_mission_id(mission_id: str) -> None:
@@ -761,122 +704,6 @@ def _validated_easyremote_run_id(value: str) -> str:
     return run_id
 
 
-def _easyremote_status_json(
-    source: str, response: Mapping[str, object], *, mission_id: str | None = None
-) -> bytes:
-    raw = dict(response)
-    run_dir = raw.get("run_dir")
-    outputs = raw.get("outputs")
-    metadata: dict[str, object] = {
-        "profile": _PROFILE,
-        "source": source,
-        "raw_result": raw,
-    }
-    if isinstance(run_dir, str):
-        metadata["run_dir"] = run_dir
-    if isinstance(outputs, Mapping):
-        metadata["outputs"] = dict(outputs)
-    return _json_bytes(
-        {
-            "profile": _PROFILE,
-            "kind": "mission_status",
-            "mission_id": _easyremote_mission_id(source, raw, mission_id),
-            "state": _easyremote_state(source, raw),
-            "terminal": _easyremote_terminal(source, raw),
-            "partial_failures": _easyremote_partial_failures(raw),
-            "cancelled": _easyremote_cancelled(raw),
-            "parent_invocation_id": _optional_string(
-                raw.get("parent_invocation_id"), "parent_invocation_id"
-            ),
-            "parent_receipt_ura": _optional_string(
-                raw.get("parent_receipt_ura"), "parent_receipt_ura"
-            ),
-            "parent_invocation": _optional_mapping(
-                raw.get("parent_invocation"), "parent_invocation"
-            ),
-            "child_invocations": [],
-            "child_receipts": [],
-            "output_refs": _easyremote_output_refs(raw),
-            "metadata": metadata,
-        }
-    )
-
-
-def _easyremote_mission_id(
-    source: str, raw: Mapping[str, object], mission_id: str | None
-) -> str:
-    if mission_id:
-        return mission_id
-    for field_name in ("mission_id", "run_id"):
-        value = raw.get(field_name)
-        if isinstance(value, str) and value.strip():
-            return value
-    raise _invalid_mission(f"{source} response is missing mission run_id")
-
-
-def _easyremote_state(source: str, raw: Mapping[str, object]) -> str:
-    value = raw.get("state")
-    if isinstance(value, str) and value.strip():
-        return value
-    if _easyremote_cancelled(raw):
-        return "cancelled"
-    if source == "mission.run":
-        return "running"
-    return "ok"
-
-
-def _easyremote_terminal(source: str, raw: Mapping[str, object]) -> bool:
-    value = raw.get("terminal")
-    if isinstance(value, bool):
-        return value
-    if _easyremote_cancelled(raw):
-        return True
-    state = raw.get("state")
-    if isinstance(state, str) and state.lower() in {
-        "completed",
-        "failed",
-        "cancelled",
-        "canceled",
-    }:
-        return True
-    return source == "mission.cancel" and bool(raw.get("ok", True))
-
-
-def _easyremote_cancelled(raw: Mapping[str, object]) -> bool:
-    value = raw.get("cancelled")
-    return value if isinstance(value, bool) else False
-
-
-def _easyremote_partial_failures(raw: Mapping[str, object]) -> int:
-    value = raw.get("partial_failures")
-    if value is None:
-        return 0
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise _invalid_mission("partial_failures must be a non-negative integer")
-    return value
-
-
-def _easyremote_output_refs(raw: Mapping[str, object]) -> list[dict[str, object]]:
-    refs: list[dict[str, object]] = []
-    run_dir = raw.get("run_dir")
-    if isinstance(run_dir, str) and run_dir:
-        refs.append({"kind": "run_dir", "path": run_dir, "metadata": {}})
-    output_refs = raw.get("output_refs")
-    if isinstance(output_refs, list):
-        for item in output_refs:
-            if not isinstance(item, Mapping):
-                raise _invalid_mission("output_refs items must be objects")
-            refs.append(
-                {
-                    "kind": _required_string(item, "kind"),
-                    "path": _optional_string(item.get("path"), "path") or "",
-                    "metadata": _optional_mapping(item.get("metadata"), "metadata")
-                    or {},
-                }
-            )
-    return refs
-
-
 def _mission_run_dir(status: MissionStatus) -> str:
     for output in status.output_refs:
         if output.kind == "run_dir" and output.path:
@@ -901,9 +728,6 @@ def _mission_outputs(status: MissionStatus) -> Mapping[str, object]:
 
 
 def _status_projection(status: MissionStatus) -> dict[str, object]:
-    raw = status.metadata.get("raw_result")
-    if isinstance(raw, Mapping):
-        return dict(raw)
     return {
         "run_id": status.mission_id,
         "mission_id": status.mission_id,
@@ -950,33 +774,6 @@ def _status_projection(status: MissionStatus) -> dict[str, object]:
         ],
         "metadata": dict(status.metadata),
     }
-
-
-def _required_object_attr(value: object, attr: str) -> str:
-    candidate = getattr(value, attr, None)
-    if not isinstance(candidate, str) or not candidate.strip():
-        raise _invalid_mission(f"EasyRemote client identity field {attr!r} is required")
-    return candidate
-
-
-def _call_method(
-    target: object, method_name: str, *args: object, **kwargs: object
-) -> object:
-    method = getattr(target, method_name, None)
-    if not callable(method):
-        raise _invalid_mission(f"EasyRemote client does not expose {method_name}()")
-    try:
-        return method(*args, **kwargs)
-    except SDKError:
-        raise
-    except Exception as exc:
-        raise _transport_error(f"EasyRemote client {method_name}() failed", exc) from exc
-
-
-def _mapping(value: object, field_name: str) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        raise _invalid_mission(f"{field_name} must be an object")
-    return dict(value)
 
 
 def _invalid_mission(message: str, cause: BaseException | None = None) -> SDKError:
