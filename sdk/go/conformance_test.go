@@ -709,6 +709,99 @@ func TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase(t *testi
 	}
 }
 
+func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	eventsCase := sharedCase(t, root, "events-directory-stream.yaml")
+	requireCaseID(t, eventsCase, "events/directory_stream")
+	for _, action := range []string{
+		"build_directory_subscription_invocation",
+		"project_directory_event",
+		"project_drop_report",
+		"project_terminal",
+	} {
+		requireCaseAction(t, eventsCase, action)
+	}
+	for _, fixture := range []string{
+		"events-directory-subscription-request.v4.json",
+		"event.directory.v4.json",
+		"event.directory-drop-report.v4.json",
+		"event.directory-terminal.v4.json",
+	} {
+		requireCaseFixture(t, eventsCase, fixture)
+	}
+	requireCaseExpectation(t, eventsCase, "subscription_invocation_fixture: events-directory-subscription-invocation.v4.json")
+	requireCaseExpectation(t, eventsCase, "stream_system_ability: federation.subscribe_directory_v2")
+	requireCaseExpectation(t, eventsCase, "cursor_required: true")
+	requireCaseExpectation(t, eventsCase, "dropped_events_are_first_class: true")
+	requireCaseExpectation(t, eventsCase, "terminal_frame_explicit: true")
+	requireCaseExpectation(t, eventsCase, "other_event_streams: scaffold_only")
+
+	events, err := NewEventClient(&sharedEventsTransport{
+		t:                                    t,
+		expectedDirectorySubscriptionRequest: sharedEventsDirectorySubscriptionRequestJSON(t, root),
+		expectedDirectoryProjectionInput:     sharedEventsProjectionInputJSON(t, root),
+		expectedDropReportInput:              sharedEventsDropReportInputJSON(t, root),
+		expectedTerminalInput:                sharedEventsTerminalInputJSON(t, root),
+		directorySubscriptionInvocationJSON:  sharedFixture(t, root, "events-directory-subscription-invocation.v4.json"),
+		directoryEventJSON:                   sharedFixture(t, root, "event.directory.v4.json"),
+		dropReportJSON:                       sharedFixture(t, root, "event.directory-drop-report.v4.json"),
+		terminalJSON:                         sharedFixture(t, root, "event.directory-terminal.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewEventClient: %v", err)
+	}
+
+	subscription, err := events.BuildDirectorySubscriptionInvocation(context.Background(), sharedEventsDirectorySubscriptionRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildDirectorySubscriptionInvocation(shared fixture): %v", err)
+	}
+	if subscription.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2@1.0.0" ||
+		subscription.Metadata()["system_ability"] != "federation.subscribe_directory_v2" {
+		t.Fatalf("unexpected shared events subscription invocation: %#v", subscription)
+	}
+
+	directoryEvent, err := events.ProjectDirectoryEvent(context.Background(), sharedEventsProjectionInput(t, root))
+	if err != nil {
+		t.Fatalf("ProjectDirectoryEvent(shared fixture): %v", err)
+	}
+	if directoryEvent.Kind != "directory.agent_advertised" || directoryEvent.Cursor.Token != "directory:8" ||
+		directoryEvent.Terminal || directoryEvent.Metadata["stream_ability"] != "federation.subscribe_directory_v2" {
+		t.Fatalf("unexpected shared directory event frame: %#v", directoryEvent)
+	}
+
+	dropReport, err := events.ProjectDropReport(context.Background(), sharedEventsDropReportInput(t, root))
+	if err != nil {
+		t.Fatalf("ProjectDropReport(shared fixture): %v", err)
+	}
+	if dropReport.Kind != "directory.drop_report" || dropReport.DroppedCount != 4 ||
+		dropReport.ReconnectAfterMS == nil || *dropReport.ReconnectAfterMS != 1000 {
+		t.Fatalf("unexpected shared events drop report: %#v", dropReport)
+	}
+
+	terminal, err := events.ProjectTerminal(context.Background(), sharedEventsTerminalInput(t, root))
+	if err != nil {
+		t.Fatalf("ProjectTerminal(shared fixture): %v", err)
+	}
+	if terminal.Kind != "directory.terminal" || !terminal.Terminal || terminal.ResumeToken != "terminal" {
+		t.Fatalf("unexpected shared events terminal frame: %#v", terminal)
+	}
+
+	incomplete := sharedEventsDirectorySubscriptionRequest(t, root)
+	incomplete.CallerURA = ""
+	if _, err := events.BuildDirectorySubscriptionInvocation(context.Background(), incomplete); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete events carrier did not produce InvalidArgument: %v", err)
+	}
+	if _, err := NewEventFrameFromJSON(sharedEventsFrameWithoutCursorToken(t, root, "event.directory.v4.json")); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("event frame without cursor token did not produce InvalidArgument: %v", err)
+	}
+	if _, err := NewEventFrameFromJSON(sharedEventsDropReportWithoutDroppedCount(t, root)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("drop report without positive dropped count did not produce InvalidArgument: %v", err)
+	}
+	if _, err := NewEventFrameFromJSON(sharedEventsTerminalWithoutTerminalFlag(t, root)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("terminal frame without terminal=true did not produce InvalidArgument: %v", err)
+	}
+}
+
 func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
@@ -956,6 +1049,70 @@ func (t *sharedAdminGatewayTransport) CreateDeviceSession(context.Context, []byt
 
 func (t *sharedAdminGatewayTransport) DeleteDeviceSession(context.Context, []byte) ([]byte, error) {
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+type sharedEventsTransport struct {
+	t                                    *testing.T
+	expectedDirectorySubscriptionRequest []byte
+	expectedDirectoryProjectionInput     []byte
+	expectedDropReportInput              []byte
+	expectedTerminalInput                []byte
+	directorySubscriptionInvocationJSON  []byte
+	directoryEventJSON                   []byte
+	dropReportJSON                       []byte
+	terminalJSON                         []byte
+}
+
+func (t *sharedEventsTransport) BuildDirectorySubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDirectorySubscriptionRequest)
+	return t.directorySubscriptionInvocationJSON, nil
+}
+
+func (t *sharedEventsTransport) BuildDeviceSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) BuildSessionSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) BuildInvocationSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) SubscribeDevices(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) SubscribeSessions(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) SubscribeInvocations(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) ListDeviceEvents(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedEventsTransport) ProjectDirectoryEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, eventJSON, t.expectedDirectoryProjectionInput)
+	return t.directoryEventJSON, nil
+}
+
+func (t *sharedEventsTransport) ProjectDropReport(_ context.Context, dropJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, dropJSON, t.expectedDropReportInput)
+	return t.dropReportJSON, nil
+}
+
+func (t *sharedEventsTransport) ProjectTerminal(_ context.Context, terminalJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, terminalJSON, t.expectedTerminalInput)
+	return t.terminalJSON, nil
 }
 
 type sharedPublicationTransport struct {
@@ -1406,6 +1563,155 @@ func sharedControlOnlyGatewayStatus(t *testing.T, root string) []byte {
 		t.Fatalf("encode control-only gateway status: %v", err)
 	}
 	return raw
+}
+
+func sharedEventsDirectorySubscriptionRequest(t *testing.T, root string) EventsDirectorySubscriptionRequest {
+	t.Helper()
+	var request EventsDirectorySubscriptionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "events-directory-subscription-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared events directory subscription request: %v", err)
+	}
+	return request
+}
+
+func sharedEventsDirectorySubscriptionRequestJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := marshalEventsSubscriptionRequest(sharedEventsDirectorySubscriptionRequest(t, root), EventStreamDirectory)
+	if err != nil {
+		t.Fatalf("marshal shared events directory subscription request: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsProjectionInput(t *testing.T, root string) EventProjectionInput {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, "event.directory.v4.json")
+	cursor := sharedEventsCursorFromFrame(t, frame)
+	return EventProjectionInput{
+		Cursor:      cursor,
+		Event:       frame["payload"].(map[string]any),
+		EventID:     frame["event_id"].(string),
+		ResumeToken: frame["resume_token"].(string),
+		TenantRef:   frame["tenant_ref"],
+	}
+}
+
+func sharedEventsProjectionInputJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(sharedEventsProjectionInput(t, root))
+	if err != nil {
+		t.Fatalf("marshal shared events projection input: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsDropReportInput(t *testing.T, root string) EventDropReportInput {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, "event.directory-drop-report.v4.json")
+	cursor := sharedEventsCursorFromFrame(t, frame)
+	return EventDropReportInput{
+		Cursor:           cursor,
+		OccurredUnixMS:   int64(frame["occurred_unix_ms"].(float64)),
+		DroppedCount:     int(frame["dropped_count"].(float64)),
+		ReconnectAfterMS: sharedEventsOptionalInt(frame["reconnect_after_ms"]),
+		Reason:           frame["metadata"].(map[string]any)["reason"].(string),
+		EventID:          frame["event_id"].(string),
+		ResumeToken:      frame["resume_token"].(string),
+		TenantRef:        frame["tenant_ref"],
+	}
+}
+
+func sharedEventsDropReportInputJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(sharedEventsDropReportInput(t, root))
+	if err != nil {
+		t.Fatalf("marshal shared events drop report input: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsTerminalInput(t *testing.T, root string) EventTerminalInput {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, "event.directory-terminal.v4.json")
+	cursor := sharedEventsCursorFromFrame(t, frame)
+	return EventTerminalInput{
+		Cursor:           cursor,
+		OccurredUnixMS:   int64(frame["occurred_unix_ms"].(float64)),
+		ReconnectAfterMS: sharedEventsOptionalInt(frame["reconnect_after_ms"]),
+		Reason:           frame["metadata"].(map[string]any)["reason"].(string),
+		EventID:          frame["event_id"].(string),
+		ResumeToken:      frame["resume_token"].(string),
+		TenantRef:        frame["tenant_ref"],
+	}
+}
+
+func sharedEventsTerminalInputJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(sharedEventsTerminalInput(t, root))
+	if err != nil {
+		t.Fatalf("marshal shared events terminal input: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsFrameWithoutCursorToken(t *testing.T, root string, fixture string) []byte {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, fixture)
+	cursor := frame["cursor"].(map[string]any)
+	delete(cursor, "token")
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatalf("encode event frame without cursor token: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsDropReportWithoutDroppedCount(t *testing.T, root string) []byte {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, "event.directory-drop-report.v4.json")
+	frame["dropped_count"] = float64(0)
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatalf("encode drop report without dropped count: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsTerminalWithoutTerminalFlag(t *testing.T, root string) []byte {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, "event.directory-terminal.v4.json")
+	frame["terminal"] = false
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatalf("encode terminal frame without terminal flag: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsFrameMap(t *testing.T, root string, fixture string) map[string]any {
+	t.Helper()
+	frame := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, fixture), &frame); err != nil {
+		t.Fatalf("decode shared events frame fixture %s: %v", fixture, err)
+	}
+	return frame
+}
+
+func sharedEventsCursorFromFrame(t *testing.T, frame map[string]any) EventCursor {
+	t.Helper()
+	cursor := frame["cursor"].(map[string]any)
+	return EventCursor{
+		Stream:   cursor["stream"].(string),
+		Sequence: uint64(cursor["sequence"].(float64)),
+	}
+}
+
+func sharedEventsOptionalInt(value any) *int {
+	if value == nil {
+		return nil
+	}
+	converted := int(value.(float64))
+	return &converted
 }
 
 func sharedDeviceQuery(t *testing.T, root string) DeviceQuery {

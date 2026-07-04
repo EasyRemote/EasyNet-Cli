@@ -481,11 +481,11 @@ func validateEventFrame(frame *EventFrame) error {
 		frame.OccurredUnixMS < 0 || frame.OccurredAt == "" || frame.Metadata == nil {
 		return invalidRuntimePayload("invalid event frame projection", nil)
 	}
+	if frame.Cursor.Token == "" {
+		return invalidRuntimePayload("event cursor token is required", nil)
+	}
 	if err := validateEventCursor(frame.Cursor); err != nil {
 		return err
-	}
-	if frame.Cursor.Token == "" {
-		frame.Cursor.Token = frame.Cursor.ResumeToken()
 	}
 	if frame.DroppedCount < 0 {
 		return invalidRuntimePayload("dropped_count must be non-negative", nil)

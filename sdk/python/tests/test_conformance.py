@@ -20,6 +20,14 @@ from easynet_sdk import (
     DirectoryClient,
     DirectoryQueryBase,
     ErrorCode,
+    EventClient,
+    EventCursor,
+    EventDropReportInput,
+    EventFrame,
+    EventProjectionInput,
+    EventTerminalInput,
+    EventsCarrierBase,
+    EventsDirectorySubscriptionRequest,
     GatewayStatus,
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
@@ -559,6 +567,107 @@ class SharedAdminGatewayTransport:
             retry=RetryHint.NEVER,
             message="not used by shared admin gateway conformance fixture test",
         )
+
+    def close(self) -> None:
+        return None
+
+
+class SharedEventsTransport:
+    def __init__(self) -> None:
+        self.expected_directory_subscription_request = (
+            shared_events_directory_subscription_request_json()
+        )
+        self.expected_directory_projection_input = shared_events_projection_input_json()
+        self.expected_drop_report_input = shared_events_drop_report_input_json()
+        self.expected_terminal_input = shared_events_terminal_input_json()
+        self.directory_subscription_invocation_json = shared_fixture(
+            "events-directory-subscription-invocation.v4.json"
+        )
+        self.directory_event_json = shared_fixture("event.directory.v4.json")
+        self.drop_report_json = shared_fixture("event.directory-drop-report.v4.json")
+        self.terminal_json = shared_fixture("event.directory-terminal.v4.json")
+
+    def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(
+            request_json, self.expected_directory_subscription_request
+        )
+        return self.directory_subscription_invocation_json
+
+    def build_device_subscription_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def subscribe_directory(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def subscribe_devices(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def subscribe_sessions(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def subscribe_invocations(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def list_device_events(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared events conformance fixture test",
+        )
+
+    def project_directory_event(self, event_json: bytes) -> bytes:
+        assert_json_equivalent(event_json, self.expected_directory_projection_input)
+        return self.directory_event_json
+
+    def project_drop_report(self, drop_json: bytes) -> bytes:
+        assert_json_equivalent(drop_json, self.expected_drop_report_input)
+        return self.drop_report_json
+
+    def project_terminal(self, terminal_json: bytes) -> bytes:
+        assert_json_equivalent(terminal_json, self.expected_terminal_input)
+        return self.terminal_json
 
     def close(self) -> None:
         return None
@@ -1275,6 +1384,109 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertTrue(degraded.control_ready)
         self.assertFalse(degraded.runtime_ready)
 
+    def test_python_events_executes_shared_directory_stream_conformance_case(self) -> None:
+        events_case = shared_case("events-directory-stream.yaml")
+        self._require_case_id(events_case, "events/directory_stream")
+        for action in (
+            "build_directory_subscription_invocation",
+            "project_directory_event",
+            "project_drop_report",
+            "project_terminal",
+        ):
+            self._require_case_action(events_case, action)
+        for fixture in (
+            "events-directory-subscription-request.v4.json",
+            "event.directory.v4.json",
+            "event.directory-drop-report.v4.json",
+            "event.directory-terminal.v4.json",
+        ):
+            self._require_case_fixture(events_case, fixture)
+        self._require_case_expectation(
+            events_case,
+            "subscription_invocation_fixture: events-directory-subscription-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            events_case, "stream_system_ability: federation.subscribe_directory_v2"
+        )
+        self._require_case_expectation(events_case, "cursor_required: true")
+        self._require_case_expectation(
+            events_case, "dropped_events_are_first_class: true"
+        )
+        self._require_case_expectation(
+            events_case, "terminal_frame_explicit: true"
+        )
+        self._require_case_expectation(events_case, "other_event_streams: scaffold_only")
+
+        events = EventClient(SharedEventsTransport())
+
+        subscription = events.build_directory_subscription_invocation(
+            shared_events_directory_subscription_request()
+        )
+        self.assertEqual(
+            subscription.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2@1.0.0",
+        )
+        self.assertEqual(
+            subscription.metadata["system_ability"],
+            "federation.subscribe_directory_v2",
+        )
+
+        directory_event = events.project_directory_event(
+            shared_events_projection_input()
+        )
+        self.assertEqual(directory_event.kind, "directory.agent_advertised")
+        self.assertEqual(directory_event.cursor.token, "directory:8")
+        self.assertFalse(directory_event.terminal)
+        self.assertEqual(
+            directory_event.metadata["stream_ability"],
+            "federation.subscribe_directory_v2",
+        )
+
+        drop_report = events.project_drop_report(shared_events_drop_report_input())
+        self.assertEqual(drop_report.kind, "directory.drop_report")
+        self.assertEqual(drop_report.dropped_count, 4)
+        self.assertEqual(drop_report.reconnect_after_ms, 1000)
+
+        terminal = events.project_terminal(shared_events_terminal_input())
+        self.assertEqual(terminal.kind, "directory.terminal")
+        self.assertTrue(terminal.terminal)
+        self.assertEqual(terminal.resume_token, "terminal")
+
+        request = shared_events_directory_subscription_request()
+        with self.assertRaises(SDKError) as caught:
+            events.build_directory_subscription_invocation(
+                EventsDirectorySubscriptionRequest(
+                    base=EventsCarrierBase(
+                        caller_ura="",
+                        callee_ura=request.base.callee_ura,
+                        subject_ura=request.base.subject_ura,
+                        descriptor_version=request.base.descriptor_version,
+                        nonce_base64=request.base.nonce_base64,
+                        causal_context=request.base.causal_context,
+                        metadata=request.base.metadata,
+                    ),
+                    realm=request.realm,
+                    agent_ura=request.agent_ura,
+                    resume_cursor=request.resume_cursor,
+                    heartbeat_interval_ms=request.heartbeat_interval_ms,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            EventFrame.from_json(
+                shared_events_frame_without_cursor_token("event.directory.v4.json")
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            EventFrame.from_json(shared_events_drop_report_without_dropped_count())
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            EventFrame.from_json(shared_events_terminal_without_terminal_flag())
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -1548,6 +1760,117 @@ def shared_control_only_gateway_status() -> bytes:
     status["directory_ready"] = False
     status["metadata"]["lifecycle_state"] = "control_only"
     return json.dumps(status, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_events_carrier_base(fixture: str) -> EventsCarrierBase:
+    decoded = json.loads(shared_fixture(fixture))
+    return EventsCarrierBase(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_events_directory_subscription_request() -> EventsDirectorySubscriptionRequest:
+    decoded = json.loads(shared_fixture("events-directory-subscription-request.v4.json"))
+    cursor = decoded.get("resume_cursor")
+    return EventsDirectorySubscriptionRequest(
+        base=shared_events_carrier_base(
+            "events-directory-subscription-request.v4.json"
+        ),
+        realm=decoded.get("realm", ""),
+        agent_ura=decoded.get("agent_ura", ""),
+        resume_cursor=EventCursor(cursor["stream"], cursor["sequence"]) if cursor else None,
+        heartbeat_interval_ms=decoded.get("heartbeat_interval_ms", 0),
+    )
+
+
+def shared_events_directory_subscription_request_json() -> bytes:
+    return shared_events_directory_subscription_request().to_json_bytes("directory")
+
+
+def shared_events_projection_input() -> EventProjectionInput:
+    frame = shared_events_frame("event.directory.v4.json")
+    cursor = shared_events_cursor_from_frame(frame)
+    return EventProjectionInput(
+        cursor=cursor,
+        event=frame["payload"],
+        event_id=frame["event_id"],
+        resume_token=frame["resume_token"],
+        tenant_ref=frame["tenant_ref"],
+    )
+
+
+def shared_events_projection_input_json() -> bytes:
+    return shared_events_projection_input().to_json_bytes()
+
+
+def shared_events_drop_report_input() -> EventDropReportInput:
+    frame = shared_events_frame("event.directory-drop-report.v4.json")
+    cursor = shared_events_cursor_from_frame(frame)
+    return EventDropReportInput(
+        cursor=cursor,
+        occurred_unix_ms=frame["occurred_unix_ms"],
+        dropped_count=frame["dropped_count"],
+        reconnect_after_ms=frame["reconnect_after_ms"],
+        reason=frame["metadata"]["reason"],
+        event_id=frame["event_id"],
+        resume_token=frame["resume_token"],
+        tenant_ref=frame["tenant_ref"],
+    )
+
+
+def shared_events_drop_report_input_json() -> bytes:
+    return shared_events_drop_report_input().to_json_bytes()
+
+
+def shared_events_terminal_input() -> EventTerminalInput:
+    frame = shared_events_frame("event.directory-terminal.v4.json")
+    cursor = shared_events_cursor_from_frame(frame)
+    return EventTerminalInput(
+        cursor=cursor,
+        occurred_unix_ms=frame["occurred_unix_ms"],
+        reconnect_after_ms=frame["reconnect_after_ms"],
+        reason=frame["metadata"]["reason"],
+        event_id=frame["event_id"],
+        resume_token=frame["resume_token"],
+        tenant_ref=frame["tenant_ref"],
+    )
+
+
+def shared_events_terminal_input_json() -> bytes:
+    return shared_events_terminal_input().to_json_bytes()
+
+
+def shared_events_frame_without_cursor_token(fixture: str) -> bytes:
+    frame = shared_events_frame(fixture)
+    del frame["cursor"]["token"]
+    return json.dumps(frame, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_events_drop_report_without_dropped_count() -> bytes:
+    frame = shared_events_frame("event.directory-drop-report.v4.json")
+    frame["dropped_count"] = 0
+    return json.dumps(frame, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_events_terminal_without_terminal_flag() -> bytes:
+    frame = shared_events_frame("event.directory-terminal.v4.json")
+    frame["terminal"] = False
+    return json.dumps(frame, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_events_frame(fixture: str) -> dict[str, object]:
+    return json.loads(shared_fixture(fixture))
+
+
+def shared_events_cursor_from_frame(frame: dict[str, object]) -> EventCursor:
+    cursor = frame["cursor"]
+    return EventCursor(cursor["stream"], cursor["sequence"])
 
 
 def shared_ability_query() -> AbilityQuery:
