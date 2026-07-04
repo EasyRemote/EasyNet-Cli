@@ -16,6 +16,7 @@ from easynet_sdk.host_binding import (
     HostStreamReadiness,
     HostStreamSessionState,
     HostStreamTerminalSummary,
+    LocalHostBindingTransport,
 )
 
 
@@ -335,6 +336,53 @@ class HostBindingTests(unittest.TestCase):
 
         with self.assertRaises(SDKError):
             writer.write_item({"token": "late"})
+
+    def test_local_transport_encodes_daemon_host_stream_wire(self) -> None:
+        client = HostBindingClient(LocalHostBindingTransport())
+        writer = client.open_frame_writer()
+
+        item = writer.write_item("a:hi")
+        second = writer.write_item("b:hi")
+        third = writer.write_item("c:hi")
+        terminal = writer.finish()
+
+        self.assertEqual(item.to_host_wire_dict(), {"stream_item": "a:hi", "seq": 0})
+        self.assertEqual(second.to_host_wire_dict(), {"stream_item": "b:hi", "seq": 1})
+        self.assertEqual(third.to_host_wire_dict(), {"stream_item": "c:hi", "seq": 2})
+        self.assertEqual(
+            terminal.to_host_wire_dict(),
+            {
+                "terminal": {
+                    "output_hash": (
+                        "sha256:653e1bed022d2aa75fba7d09f92bb1d1db86c3caffb89cf54e6f7556ff3e3183"
+                    ),
+                    "frames": 3,
+                }
+            },
+        )
+
+    def test_local_transport_preserves_host_wire_error_taxonomy(self) -> None:
+        client = HostBindingClient(LocalHostBindingTransport())
+        frame = client.encode_error(
+            SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="host",
+                retry=RetryHint.NEVER,
+                message="bad input",
+                details={"kind": "INVALID_ARGUMENT", "reason": "bad_request"},
+            )
+        )
+
+        self.assertEqual(
+            frame.to_host_wire_dict(),
+            {
+                "error": {
+                    "kind": "INVALID_ARGUMENT",
+                    "reason": "bad_request",
+                    "message": "bad input",
+                }
+            },
+        )
 
     def test_frame_writer_fail_is_terminal_and_does_not_close_client(self) -> None:
         transport = MemoryHostBindingTransport()

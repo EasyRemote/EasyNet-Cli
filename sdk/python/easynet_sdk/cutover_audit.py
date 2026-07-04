@@ -90,6 +90,7 @@ class EasyRemoteCutoverAuditor:
         violations.extend(_audit_raw_ffi_markers(relative, text))
         violations.extend(_audit_raw_abi_symbols(relative, text))
         violations.extend(_audit_invocation_codec(relative, text))
+        violations.extend(_audit_host_stream_codec(relative, text))
         return tuple(violations)
 
 
@@ -269,6 +270,62 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...
                     )
                 )
     return tuple(violations)
+
+
+def _audit_host_stream_codec(path: str, text: str) -> tuple[CutoverViolation, ...]:
+    violations: list[CutoverViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        markers = sorted(_host_stream_codec_markers(node))
+        if not markers:
+            continue
+        violations.append(
+            CutoverViolation(
+                path=path,
+                rule="raw_host_stream_codec",
+                detail=", ".join(markers),
+                line=getattr(node, "lineno", 1),
+            )
+        )
+    return tuple(violations)
+
+
+def _host_stream_codec_markers(node: ast.AST) -> set[str]:
+    markers: set[str] = set()
+    if isinstance(node, ast.ClassDef) and node.name == "_RollingHash":
+        markers.add("_RollingHash")
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
+        "_canonical_json",
+        "_stream_error",
+    }:
+        markers.add(node.name)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        if node.value == "host_stream hash frame":
+            markers.add("host_stream hash frame")
+    if isinstance(node, ast.Dict):
+        fields = {
+            key.value
+            for key in node.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if {"stream_item", "seq"}.issubset(fields):
+            markers.add("stream_item_frame")
+        if "terminal" in fields and _dict_contains_string(node, "output_hash"):
+            markers.add("terminal_output_hash_frame")
+    return markers
+
+
+def _dict_contains_string(node: ast.Dict, value: str) -> bool:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and child.value == value:
+            return True
+    return False
 
 
 def _is_json_codec_call(node: ast.Call) -> bool:

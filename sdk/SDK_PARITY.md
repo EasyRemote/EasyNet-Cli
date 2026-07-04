@@ -248,17 +248,21 @@ method spelling.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, typed cleanup/readiness/lifecycle ownership DTOs,
   item/error/terminal frame encoding, output-hash folding seams with shared
-  conformance-pinned hash cursor invariants over schema-backed transport
+  conformance-pinned hash cursor invariants over schema-backed and local SDK
+  codec transports, daemon host-stream line-protocol projection
   projections, and a `HostStreamFrameWriter` lifecycle helper that delegates all
   frame/hash semantics through the client plus per-call `HostStreamSession`
-  state seams; product host readiness execution, cleanup execution,
-  EasyRemote warm host integration, and behavior-executing host lifecycle
+  state seams; EasyRemote warm host frame/error/terminal emission now delegates
+  frame and output-hash semantics to SDK Host Binding. Product host readiness
+  execution, cleanup execution, and behavior-executing host lifecycle
   conformance remain incomplete.
 - Python EasyRemote cutover audit helpers expose source-tree checks for raw
-  FFI/Axon imports, raw C ABI symbols, and raw Invocation JSON codecs, with
-  shared conformance cases for no-raw-FFI, no-raw-invocation-codec, and
-  context-causal gates; actual EasyRemote repository extraction remains
-  incomplete.
+  FFI/Axon imports, raw C ABI symbols, raw Invocation JSON codecs, and raw
+  host-stream frame/hash codecs, with shared conformance cases for no-raw-FFI,
+  no-raw-invocation-codec, host-stream-codec ownership, and context-causal
+  gates; EasyRemote transport, invocation, and warm host frame/hash substrate
+  extraction now pass static gates, while receipt/context/publication/mission/
+  admin product extraction remains incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, plus daemon `MissionStatus` and

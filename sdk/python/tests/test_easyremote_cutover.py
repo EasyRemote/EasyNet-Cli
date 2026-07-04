@@ -1,7 +1,9 @@
 import json
+import tempfile
 import unittest
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from easynet_sdk import (
     AbilityCallRequest,
@@ -13,6 +15,7 @@ from easynet_sdk import (
     ReceiptClient,
     RuntimeClient,
     ability_address,
+    audit_easyremote_cutover,
 )
 
 from test_identity import MemoryIdentityTransport
@@ -227,6 +230,26 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             runtime_transport.seen_draft["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
         )
+
+    def test_cutover_audit_rejects_raw_host_stream_codec(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "host.py").write_text(
+                """
+import hashlib
+
+class _RollingHash:
+    def fold(self, seq, frame):
+        hashlib.sha256()
+        return {"stream_item": frame, "seq": seq}
+""",
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_host_stream_codec", {item.rule for item in result.violations})
 
     def test_easyremote_style_unary_invoke_uses_sdk_addressing_and_transport(
         self,

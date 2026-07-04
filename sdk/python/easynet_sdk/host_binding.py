@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
@@ -209,7 +210,7 @@ class HostStreamEnvelopeRequest:
     caller: str
 
     def to_json_dict(self) -> dict[str, object]:
-        if not self.fn or not self.call_id or not self.caller:
+        if not self.fn or not self.call_id:
             raise _invalid_host_binding("host stream envelope request is incomplete")
         return {
             "fn": self.fn,
@@ -222,6 +223,24 @@ class HostStreamEnvelopeRequest:
 @dataclass(frozen=True)
 class HostStreamEnvelope:
     request: HostStreamEnvelopeRequest
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "HostStreamEnvelope":
+        decoded = _json_object(raw, "host stream envelope")
+        request_value = decoded.get("request")
+        if not isinstance(request_value, dict):
+            raise _invalid_host_binding(
+                "host_stream envelope must be a JSON object with a request object"
+            )
+        request = dict(request_value)
+        return cls(
+            HostStreamEnvelopeRequest(
+                fn=_required_string(request, "fn"),
+                args=request.get("args", {}),
+                call_id=_required_string(request, "call_id"),
+                caller=_required_string(request, "caller", allow_empty=True),
+            )
+        )
 
     def to_json_bytes(self) -> bytes:
         return _json_bytes({"request": self.request.to_json_dict()})
@@ -244,7 +263,7 @@ class HostStreamRequest:
             function=_required_string(decoded, "function"),
             args=decoded.get("args"),
             call_id=_required_string(decoded, "call_id"),
-            caller=_required_string(decoded, "caller"),
+            caller=_required_string(decoded, "caller", allow_empty=True),
             metadata=_required_mapping(decoded, "metadata"),
         )
 
@@ -292,6 +311,32 @@ class HostStreamFrame:
         )
         _validate_frame(frame)
         return frame
+
+    def to_json_dict(self) -> dict[str, object]:
+        _validate_frame(self)
+        return {
+            "frame_type": self.frame_type,
+            "seq": self.seq,
+            "value": self.value,
+            "error": _sdk_error_json_dict(self.error) if self.error is not None else None,
+            "terminal": (
+                self.terminal.to_json_dict() if self.terminal is not None else None
+            ),
+            "output_hash": self.output_hash,
+        }
+
+    def to_host_wire_dict(self) -> dict[str, object]:
+        """Return the daemon host_stream line protocol shape."""
+
+        _validate_frame(self)
+        if self.frame_type == "item":
+            assert self.seq is not None
+            return {"stream_item": self.value, "seq": self.seq}
+        if self.frame_type == "error":
+            assert self.error is not None
+            return {"error": _host_wire_error(self.error)}
+        assert self.terminal is not None
+        return {"terminal": self.terminal.to_json_dict()}
 
 
 @dataclass(frozen=True)
@@ -367,6 +412,149 @@ class HostBindingTransport(Protocol):
 
     def fold_output_hash(self, request_json: bytes) -> bytes:
         ...
+
+
+class LocalHostBindingTransport:
+    """Pure SDK host-stream codec/hash transport.
+
+    This transport is for product hosts that need local frame encoding without
+    binding raw daemon or Axon internals. It owns the Python projection of the
+    shared host-stream frame and rolling hash fixtures.
+    """
+
+    def build_host_stream_binding(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "host stream binding request")
+        binding_request = HostStreamBindingRequest(
+            binding_id=_required_string(request, "binding_id"),
+            descriptor_ref=_required_string(request, "descriptor_ref"),
+            endpoint=_required_string(request, "endpoint"),
+            frame_schema=_required_string(request, "frame_schema"),
+            cleanup=_optional_mapping(request.get("cleanup"), "cleanup"),
+            timeout_ms=_optional_int(request.get("timeout_ms"), "timeout_ms"),
+            readiness=_optional_mapping(request.get("readiness"), "readiness"),
+            metadata=_optional_mapping(request.get("metadata"), "metadata") or {},
+        )
+        binding_request.to_json_bytes()
+        return _json_bytes(
+            {
+                "binding_id": binding_request.binding_id,
+                "descriptor_ref": binding_request.descriptor_ref,
+                "endpoint": binding_request.endpoint,
+                "frame_schema": binding_request.frame_schema,
+                "cleanup": _cleanup_dict(binding_request.cleanup or {}),
+                "timeout_ms": binding_request.timeout_ms,
+                "readiness": _readiness_dict(
+                    binding_request.readiness
+                    or HostStreamReadiness(
+                        state="declared",
+                        checked=False,
+                        endpoint_ready=None,
+                    )
+                ),
+                "lifecycle": HostStreamLifecycle(
+                    endpoint_owner="product_host",
+                    process_owner="product_host",
+                    frame_contract_owner="daemon_sdk",
+                ).to_json_dict(),
+                "metadata": {
+                    **dict(binding_request.metadata),
+                    "profile": "host_binding",
+                    "frame_schema": HOST_STREAM_FRAME_SCHEMA,
+                    "hash_algorithm": HOST_STREAM_HASH_ALGORITHM,
+                },
+            }
+        )
+
+    def decode_request(self, envelope_json: bytes) -> bytes:
+        envelope = HostStreamEnvelope.from_json(envelope_json)
+        return _json_bytes(
+            {
+                "function": envelope.request.fn,
+                "args": envelope.request.args,
+                "call_id": envelope.request.call_id,
+                "caller": envelope.request.caller,
+                "metadata": {
+                    "wire": "host_stream_request_v1",
+                    "frame_contract_owner": "daemon_sdk",
+                },
+            }
+        )
+
+    def encode_item(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "host stream item request")
+        seq = _required_non_negative_int(request, "seq")
+        return _frame_json(
+            HostStreamFrame(
+                frame_type="item",
+                seq=seq,
+                value=request.get("value"),
+                error=None,
+                terminal=None,
+                output_hash=None,
+            )
+        )
+
+    def encode_error(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "host stream error request")
+        error = _optional_sdk_error(request.get("error"), "error")
+        if error is None:
+            raise _invalid_host_binding("error is required")
+        return _frame_json(
+            HostStreamFrame(
+                frame_type="error",
+                seq=None,
+                value=None,
+                error=error,
+                terminal=None,
+                output_hash=None,
+            )
+        )
+
+    def encode_terminal(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "host stream terminal request")
+        summary_value = _required_mapping(request, "summary")
+        summary = HostStreamTerminalSummary(
+            output_hash=_required_string(summary_value, "output_hash"),
+            frames=_required_non_negative_int(summary_value, "frames"),
+            metadata=_optional_mapping(summary_value.get("metadata"), "metadata")
+            or {},
+        )
+        return _frame_json(
+            HostStreamFrame(
+                frame_type="terminal",
+                seq=summary.frames,
+                value=None,
+                error=None,
+                terminal=summary,
+                output_hash=summary.output_hash,
+            )
+        )
+
+    def fold_output_hash(self, request_json: bytes) -> bytes:
+        request = _json_object(request_json, "host stream hash fold request")
+        state = HostStreamHashState.from_json(
+            json.dumps(
+                _required_mapping(request, "state"),
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        seq = _required_non_negative_int(request, "seq")
+        _validate_hash_fold(state, seq)
+        canonical_json = _canonical_frame_json(request.get("value"))
+        output_hash = _fold_hash(state.output_hash, seq, canonical_json)
+        return _json_bytes(
+            {
+                "algorithm": HOST_STREAM_HASH_ALGORITHM,
+                "output_hash": output_hash,
+                "frames": state.frames + 1,
+                "last_seq": seq,
+                "canonical_json": canonical_json,
+            }
+        )
+
+    def close(self) -> None:
+        return None
 
 
 @dataclass(frozen=True)
@@ -728,23 +916,88 @@ def _optional_sdk_error(value: object, field_name: str) -> Optional[SDKError]:
 
 def _error_json_dict(error: BaseException) -> dict[str, object]:
     if isinstance(error, SDKError):
-        return {
-            "code": str(error.code),
-            "stage": error.stage,
-            "message": error.message,
-            "retry": str(error.retry),
-            "source": error.source,
-            "invocation_id": error.invocation_id,
-            "receipt_ura": error.receipt_ura,
-            "details": dict(error.details),
-        }
+        return _sdk_error_json_dict(error)
+    kind = getattr(error, "kind", None)
+    reason = getattr(error, "reason", None)
+    details: dict[str, object] = {}
+    if isinstance(kind, str) and kind:
+        details["kind"] = kind
+    if isinstance(reason, str) and reason:
+        details["reason"] = reason
     return {
         "code": str(ErrorCode.GENERIC),
         "stage": "host_binding",
         "message": str(error),
         "retry": str(RetryHint.NEVER),
-        "details": {},
+        "details": details,
     }
+
+
+def _sdk_error_json_dict(error: SDKError) -> dict[str, object]:
+    return {
+        "code": str(error.code),
+        "stage": error.stage,
+        "message": error.message,
+        "retry": str(error.retry),
+        "source": error.source,
+        "invocation_id": error.invocation_id,
+        "receipt_ura": error.receipt_ura,
+        "details": dict(error.details),
+    }
+
+
+def _host_wire_error(error: SDKError) -> dict[str, object]:
+    details = dict(error.details)
+    kind = details.get("kind")
+    reason = details.get("reason")
+    return {
+        "kind": kind if isinstance(kind, str) and kind else str(error.code),
+        "reason": reason if isinstance(reason, str) and reason else error.stage,
+        "message": error.message,
+    }
+
+
+def _frame_json(frame: HostStreamFrame) -> bytes:
+    return _json_bytes(frame.to_json_dict())
+
+
+def _canonical_frame_json(value: object) -> str:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except ValueError as exc:
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="host_binding",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=f"host stream frame is not valid JSON: {exc}",
+            details={
+                "kind": "INVALID_ARGUMENT",
+                "reason": "invalid_json_payload",
+            },
+            cause=exc,
+        ) from exc
+
+
+def _fold_hash(previous_output_hash: str, seq: int, canonical_json: str) -> str:
+    prefix = "sha256:"
+    if not previous_output_hash.startswith(prefix):
+        raise _invalid_host_binding("previous output_hash must be sha256-prefixed")
+    try:
+        previous = bytes.fromhex(previous_output_hash.removeprefix(prefix))
+    except ValueError as exc:
+        raise _invalid_host_binding("previous output_hash is not hex", exc) from exc
+    hasher = hashlib.sha256()
+    hasher.update(previous)
+    hasher.update(seq.to_bytes(8, "big"))
+    hasher.update(canonical_json.encode("utf-8"))
+    return prefix + hasher.hexdigest()
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

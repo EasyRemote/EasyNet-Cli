@@ -224,6 +224,7 @@ from .host_binding import (
     HostStreamSession,
     HostStreamSessionState,
     HostStreamTerminalSummary,
+    LocalHostBindingTransport,
 )
 from .invocation import (
     InvocationBuilder,
@@ -500,6 +501,7 @@ __all__ = [
     "HostStreamSession",
     "HostStreamSessionState",
     "HostStreamTerminalSummary",
+    "LocalHostBindingTransport",
     "AgentQuery",
     "DeviceQuery",
     "AddressingClient",
