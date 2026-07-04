@@ -115,6 +115,7 @@ swift test --package-path sdk/swift
 - convenience wrapper file/session/media record projections without execution
   transport ownership
 - profile ownership exclusivity
+- first-class consumer coverage through declared profiles
 
 The scaffold in `cases/` names the first shared cases. A profile must add its
 full case set before it can be marked profile-ready.

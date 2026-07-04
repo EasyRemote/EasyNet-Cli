@@ -349,6 +349,7 @@ case_files=(
   directory-no-default-fanout.yaml
   directory-resolve.yaml
   memc-profile-exclusivity.yaml
+  memc-consumer-coverage.yaml
 )
 
 for case_file in "${case_files[@]}"; do
@@ -377,6 +378,8 @@ require_literal sdk/go/conformance_test.go "TestGoReceiptFacadeExecutesSharedPro
 require_literal sdk/go/conformance_test.go "TestGoWrapperFacadeExecutesSharedProjectionConformanceCase"
 require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedProfileExclusivityConformanceCase"
 require_literal sdk/go/conformance_test.go "memc/profile_exclusivity"
+require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedConsumerCoverageConformanceCase"
+require_literal sdk/go/conformance_test.go "memc/consumer_coverage"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/cases"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/fixtures"
 require_literal sdk/python/tests/test_conformance.py "SharedConformanceFixtureTests"
@@ -390,6 +393,8 @@ require_literal sdk/python/tests/test_conformance.py "test_python_receipt_execut
 require_literal sdk/python/tests/test_conformance.py "test_python_wrappers_execute_shared_projection_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_profile_exclusivity_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "memc/profile_exclusivity"
+require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_consumer_coverage_conformance_case"
+require_literal sdk/python/tests/test_conformance.py "memc/consumer_coverage"
 require_literal sdk/go/client.go "DiscoveryTransport"
 require_literal sdk/go/daemon.go "DaemonHandle"
 require_literal sdk/go/daemon.go "DaemonLifecycleState"

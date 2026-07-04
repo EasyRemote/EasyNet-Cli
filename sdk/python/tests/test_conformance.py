@@ -2837,6 +2837,206 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual([], unmapped)
         self.assertEqual([], duplicate_owners)
 
+    def test_python_memc_executes_shared_consumer_coverage_conformance_case(self) -> None:
+        coverage_case = shared_case("memc-consumer-coverage.yaml")
+        self._require_case_id(coverage_case, "memc/consumer_coverage")
+        self._require_case_action(coverage_case, "inspect_consumer_coverage")
+        self._require_case_expectation(coverage_case, "raw_lower_layer_dependency: false")
+        for consumer in (
+            "backend_hub",
+            "easyremote",
+            "cli",
+            "desktop_gui",
+            "third_party_host_app",
+            "future_bindings",
+        ):
+            self._require_case_literal(coverage_case, f"- {consumer}")
+        for forbidden in (
+            "axon_sdk_proto",
+            "c_abi_direct",
+            "raw_daemon_socket",
+            "control_frame_product_call",
+            "cli_subprocess",
+            "easyremote_dependency",
+            "product_local_daemon_transport",
+        ):
+            self._require_case_literal(coverage_case, f"- {forbidden}")
+
+        requirements = [
+            (
+                "backend_hub",
+                "runtime_core",
+                (
+                    (Client, ("require_abi", "feature_discovery")),
+                    (RuntimeClient, ("invoke", "invoke_stream", "open_bidi", "await_result", "cancel")),
+                    (HealthClient, ("runtime_health",)),
+                ),
+            ),
+            (
+                "backend_hub",
+                "directory_identity",
+                (
+                    (DirectoryClient, ("resolve", "list_devices", "list_agents", "list_abilities")),
+                    (IdentityClient, ("project_descriptor_ref", "build_resource_ref")),
+                ),
+            ),
+            (
+                "backend_hub",
+                "receipt",
+                ((ReceiptClient, ("fetch", "project", "verify", "causal_ref")),),
+            ),
+            (
+                "backend_hub",
+                "events",
+                ((EventClient, ("subscribe_directory", "subscribe_invocations", "list_device_events", "project_drop_report")),),
+            ),
+            (
+                "backend_hub",
+                "admin_gateway",
+                ((AdminClient, ("gateway_status", "list_agents", "list_device_sessions", "join_hub", "leave_hub")),),
+            ),
+            (
+                "backend_hub",
+                "surface",
+                ((SurfaceClient, ("list_pages", "create_page", "delete_page", "surface_manifest", "public_page_ref", "surface_health")),),
+            ),
+            (
+                "backend_hub",
+                "compatibility",
+                ((CompatibilityClient, ("list_models", "create_chat_completion", "stream_chat_completion", "upload_file", "retrieve_file", "delete_file")),),
+            ),
+            (
+                "backend_hub",
+                "publication",
+                ((PublicationClient, ("list_abilities", "show_ability", "build_deploy_invocation")),),
+            ),
+            (
+                "backend_hub",
+                "wrappers",
+                ((WrapperClient, ("transfer_file", "start_terminal_session", "start_remote_desktop_session", "start_browser_session", "start_media_session")),),
+            ),
+            (
+                "easyremote",
+                "runtime_core",
+                (
+                    (DaemonControl, ("start", "attach", "connect_local")),
+                    (RuntimeClient, ("prepare", "submit_signed", "invoke", "invoke_stream", "open_bidi")),
+                ),
+            ),
+            (
+                "easyremote",
+                "directory_identity",
+                (
+                    (DirectoryClient, ("resolve", "list_abilities")),
+                    (IdentityClient, ("build_resource_ref", "signer", "register_signing_key", "list_signing_keys")),
+                ),
+            ),
+            (
+                "easyremote",
+                "publication",
+                ((PublicationClient, ("build_local_resource_ref", "deploy_ability", "list_abilities", "show_ability", "enable_ability_impl", "disable_ability_impl")),),
+            ),
+            (
+                "easyremote",
+                "host_binding",
+                ((HostBindingClient, ("build_host_stream_binding", "decode_request", "encode_item", "encode_error", "encode_terminal", "fold_output_hash")),),
+            ),
+            (
+                "easyremote",
+                "mission",
+                ((MissionClient, ("build_run_eal_invocation", "run_eal", "run_file", "track", "cancel", "events")),),
+            ),
+            (
+                "easyremote",
+                "admin_gateway",
+                ((AdminClient, ("gateway_status", "list_agents", "agent_start", "agent_refresh")),),
+            ),
+            (
+                "cli",
+                "runtime_core",
+                (
+                    (DaemonControl, ("discover", "start", "attach")),
+                    (RuntimeClient, ("invoke", "invoke_stream", "open_bidi")),
+                ),
+            ),
+            (
+                "cli",
+                "directory_identity",
+                ((DirectoryClient, ("resolve", "list_devices", "list_agents", "list_abilities")),),
+            ),
+            (
+                "cli",
+                "publication",
+                ((PublicationClient, ("validate_package", "deploy_ability", "install_plugin", "unpublish_ability")),),
+            ),
+            (
+                "cli",
+                "host_binding",
+                ((HostBindingClient, ("build_host_stream_binding", "fold_output_hash")),),
+            ),
+            (
+                "cli",
+                "mission",
+                ((MissionClient, ("run_eal", "run_file", "track", "cancel")),),
+            ),
+            (
+                "cli",
+                "admin_gateway",
+                ((AdminClient, ("gateway_status", "join_hub", "leave_hub", "list_agents")),),
+            ),
+            (
+                "cli",
+                "wrappers",
+                ((WrapperClient, ("transfer_file", "start_terminal_session")),),
+            ),
+            (
+                "desktop_gui",
+                "runtime_core",
+                (
+                    (DaemonControl, ("start", "attach", "connect_local")),
+                    (RuntimeClient, ("invoke", "invoke_stream", "open_bidi")),
+                    (HealthClient, ("runtime_health",)),
+                ),
+            ),
+            (
+                "desktop_gui",
+                "directory_identity",
+                ((DirectoryClient, ("list_devices", "list_agents", "list_abilities", "resolve")),),
+            ),
+            (
+                "desktop_gui",
+                "wrappers",
+                ((WrapperClient, ("start_terminal_session", "start_remote_desktop_session")),),
+            ),
+            (
+                "third_party_host_app",
+                "runtime_core",
+                ((RuntimeClient, ("invoke", "prepare", "submit_signed")),),
+            ),
+            (
+                "third_party_host_app",
+                "directory_identity",
+                (
+                    (DirectoryClient, ("resolve", "list_abilities")),
+                    (IdentityClient, ("build_resource_ref", "project_descriptor_ref")),
+                ),
+            ),
+            (
+                "third_party_host_app",
+                "publication",
+                ((PublicationClient, ("build_local_resource_ref", "validate_package", "deploy_ability")),),
+            ),
+            (
+                "third_party_host_app",
+                "host_binding",
+                ((HostBindingClient, ("build_host_stream_binding", "decode_request", "encode_terminal", "fold_output_hash")),),
+            ),
+        ]
+
+        missing, duplicates = audit_shared_consumer_coverage(requirements)
+        self.assertEqual([], missing)
+        self.assertEqual([], duplicates)
+
     def _require_case_id(self, raw: str, case_id: str) -> None:
         self._require_case_literal(raw, f"id: {case_id}")
 
@@ -2873,6 +3073,30 @@ def audit_shared_profile_ownership(audits):
                 f"{operation} owned by {', '.join(sorted(owners))}"
             )
     return sorted(unmapped), sorted(duplicate_owners)
+
+
+def audit_shared_consumer_coverage(requirements):
+    missing = []
+    duplicates = []
+    seen = set()
+    for consumer, profile, surfaces in requirements:
+        key = f"{consumer}/{profile}"
+        if key in seen:
+            duplicates.append(key)
+        seen.add(key)
+        if not surfaces:
+            missing.append(f"{key} has no public SDK surface")
+            continue
+        for cls, methods in surfaces:
+            public_methods = {
+                name
+                for name, _ in inspect.getmembers(cls, inspect.isfunction)
+                if not name.startswith("_")
+            }
+            for method in methods:
+                if method not in public_methods:
+                    missing.append(f"{key} missing {cls.__name__}.{method}")
+    return sorted(missing), sorted(duplicates)
 
 
 def shared_directory_query_base(fixture: str) -> DirectoryQueryBase:

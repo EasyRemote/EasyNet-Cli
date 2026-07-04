@@ -1866,6 +1866,300 @@ func auditSharedProfileOwnership(audits []sharedProfileOwnershipAudit) ([]string
 	return unmapped, duplicateOwners
 }
 
+func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	coverageCase := sharedCase(t, root, "memc-consumer-coverage.yaml")
+	requireCaseID(t, coverageCase, "memc/consumer_coverage")
+	requireCaseAction(t, coverageCase, "inspect_consumer_coverage")
+	requireCaseExpectation(t, coverageCase, "raw_lower_layer_dependency: false")
+	for _, consumer := range []string{
+		"backend_hub",
+		"easyremote",
+		"cli",
+		"desktop_gui",
+		"third_party_host_app",
+		"future_bindings",
+	} {
+		requireCaseLiteral(t, coverageCase, "- "+consumer)
+	}
+	for _, forbidden := range []string{
+		"axon_sdk_proto",
+		"c_abi_direct",
+		"raw_daemon_socket",
+		"control_frame_product_call",
+		"cli_subprocess",
+		"easyremote_dependency",
+		"product_local_daemon_transport",
+	} {
+		requireCaseLiteral(t, coverageCase, "- "+forbidden)
+	}
+
+	requirements := []sharedConsumerCoverageRequirement{
+		{
+			Consumer: "backend_hub",
+			Profile:  "runtime_core",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*Client)(nil)), Methods: []string{"RequireABI", "FeatureDiscovery"}},
+				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Invoke", "InvokeStream", "OpenBidi", "Await", "Cancel"}},
+				{Type: reflect.TypeOf((*HealthClient)(nil)), Methods: []string{"RuntimeHealth"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "directory_identity",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DirectoryClient)(nil)), Methods: []string{"Resolve", "ListDevices", "ListAgents", "ListAbilities"}},
+				{Type: reflect.TypeOf((*IdentityClient)(nil)), Methods: []string{"ProjectDescriptorRef", "BuildResourceRef"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "receipt",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*ReceiptClient)(nil)), Methods: []string{"Fetch", "Project", "Verify", "CausalRef"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "events",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*EventClient)(nil)), Methods: []string{"SubscribeDirectory", "SubscribeInvocations", "ListDeviceEvents", "ProjectDropReport"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "admin_gateway",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*AdminClient)(nil)), Methods: []string{"GatewayStatus", "ListAgents", "ListDeviceSessions", "JoinHub", "LeaveHub"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "surface",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*SurfaceClient)(nil)), Methods: []string{"ListPages", "CreatePage", "DeletePage", "SurfaceManifest", "PublicPageRef", "SurfaceHealth"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "compatibility",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*CompatibilityClient)(nil)), Methods: []string{"ListModels", "CreateChatCompletion", "StreamChatCompletion", "UploadFile", "RetrieveFile", "DeleteFile"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "publication",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*PublicationClient)(nil)), Methods: []string{"ListAbilities", "ShowAbility", "BuildDeployInvocation"}},
+			},
+		},
+		{
+			Consumer: "backend_hub",
+			Profile:  "wrappers",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"TransferFile", "StartTerminalSession", "StartRemoteDesktopSession", "StartBrowserSession", "StartMediaSession"}},
+			},
+		},
+		{
+			Consumer: "easyremote",
+			Profile:  "runtime_core",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DaemonControl)(nil)), Methods: []string{"Start", "Attach", "ConnectLocal"}},
+				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Prepare", "SubmitSigned", "Invoke", "InvokeStream", "OpenBidi"}},
+			},
+		},
+		{
+			Consumer: "easyremote",
+			Profile:  "directory_identity",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DirectoryClient)(nil)), Methods: []string{"Resolve", "ListAbilities"}},
+				{Type: reflect.TypeOf((*IdentityClient)(nil)), Methods: []string{"BuildResourceRef", "Signer", "RegisterSigningKey", "ListSigningKeys"}},
+			},
+		},
+		{
+			Consumer: "easyremote",
+			Profile:  "publication",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*PublicationClient)(nil)), Methods: []string{"BuildLocalResourceRef", "DeployAbility", "ListAbilities", "ShowAbility", "EnableAbilityImpl", "DisableAbilityImpl"}},
+			},
+		},
+		{
+			Consumer: "easyremote",
+			Profile:  "host_binding",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*HostBindingClient)(nil)), Methods: []string{"BuildHostStreamBinding", "DecodeRequest", "EncodeItem", "EncodeError", "EncodeTerminal", "FoldOutputHash"}},
+			},
+		},
+		{
+			Consumer: "easyremote",
+			Profile:  "mission",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*MissionClient)(nil)), Methods: []string{"BuildRunEALInvocation", "RunEAL", "RunFile", "Track", "Cancel", "Events"}},
+			},
+		},
+		{
+			Consumer: "easyremote",
+			Profile:  "admin_gateway",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*AdminClient)(nil)), Methods: []string{"GatewayStatus", "ListAgents", "AgentStart", "AgentRefresh"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "runtime_core",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DaemonControl)(nil)), Methods: []string{"Discover", "Start", "Attach"}},
+				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Invoke", "InvokeStream", "OpenBidi"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "directory_identity",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DirectoryClient)(nil)), Methods: []string{"Resolve", "ListDevices", "ListAgents", "ListAbilities"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "publication",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*PublicationClient)(nil)), Methods: []string{"ValidatePackage", "DeployAbility", "InstallPlugin", "UnpublishAbility"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "host_binding",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*HostBindingClient)(nil)), Methods: []string{"BuildHostStreamBinding", "FoldOutputHash"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "mission",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*MissionClient)(nil)), Methods: []string{"RunEAL", "RunFile", "Track", "Cancel"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "admin_gateway",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*AdminClient)(nil)), Methods: []string{"GatewayStatus", "JoinHub", "LeaveHub", "ListAgents"}},
+			},
+		},
+		{
+			Consumer: "cli",
+			Profile:  "wrappers",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"TransferFile", "StartTerminalSession"}},
+			},
+		},
+		{
+			Consumer: "desktop_gui",
+			Profile:  "runtime_core",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DaemonControl)(nil)), Methods: []string{"Start", "Attach", "ConnectLocal"}},
+				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Invoke", "InvokeStream", "OpenBidi"}},
+				{Type: reflect.TypeOf((*HealthClient)(nil)), Methods: []string{"RuntimeHealth"}},
+			},
+		},
+		{
+			Consumer: "desktop_gui",
+			Profile:  "directory_identity",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DirectoryClient)(nil)), Methods: []string{"ListDevices", "ListAgents", "ListAbilities", "Resolve"}},
+			},
+		},
+		{
+			Consumer: "desktop_gui",
+			Profile:  "wrappers",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"StartTerminalSession", "StartRemoteDesktopSession"}},
+			},
+		},
+		{
+			Consumer: "third_party_host_app",
+			Profile:  "runtime_core",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Invoke", "Prepare", "SubmitSigned"}},
+			},
+		},
+		{
+			Consumer: "third_party_host_app",
+			Profile:  "directory_identity",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*DirectoryClient)(nil)), Methods: []string{"Resolve", "ListAbilities"}},
+				{Type: reflect.TypeOf((*IdentityClient)(nil)), Methods: []string{"BuildResourceRef", "ProjectDescriptorRef"}},
+			},
+		},
+		{
+			Consumer: "third_party_host_app",
+			Profile:  "publication",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*PublicationClient)(nil)), Methods: []string{"BuildLocalResourceRef", "ValidatePackage", "DeployAbility"}},
+			},
+		},
+		{
+			Consumer: "third_party_host_app",
+			Profile:  "host_binding",
+			Surfaces: []sharedConsumerCoverageSurface{
+				{Type: reflect.TypeOf((*HostBindingClient)(nil)), Methods: []string{"BuildHostStreamBinding", "DecodeRequest", "EncodeTerminal", "FoldOutputHash"}},
+			},
+		},
+	}
+
+	missing, duplicates := auditSharedConsumerCoverage(requirements)
+	if len(missing) > 0 {
+		t.Fatalf("consumer coverage has missing public SDK methods:\n%s", strings.Join(missing, "\n"))
+	}
+	if len(duplicates) > 0 {
+		t.Fatalf("consumer coverage has duplicate consumer/profile rows:\n%s", strings.Join(duplicates, "\n"))
+	}
+}
+
+type sharedConsumerCoverageRequirement struct {
+	Consumer string
+	Profile  string
+	Surfaces []sharedConsumerCoverageSurface
+}
+
+type sharedConsumerCoverageSurface struct {
+	Type    reflect.Type
+	Methods []string
+}
+
+func auditSharedConsumerCoverage(requirements []sharedConsumerCoverageRequirement) ([]string, []string) {
+	var missing []string
+	seen := make(map[string]struct{})
+	var duplicates []string
+	for _, requirement := range requirements {
+		key := requirement.Consumer + "/" + requirement.Profile
+		if _, ok := seen[key]; ok {
+			duplicates = append(duplicates, key)
+		}
+		seen[key] = struct{}{}
+		if len(requirement.Surfaces) == 0 {
+			missing = append(missing, key+" has no public SDK surface")
+			continue
+		}
+		for _, surface := range requirement.Surfaces {
+			if surface.Type == nil || surface.Type.Kind() != reflect.Pointer {
+				missing = append(missing, key+" has invalid SDK surface type")
+				continue
+			}
+			for _, method := range surface.Methods {
+				if _, ok := surface.Type.MethodByName(method); !ok {
+					missing = append(missing, fmt.Sprintf("%s missing %s.%s", key, surface.Type.Elem().Name(), method))
+				}
+			}
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(duplicates)
+	return missing, duplicates
+}
+
 type sharedMissionTransport struct {
 	t                      *testing.T
 	expectedRunRequest     []byte
