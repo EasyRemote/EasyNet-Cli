@@ -46,10 +46,10 @@ type EventCursor struct {
 
 func NewEventCursor(stream string, sequence uint64) (EventCursor, error) {
 	if stream == "" {
-		return EventCursor{}, invalidRuntimePayload("event cursor stream is required", nil)
+		return EventCursor{}, invalidProfilePayload(eventsProfile, "event cursor stream is required", nil)
 	}
 	if !validEventStreamKind(EventStreamKind(stream)) {
-		return EventCursor{}, invalidRuntimePayload("unsupported event stream", nil)
+		return EventCursor{}, invalidProfilePayload(eventsProfile, "unsupported event stream", nil)
 	}
 	return EventCursor{Stream: stream, Sequence: sequence}, nil
 }
@@ -206,84 +206,84 @@ type EventTransportFunc struct {
 
 func (f EventTransportFunc) BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildDirectorySubscriptionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("events directory-subscription invocation transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events directory-subscription invocation transport function is required")
 	}
 	return f.BuildDirectorySubscriptionInvocationFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) BuildDeviceSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildDeviceSubscriptionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("events device-subscription invocation transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events device-subscription invocation transport function is required")
 	}
 	return f.BuildDeviceSubscriptionInvocationFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) BuildSessionSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildSessionSubscriptionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("events session-subscription invocation transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events session-subscription invocation transport function is required")
 	}
 	return f.BuildSessionSubscriptionInvocationFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) BuildInvocationSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildInvocationSubscriptionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("events invocation-subscription invocation transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events invocation-subscription invocation transport function is required")
 	}
 	return f.BuildInvocationSubscriptionInvocationFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SubscribeDirectoryFunc == nil {
-		return nil, invalidRuntimeClient("events subscribe-directory transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events subscribe-directory transport function is required")
 	}
 	return f.SubscribeDirectoryFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) SubscribeDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SubscribeDevicesFunc == nil {
-		return nil, invalidRuntimeClient("events subscribe-devices transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events subscribe-devices transport function is required")
 	}
 	return f.SubscribeDevicesFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) SubscribeSessions(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SubscribeSessionsFunc == nil {
-		return nil, invalidRuntimeClient("events subscribe-sessions transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events subscribe-sessions transport function is required")
 	}
 	return f.SubscribeSessionsFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SubscribeInvocationsFunc == nil {
-		return nil, invalidRuntimeClient("events subscribe-invocations transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events subscribe-invocations transport function is required")
 	}
 	return f.SubscribeInvocationsFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListDeviceEventsFunc == nil {
-		return nil, invalidRuntimeClient("events list-device-events transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events list-device-events transport function is required")
 	}
 	return f.ListDeviceEventsFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
 	if f.ProjectDirectoryEventFunc == nil {
-		return nil, invalidRuntimeClient("events project-directory-event transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events project-directory-event transport function is required")
 	}
 	return f.ProjectDirectoryEventFunc(ctx, eventJSON)
 }
 
 func (f EventTransportFunc) ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error) {
 	if f.ProjectDropReportFunc == nil {
-		return nil, invalidRuntimeClient("events project-drop-report transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events project-drop-report transport function is required")
 	}
 	return f.ProjectDropReportFunc(ctx, dropJSON)
 }
 
 func (f EventTransportFunc) ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error) {
 	if f.ProjectTerminalFunc == nil {
-		return nil, invalidRuntimeClient("events project-terminal transport function is required")
+		return nil, invalidProfileClient(eventsProfile, "events project-terminal transport function is required")
 	}
 	return f.ProjectTerminalFunc(ctx, terminalJSON)
 }
@@ -296,7 +296,7 @@ type EventClient struct {
 
 func NewEventClient(transport EventTransport) (*EventClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("events transport is required")
+		return nil, invalidProfileClient(eventsProfile, "events transport is required")
 	}
 	return &EventClient{transport: transport}, nil
 }
@@ -431,7 +431,7 @@ func (c *EventClient) projectFrame(ctx context.Context, input any, validate func
 	}
 	requestJSON, err := json.Marshal(input)
 	if err != nil {
-		return EventFrame{}, invalidRuntimePayload(fmt.Sprintf("encode events projection input: %v", err), err)
+		return EventFrame{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events projection input: %v", err), err)
 	}
 	raw, err := fn(ctx, requestJSON)
 	if err != nil {
@@ -442,14 +442,14 @@ func (c *EventClient) projectFrame(ctx context.Context, input any, validate func
 
 func (c *EventClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("events client is not initialized")
+		return invalidProfileClient(eventsProfile, "events client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "events")
 }
 
 func (c *EventClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("events client is not initialized")
+		return invalidProfileClient(eventsProfile, "events client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "events")
 }
@@ -457,10 +457,10 @@ func (c *EventClient) requireReady(ctx context.Context) error {
 func NewEventStreamFromJSON(raw []byte) (EventStream, error) {
 	var stream EventStream
 	if err := json.Unmarshal(raw, &stream); err != nil {
-		return EventStream{}, invalidRuntimePayload(fmt.Sprintf("decode event stream JSON: %v", err), err)
+		return EventStream{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("decode event stream JSON: %v", err), err)
 	}
 	if !validEventStreamKind(EventStreamKind(stream.Stream)) || stream.State == "" || stream.Metadata == nil {
-		return EventStream{}, invalidRuntimePayload("invalid event stream projection", nil)
+		return EventStream{}, invalidProfilePayload(eventsProfile, "invalid event stream projection", nil)
 	}
 	return stream, nil
 }
@@ -468,7 +468,7 @@ func NewEventStreamFromJSON(raw []byte) (EventStream, error) {
 func NewEventFrameFromJSON(raw []byte) (EventFrame, error) {
 	var frame EventFrame
 	if err := json.Unmarshal(raw, &frame); err != nil {
-		return EventFrame{}, invalidRuntimePayload(fmt.Sprintf("decode event frame JSON: %v", err), err)
+		return EventFrame{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("decode event frame JSON: %v", err), err)
 	}
 	if err := validateEventFrame(&frame); err != nil {
 		return EventFrame{}, err
@@ -480,22 +480,22 @@ func validateEventFrame(frame *EventFrame) error {
 	if frame.Profile != eventsProfile || !validEventStreamKind(EventStreamKind(frame.Stream)) ||
 		frame.Kind == "" || frame.EventID == "" || frame.ResumeToken == "" ||
 		frame.OccurredUnixMS < 0 || frame.OccurredAt == "" || frame.Metadata == nil {
-		return invalidRuntimePayload("invalid event frame projection", nil)
+		return invalidProfilePayload(eventsProfile, "invalid event frame projection", nil)
 	}
 	if frame.Cursor.Token == "" {
-		return invalidRuntimePayload("event cursor token is required", nil)
+		return invalidProfilePayload(eventsProfile, "event cursor token is required", nil)
 	}
 	if err := validateEventCursor(frame.Cursor); err != nil {
 		return err
 	}
 	if frame.DroppedCount < 0 {
-		return invalidRuntimePayload("dropped_count must be non-negative", nil)
+		return invalidProfilePayload(eventsProfile, "dropped_count must be non-negative", nil)
 	}
 	if strings.Contains(frame.Kind, "drop_report") && frame.DroppedCount == 0 {
-		return invalidRuntimePayload("dropped_count must be greater than zero", nil)
+		return invalidProfilePayload(eventsProfile, "dropped_count must be greater than zero", nil)
 	}
 	if strings.Contains(frame.Kind, "terminal") && !frame.Terminal {
-		return invalidRuntimePayload("terminal event frame must be terminal", nil)
+		return invalidProfilePayload(eventsProfile, "terminal event frame must be terminal", nil)
 	}
 	return nil
 }
@@ -503,16 +503,16 @@ func validateEventFrame(frame *EventFrame) error {
 func NewDeviceEventPageFromJSON(raw []byte) (DeviceEventPage, error) {
 	var page DeviceEventPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return DeviceEventPage{}, invalidRuntimePayload(fmt.Sprintf("decode device event page JSON: %v", err), err)
+		return DeviceEventPage{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("decode device event page JSON: %v", err), err)
 	}
 	if page.Profile != eventsProfile || page.Stream != string(EventStreamDevice) ||
 		page.ItemKind == "" || page.Limit < 1 || page.Limit > MaxEventPageSize ||
 		page.Items == nil || page.Metadata == nil {
-		return DeviceEventPage{}, invalidRuntimePayload("invalid device event page projection", nil)
+		return DeviceEventPage{}, invalidProfilePayload(eventsProfile, "invalid device event page projection", nil)
 	}
 	for idx := range page.Items {
 		if page.Items[idx].Stream != string(EventStreamDevice) {
-			return DeviceEventPage{}, invalidRuntimePayload("device event page item stream mismatch", nil)
+			return DeviceEventPage{}, invalidProfilePayload(eventsProfile, "device event page item stream mismatch", nil)
 		}
 		if err := validateEventFrame(&page.Items[idx]); err != nil {
 			return DeviceEventPage{}, err
@@ -528,7 +528,7 @@ func marshalEventsSubscriptionRequest(req EventsSubscriptionRequest, expected Ev
 	}
 	requestJSON, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode events subscription request: %v", err), err)
+		return nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events subscription request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -540,7 +540,7 @@ func marshalEventsDeviceEventListRequest(req EventsDeviceEventListRequest) ([]by
 	}
 	requestJSON, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode events device event list request: %v", err), err)
+		return nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events device event list request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -554,27 +554,27 @@ func normalizeEventsDeviceEventListRequest(req EventsDeviceEventListRequest) (Ev
 		"cursor":     req.Cursor,
 	} {
 		if strings.TrimSpace(value) != value {
-			return EventsDeviceEventListRequest{}, invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+			return EventsDeviceEventListRequest{}, invalidProfilePayload(eventsProfile, field+" must not contain surrounding whitespace", nil)
 		}
 	}
 	if req.Limit == 0 {
 		req.Limit = DefaultEventPageSize
 	}
 	if req.Limit < 1 || req.Limit > MaxEventPageSize {
-		return EventsDeviceEventListRequest{}, invalidRuntimePayload("event page limit exceeds bounds", nil)
+		return EventsDeviceEventListRequest{}, invalidProfilePayload(eventsProfile, "event page limit exceeds bounds", nil)
 	}
 	return req, nil
 }
 
 func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected EventStreamKind) (EventsSubscriptionRequest, error) {
 	if !validEventStreamKind(expected) {
-		return EventsSubscriptionRequest{}, invalidRuntimePayload("unsupported event stream", nil)
+		return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "unsupported event stream", nil)
 	}
 	if req.Stream == "" {
 		req.Stream = expected
 	}
 	if req.Stream != expected {
-		return EventsSubscriptionRequest{}, invalidRuntimePayload("event subscription stream mismatch", nil)
+		return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "event subscription stream mismatch", nil)
 	}
 	if err := validateEventsCarrierBase(req.EventsCarrierBase); err != nil {
 		return EventsSubscriptionRequest{}, err
@@ -589,7 +589,7 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 		"invocation_id": req.InvocationID,
 	} {
 		if strings.TrimSpace(value) != value {
-			return EventsSubscriptionRequest{}, invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+			return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, field+" must not contain surrounding whitespace", nil)
 		}
 	}
 	if req.ResumeCursor != nil {
@@ -597,23 +597,23 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 			return EventsSubscriptionRequest{}, err
 		}
 		if EventStreamKind(req.ResumeCursor.Stream) != expected {
-			return EventsSubscriptionRequest{}, invalidRuntimePayload("resume cursor stream mismatch", nil)
+			return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "resume cursor stream mismatch", nil)
 		}
 	}
 	if expected == EventStreamSession {
 		if req.SessionURA != "" {
-			return EventsSubscriptionRequest{}, invalidRuntimePayload("session_ura cannot be converted into daemon session_id", nil)
+			return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "session_ura cannot be converted into daemon session_id", nil)
 		}
 		if req.SessionID == "" {
-			return EventsSubscriptionRequest{}, invalidRuntimePayload("session_id is required", nil)
+			return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "session_id is required", nil)
 		}
 		if strings.ContainsAny(req.SessionID, " \t\r\n") {
-			return EventsSubscriptionRequest{}, invalidRuntimePayload("session_id must not contain whitespace", nil)
+			return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "session_id must not contain whitespace", nil)
 		}
 	}
 	if req.HeartbeatIntervalMS != 0 &&
 		(req.HeartbeatIntervalMS < MinEventHeartbeatIntervalMS || req.HeartbeatIntervalMS > MaxEventHeartbeatIntervalMS) {
-		return EventsSubscriptionRequest{}, invalidRuntimePayload("heartbeat_interval_ms exceeds bounds", nil)
+		return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "heartbeat_interval_ms exceeds bounds", nil)
 	}
 	return req, nil
 }
@@ -621,7 +621,7 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 func validateEventsCarrierBase(base EventsCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
-		return invalidRuntimePayload("complete events invocation carrier is required", nil)
+		return invalidProfilePayload(eventsProfile, "complete events invocation carrier is required", nil)
 	}
 	return nil
 }
@@ -632,7 +632,7 @@ func validateEventProjectionInput(input any) error {
 		return err
 	}
 	if value.Event == nil {
-		return invalidRuntimePayload("directory event payload is required", nil)
+		return invalidProfilePayload(eventsProfile, "directory event payload is required", nil)
 	}
 	return nil
 }
@@ -643,10 +643,10 @@ func validateEventDropReportInput(input any) error {
 		return err
 	}
 	if value.OccurredUnixMS < 0 {
-		return invalidRuntimePayload("occurred_unix_ms must be non-negative", nil)
+		return invalidProfilePayload(eventsProfile, "occurred_unix_ms must be non-negative", nil)
 	}
 	if value.DroppedCount <= 0 {
-		return invalidRuntimePayload("dropped_count must be greater than zero", nil)
+		return invalidProfilePayload(eventsProfile, "dropped_count must be greater than zero", nil)
 	}
 	return validateReconnectAfterMS(value.ReconnectAfterMS)
 }
@@ -657,24 +657,24 @@ func validateEventTerminalInput(input any) error {
 		return err
 	}
 	if value.OccurredUnixMS < 0 {
-		return invalidRuntimePayload("occurred_unix_ms must be non-negative", nil)
+		return invalidProfilePayload(eventsProfile, "occurred_unix_ms must be non-negative", nil)
 	}
 	return validateReconnectAfterMS(value.ReconnectAfterMS)
 }
 
 func validateEventCursor(cursor EventCursor) error {
 	if !validEventStreamKind(EventStreamKind(cursor.Stream)) {
-		return invalidRuntimePayload("unsupported event stream", nil)
+		return invalidProfilePayload(eventsProfile, "unsupported event stream", nil)
 	}
 	token := cursor.ResumeToken()
 	if token == "" {
-		return invalidRuntimePayload("event cursor token is required", nil)
+		return invalidProfilePayload(eventsProfile, "event cursor token is required", nil)
 	}
 	if strings.ContainsAny(cursor.Stream, " \t\r\n") || strings.ContainsAny(token, " \t\r\n") {
-		return invalidRuntimePayload("event cursor must not contain whitespace", nil)
+		return invalidProfilePayload(eventsProfile, "event cursor must not contain whitespace", nil)
 	}
 	if want := fmt.Sprintf("%s:%d", cursor.Stream, cursor.Sequence); token != want {
-		return invalidRuntimePayload("event cursor token must match stream sequence", nil)
+		return invalidProfilePayload(eventsProfile, "event cursor token must match stream sequence", nil)
 	}
 	return nil
 }
@@ -693,7 +693,7 @@ func validateReconnectAfterMS(value *int) error {
 		return nil
 	}
 	if *value < 0 || *value > MaxEventHeartbeatIntervalMS {
-		return invalidRuntimePayload("reconnect_after_ms exceeds bounds", nil)
+		return invalidProfilePayload(eventsProfile, "reconnect_after_ms exceeds bounds", nil)
 	}
 	return nil
 }
@@ -701,7 +701,7 @@ func validateReconnectAfterMS(value *int) error {
 func wrapEventsTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, eventsProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(eventsProfile, message, cause)
 }

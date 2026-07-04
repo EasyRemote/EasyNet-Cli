@@ -200,84 +200,84 @@ type CompatibilityTransportFunc struct {
 
 func (f CompatibilityTransportFunc) BuildListModelsInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildListModelsInvocationFunc == nil {
-		return nil, invalidRuntimeClient("compatibility list-models invocation transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility list-models invocation transport function is required")
 	}
 	return f.BuildListModelsInvocationFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) BuildChatCompletionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildChatCompletionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("compatibility chat-completion invocation transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility chat-completion invocation transport function is required")
 	}
 	return f.BuildChatCompletionInvocationFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) BuildStreamChatCompletionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildStreamChatCompletionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("compatibility stream-chat-completion invocation transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility stream-chat-completion invocation transport function is required")
 	}
 	return f.BuildStreamChatCompletionInvocationFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) BuildFileUploadInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildFileUploadInvocationFunc == nil {
-		return nil, invalidRuntimeClient("compatibility file-upload invocation transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-upload invocation transport function is required")
 	}
 	return f.BuildFileUploadInvocationFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) BuildFileRetrieveInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildFileRetrieveInvocationFunc == nil {
-		return nil, invalidRuntimeClient("compatibility file-retrieve invocation transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-retrieve invocation transport function is required")
 	}
 	return f.BuildFileRetrieveInvocationFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) BuildFileDeleteInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildFileDeleteInvocationFunc == nil {
-		return nil, invalidRuntimeClient("compatibility file-delete invocation transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-delete invocation transport function is required")
 	}
 	return f.BuildFileDeleteInvocationFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) ListModels(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListModelsFunc == nil {
-		return nil, invalidRuntimeClient("compatibility list-models transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility list-models transport function is required")
 	}
 	return f.ListModelsFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) CreateChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.CreateChatCompletionFunc == nil {
-		return nil, invalidRuntimeClient("compatibility chat-completion transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility chat-completion transport function is required")
 	}
 	return f.CreateChatCompletionFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) StreamChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.StreamChatCompletionFunc == nil {
-		return nil, invalidRuntimeClient("compatibility stream-chat-completion transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility stream-chat-completion transport function is required")
 	}
 	return f.StreamChatCompletionFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) UploadFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.UploadFileFunc == nil {
-		return nil, invalidRuntimeClient("compatibility file-upload transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-upload transport function is required")
 	}
 	return f.UploadFileFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.RetrieveFileFunc == nil {
-		return nil, invalidRuntimeClient("compatibility file-retrieve transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-retrieve transport function is required")
 	}
 	return f.RetrieveFileFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) DeleteFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.DeleteFileFunc == nil {
-		return nil, invalidRuntimeClient("compatibility file-delete transport function is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-delete transport function is required")
 	}
 	return f.DeleteFileFunc(ctx, requestJSON)
 }
@@ -290,7 +290,7 @@ type CompatibilityClient struct {
 
 func NewCompatibilityClient(transport CompatibilityTransport) (*CompatibilityClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("compatibility transport is required")
+		return nil, invalidProfileClient(compatibilityProfile, "compatibility transport is required")
 	}
 	return &CompatibilityClient{transport: transport}, nil
 }
@@ -450,7 +450,7 @@ func (c *CompatibilityClient) ProjectFileDeleteResult(req CompatibilityFileDelet
 
 func (c *CompatibilityClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("compatibility client is not initialized")
+		return invalidProfileClient(compatibilityProfile, "compatibility client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "compatibility")
 }
@@ -472,7 +472,7 @@ func (c *CompatibilityClient) buildInvocation(ctx context.Context, req any, vali
 
 func (c *CompatibilityClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("compatibility client is not initialized")
+		return invalidProfileClient(compatibilityProfile, "compatibility client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "compatibility")
 }
@@ -480,10 +480,10 @@ func (c *CompatibilityClient) requireReady(ctx context.Context) error {
 func NewCompatibilityModelPageFromJSON(raw []byte) (CompatibilityModelPage, error) {
 	var page CompatibilityModelPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return CompatibilityModelPage{}, invalidRuntimePayload(fmt.Sprintf("decode compatibility model page JSON: %v", err), err)
+		return CompatibilityModelPage{}, invalidProfilePayload(compatibilityProfile, fmt.Sprintf("decode compatibility model page JSON: %v", err), err)
 	}
 	if page.Profile != compatibilityProfile || page.Kind != "model_page" || page.Object != "list" || page.Data == nil || page.Metadata == nil {
-		return CompatibilityModelPage{}, invalidRuntimePayload("invalid compatibility model page projection", nil)
+		return CompatibilityModelPage{}, invalidProfilePayload(compatibilityProfile, "invalid compatibility model page projection", nil)
 	}
 	for _, model := range page.Data {
 		if err := validateCompatibilityModel(model); err != nil {
@@ -496,11 +496,11 @@ func NewCompatibilityModelPageFromJSON(raw []byte) (CompatibilityModelPage, erro
 func NewCompatibilityChatCompletionFromJSON(raw []byte) (CompatibilityChatCompletion, error) {
 	var completion CompatibilityChatCompletion
 	if err := json.Unmarshal(raw, &completion); err != nil {
-		return CompatibilityChatCompletion{}, invalidRuntimePayload(fmt.Sprintf("decode compatibility chat completion JSON: %v", err), err)
+		return CompatibilityChatCompletion{}, invalidProfilePayload(compatibilityProfile, fmt.Sprintf("decode compatibility chat completion JSON: %v", err), err)
 	}
 	if completion.Profile != compatibilityProfile || completion.Kind != "chat_completion" || completion.Object != "chat.completion" ||
 		completion.ID == "" || completion.Created < 0 || completion.Model == "" || completion.Choices == nil || completion.Metadata == nil {
-		return CompatibilityChatCompletion{}, invalidRuntimePayload("invalid compatibility chat completion projection", nil)
+		return CompatibilityChatCompletion{}, invalidProfilePayload(compatibilityProfile, "invalid compatibility chat completion projection", nil)
 	}
 	return completion, nil
 }
@@ -508,17 +508,17 @@ func NewCompatibilityChatCompletionFromJSON(raw []byte) (CompatibilityChatComple
 func NewCompatibilityChatCompletionStreamFromJSON(raw []byte) (CompatibilityChatCompletionStream, error) {
 	var stream CompatibilityChatCompletionStream
 	if err := json.Unmarshal(raw, &stream); err != nil {
-		return CompatibilityChatCompletionStream{}, invalidRuntimePayload(fmt.Sprintf("decode compatibility chat stream JSON: %v", err), err)
+		return CompatibilityChatCompletionStream{}, invalidProfilePayload(compatibilityProfile, fmt.Sprintf("decode compatibility chat stream JSON: %v", err), err)
 	}
 	if stream.Profile != compatibilityProfile || stream.Kind != "chat_completion_stream" || !stream.Stream ||
 		stream.DoneSentinel != "[DONE]" || stream.Items == nil || stream.Metadata == nil {
-		return CompatibilityChatCompletionStream{}, invalidRuntimePayload("invalid compatibility chat stream projection", nil)
+		return CompatibilityChatCompletionStream{}, invalidProfilePayload(compatibilityProfile, "invalid compatibility chat stream projection", nil)
 	}
 	for _, item := range stream.Items {
 		if item.Profile != compatibilityProfile || item.Kind != "chat_completion_chunk" ||
 			item.Object != "chat.completion.chunk" || item.ID == "" || item.Created < 0 ||
 			item.Model == "" || item.Choices == nil || item.Metadata == nil {
-			return CompatibilityChatCompletionStream{}, invalidRuntimePayload("invalid compatibility chat stream chunk projection", nil)
+			return CompatibilityChatCompletionStream{}, invalidProfilePayload(compatibilityProfile, "invalid compatibility chat stream chunk projection", nil)
 		}
 	}
 	return stream, nil
@@ -527,7 +527,7 @@ func NewCompatibilityChatCompletionStreamFromJSON(raw []byte) (CompatibilityChat
 func NewCompatibilityFileFromJSON(raw []byte) (CompatibilityFile, error) {
 	var file CompatibilityFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return CompatibilityFile{}, invalidRuntimePayload(fmt.Sprintf("decode compatibility file JSON: %v", err), err)
+		return CompatibilityFile{}, invalidProfilePayload(compatibilityProfile, fmt.Sprintf("decode compatibility file JSON: %v", err), err)
 	}
 	if err := validateCompatibilityFileProjection(file); err != nil {
 		return CompatibilityFile{}, err
@@ -538,11 +538,11 @@ func NewCompatibilityFileFromJSON(raw []byte) (CompatibilityFile, error) {
 func NewCompatibilityFileDeleteResultFromJSON(raw []byte) (CompatibilityFileDeleteResult, error) {
 	var result CompatibilityFileDeleteResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return CompatibilityFileDeleteResult{}, invalidRuntimePayload(fmt.Sprintf("decode compatibility file delete result JSON: %v", err), err)
+		return CompatibilityFileDeleteResult{}, invalidProfilePayload(compatibilityProfile, fmt.Sprintf("decode compatibility file delete result JSON: %v", err), err)
 	}
 	if result.Profile != compatibilityProfile || result.Kind != "file_delete_result" || result.Object != "file" ||
 		result.ID == "" || !result.Deleted || result.Metadata == nil {
-		return CompatibilityFileDeleteResult{}, invalidRuntimePayload("invalid compatibility file delete projection", nil)
+		return CompatibilityFileDeleteResult{}, invalidProfilePayload(compatibilityProfile, "invalid compatibility file delete projection", nil)
 	}
 	return result, nil
 }
@@ -553,7 +553,7 @@ func marshalCompatibilityStruct(req any, validate func(any) error) ([]byte, erro
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode compatibility request: %v", err), err)
+		return nil, invalidProfilePayload(compatibilityProfile, fmt.Sprintf("encode compatibility request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -650,7 +650,7 @@ func validateCompatibilityChatCompletionRequest(req any) error {
 		return err
 	}
 	if stream, ok := value.Request["stream"].(bool); ok && stream {
-		return invalidRuntimePayload("unary chat completion request must not set stream=true", nil)
+		return invalidProfilePayload(compatibilityProfile, "unary chat completion request must not set stream=true", nil)
 	}
 	return nil
 }
@@ -666,25 +666,25 @@ func validateCompatibilityStreamChatCompletionRequest(req any) error {
 func validateCompatibilityCarrierBase(base CompatibilityCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
-		return invalidRuntimePayload("complete compatibility invocation carrier is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "complete compatibility invocation carrier is required", nil)
 	}
 	return nil
 }
 
 func validateCompatibilityChatRequest(request map[string]any) error {
 	if request == nil {
-		return invalidRuntimePayload("compatibility chat request is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility chat request is required", nil)
 	}
 	model, ok := request["model"].(string)
 	if !ok || model == "" {
-		return invalidRuntimePayload("compatibility model is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility model is required", nil)
 	}
 	if err := validateCompatibilityAbilityModel(model); err != nil {
 		return err
 	}
 	messages, ok := request["messages"].([]any)
 	if !ok || len(messages) == 0 {
-		return invalidRuntimePayload("compatibility messages are required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility messages are required", nil)
 	}
 	return nil
 }
@@ -693,23 +693,23 @@ func validateCompatibilityAbilityModel(model string) error {
 	if strings.HasPrefix(model, "easynet://") && strings.Contains(model, "/ability/") {
 		return nil
 	}
-	return invalidRuntimePayload("compatibility model must be an EasyNet ability ref", nil)
+	return invalidProfilePayload(compatibilityProfile, "compatibility model must be an EasyNet ability ref", nil)
 }
 
 func validateCompatibilityModel(model CompatibilityModel) error {
 	if model.Profile != compatibilityProfile || model.Kind != "model" || model.Object != "model" ||
 		model.ID == "" || model.OwnedBy == "" || model.AbilityRef == "" || model.Metadata == nil {
-		return invalidRuntimePayload("invalid compatibility model projection", nil)
+		return invalidProfilePayload(compatibilityProfile, "invalid compatibility model projection", nil)
 	}
 	if model.Created < 0 {
-		return invalidRuntimePayload("compatibility model created must be non-negative", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility model created must be non-negative", nil)
 	}
 	return nil
 }
 
 func validateCompatibilityFileUploadRequest(req CompatibilityFileUploadRequest) error {
 	if req.Purpose == "" {
-		return invalidRuntimePayload("compatibility file purpose is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file purpose is required", nil)
 	}
 	return validateCompatibilityFileFacts(req.ID, req.FileID, req.FileRef, req.ResourceRef, req.ResourceURA, req.Filename, req.Bytes, req.SizeBytes, req.CreatedAt, 0)
 }
@@ -736,10 +736,10 @@ func validateCompatibilityFileCarrierRequest(req any) error {
 
 func validateCompatibilityFileDeleteRequest(req CompatibilityFileDeleteRequest) error {
 	if firstNonEmpty(req.ID, req.FileID, req.FileRef, req.ResourceRef, req.ResourceURA, req.ContentHash) == "" {
-		return invalidRuntimePayload("compatibility file identity is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file identity is required", nil)
 	}
 	if !req.Deleted {
-		return invalidRuntimePayload("compatibility file delete result must be deleted", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file delete result must be deleted", nil)
 	}
 	return nil
 }
@@ -754,16 +754,16 @@ func validateCompatibilityFileDeleteCarrierRequest(req any) error {
 
 func validateCompatibilityFileFacts(id, fileID, fileRef, resourceRef, resourceURA, filename string, bytesValue, sizeBytes, createdAt, created int64) error {
 	if firstNonEmpty(id, fileID) == "" {
-		return invalidRuntimePayload("compatibility file id is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file id is required", nil)
 	}
 	if firstNonEmpty(fileRef, resourceRef, resourceURA) == "" {
-		return invalidRuntimePayload("compatibility file ref is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file ref is required", nil)
 	}
 	if filename == "" {
-		return invalidRuntimePayload("compatibility filename is required", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility filename is required", nil)
 	}
 	if bytesValue < 0 || sizeBytes < 0 || createdAt < 0 || created < 0 {
-		return invalidRuntimePayload("compatibility file counters must be non-negative", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file counters must be non-negative", nil)
 	}
 	return nil
 }
@@ -771,10 +771,10 @@ func validateCompatibilityFileFacts(id, fileID, fileRef, resourceRef, resourceUR
 func validateCompatibilityFileProjection(file CompatibilityFile) error {
 	if file.Profile != compatibilityProfile || file.Kind != "file" || file.Object != "file" ||
 		file.ID == "" || file.Filename == "" || file.Purpose == "" || file.Metadata == nil {
-		return invalidRuntimePayload("invalid compatibility file projection", nil)
+		return invalidProfilePayload(compatibilityProfile, "invalid compatibility file projection", nil)
 	}
 	if file.Bytes < 0 || file.CreatedAt < 0 {
-		return invalidRuntimePayload("compatibility file counters must be non-negative", nil)
+		return invalidProfilePayload(compatibilityProfile, "compatibility file counters must be non-negative", nil)
 	}
 	return nil
 }
@@ -888,7 +888,7 @@ func firstNonZeroInt64(values ...int64) int64 {
 func wrapCompatibilityTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, compatibilityProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(compatibilityProfile, message, cause)
 }

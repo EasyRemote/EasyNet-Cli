@@ -159,42 +159,42 @@ type DirectoryTransportFunc struct {
 
 func (f DirectoryTransportFunc) BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildDirectorySubscriptionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("directory subscription invocation transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory subscription invocation transport function is required")
 	}
 	return f.BuildDirectorySubscriptionInvocationFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) Resolve(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ResolveFunc == nil {
-		return nil, invalidRuntimeClient("directory resolve transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory resolve transport function is required")
 	}
 	return f.ResolveFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) ListDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListDevicesFunc == nil {
-		return nil, invalidRuntimeClient("directory list-devices transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory list-devices transport function is required")
 	}
 	return f.ListDevicesFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListAgentsFunc == nil {
-		return nil, invalidRuntimeClient("directory list-agents transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory list-agents transport function is required")
 	}
 	return f.ListAgentsFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) ListAbilities(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListAbilitiesFunc == nil {
-		return nil, invalidRuntimeClient("directory list-abilities transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory list-abilities transport function is required")
 	}
 	return f.ListAbilitiesFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SubscribeDirectoryFunc == nil {
-		return nil, invalidRuntimeClient("directory subscribe transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory subscribe transport function is required")
 	}
 	return f.SubscribeDirectoryFunc(ctx, requestJSON)
 }
@@ -207,7 +207,7 @@ type DirectoryClient struct {
 
 func NewDirectoryClient(transport DirectoryTransport) (*DirectoryClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("directory transport is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory transport is required")
 	}
 	return &DirectoryClient{transport: transport}, nil
 }
@@ -250,11 +250,11 @@ func (c *DirectoryClient) Resolve(ctx context.Context, query ResolveQuery) (Reso
 		return ResolvedRef{}, err
 	}
 	if query.QueryName == "" && query.RealmHint == "" {
-		return ResolvedRef{}, invalidRuntimePayload("query_name or realm_hint is required", nil)
+		return ResolvedRef{}, invalidProfilePayload(directoryIdentityProfile, "query_name or realm_hint is required", nil)
 	}
 	requestJSON, err := json.Marshal(query)
 	if err != nil {
-		return ResolvedRef{}, invalidRuntimePayload(fmt.Sprintf("encode directory resolve request: %v", err), err)
+		return ResolvedRef{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode directory resolve request: %v", err), err)
 	}
 	raw, err := c.transport.Resolve(ctx, requestJSON)
 	if err != nil {
@@ -303,7 +303,7 @@ func (c *DirectoryClient) ListAbilities(ctx context.Context, query AbilityQuery)
 	}
 	requestJSON, err := json.Marshal(query)
 	if err != nil {
-		return AbilityPage{}, invalidRuntimePayload(fmt.Sprintf("encode directory ability query: %v", err), err)
+		return AbilityPage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode directory ability query: %v", err), err)
 	}
 	raw, err := c.transport.ListAbilities(ctx, requestJSON)
 	if err != nil {
@@ -314,14 +314,14 @@ func (c *DirectoryClient) ListAbilities(ctx context.Context, query AbilityQuery)
 
 func (c *DirectoryClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("directory client is not initialized")
+		return invalidProfileClient(directoryIdentityProfile, "directory client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "directory")
 }
 
 func (c *DirectoryClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("directory client is not initialized")
+		return invalidProfileClient(directoryIdentityProfile, "directory client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "directory")
 }
@@ -431,10 +431,10 @@ type AbilityPage struct {
 func NewResolvedRefFromJSON(raw []byte) (ResolvedRef, error) {
 	var ref ResolvedRef
 	if err := json.Unmarshal(raw, &ref); err != nil {
-		return ResolvedRef{}, invalidRuntimePayload(fmt.Sprintf("decode resolved ref JSON: %v", err), err)
+		return ResolvedRef{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode resolved ref JSON: %v", err), err)
 	}
 	if ref.Profile != directoryIdentityProfile || ref.Kind != "resolved_ref" || ref.AnswerKind == "" {
-		return ResolvedRef{}, invalidRuntimePayload("invalid directory resolved_ref projection", nil)
+		return ResolvedRef{}, invalidProfilePayload(directoryIdentityProfile, "invalid directory resolved_ref projection", nil)
 	}
 	if ref.Metadata == nil {
 		ref.Metadata = map[string]any{}
@@ -445,7 +445,7 @@ func NewResolvedRefFromJSON(raw []byte) (ResolvedRef, error) {
 func NewDevicePageFromJSON(raw []byte) (DevicePage, error) {
 	var page DevicePage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return DevicePage{}, invalidRuntimePayload(fmt.Sprintf("decode device page JSON: %v", err), err)
+		return DevicePage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode device page JSON: %v", err), err)
 	}
 	if err := validateDirectoryPage(page.Profile, page.Kind, page.ItemKind, page.Source, page.Limit, "device_page", "device"); err != nil {
 		return DevicePage{}, err
@@ -456,7 +456,7 @@ func NewDevicePageFromJSON(raw []byte) (DevicePage, error) {
 func NewAgentPageFromJSON(raw []byte) (AgentPage, error) {
 	var page AgentPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return AgentPage{}, invalidRuntimePayload(fmt.Sprintf("decode agent page JSON: %v", err), err)
+		return AgentPage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode agent page JSON: %v", err), err)
 	}
 	if err := validateDirectoryPage(page.Profile, page.Kind, page.ItemKind, page.Source, page.Limit, "agent_page", "agent"); err != nil {
 		return AgentPage{}, err
@@ -467,7 +467,7 @@ func NewAgentPageFromJSON(raw []byte) (AgentPage, error) {
 func NewAbilityPageFromJSON(raw []byte) (AbilityPage, error) {
 	var page AbilityPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return AbilityPage{}, invalidRuntimePayload(fmt.Sprintf("decode ability page JSON: %v", err), err)
+		return AbilityPage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode ability page JSON: %v", err), err)
 	}
 	if err := validateDirectoryPage(page.Profile, page.Kind, page.ItemKind, page.Source, page.Limit, "ability_page", "ability"); err != nil {
 		return AbilityPage{}, err
@@ -478,7 +478,7 @@ func NewAbilityPageFromJSON(raw []byte) (AbilityPage, error) {
 func NewDirectorySubscriptionFromJSON(raw []byte) (DirectorySubscription, error) {
 	var subscription DirectorySubscription
 	if err := json.Unmarshal(raw, &subscription); err != nil {
-		return DirectorySubscription{}, invalidRuntimePayload(fmt.Sprintf("decode directory subscription JSON: %v", err), err)
+		return DirectorySubscription{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode directory subscription JSON: %v", err), err)
 	}
 	if err := validateDirectorySubscription(&subscription); err != nil {
 		return DirectorySubscription{}, err
@@ -493,7 +493,7 @@ func marshalDirectorySubscriptionRequest(req DirectorySubscriptionRequest) ([]by
 	}
 	raw, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode directory subscription request: %v", err), err)
+		return nil, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode directory subscription request: %v", err), err)
 	}
 	return raw, nil
 }
@@ -505,7 +505,7 @@ func marshalDirectoryPageQuery(query DirectoryQueryBase) ([]byte, error) {
 	}
 	raw, err := json.Marshal(query)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode directory page query: %v", err), err)
+		return nil, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode directory page query: %v", err), err)
 	}
 	return raw, nil
 }
@@ -515,7 +515,7 @@ func normalizeDirectorySubscriptionRequest(req DirectorySubscriptionRequest) (Di
 		req.Stream = directorySubscriptionStream
 	}
 	if req.Stream != directorySubscriptionStream {
-		return DirectorySubscriptionRequest{}, invalidRuntimePayload("directory subscription stream mismatch", nil)
+		return DirectorySubscriptionRequest{}, invalidProfilePayload(directoryIdentityProfile, "directory subscription stream mismatch", nil)
 	}
 	if err := validateDirectoryQueryBase(req.DirectoryQueryBase, false); err != nil {
 		return DirectorySubscriptionRequest{}, err
@@ -529,7 +529,7 @@ func normalizeDirectorySubscriptionRequest(req DirectorySubscriptionRequest) (Di
 		"item_kind":   req.ItemKind,
 	} {
 		if strings.TrimSpace(value) != value {
-			return DirectorySubscriptionRequest{}, invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+			return DirectorySubscriptionRequest{}, invalidProfilePayload(directoryIdentityProfile, field+" must not contain surrounding whitespace", nil)
 		}
 	}
 	if req.ResumeCursor != nil {
@@ -538,7 +538,7 @@ func normalizeDirectorySubscriptionRequest(req DirectorySubscriptionRequest) (Di
 		}
 	}
 	if req.HeartbeatIntervalMS < 0 {
-		return DirectorySubscriptionRequest{}, invalidRuntimePayload("heartbeat_interval_ms must be non-negative", nil)
+		return DirectorySubscriptionRequest{}, invalidProfilePayload(directoryIdentityProfile, "heartbeat_interval_ms must be non-negative", nil)
 	}
 	return req, nil
 }
@@ -552,14 +552,14 @@ func normalizeDirectoryPageQuery(query DirectoryQueryBase) DirectoryQueryBase {
 
 func validateDirectoryQueryBase(query DirectoryQueryBase, requireLimit bool) error {
 	if query.CallerURA == "" || query.CalleeURA == "" || query.SubjectURA == "" || query.DescriptorVersion == "" || query.NonceBase64 == "" {
-		return invalidRuntimePayload("caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required", nil)
 	}
 	if query.CausalContext == nil {
-		return invalidRuntimePayload("causal_context is required", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "causal_context is required", nil)
 	}
 	if requireLimit {
 		if query.Limit < 1 || query.Limit > MaxDirectoryPageSize {
-			return invalidRuntimePayload("directory page limit exceeds bounds", nil)
+			return invalidProfilePayload(directoryIdentityProfile, "directory page limit exceeds bounds", nil)
 		}
 	}
 	return nil
@@ -568,10 +568,10 @@ func validateDirectoryQueryBase(query DirectoryQueryBase, requireLimit bool) err
 func validateDirectorySubscription(subscription *DirectorySubscription) error {
 	if subscription.Profile != directoryIdentityProfile || subscription.Kind != "directory_subscription" ||
 		subscription.Stream != directorySubscriptionStream || subscription.Metadata == nil {
-		return invalidRuntimePayload("invalid directory subscription projection", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "invalid directory subscription projection", nil)
 	}
 	if !validDirectorySubscriptionState(subscription.State) {
-		return invalidRuntimePayload("invalid directory subscription state", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "invalid directory subscription state", nil)
 	}
 	if err := validateDirectorySubscriptionCursor(subscription.Cursor); err != nil {
 		return err
@@ -580,13 +580,13 @@ func validateDirectorySubscription(subscription *DirectorySubscription) error {
 		subscription.ResumeToken = subscription.Cursor.ResumeToken()
 	}
 	if subscription.ResumeToken != subscription.Cursor.ResumeToken() {
-		return invalidRuntimePayload("directory subscription resume token mismatch", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription resume token mismatch", nil)
 	}
 	if subscription.DropCount < 0 {
-		return invalidRuntimePayload("directory subscription drop_count must be non-negative", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription drop_count must be non-negative", nil)
 	}
 	if len(subscription.Events) > MaxDirectorySubscriptionBufferedEvents {
-		return invalidRuntimePayload("directory subscription buffered events exceeds bounds", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription buffered events exceeds bounds", nil)
 	}
 	return validateDirectorySubscriptionEvents(subscription.Events)
 }
@@ -599,27 +599,27 @@ func validateDirectorySubscriptionEvents(events []DirectorySubscriptionEvent) er
 		event := &events[idx]
 		if event.Profile != directoryIdentityProfile || event.Stream != directorySubscriptionStream ||
 			event.Kind == "" || event.EventID == "" || event.Phase == "" || event.Metadata == nil {
-			return invalidRuntimePayload("invalid directory subscription event projection", nil)
+			return invalidProfilePayload(directoryIdentityProfile, "invalid directory subscription event projection", nil)
 		}
 		if _, ok := seen[event.EventID]; ok {
-			return invalidRuntimePayload("duplicate directory subscription event id", nil)
+			return invalidProfilePayload(directoryIdentityProfile, "duplicate directory subscription event id", nil)
 		}
 		seen[event.EventID] = struct{}{}
 		if err := validateDirectorySubscriptionCursor(event.Cursor); err != nil {
 			return err
 		}
 		if idx > 0 && event.Cursor.Sequence <= lastSequence {
-			return invalidRuntimePayload("directory subscription event sequence must increase", nil)
+			return invalidProfilePayload(directoryIdentityProfile, "directory subscription event sequence must increase", nil)
 		}
 		lastSequence = event.Cursor.Sequence
 		if event.ResumeToken == "" {
 			event.ResumeToken = event.Cursor.ResumeToken()
 		}
 		if event.ResumeToken != event.Cursor.ResumeToken() {
-			return invalidRuntimePayload("directory subscription event resume token mismatch", nil)
+			return invalidProfilePayload(directoryIdentityProfile, "directory subscription event resume token mismatch", nil)
 		}
 		if event.Phase == "live" && !snapshotComplete {
-			return invalidRuntimePayload("directory live event before snapshot_complete", nil)
+			return invalidProfilePayload(directoryIdentityProfile, "directory live event before snapshot_complete", nil)
 		}
 		if event.Phase == "snapshot_complete" {
 			snapshotComplete = true
@@ -630,14 +630,14 @@ func validateDirectorySubscriptionEvents(events []DirectorySubscriptionEvent) er
 
 func validateDirectorySubscriptionCursor(cursor DirectorySubscriptionCursor) error {
 	if cursor.Stream != directorySubscriptionStream {
-		return invalidRuntimePayload("directory subscription cursor stream mismatch", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription cursor stream mismatch", nil)
 	}
 	token := cursor.ResumeToken()
 	if token == "" || strings.ContainsAny(token, " \t\r\n") {
-		return invalidRuntimePayload("directory subscription cursor token is invalid", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription cursor token is invalid", nil)
 	}
 	if token != fmt.Sprintf("%s:%d", cursor.Stream, cursor.Sequence) {
-		return invalidRuntimePayload("directory subscription cursor token mismatch", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription cursor token mismatch", nil)
 	}
 	return nil
 }
@@ -654,10 +654,10 @@ func validDirectorySubscriptionState(state DirectorySubscriptionState) bool {
 
 func validateDirectoryPage(profile string, kind string, itemKind string, source string, limit int, wantKind string, wantItem string) error {
 	if profile != directoryIdentityProfile || kind != wantKind || itemKind != wantItem || source != directoryReadModelSource {
-		return invalidRuntimePayload("invalid directory page projection", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "invalid directory page projection", nil)
 	}
 	if limit < 1 || limit > MaxDirectoryPageSize {
-		return invalidRuntimePayload("directory page limit exceeds bounds", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "directory page limit exceeds bounds", nil)
 	}
 	return nil
 }
@@ -665,7 +665,7 @@ func validateDirectoryPage(profile string, kind string, itemKind string, source 
 func wrapDirectoryTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, directoryIdentityProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(directoryIdentityProfile, message, cause)
 }

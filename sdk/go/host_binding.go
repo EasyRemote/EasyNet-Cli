@@ -10,6 +10,7 @@ import (
 
 const hostStreamFrameSchema = "host-stream-frame.schema.json"
 const hostStreamHashAlgorithm = "sha256(prev_hash || seq_be || canonical_json(value))"
+const hostBindingProfile = "host_binding"
 
 // HostStreamBindingRequest declares a daemon-to-host execution binding.
 type HostStreamBindingRequest struct {
@@ -105,42 +106,42 @@ type HostBindingTransportFunc struct {
 
 func (f HostBindingTransportFunc) BuildHostStreamBinding(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildHostStreamBindingFunc == nil {
-		return nil, invalidRuntimeClient("host binding build transport function is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding build transport function is required")
 	}
 	return f.BuildHostStreamBindingFunc(ctx, requestJSON)
 }
 
 func (f HostBindingTransportFunc) DecodeRequest(ctx context.Context, envelopeJSON []byte) ([]byte, error) {
 	if f.DecodeRequestFunc == nil {
-		return nil, invalidRuntimeClient("host binding decode transport function is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding decode transport function is required")
 	}
 	return f.DecodeRequestFunc(ctx, envelopeJSON)
 }
 
 func (f HostBindingTransportFunc) EncodeItem(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.EncodeItemFunc == nil {
-		return nil, invalidRuntimeClient("host binding encode item transport function is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding encode item transport function is required")
 	}
 	return f.EncodeItemFunc(ctx, requestJSON)
 }
 
 func (f HostBindingTransportFunc) EncodeError(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.EncodeErrorFunc == nil {
-		return nil, invalidRuntimeClient("host binding encode error transport function is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding encode error transport function is required")
 	}
 	return f.EncodeErrorFunc(ctx, requestJSON)
 }
 
 func (f HostBindingTransportFunc) EncodeTerminal(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.EncodeTerminalFunc == nil {
-		return nil, invalidRuntimeClient("host binding encode terminal transport function is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding encode terminal transport function is required")
 	}
 	return f.EncodeTerminalFunc(ctx, requestJSON)
 }
 
 func (f HostBindingTransportFunc) FoldOutputHash(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.FoldOutputHashFunc == nil {
-		return nil, invalidRuntimeClient("host binding hash transport function is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding hash transport function is required")
 	}
 	return f.FoldOutputHashFunc(ctx, requestJSON)
 }
@@ -153,7 +154,7 @@ type HostBindingClient struct {
 
 func NewHostBindingClient(transport HostBindingTransport) (*HostBindingClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("host binding transport is required")
+		return nil, invalidProfileClient(hostBindingProfile, "host binding transport is required")
 	}
 	return &HostBindingClient{transport: transport}, nil
 }
@@ -167,7 +168,7 @@ func (c *HostBindingClient) BuildHostStreamBinding(ctx context.Context, req Host
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return HostStreamBinding{}, invalidRuntimePayload(fmt.Sprintf("encode host binding request: %v", err), err)
+		return HostStreamBinding{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("encode host binding request: %v", err), err)
 	}
 	raw, err := c.transport.BuildHostStreamBinding(ctx, requestJSON)
 	if err != nil {
@@ -181,11 +182,11 @@ func (c *HostBindingClient) DecodeRequest(ctx context.Context, envelope HostStre
 		return HostStreamRequest{}, err
 	}
 	if envelope.Request.Fn == "" || envelope.Request.CallID == "" || envelope.Request.Caller == "" {
-		return HostStreamRequest{}, invalidRuntimePayload("host stream envelope request is incomplete", nil)
+		return HostStreamRequest{}, invalidProfilePayload(hostBindingProfile, "host stream envelope request is incomplete", nil)
 	}
 	requestJSON, err := json.Marshal(envelope)
 	if err != nil {
-		return HostStreamRequest{}, invalidRuntimePayload(fmt.Sprintf("encode host stream envelope: %v", err), err)
+		return HostStreamRequest{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("encode host stream envelope: %v", err), err)
 	}
 	raw, err := c.transport.DecodeRequest(ctx, requestJSON)
 	if err != nil {
@@ -200,7 +201,7 @@ func (c *HostBindingClient) EncodeItem(ctx context.Context, seq uint64, value an
 	}
 	requestJSON, err := json.Marshal(map[string]any{"seq": seq, "value": value})
 	if err != nil {
-		return HostStreamFrame{}, invalidRuntimePayload(fmt.Sprintf("encode host stream item request: %v", err), err)
+		return HostStreamFrame{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("encode host stream item request: %v", err), err)
 	}
 	raw, err := c.transport.EncodeItem(ctx, requestJSON)
 	if err != nil {
@@ -214,11 +215,11 @@ func (c *HostBindingClient) EncodeError(ctx context.Context, errValue error) (Ho
 		return HostStreamFrame{}, err
 	}
 	if errValue == nil {
-		return HostStreamFrame{}, invalidRuntimePayload("error is required", nil)
+		return HostStreamFrame{}, invalidProfilePayload(hostBindingProfile, "error is required", nil)
 	}
 	requestJSON, err := json.Marshal(map[string]any{"error": hostBindingErrorDTO(errValue)})
 	if err != nil {
-		return HostStreamFrame{}, invalidRuntimePayload(fmt.Sprintf("encode host stream error request: %v", err), err)
+		return HostStreamFrame{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("encode host stream error request: %v", err), err)
 	}
 	raw, err := c.transport.EncodeError(ctx, requestJSON)
 	if err != nil {
@@ -232,11 +233,11 @@ func (c *HostBindingClient) EncodeTerminal(ctx context.Context, summary HostStre
 		return HostStreamFrame{}, err
 	}
 	if summary.OutputHash == "" || summary.Frames < 0 {
-		return HostStreamFrame{}, invalidRuntimePayload("terminal output_hash and frames are required", nil)
+		return HostStreamFrame{}, invalidProfilePayload(hostBindingProfile, "terminal output_hash and frames are required", nil)
 	}
 	requestJSON, err := json.Marshal(map[string]any{"summary": summary})
 	if err != nil {
-		return HostStreamFrame{}, invalidRuntimePayload(fmt.Sprintf("encode host stream terminal request: %v", err), err)
+		return HostStreamFrame{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("encode host stream terminal request: %v", err), err)
 	}
 	raw, err := c.transport.EncodeTerminal(ctx, requestJSON)
 	if err != nil {
@@ -254,7 +255,7 @@ func (c *HostBindingClient) FoldOutputHash(ctx context.Context, state HostStream
 	}
 	requestJSON, err := json.Marshal(map[string]any{"state": state, "seq": seq, "value": value})
 	if err != nil {
-		return HostStreamHashState{}, invalidRuntimePayload(fmt.Sprintf("encode host stream hash request: %v", err), err)
+		return HostStreamHashState{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("encode host stream hash request: %v", err), err)
 	}
 	raw, err := c.transport.FoldOutputHash(ctx, requestJSON)
 	if err != nil {
@@ -265,14 +266,14 @@ func (c *HostBindingClient) FoldOutputHash(ctx context.Context, state HostStream
 
 func (c *HostBindingClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("host binding client is not initialized")
+		return invalidProfileClient(hostBindingProfile, "host binding client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "host binding")
 }
 
 func (c *HostBindingClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("host binding client is not initialized")
+		return invalidProfileClient(hostBindingProfile, "host binding client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "host binding")
 }
@@ -280,15 +281,15 @@ func (c *HostBindingClient) requireReady(ctx context.Context) error {
 func NewHostStreamBindingFromJSON(raw []byte) (HostStreamBinding, error) {
 	var binding HostStreamBinding
 	if err := json.Unmarshal(raw, &binding); err != nil {
-		return HostStreamBinding{}, invalidRuntimePayload(fmt.Sprintf("decode host binding JSON: %v", err), err)
+		return HostStreamBinding{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("decode host binding JSON: %v", err), err)
 	}
 	if binding.BindingID == "" || binding.DescriptorRef == "" || binding.Endpoint == "" ||
 		binding.FrameSchema != hostStreamFrameSchema || binding.Cleanup == nil ||
 		binding.Readiness == nil || binding.Lifecycle == nil || binding.Metadata == nil {
-		return HostStreamBinding{}, invalidRuntimePayload("invalid host stream binding projection", nil)
+		return HostStreamBinding{}, invalidProfilePayload(hostBindingProfile, "invalid host stream binding projection", nil)
 	}
 	if !isAbsoluteHostEndpoint(binding.Endpoint) {
-		return HostStreamBinding{}, invalidRuntimePayload("host stream endpoint must be absolute", nil)
+		return HostStreamBinding{}, invalidProfilePayload(hostBindingProfile, "host stream endpoint must be absolute", nil)
 	}
 	return binding, nil
 }
@@ -296,10 +297,10 @@ func NewHostStreamBindingFromJSON(raw []byte) (HostStreamBinding, error) {
 func NewHostStreamRequestFromJSON(raw []byte) (HostStreamRequest, error) {
 	var request HostStreamRequest
 	if err := json.Unmarshal(raw, &request); err != nil {
-		return HostStreamRequest{}, invalidRuntimePayload(fmt.Sprintf("decode host stream request JSON: %v", err), err)
+		return HostStreamRequest{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("decode host stream request JSON: %v", err), err)
 	}
 	if request.Function == "" || request.CallID == "" || request.Caller == "" || request.Metadata == nil {
-		return HostStreamRequest{}, invalidRuntimePayload("invalid host stream request projection", nil)
+		return HostStreamRequest{}, invalidProfilePayload(hostBindingProfile, "invalid host stream request projection", nil)
 	}
 	return request, nil
 }
@@ -314,7 +315,7 @@ func NewHostStreamFrameFromJSON(raw []byte) (HostStreamFrame, error) {
 		OutputHash *string                    `json:"output_hash"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
-		return HostStreamFrame{}, invalidRuntimePayload(fmt.Sprintf("decode host stream frame JSON: %v", err), err)
+		return HostStreamFrame{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("decode host stream frame JSON: %v", err), err)
 	}
 	var sdkErr *SDKError
 	if len(dto.Error) > 0 && string(dto.Error) != "null" {
@@ -341,10 +342,10 @@ func NewHostStreamFrameFromJSON(raw []byte) (HostStreamFrame, error) {
 func NewHostStreamHashStateFromJSON(raw []byte) (HostStreamHashState, error) {
 	var state HostStreamHashState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return HostStreamHashState{}, invalidRuntimePayload(fmt.Sprintf("decode host stream hash state JSON: %v", err), err)
+		return HostStreamHashState{}, invalidProfilePayload(hostBindingProfile, fmt.Sprintf("decode host stream hash state JSON: %v", err), err)
 	}
 	if state.Algorithm != hostStreamHashAlgorithm || state.OutputHash == "" || state.Frames < 0 {
-		return HostStreamHashState{}, invalidRuntimePayload("invalid host stream hash state projection", nil)
+		return HostStreamHashState{}, invalidProfilePayload(hostBindingProfile, "invalid host stream hash state projection", nil)
 	}
 	if err := validateHostStreamHashState(state); err != nil {
 		return HostStreamHashState{}, err
@@ -354,13 +355,13 @@ func NewHostStreamHashStateFromJSON(raw []byte) (HostStreamHashState, error) {
 
 func validateHostStreamBindingRequest(req HostStreamBindingRequest) error {
 	if req.BindingID == "" || req.DescriptorRef == "" || req.Endpoint == "" {
-		return invalidRuntimePayload("binding_id, descriptor_ref, and endpoint are required", nil)
+		return invalidProfilePayload(hostBindingProfile, "binding_id, descriptor_ref, and endpoint are required", nil)
 	}
 	if req.FrameSchema != hostStreamFrameSchema {
-		return invalidRuntimePayload("frame_schema must be host-stream-frame.schema.json", nil)
+		return invalidProfilePayload(hostBindingProfile, "frame_schema must be host-stream-frame.schema.json", nil)
 	}
 	if !isAbsoluteHostEndpoint(req.Endpoint) {
-		return invalidRuntimePayload("host stream endpoint must be absolute", nil)
+		return invalidProfilePayload(hostBindingProfile, "host stream endpoint must be absolute", nil)
 	}
 	return nil
 }
@@ -373,34 +374,34 @@ func validateHostStreamFrame(frame HostStreamFrame) error {
 	switch frame.FrameType {
 	case "item":
 		if frame.Seq == nil || frame.Error != nil || frame.Terminal != nil || frame.OutputHash != nil {
-			return invalidRuntimePayload("invalid item host stream frame", nil)
+			return invalidProfilePayload(hostBindingProfile, "invalid item host stream frame", nil)
 		}
 	case "error":
 		if frame.Seq != nil || frame.Value != nil || frame.Error == nil || frame.Terminal != nil || frame.OutputHash != nil {
-			return invalidRuntimePayload("invalid error host stream frame", nil)
+			return invalidProfilePayload(hostBindingProfile, "invalid error host stream frame", nil)
 		}
 	case "terminal":
 		if frame.Seq == nil || frame.Value != nil || frame.Error != nil || frame.Terminal == nil || frame.OutputHash == nil {
-			return invalidRuntimePayload("invalid terminal host stream frame", nil)
+			return invalidProfilePayload(hostBindingProfile, "invalid terminal host stream frame", nil)
 		}
 		if frame.Terminal.OutputHash == "" || frame.Terminal.Frames < 0 || *frame.OutputHash != frame.Terminal.OutputHash {
-			return invalidRuntimePayload("invalid terminal host stream summary", nil)
+			return invalidProfilePayload(hostBindingProfile, "invalid terminal host stream summary", nil)
 		}
 	default:
-		return invalidRuntimePayload("unknown host stream frame type", nil)
+		return invalidProfilePayload(hostBindingProfile, "unknown host stream frame type", nil)
 	}
 	return nil
 }
 
 func validateHostStreamHashFold(state HostStreamHashState, seq uint64) error {
 	if state.Algorithm != hostStreamHashAlgorithm || state.OutputHash == "" || state.Frames < 0 {
-		return invalidRuntimePayload("valid hash state is required", nil)
+		return invalidProfilePayload(hostBindingProfile, "valid hash state is required", nil)
 	}
 	if err := validateHostStreamHashState(state); err != nil {
 		return err
 	}
 	if seq != uint64(state.Frames) {
-		return invalidRuntimePayload("host stream hash sequence gap", nil)
+		return invalidProfilePayload(hostBindingProfile, "host stream hash sequence gap", nil)
 	}
 	return nil
 }
@@ -408,12 +409,12 @@ func validateHostStreamHashFold(state HostStreamHashState, seq uint64) error {
 func validateHostStreamHashState(state HostStreamHashState) error {
 	if state.Frames == 0 {
 		if state.LastSeq != nil {
-			return invalidRuntimePayload("host stream hash state cannot have last_seq when frames is zero", nil)
+			return invalidProfilePayload(hostBindingProfile, "host stream hash state cannot have last_seq when frames is zero", nil)
 		}
 		return nil
 	}
 	if state.LastSeq == nil || *state.LastSeq != uint64(state.Frames-1) {
-		return invalidRuntimePayload("host stream hash state last_seq must match frames", nil)
+		return invalidProfilePayload(hostBindingProfile, "host stream hash state last_seq must match frames", nil)
 	}
 	return nil
 }
@@ -467,7 +468,7 @@ func emptyStringAsNil(value string) any {
 func wrapHostBindingTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, hostBindingProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(hostBindingProfile, message, cause)
 }

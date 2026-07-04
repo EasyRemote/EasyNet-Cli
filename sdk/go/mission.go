@@ -165,63 +165,63 @@ type MissionTransportFunc struct {
 
 func (f MissionTransportFunc) BuildRunEALInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildRunEALInvocationFunc == nil {
-		return nil, invalidRuntimeClient("mission run invocation transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission run invocation transport function is required")
 	}
 	return f.BuildRunEALInvocationFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) BuildRunFileInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildRunFileInvocationFunc == nil {
-		return nil, invalidRuntimeClient("mission run-file invocation transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission run-file invocation transport function is required")
 	}
 	return f.BuildRunFileInvocationFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) BuildTrackInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildTrackInvocationFunc == nil {
-		return nil, invalidRuntimeClient("mission track invocation transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission track invocation transport function is required")
 	}
 	return f.BuildTrackInvocationFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) BuildCancelInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildCancelInvocationFunc == nil {
-		return nil, invalidRuntimeClient("mission cancel invocation transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission cancel invocation transport function is required")
 	}
 	return f.BuildCancelInvocationFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) RunEAL(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.RunEALFunc == nil {
-		return nil, invalidRuntimeClient("mission run transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission run transport function is required")
 	}
 	return f.RunEALFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) RunFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.RunFileFunc == nil {
-		return nil, invalidRuntimeClient("mission run-file transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission run-file transport function is required")
 	}
 	return f.RunFileFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) Track(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.TrackFunc == nil {
-		return nil, invalidRuntimeClient("mission track transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission track transport function is required")
 	}
 	return f.TrackFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) Cancel(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.CancelFunc == nil {
-		return nil, invalidRuntimeClient("mission cancel transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission cancel transport function is required")
 	}
 	return f.CancelFunc(ctx, requestJSON)
 }
 
 func (f MissionTransportFunc) Events(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.EventsFunc == nil {
-		return nil, invalidRuntimeClient("mission events transport function is required")
+		return nil, invalidProfileClient(missionProfile, "mission events transport function is required")
 	}
 	return f.EventsFunc(ctx, requestJSON)
 }
@@ -234,7 +234,7 @@ type MissionClient struct {
 
 func NewMissionClient(transport MissionTransport) (*MissionClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("mission transport is required")
+		return nil, invalidProfileClient(missionProfile, "mission transport is required")
 	}
 	return &MissionClient{transport: transport}, nil
 }
@@ -321,14 +321,14 @@ func (c *MissionClient) statusOperation(ctx context.Context, req any, validate f
 
 func (c *MissionClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("mission client is not initialized")
+		return invalidProfileClient(missionProfile, "mission client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "mission")
 }
 
 func (c *MissionClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("mission client is not initialized")
+		return invalidProfileClient(missionProfile, "mission client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "mission")
 }
@@ -352,16 +352,16 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 		Metadata           map[string]any           `json:"metadata"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
-		return MissionStatus{}, invalidRuntimePayload(fmt.Sprintf("decode mission status JSON: %v", err), err)
+		return MissionStatus{}, invalidProfilePayload(missionProfile, fmt.Sprintf("decode mission status JSON: %v", err), err)
 	}
 	if dto.Profile != missionProfile || dto.Kind != "mission_status" || dto.MissionID == "" ||
 		dto.State == "" || dto.PartialFailures < 0 || dto.ChildInvocations == nil ||
 		dto.ChildReceipts == nil || dto.OutputRefs == nil || dto.Metadata == nil {
-		return MissionStatus{}, invalidRuntimePayload("invalid mission status projection", nil)
+		return MissionStatus{}, invalidProfilePayload(missionProfile, "invalid mission status projection", nil)
 	}
 	for _, receipt := range dto.ChildReceipts {
 		if receipt.ReceiptURA == "" || receipt.ReceiptHash == "" {
-			return MissionStatus{}, invalidRuntimePayload("invalid mission child receipt projection", nil)
+			return MissionStatus{}, invalidProfilePayload(missionProfile, "invalid mission child receipt projection", nil)
 		}
 	}
 	if err := validateMissionChildReceiptAnchors(dto.ParentReceiptURA, dto.ChildInvocations, dto.ChildReceipts); err != nil {
@@ -369,7 +369,7 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 	}
 	for _, ref := range dto.OutputRefs {
 		if ref.Kind == "" {
-			return MissionStatus{}, invalidRuntimePayload("invalid mission output ref projection", nil)
+			return MissionStatus{}, invalidProfilePayload(missionProfile, "invalid mission output ref projection", nil)
 		}
 	}
 	var sdkErr *SDKError
@@ -404,7 +404,7 @@ func validateMissionChildReceiptAnchors(parentReceiptURA *string, invocations []
 		return nil
 	}
 	if parentReceiptURA == nil || *parentReceiptURA == "" {
-		return invalidRuntimePayload("mission child receipts require parent receipt anchor", nil)
+		return invalidProfilePayload(missionProfile, "mission child receipts require parent receipt anchor", nil)
 	}
 	byInvocationURA := map[string]MissionChildInvocation{}
 	for _, invocation := range invocations {
@@ -414,14 +414,14 @@ func validateMissionChildReceiptAnchors(parentReceiptURA *string, invocations []
 	}
 	for _, receipt := range receipts {
 		if receipt.InvocationURA == nil || *receipt.InvocationURA == "" {
-			return invalidRuntimePayload("mission child receipt requires invocation_ura", nil)
+			return invalidProfilePayload(missionProfile, "mission child receipt requires invocation_ura", nil)
 		}
 		invocation, ok := byInvocationURA[*receipt.InvocationURA]
 		if !ok || invocation.Receipt == nil {
-			return invalidRuntimePayload("mission child receipt is not anchored to child invocation", nil)
+			return invalidProfilePayload(missionProfile, "mission child receipt is not anchored to child invocation", nil)
 		}
 		if invocation.Receipt["receipt_ura"] != receipt.ReceiptURA || invocation.Receipt["receipt_hash"] != receipt.ReceiptHash {
-			return invalidRuntimePayload("mission child receipt does not match child invocation receipt", nil)
+			return invalidProfilePayload(missionProfile, "mission child receipt does not match child invocation receipt", nil)
 		}
 	}
 	return nil
@@ -440,12 +440,12 @@ func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {
 		Metadata           map[string]any `json:"metadata"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
-		return MissionEventPage{}, invalidRuntimePayload(fmt.Sprintf("decode mission event page JSON: %v", err), err)
+		return MissionEventPage{}, invalidProfilePayload(missionProfile, fmt.Sprintf("decode mission event page JSON: %v", err), err)
 	}
 	if dto.Profile != missionProfile || dto.Kind != "mission_event_page" || dto.MissionID == "" ||
 		dto.CursorSequence < 0 || dto.NextCursorSequence < dto.CursorSequence || dto.DroppedCount < 0 ||
 		dto.Events == nil || dto.Metadata == nil {
-		return MissionEventPage{}, invalidRuntimePayload("invalid mission event page projection", nil)
+		return MissionEventPage{}, invalidProfilePayload(missionProfile, "invalid mission event page projection", nil)
 	}
 	var previousSequence int64
 	hasPrevious := false
@@ -453,13 +453,13 @@ func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {
 		event := &dto.Events[index]
 		if event.Profile != missionProfile || event.Kind != "mission_event" || event.MissionID != dto.MissionID ||
 			event.Sequence < 0 || event.EventType == "" || event.OccurredUnixMS < 0 || event.Metadata == nil {
-			return MissionEventPage{}, invalidRuntimePayload("invalid mission event projection", nil)
+			return MissionEventPage{}, invalidProfilePayload(missionProfile, "invalid mission event projection", nil)
 		}
 		if hasPrevious && event.Sequence <= previousSequence {
-			return MissionEventPage{}, invalidRuntimePayload("mission events must be strictly ordered by sequence", nil)
+			return MissionEventPage{}, invalidProfilePayload(missionProfile, "mission events must be strictly ordered by sequence", nil)
 		}
 		if event.Terminal && !missionEventTypeIsTerminal(event.EventType) {
-			return MissionEventPage{}, invalidRuntimePayload("terminal mission event has non-terminal event_type", nil)
+			return MissionEventPage{}, invalidProfilePayload(missionProfile, "terminal mission event has non-terminal event_type", nil)
 		}
 		previousSequence = event.Sequence
 		hasPrevious = true
@@ -486,7 +486,7 @@ func marshalMissionRequest(req any, validate func(any) error) ([]byte, error) {
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode mission request: %v", err), err)
+		return nil, invalidProfilePayload(missionProfile, fmt.Sprintf("encode mission request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -497,7 +497,7 @@ func validateMissionRunRequest(req any) error {
 		return err
 	}
 	if value.Source == "" {
-		return invalidRuntimePayload("mission source is required", nil)
+		return invalidProfilePayload(missionProfile, "mission source is required", nil)
 	}
 	return nil
 }
@@ -508,7 +508,7 @@ func validateMissionRunFileRequest(req any) error {
 		return err
 	}
 	if value.Path == "" || !strings.HasPrefix(value.Path, "/") {
-		return invalidRuntimePayload("absolute mission file path is required", nil)
+		return invalidProfilePayload(missionProfile, "absolute mission file path is required", nil)
 	}
 	return nil
 }
@@ -538,13 +538,13 @@ func validateMissionEventListRequest(req any) error {
 		return err
 	}
 	if value.CursorSequence < 0 {
-		return invalidRuntimePayload("mission event cursor_sequence must be non-negative", nil)
+		return invalidProfilePayload(missionProfile, "mission event cursor_sequence must be non-negative", nil)
 	}
 	if value.Limit < 0 {
-		return invalidRuntimePayload("mission event limit must be non-negative", nil)
+		return invalidProfilePayload(missionProfile, "mission event limit must be non-negative", nil)
 	}
 	if value.Limit > 1000 {
-		return invalidRuntimePayload("mission event limit exceeds bounds", nil)
+		return invalidProfilePayload(missionProfile, "mission event limit exceeds bounds", nil)
 	}
 	return nil
 }
@@ -552,17 +552,17 @@ func validateMissionEventListRequest(req any) error {
 func validateMissionCarrierBase(base MissionCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
-		return invalidRuntimePayload("complete mission invocation carrier is required", nil)
+		return invalidProfilePayload(missionProfile, "complete mission invocation carrier is required", nil)
 	}
 	return nil
 }
 
 func validateMissionID(missionID string) error {
 	if missionID == "" {
-		return invalidRuntimePayload("mission_id is required", nil)
+		return invalidProfilePayload(missionProfile, "mission_id is required", nil)
 	}
 	if strings.Contains(missionID, "/") || strings.Contains(missionID, "\\") || strings.Contains(missionID, "://") {
-		return invalidRuntimePayload("mission_id must not be path-like", nil)
+		return invalidProfilePayload(missionProfile, "mission_id must not be path-like", nil)
 	}
 	return nil
 }
@@ -579,7 +579,7 @@ func missionEventTypeIsTerminal(eventType string) bool {
 func wrapMissionTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, missionProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(missionProfile, message, cause)
 }

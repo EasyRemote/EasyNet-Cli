@@ -172,63 +172,63 @@ type IdentityTransportFunc struct {
 
 func (f IdentityTransportFunc) ProjectDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ProjectDescriptorRefFunc == nil {
-		return nil, invalidRuntimeClient("identity descriptor projection transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity descriptor projection transport function is required")
 	}
 	return f.ProjectDescriptorRefFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) BuildDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildDescriptorRefFunc == nil {
-		return nil, invalidRuntimeClient("identity descriptor build transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity descriptor build transport function is required")
 	}
 	return f.BuildDescriptorRefFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) ProjectIdentity(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ProjectIdentityFunc == nil {
-		return nil, invalidRuntimeClient("identity projection transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity projection transport function is required")
 	}
 	return f.ProjectIdentityFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) BuildURA(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildURAFunc == nil {
-		return nil, invalidRuntimeClient("identity URA build transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity URA build transport function is required")
 	}
 	return f.BuildURAFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) BuildResourceRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildResourceRefFunc == nil {
-		return nil, invalidRuntimeClient("identity resource-ref transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity resource-ref transport function is required")
 	}
 	return f.BuildResourceRefFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) RegisterSigningKey(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.RegisterSigningKeyFunc == nil {
-		return nil, invalidRuntimeClient("identity register-signing-key transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity register-signing-key transport function is required")
 	}
 	return f.RegisterSigningKeyFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) ListSigningKeys(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListSigningKeysFunc == nil {
-		return nil, invalidRuntimeClient("identity list-signing-keys transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity list-signing-keys transport function is required")
 	}
 	return f.ListSigningKeysFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) RevokeSigningKey(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.RevokeSigningKeyFunc == nil {
-		return nil, invalidRuntimeClient("identity revoke-signing-key transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity revoke-signing-key transport function is required")
 	}
 	return f.RevokeSigningKeyFunc(ctx, requestJSON)
 }
 
 func (f IdentityTransportFunc) Signer(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SignerFunc == nil {
-		return nil, invalidRuntimeClient("identity signer transport function is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity signer transport function is required")
 	}
 	return f.SignerFunc(ctx, requestJSON)
 }
@@ -241,7 +241,7 @@ type IdentityClient struct {
 
 func NewIdentityClient(transport IdentityTransport) (*IdentityClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("identity transport is required")
+		return nil, invalidProfileClient(directoryIdentityProfile, "identity transport is required")
 	}
 	return &IdentityClient{transport: transport}, nil
 }
@@ -251,11 +251,11 @@ func (c *IdentityClient) ProjectDescriptorRef(ctx context.Context, req Descripto
 		return IdentityProjection{}, err
 	}
 	if req.DescriptorRef == "" {
-		return IdentityProjection{}, invalidRuntimePayload("descriptor_ref is required", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "descriptor_ref is required", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("encode descriptor projection request: %v", err), err)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode descriptor projection request: %v", err), err)
 	}
 	raw, err := c.transport.ProjectDescriptorRef(ctx, requestJSON)
 	if err != nil {
@@ -269,14 +269,14 @@ func (c *IdentityClient) ProjectIdentity(ctx context.Context, req IdentityProjec
 		return IdentityProjection{}, err
 	}
 	if req.URA == "" {
-		return IdentityProjection{}, invalidRuntimePayload("ura is required for identity projection", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "ura is required for identity projection", nil)
 	}
 	if req.Kind != "" {
-		return IdentityProjection{}, invalidRuntimePayload("kind is not an identity projection selector; use BuildURA", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "kind is not an identity projection selector; use BuildURA", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("encode identity projection request: %v", err), err)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode identity projection request: %v", err), err)
 	}
 	raw, err := c.transport.ProjectIdentity(ctx, requestJSON)
 	if err != nil {
@@ -290,11 +290,11 @@ func (c *IdentityClient) BuildURA(ctx context.Context, req URABuildRequest) (Ide
 		return IdentityProjection{}, err
 	}
 	if req.Kind == "" {
-		return IdentityProjection{}, invalidRuntimePayload("URA build kind is required", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "URA build kind is required", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("encode URA build request: %v", err), err)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode URA build request: %v", err), err)
 	}
 	raw, err := c.transport.BuildURA(ctx, requestJSON)
 	if err != nil {
@@ -308,11 +308,11 @@ func (c *IdentityClient) BuildDescriptorRef(ctx context.Context, req DescriptorR
 		return IdentityProjection{}, err
 	}
 	if req.AbilityURA == "" || req.DescriptorVersion == "" {
-		return IdentityProjection{}, invalidRuntimePayload("ability_ura and descriptor_version are required", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "ability_ura and descriptor_version are required", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("encode descriptor-ref build request: %v", err), err)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode descriptor-ref build request: %v", err), err)
 	}
 	raw, err := c.transport.BuildDescriptorRef(ctx, requestJSON)
 	if err != nil {
@@ -331,7 +331,7 @@ func (c *IdentityClient) OwnerAbilityURA(ctx context.Context, ownerURA string, a
 		return "", err
 	}
 	if projection.Kind != "ability" || projection.URA == "" {
-		return "", invalidRuntimePayload("invalid ability URA projection", nil)
+		return "", invalidProfilePayload(directoryIdentityProfile, "invalid ability URA projection", nil)
 	}
 	return projection.URA, nil
 }
@@ -342,11 +342,11 @@ func (c *IdentityClient) OwnerURAForAbility(ctx context.Context, abilityURA stri
 		return "", err
 	}
 	if projection.Kind != "ability" {
-		return "", invalidRuntimePayload("ability_ura must project to an ability", nil)
+		return "", invalidProfilePayload(directoryIdentityProfile, "ability_ura must project to an ability", nil)
 	}
 	ownerURA, ok := projection.Components["owner_ura"].(string)
 	if !ok || ownerURA == "" {
-		return "", invalidRuntimePayload("ability projection missing owner_ura", nil)
+		return "", invalidProfilePayload(directoryIdentityProfile, "ability projection missing owner_ura", nil)
 	}
 	return ownerURA, nil
 }
@@ -375,7 +375,7 @@ func (c *IdentityClient) CanonicalAbilityDescriptorRef(ctx context.Context, valu
 		return "", err
 	}
 	if projection.Kind != "descriptor_ref" || projection.DescriptorRef == "" {
-		return "", invalidRuntimePayload("invalid descriptor_ref projection", nil)
+		return "", invalidProfilePayload(directoryIdentityProfile, "invalid descriptor_ref projection", nil)
 	}
 	return projection.DescriptorRef, nil
 }
@@ -386,7 +386,7 @@ func (c *IdentityClient) AbilityURAFromDescriptorRef(ctx context.Context, descri
 		return "", err
 	}
 	if projection.Kind != "descriptor_ref" || projection.AbilityURA == "" {
-		return "", invalidRuntimePayload("invalid descriptor_ref ability projection", nil)
+		return "", invalidProfilePayload(directoryIdentityProfile, "invalid descriptor_ref ability projection", nil)
 	}
 	return projection.AbilityURA, nil
 }
@@ -396,11 +396,11 @@ func (c *IdentityClient) BuildResourceRef(ctx context.Context, req LocalResource
 		return ResourceRef{}, err
 	}
 	if req.Path == "" || req.Capability == "" {
-		return ResourceRef{}, invalidRuntimePayload("path and capability are required", nil)
+		return ResourceRef{}, invalidProfilePayload(directoryIdentityProfile, "path and capability are required", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return ResourceRef{}, invalidRuntimePayload(fmt.Sprintf("encode resource-ref request: %v", err), err)
+		return ResourceRef{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode resource-ref request: %v", err), err)
 	}
 	raw, err := c.transport.BuildResourceRef(ctx, requestJSON)
 	if err != nil {
@@ -471,14 +471,14 @@ func (c *IdentityClient) Signer(ctx context.Context, req SignerRequest) (SignerH
 
 func (c *IdentityClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("identity client is not initialized")
+		return invalidProfileClient(directoryIdentityProfile, "identity client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "identity")
 }
 
 func (c *IdentityClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("identity client is not initialized")
+		return invalidProfileClient(directoryIdentityProfile, "identity client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "identity")
 }
@@ -486,13 +486,13 @@ func (c *IdentityClient) Close(ctx context.Context) error {
 func NewIdentityProjectionFromJSON(raw []byte) (IdentityProjection, error) {
 	var projection IdentityProjection
 	if err := json.Unmarshal(raw, &projection); err != nil {
-		return IdentityProjection{}, invalidRuntimePayload(fmt.Sprintf("decode identity projection JSON: %v", err), err)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode identity projection JSON: %v", err), err)
 	}
 	if projection.Kind == "" || projection.Profile == "" || projection.Components == nil || projection.Metadata == nil {
-		return IdentityProjection{}, invalidRuntimePayload("invalid identity projection", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "invalid identity projection", nil)
 	}
 	if projection.Kind == "descriptor_ref" && (projection.DescriptorRef == "" || projection.AbilityURA == "" || projection.DescriptorVersion == "") {
-		return IdentityProjection{}, invalidRuntimePayload("invalid descriptor_ref projection", nil)
+		return IdentityProjection{}, invalidProfilePayload(directoryIdentityProfile, "invalid descriptor_ref projection", nil)
 	}
 	return projection, nil
 }
@@ -500,10 +500,10 @@ func NewIdentityProjectionFromJSON(raw []byte) (IdentityProjection, error) {
 func NewResourceRefFromJSON(raw []byte) (ResourceRef, error) {
 	var ref ResourceRef
 	if err := json.Unmarshal(raw, &ref); err != nil {
-		return ResourceRef{}, invalidRuntimePayload(fmt.Sprintf("decode resource-ref JSON: %v", err), err)
+		return ResourceRef{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode resource-ref JSON: %v", err), err)
 	}
 	if ref.ResourceURA == "" || ref.OwnerURA == "" || ref.Namespace == "" || ref.Capability == "" || ref.Revision == "" {
-		return ResourceRef{}, invalidRuntimePayload("invalid resource-ref projection", nil)
+		return ResourceRef{}, invalidProfilePayload(directoryIdentityProfile, "invalid resource-ref projection", nil)
 	}
 	return ref, nil
 }
@@ -511,7 +511,7 @@ func NewResourceRefFromJSON(raw []byte) (ResourceRef, error) {
 func NewSigningKeyRecordFromJSON(raw []byte) (SigningKeyRecord, error) {
 	var record SigningKeyRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return SigningKeyRecord{}, invalidRuntimePayload(fmt.Sprintf("decode signing-key record JSON: %v", err), err)
+		return SigningKeyRecord{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode signing-key record JSON: %v", err), err)
 	}
 	if err := validateSigningKeyRecord(record); err != nil {
 		return SigningKeyRecord{}, err
@@ -522,10 +522,10 @@ func NewSigningKeyRecordFromJSON(raw []byte) (SigningKeyRecord, error) {
 func NewSigningKeyPageFromJSON(raw []byte) (SigningKeyPage, error) {
 	var page SigningKeyPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return SigningKeyPage{}, invalidRuntimePayload(fmt.Sprintf("decode signing-key page JSON: %v", err), err)
+		return SigningKeyPage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode signing-key page JSON: %v", err), err)
 	}
 	if page.Profile == "" || page.Items == nil || page.Limit < 1 || page.Limit > MaxSigningKeyPageSize || page.Metadata == nil {
-		return SigningKeyPage{}, invalidRuntimePayload("invalid signing-key page projection", nil)
+		return SigningKeyPage{}, invalidProfilePayload(directoryIdentityProfile, "invalid signing-key page projection", nil)
 	}
 	for _, record := range page.Items {
 		if err := validateSigningKeyRecord(record); err != nil {
@@ -538,13 +538,13 @@ func NewSigningKeyPageFromJSON(raw []byte) (SigningKeyPage, error) {
 func NewSigningKeyRevokeResultFromJSON(raw []byte) (SigningKeyRevokeResult, error) {
 	var result SigningKeyRevokeResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return SigningKeyRevokeResult{}, invalidRuntimePayload(fmt.Sprintf("decode signing-key revoke result JSON: %v", err), err)
+		return SigningKeyRevokeResult{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode signing-key revoke result JSON: %v", err), err)
 	}
 	if result.Profile == "" || result.KeyID == "" || result.State == "" || result.Metadata == nil {
-		return SigningKeyRevokeResult{}, invalidRuntimePayload("invalid signing-key revoke result projection", nil)
+		return SigningKeyRevokeResult{}, invalidProfilePayload(directoryIdentityProfile, "invalid signing-key revoke result projection", nil)
 	}
 	if !result.Revoked {
-		return SigningKeyRevokeResult{}, invalidRuntimePayload("signing-key revoke result is not terminal", nil)
+		return SigningKeyRevokeResult{}, invalidProfilePayload(directoryIdentityProfile, "signing-key revoke result is not terminal", nil)
 	}
 	return result, nil
 }
@@ -552,11 +552,11 @@ func NewSigningKeyRevokeResultFromJSON(raw []byte) (SigningKeyRevokeResult, erro
 func NewSignerHandleFromJSON(raw []byte) (SignerHandle, error) {
 	var signer SignerHandle
 	if err := json.Unmarshal(raw, &signer); err != nil {
-		return SignerHandle{}, invalidRuntimePayload(fmt.Sprintf("decode signer handle JSON: %v", err), err)
+		return SignerHandle{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode signer handle JSON: %v", err), err)
 	}
 	if signer.Profile == "" || signer.SignerID == "" || signer.OwnerURA == "" || signer.KeyID == "" ||
 		signer.Algorithm == "" || signer.Policy == nil || signer.Metadata == nil {
-		return SignerHandle{}, invalidRuntimePayload("invalid signer handle projection", nil)
+		return SignerHandle{}, invalidProfilePayload(directoryIdentityProfile, "invalid signer handle projection", nil)
 	}
 	return signer, nil
 }
@@ -575,7 +575,7 @@ func marshalSigningKeyRegistrationRequest(req SigningKeyRegistrationRequest) ([]
 		return nil, err
 	}
 	if len(req.Usage) == 0 {
-		return nil, invalidRuntimePayload("owner_ura, key_id, algorithm, public_key_base64, and usage are required", nil)
+		return nil, invalidProfilePayload(directoryIdentityProfile, "owner_ura, key_id, algorithm, public_key_base64, and usage are required", nil)
 	}
 	for _, usage := range req.Usage {
 		if err := requiredCleanIdentityField(usage, "usage"); err != nil {
@@ -583,20 +583,20 @@ func marshalSigningKeyRegistrationRequest(req SigningKeyRegistrationRequest) ([]
 		}
 	}
 	if containsPrivateKeyMetadata(req.Metadata) {
-		return nil, invalidRuntimePayload("private key material must not be supplied to identity facade", nil)
+		return nil, invalidProfilePayload(directoryIdentityProfile, "private key material must not be supplied to identity facade", nil)
 	}
 	return marshalIdentityRequest(req, "signing-key registration request")
 }
 
 func marshalSigningKeyListRequest(req SigningKeyListRequest) ([]byte, error) {
 	if strings.TrimSpace(req.OwnerURA) != req.OwnerURA || strings.TrimSpace(req.Cursor) != req.Cursor {
-		return nil, invalidRuntimePayload("owner_ura and cursor must not contain surrounding whitespace", nil)
+		return nil, invalidProfilePayload(directoryIdentityProfile, "owner_ura and cursor must not contain surrounding whitespace", nil)
 	}
 	if req.Limit == 0 {
 		req.Limit = DefaultSigningKeyPageSize
 	}
 	if req.Limit < 1 || req.Limit > MaxSigningKeyPageSize {
-		return nil, invalidRuntimePayload("signing-key page limit exceeds bounds", nil)
+		return nil, invalidProfilePayload(directoryIdentityProfile, "signing-key page limit exceeds bounds", nil)
 	}
 	return marshalIdentityRequest(req, "signing-key list request")
 }
@@ -624,7 +624,7 @@ func marshalSignerRequest(req SignerRequest) ([]byte, error) {
 		}
 	}
 	if containsPrivateKeyMetadata(req.Metadata) {
-		return nil, invalidRuntimePayload("private key material must not be supplied to identity facade", nil)
+		return nil, invalidProfilePayload(directoryIdentityProfile, "private key material must not be supplied to identity facade", nil)
 	}
 	return marshalIdentityRequest(req, "signer request")
 }
@@ -632,17 +632,17 @@ func marshalSignerRequest(req SignerRequest) ([]byte, error) {
 func marshalIdentityRequest(req any, label string) ([]byte, error) {
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode %s: %v", label, err), err)
+		return nil, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode %s: %v", label, err), err)
 	}
 	return requestJSON, nil
 }
 
 func requiredCleanIdentityField(value string, field string) error {
 	if strings.TrimSpace(value) == "" {
-		return invalidRuntimePayload(fmt.Sprintf("%s is required", field), nil)
+		return invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("%s is required", field), nil)
 	}
 	if strings.TrimSpace(value) != value {
-		return invalidRuntimePayload(fmt.Sprintf("%s must not contain surrounding whitespace", field), nil)
+		return invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("%s must not contain surrounding whitespace", field), nil)
 	}
 	return nil
 }
@@ -651,7 +651,7 @@ func validateSigningKeyRecord(record SigningKeyRecord) error {
 	if record.Profile == "" || record.KeyID == "" || record.OwnerURA == "" ||
 		record.Algorithm == "" || record.PublicKeyBase64 == "" || record.State == "" ||
 		len(record.Usage) == 0 || record.Metadata == nil {
-		return invalidRuntimePayload("invalid signing-key record projection", nil)
+		return invalidProfilePayload(directoryIdentityProfile, "invalid signing-key record projection", nil)
 	}
 	return nil
 }
@@ -669,7 +669,7 @@ func containsPrivateKeyMetadata(metadata map[string]any) bool {
 func wrapIdentityTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, directoryIdentityProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(directoryIdentityProfile, message, cause)
 }

@@ -47,8 +47,8 @@ method spelling.
   await/cancel/events/free handles for unary submit; live event streaming and
   Axon-backed receipt verification remain incomplete.
 - C ABI now exposes schema-shaped typed error JSON for ABI return codes; Python
-  profile facades now attach stable `profile`/`source_ref` details, while broad
-  non-Python language facade error classes and source refs remain incomplete.
+  and Go profile facades now attach stable `profile`/`source_ref` details, while
+  broader non-P0 language facade error classes and source refs remain incomplete.
 - Receipt fetch carrier, projection, and causal-ref guardrails exist for
   Rust/C ABI over daemon `invocation.history.get`; Axon-backed full
   verification, fetched-record execution convenience, and language facades
@@ -208,11 +208,12 @@ method spelling.
   EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
-  EasyRemote-style descriptor-ref and target-dispatch cutover tests; private C ABI v4 profile carrier/projection bridges for
+  EasyRemote-style descriptor-ref and target-dispatch cutover tests, stable
+  per-profile error source refs; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; direct daemon
-  prepare/submit adapters, live profile execution adapters, remaining EasyRemote repository extraction, per-profile
-  error source refs, and remaining profile conformance action execution remain incomplete before
+  prepare/submit adapters, live profile execution adapters, remaining EasyRemote repository extraction,
+  and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, list/resolve Invocation carrier

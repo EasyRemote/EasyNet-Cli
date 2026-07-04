@@ -210,6 +210,42 @@ func NormalizeErrorCode(code string) ErrorCode {
 	}
 }
 
+func profileErrorDetails(profile string, details map[string]any) map[string]any {
+	value := make(map[string]any, len(details)+2)
+	for key, item := range details {
+		value[key] = item
+	}
+	if _, ok := value["profile"]; !ok {
+		value["profile"] = profile
+	}
+	if _, ok := value["source_ref"]; !ok {
+		value["source_ref"] = "go_sdk.profile." + profile
+	}
+	return value
+}
+
+func withProfileErrorDetails(err error, profile string) error {
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		return err
+	}
+	copy := *sdkErr
+	copy.Details = profileErrorDetails(profile, sdkErr.Details)
+	return &copy
+}
+
+func invalidProfileClient(profile string, message string) error {
+	return withProfileErrorDetails(invalidRuntimeClient(message), profile)
+}
+
+func invalidProfilePayload(profile string, message string, cause error) error {
+	return withProfileErrorDetails(invalidRuntimePayload(message, cause), profile)
+}
+
+func transportProfileError(profile string, message string, cause error) error {
+	return withProfileErrorDetails(transportRuntimeError(message, cause), profile)
+}
+
 func parseRetryHint(value string) (RetryHint, error) {
 	switch RetryHint(value) {
 	case RetryNever, RetrySafe, RetryAfterBackoff, RetryUnknown:

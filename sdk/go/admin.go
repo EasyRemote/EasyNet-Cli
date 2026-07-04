@@ -309,140 +309,140 @@ type AdminTransportFunc struct {
 
 func (f AdminTransportFunc) BuildAgentListInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildAgentListInvocationFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-list invocation transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-list invocation transport function is required")
 	}
 	return f.BuildAgentListInvocationFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) BuildAgentStartInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildAgentStartInvocationFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-start invocation transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-start invocation transport function is required")
 	}
 	return f.BuildAgentStartInvocationFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) BuildAgentStopInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildAgentStopInvocationFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-stop invocation transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-stop invocation transport function is required")
 	}
 	return f.BuildAgentStopInvocationFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) BuildAgentRefreshInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildAgentRefreshInvocationFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-refresh invocation transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-refresh invocation transport function is required")
 	}
 	return f.BuildAgentRefreshInvocationFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) BuildSessionListInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildSessionListInvocationFunc == nil {
-		return nil, invalidRuntimeClient("admin session-list invocation transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin session-list invocation transport function is required")
 	}
 	return f.BuildSessionListInvocationFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.GatewayStatusFunc == nil {
-		return nil, invalidRuntimeClient("admin gateway-status transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin gateway-status transport function is required")
 	}
 	return f.GatewayStatusFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListAgentsFunc == nil {
-		return nil, invalidRuntimeClient("admin list-agents transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin list-agents transport function is required")
 	}
 	return f.ListAgentsFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) AgentStart(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.AgentStartFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-start transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-start transport function is required")
 	}
 	return f.AgentStartFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) AgentStop(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.AgentStopFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-stop transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-stop transport function is required")
 	}
 	return f.AgentStopFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) AgentRefresh(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.AgentRefreshFunc == nil {
-		return nil, invalidRuntimeClient("admin agent-refresh transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin agent-refresh transport function is required")
 	}
 	return f.AgentRefreshFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) ListDeviceSessions(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListDeviceSessionsFunc == nil {
-		return nil, invalidRuntimeClient("admin list-device-sessions transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin list-device-sessions transport function is required")
 	}
 	return f.ListDeviceSessionsFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) JoinHub(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.JoinHubFunc == nil {
-		return nil, invalidRuntimeClient("admin join-hub transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin join-hub transport function is required")
 	}
 	return f.JoinHubFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) LeaveHub(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.LeaveHubFunc == nil {
-		return nil, invalidRuntimeClient("admin leave-hub transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin leave-hub transport function is required")
 	}
 	return f.LeaveHubFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) PairingPreflight(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.PairingPreflightFunc == nil {
-		return nil, invalidRuntimeClient("admin pairing-preflight transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin pairing-preflight transport function is required")
 	}
 	return f.PairingPreflightFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) ValidatePairing(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ValidatePairingFunc == nil {
-		return nil, invalidRuntimeClient("admin validate-pairing transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin validate-pairing transport function is required")
 	}
 	return f.ValidatePairingFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) VerifyDeviceCredential(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.VerifyDeviceCredentialFunc == nil {
-		return nil, invalidRuntimeClient("admin verify-device-credential transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin verify-device-credential transport function is required")
 	}
 	return f.VerifyDeviceCredentialFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) CreatePairing(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.CreatePairingFunc == nil {
-		return nil, invalidRuntimeClient("admin create-pairing transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin create-pairing transport function is required")
 	}
 	return f.CreatePairingFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) RevokeDevice(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.RevokeDeviceFunc == nil {
-		return nil, invalidRuntimeClient("admin revoke-device transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin revoke-device transport function is required")
 	}
 	return f.RevokeDeviceFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) CreateDeviceSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.CreateDeviceSessionFunc == nil {
-		return nil, invalidRuntimeClient("admin create-device-session transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin create-device-session transport function is required")
 	}
 	return f.CreateDeviceSessionFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) DeleteDeviceSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.DeleteDeviceSessionFunc == nil {
-		return nil, invalidRuntimeClient("admin delete-device-session transport function is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin delete-device-session transport function is required")
 	}
 	return f.DeleteDeviceSessionFunc(ctx, requestJSON)
 }
@@ -455,7 +455,7 @@ type AdminClient struct {
 
 func NewAdminClient(transport AdminTransport) (*AdminClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("admin transport is required")
+		return nil, invalidProfileClient(adminGatewayProfile, "admin transport is required")
 	}
 	return &AdminClient{transport: transport}, nil
 }
@@ -486,7 +486,7 @@ func (c *AdminClient) GatewayStatus(ctx context.Context, req AdminGatewayStatusR
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return GatewayStatus{}, invalidRuntimePayload(fmt.Sprintf("encode gateway status request: %v", err), err)
+		return GatewayStatus{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode gateway status request: %v", err), err)
 	}
 	raw, err := c.transport.GatewayStatus(ctx, requestJSON)
 	if err != nil {
@@ -660,14 +660,14 @@ func (c *AdminClient) resultOperation(ctx context.Context, req any, validate fun
 
 func (c *AdminClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("admin client is not initialized")
+		return invalidProfileClient(adminGatewayProfile, "admin client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "admin")
 }
 
 func (c *AdminClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("admin client is not initialized")
+		return invalidProfileClient(adminGatewayProfile, "admin client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "admin")
 }
@@ -675,15 +675,15 @@ func (c *AdminClient) requireReady(ctx context.Context) error {
 func NewGatewayStatusFromJSON(raw []byte) (GatewayStatus, error) {
 	var status GatewayStatus
 	if err := json.Unmarshal(raw, &status); err != nil {
-		return GatewayStatus{}, invalidRuntimePayload(fmt.Sprintf("decode gateway status JSON: %v", err), err)
+		return GatewayStatus{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode gateway status JSON: %v", err), err)
 	}
 	if status.Profile != adminGatewayProfile || status.GatewayID == "" || status.State == "" ||
 		status.Listeners == nil || status.Metadata == nil {
-		return GatewayStatus{}, invalidRuntimePayload("invalid gateway status projection", nil)
+		return GatewayStatus{}, invalidProfilePayload(adminGatewayProfile, "invalid gateway status projection", nil)
 	}
 	for _, listener := range status.Listeners {
 		if listener.Kind == "" || listener.Endpoint == "" {
-			return GatewayStatus{}, invalidRuntimePayload("invalid gateway listener projection", nil)
+			return GatewayStatus{}, invalidProfilePayload(adminGatewayProfile, "invalid gateway listener projection", nil)
 		}
 	}
 	return status, nil
@@ -692,15 +692,15 @@ func NewGatewayStatusFromJSON(raw []byte) (GatewayStatus, error) {
 func NewAdminAgentPageFromJSON(raw []byte) (AdminAgentPage, error) {
 	var page AdminAgentPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return AdminAgentPage{}, invalidRuntimePayload(fmt.Sprintf("decode admin agent page JSON: %v", err), err)
+		return AdminAgentPage{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode admin agent page JSON: %v", err), err)
 	}
 	if page.Profile != adminGatewayProfile || page.Kind != "agent_records" || page.State == "" ||
 		page.Items == nil || page.Metadata == nil {
-		return AdminAgentPage{}, invalidRuntimePayload("invalid admin agent page projection", nil)
+		return AdminAgentPage{}, invalidProfilePayload(adminGatewayProfile, "invalid admin agent page projection", nil)
 	}
 	for _, item := range page.Items {
 		if item.Name == "" || item.State == "" || item.Runtime == "" || item.Metadata == nil {
-			return AdminAgentPage{}, invalidRuntimePayload("invalid admin agent record projection", nil)
+			return AdminAgentPage{}, invalidProfilePayload(adminGatewayProfile, "invalid admin agent record projection", nil)
 		}
 	}
 	return page, nil
@@ -709,10 +709,10 @@ func NewAdminAgentPageFromJSON(raw []byte) (AdminAgentPage, error) {
 func NewAdminGatewayResultFromJSON(raw []byte) (AdminGatewayResult, error) {
 	var result AdminGatewayResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return AdminGatewayResult{}, invalidRuntimePayload(fmt.Sprintf("decode admin result JSON: %v", err), err)
+		return AdminGatewayResult{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode admin result JSON: %v", err), err)
 	}
 	if result.Profile != adminGatewayProfile || result.Kind == "" || result.State == "" || result.Metadata == nil {
-		return AdminGatewayResult{}, invalidRuntimePayload("invalid admin result projection", nil)
+		return AdminGatewayResult{}, invalidProfilePayload(adminGatewayProfile, "invalid admin result projection", nil)
 	}
 	return result, nil
 }
@@ -720,11 +720,11 @@ func NewAdminGatewayResultFromJSON(raw []byte) (AdminGatewayResult, error) {
 func NewPairingPreflightFromJSON(raw []byte) (PairingPreflight, error) {
 	var result PairingPreflight
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return PairingPreflight{}, invalidRuntimePayload(fmt.Sprintf("decode pairing preflight JSON: %v", err), err)
+		return PairingPreflight{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode pairing preflight JSON: %v", err), err)
 	}
 	if result.Profile != adminGatewayProfile || result.Kind == "" || result.State == "" ||
 		result.HubURA == "" || result.DeviceURA == "" || result.Scopes == nil || result.Metadata == nil {
-		return PairingPreflight{}, invalidRuntimePayload("invalid pairing preflight projection", nil)
+		return PairingPreflight{}, invalidProfilePayload(adminGatewayProfile, "invalid pairing preflight projection", nil)
 	}
 	return result, nil
 }
@@ -732,12 +732,12 @@ func NewPairingPreflightFromJSON(raw []byte) (PairingPreflight, error) {
 func NewPairingTokenFromJSON(raw []byte) (PairingToken, error) {
 	var token PairingToken
 	if err := json.Unmarshal(raw, &token); err != nil {
-		return PairingToken{}, invalidRuntimePayload(fmt.Sprintf("decode pairing token JSON: %v", err), err)
+		return PairingToken{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode pairing token JSON: %v", err), err)
 	}
 	if token.Profile != adminGatewayProfile || token.Kind == "" || token.TokenID == "" ||
 		token.Token == "" || token.HubURA == "" || token.DeviceURA == "" || token.State == "" ||
 		token.ExpiresUnixMS <= 0 || token.Scopes == nil || token.Metadata == nil {
-		return PairingToken{}, invalidRuntimePayload("invalid pairing token projection", nil)
+		return PairingToken{}, invalidProfilePayload(adminGatewayProfile, "invalid pairing token projection", nil)
 	}
 	return token, nil
 }
@@ -745,13 +745,13 @@ func NewPairingTokenFromJSON(raw []byte) (PairingToken, error) {
 func NewDeviceCredentialFromJSON(raw []byte) (DeviceCredential, error) {
 	var credential DeviceCredential
 	if err := json.Unmarshal(raw, &credential); err != nil {
-		return DeviceCredential{}, invalidRuntimePayload(fmt.Sprintf("decode device credential JSON: %v", err), err)
+		return DeviceCredential{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode device credential JSON: %v", err), err)
 	}
 	if credential.Profile != adminGatewayProfile || credential.Kind == "" || credential.CredentialID == "" ||
 		credential.DeviceURA == "" || credential.HubURA == "" || credential.State == "" ||
 		credential.IssuedUnixMS <= 0 || credential.ExpiresUnixMS <= 0 || credential.Scopes == nil ||
 		credential.Metadata == nil {
-		return DeviceCredential{}, invalidRuntimePayload("invalid device credential projection", nil)
+		return DeviceCredential{}, invalidProfilePayload(adminGatewayProfile, "invalid device credential projection", nil)
 	}
 	return credential, nil
 }
@@ -759,14 +759,14 @@ func NewDeviceCredentialFromJSON(raw []byte) (DeviceCredential, error) {
 func NewDeviceCredentialVerificationFromJSON(raw []byte) (DeviceCredentialVerification, error) {
 	var verification DeviceCredentialVerification
 	if err := json.Unmarshal(raw, &verification); err != nil {
-		return DeviceCredentialVerification{}, invalidRuntimePayload(fmt.Sprintf("decode device credential verification JSON: %v", err), err)
+		return DeviceCredentialVerification{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode device credential verification JSON: %v", err), err)
 	}
 	if verification.Profile != adminGatewayProfile || verification.Kind == "" || verification.CredentialID == "" ||
 		verification.DeviceURA == "" || verification.HubURA == "" || verification.Metadata == nil {
-		return DeviceCredentialVerification{}, invalidRuntimePayload("invalid device credential verification projection", nil)
+		return DeviceCredentialVerification{}, invalidProfilePayload(adminGatewayProfile, "invalid device credential verification projection", nil)
 	}
 	if verification.Verified && verification.Method == "" {
-		return DeviceCredentialVerification{}, invalidRuntimePayload("verified device credential must include method", nil)
+		return DeviceCredentialVerification{}, invalidProfilePayload(adminGatewayProfile, "verified device credential must include method", nil)
 	}
 	return verification, nil
 }
@@ -774,7 +774,7 @@ func NewDeviceCredentialVerificationFromJSON(raw []byte) (DeviceCredentialVerifi
 func NewDeviceSessionFromJSON(raw []byte) (DeviceSession, error) {
 	var session DeviceSession
 	if err := json.Unmarshal(raw, &session); err != nil {
-		return DeviceSession{}, invalidRuntimePayload(fmt.Sprintf("decode device session JSON: %v", err), err)
+		return DeviceSession{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode device session JSON: %v", err), err)
 	}
 	if err := validateDeviceSessionProjection(session); err != nil {
 		return DeviceSession{}, err
@@ -785,11 +785,11 @@ func NewDeviceSessionFromJSON(raw []byte) (DeviceSession, error) {
 func NewDeviceSessionPageFromJSON(raw []byte) (DeviceSessionPage, error) {
 	var page DeviceSessionPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return DeviceSessionPage{}, invalidRuntimePayload(fmt.Sprintf("decode device session page JSON: %v", err), err)
+		return DeviceSessionPage{}, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode device session page JSON: %v", err), err)
 	}
 	if page.Profile != adminGatewayProfile || page.Kind != "device_sessions" || page.State == "" ||
 		page.Items == nil || page.Metadata == nil {
-		return DeviceSessionPage{}, invalidRuntimePayload("invalid device session page projection", nil)
+		return DeviceSessionPage{}, invalidProfilePayload(adminGatewayProfile, "invalid device session page projection", nil)
 	}
 	for _, session := range page.Items {
 		if err := validateDeviceSessionProjection(session); err != nil {
@@ -805,7 +805,7 @@ func marshalAdminRequest(req any, validate func(any) error) ([]byte, error) {
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode admin request: %v", err), err)
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode admin request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -823,13 +823,13 @@ func validateAdminAgentStartRequest(req any) error {
 		return err
 	}
 	if value.AgentType == "" && value.Entry == nil {
-		return invalidRuntimePayload("either agent_type or entry is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, "either agent_type or entry is required", nil)
 	}
 	if value.RootPath != "" && !strings.HasPrefix(value.RootPath, "/") {
-		return invalidRuntimePayload("root_path must be absolute", nil)
+		return invalidProfilePayload(adminGatewayProfile, "root_path must be absolute", nil)
 	}
 	if strings.Contains(value.RootPath, "/../") || strings.HasSuffix(value.RootPath, "/..") {
-		return invalidRuntimePayload("root_path must not contain parent traversal", nil)
+		return invalidProfilePayload(adminGatewayProfile, "root_path must not contain parent traversal", nil)
 	}
 	return nil
 }
@@ -840,7 +840,7 @@ func validateAdminAgentStopRequest(req any) error {
 		return err
 	}
 	if value.Name == "" && value.AgentURA == "" {
-		return invalidRuntimePayload("either name or agent_ura is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, "either name or agent_ura is required", nil)
 	}
 	if value.Name != "" {
 		if err := validateAdminAgentName(value.Name, "name"); err != nil {
@@ -852,7 +852,7 @@ func validateAdminAgentStopRequest(req any) error {
 			return err
 		}
 		if value.Name != "" && !strings.HasSuffix(value.AgentURA, "."+value.Name) {
-			return invalidRuntimePayload("agent_ura must name the same hosted agent as name", nil)
+			return invalidProfilePayload(adminGatewayProfile, "agent_ura must name the same hosted agent as name", nil)
 		}
 	}
 	return nil
@@ -949,7 +949,7 @@ func validateCreatePairingRequest(req any) error {
 		return err
 	}
 	if value.ExpiresUnixMS <= 0 {
-		return invalidRuntimePayload("expires_unix_ms is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, "expires_unix_ms is required", nil)
 	}
 	return validateAdminScopes(value.Scopes)
 }
@@ -988,7 +988,7 @@ func validateDeleteDeviceSessionRequest(req any) error {
 		return err
 	}
 	if strings.Contains(strings.ToLower(value.SessionID), "browser") {
-		return invalidRuntimePayload("session_id must be a daemon device-session id", nil)
+		return invalidProfilePayload(adminGatewayProfile, "session_id must be a daemon device-session id", nil)
 	}
 	if value.Reason != "" {
 		return validateAdminIdentifier(value.Reason, "reason")
@@ -999,17 +999,17 @@ func validateDeleteDeviceSessionRequest(req any) error {
 func validateAdminCarrierBase(base AdminCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
-		return invalidRuntimePayload("complete admin invocation carrier is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, "complete admin invocation carrier is required", nil)
 	}
 	return nil
 }
 
 func validateAdminIdentifier(value string, field string) error {
 	if strings.TrimSpace(value) == "" {
-		return invalidRuntimePayload(field+" is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, field+" is required", nil)
 	}
 	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "/\\\t\r\n") {
-		return invalidRuntimePayload(field+" must be an opaque daemon identifier", nil)
+		return invalidProfilePayload(adminGatewayProfile, field+" must be an opaque daemon identifier", nil)
 	}
 	return nil
 }
@@ -1025,20 +1025,20 @@ func validateAdminScopes(scopes []string) error {
 
 func validateHubURA(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return invalidRuntimePayload("hub_ura is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, "hub_ura is required", nil)
 	}
 	if !strings.Contains(value, "/hub/") {
-		return invalidRuntimePayload("hub_ura must be a Hub URA", nil)
+		return invalidProfilePayload(adminGatewayProfile, "hub_ura must be a Hub URA", nil)
 	}
 	return nil
 }
 
 func validateDeviceURA(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return invalidRuntimePayload("device_ura is required", nil)
+		return invalidProfilePayload(adminGatewayProfile, "device_ura is required", nil)
 	}
 	if !strings.Contains(value, "/device/") {
-		return invalidRuntimePayload("device_ura must be a Device URA", nil)
+		return invalidProfilePayload(adminGatewayProfile, "device_ura must be a Device URA", nil)
 	}
 	return nil
 }
@@ -1047,30 +1047,30 @@ func validateDeviceSessionProjection(session DeviceSession) error {
 	if session.Profile != adminGatewayProfile || session.Kind == "" || session.SessionID == "" ||
 		session.DeviceURA == "" || session.HubURA == "" || session.State == "" ||
 		session.SessionKind == "" || session.CreatedUnixMS <= 0 || session.Metadata == nil {
-		return invalidRuntimePayload("invalid device session projection", nil)
+		return invalidProfilePayload(adminGatewayProfile, "invalid device session projection", nil)
 	}
 	return nil
 }
 
 func validateAdminAgentName(value string, field string) error {
 	if strings.TrimSpace(value) == "" {
-		return invalidRuntimePayload(field+" must not be empty", nil)
+		return invalidProfilePayload(adminGatewayProfile, field+" must not be empty", nil)
 	}
 	if value == "device" || strings.HasPrefix(value, "device.") {
-		return invalidRuntimePayload("device system agents are not managed by hosted agent lifecycle", nil)
+		return invalidProfilePayload(adminGatewayProfile, "device system agents are not managed by hosted agent lifecycle", nil)
 	}
 	if strings.Contains(value, "/") || strings.Contains(value, "\\") || strings.ContainsAny(value, " \t\r\n") {
-		return invalidRuntimePayload(field+" must be an owner-local agent id", nil)
+		return invalidProfilePayload(adminGatewayProfile, field+" must be an owner-local agent id", nil)
 	}
 	return nil
 }
 
 func validateHostedAgentURA(value string) error {
 	if !strings.Contains(value, "/agent/") {
-		return invalidRuntimePayload("agent_ura must be an Agent URA", nil)
+		return invalidProfilePayload(adminGatewayProfile, "agent_ura must be an Agent URA", nil)
 	}
 	if strings.Contains(value, "/agent/device.") {
-		return invalidRuntimePayload("device-sponsored System Agents are not managed by hosted agent lifecycle", nil)
+		return invalidProfilePayload(adminGatewayProfile, "device-sponsored System Agents are not managed by hosted agent lifecycle", nil)
 	}
 	return nil
 }
@@ -1078,7 +1078,7 @@ func validateHostedAgentURA(value string) error {
 func wrapAdminTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, adminGatewayProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(adminGatewayProfile, message, cause)
 }

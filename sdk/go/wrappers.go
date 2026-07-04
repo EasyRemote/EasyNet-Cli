@@ -192,70 +192,70 @@ type WrapperTransportFunc struct {
 
 func (f WrapperTransportFunc) BuildFileTransferInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildFileTransferInvocationFunc == nil {
-		return nil, invalidRuntimeClient("wrapper file-transfer invocation transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper file-transfer invocation transport function is required")
 	}
 	return f.BuildFileTransferInvocationFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) BuildTerminalSessionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildTerminalSessionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("wrapper terminal-session invocation transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper terminal-session invocation transport function is required")
 	}
 	return f.BuildTerminalSessionInvocationFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) BuildRemoteDesktopSessionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildRemoteDesktopSessionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("wrapper remote-desktop-session invocation transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper remote-desktop-session invocation transport function is required")
 	}
 	return f.BuildRemoteDesktopSessionInvocationFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) BuildBrowserSessionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildBrowserSessionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("wrapper browser-session invocation transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper browser-session invocation transport function is required")
 	}
 	return f.BuildBrowserSessionInvocationFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) BuildMediaSessionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildMediaSessionInvocationFunc == nil {
-		return nil, invalidRuntimeClient("wrapper media-session invocation transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper media-session invocation transport function is required")
 	}
 	return f.BuildMediaSessionInvocationFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) TransferFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.TransferFileFunc == nil {
-		return nil, invalidRuntimeClient("wrapper file-transfer transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper file-transfer transport function is required")
 	}
 	return f.TransferFileFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) StartTerminalSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.StartTerminalSessionFunc == nil {
-		return nil, invalidRuntimeClient("wrapper terminal-session transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper terminal-session transport function is required")
 	}
 	return f.StartTerminalSessionFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) StartRemoteDesktopSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.StartRemoteDesktopSessionFunc == nil {
-		return nil, invalidRuntimeClient("wrapper remote-desktop-session transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper remote-desktop-session transport function is required")
 	}
 	return f.StartRemoteDesktopSessionFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) StartBrowserSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.StartBrowserSessionFunc == nil {
-		return nil, invalidRuntimeClient("wrapper browser-session transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper browser-session transport function is required")
 	}
 	return f.StartBrowserSessionFunc(ctx, requestJSON)
 }
 
 func (f WrapperTransportFunc) StartMediaSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.StartMediaSessionFunc == nil {
-		return nil, invalidRuntimeClient("wrapper media-session transport function is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper media-session transport function is required")
 	}
 	return f.StartMediaSessionFunc(ctx, requestJSON)
 }
@@ -272,7 +272,7 @@ func NewWrapperClient() *WrapperClient {
 
 func NewWrapperClientWithTransport(transport WrapperTransport) (*WrapperClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("wrapper transport is required")
+		return nil, invalidProfileClient(wrappersProfile, "wrapper transport is required")
 	}
 	return &WrapperClient{transport: transport}, nil
 }
@@ -359,7 +359,7 @@ func (c *WrapperClient) StartMediaSession(ctx context.Context, req WrapperMediaS
 
 func (c *WrapperClient) ProjectFileRecord(req WrapperFileRecordRequest) (WrapperFileRecord, error) {
 	if c == nil {
-		return WrapperFileRecord{}, invalidRuntimeClient("wrapper client is not initialized")
+		return WrapperFileRecord{}, invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if err := validateWrapperFileRecordRequest(req); err != nil {
 		return WrapperFileRecord{}, err
@@ -410,27 +410,27 @@ func (c *WrapperClient) execute(ctx context.Context, req any, validate func(any)
 
 func (c *WrapperClient) requireTransportReady(ctx context.Context) error {
 	if c == nil {
-		return invalidRuntimeClient("wrapper client is not initialized")
+		return invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if c.transport == nil {
-		return invalidRuntimeClient("wrapper transport is required")
+		return invalidProfileClient(wrappersProfile, "wrapper transport is required")
 	}
 	return c.lifecycle.RequireOpen(ctx, "wrapper")
 }
 
 func (c *WrapperClient) Close(ctx context.Context) error {
 	if c == nil {
-		return invalidRuntimeClient("wrapper client is not initialized")
+		return invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if c.transport == nil {
-		return invalidRuntimeClient("wrapper transport is required")
+		return invalidProfileClient(wrappersProfile, "wrapper transport is required")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "wrapper")
 }
 
 func (c *WrapperClient) ProjectTerminalSession(req WrapperTerminalSessionRequest) (WrapperTerminalSessionRecord, error) {
 	if c == nil {
-		return WrapperTerminalSessionRecord{}, invalidRuntimeClient("wrapper client is not initialized")
+		return WrapperTerminalSessionRecord{}, invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if err := validateWrapperSessionFacts(req.SessionID, req.OwnerURA, req.State); err != nil {
 		return WrapperTerminalSessionRecord{}, err
@@ -452,7 +452,7 @@ func (c *WrapperClient) ProjectTerminalSession(req WrapperTerminalSessionRequest
 
 func (c *WrapperClient) ProjectRemoteDesktopSession(req WrapperRemoteDesktopSessionRequest) (WrapperRemoteDesktopSessionRecord, error) {
 	if c == nil {
-		return WrapperRemoteDesktopSessionRecord{}, invalidRuntimeClient("wrapper client is not initialized")
+		return WrapperRemoteDesktopSessionRecord{}, invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if err := validateWrapperSessionFacts(req.SessionID, req.OwnerURA, req.State); err != nil {
 		return WrapperRemoteDesktopSessionRecord{}, err
@@ -474,7 +474,7 @@ func (c *WrapperClient) ProjectRemoteDesktopSession(req WrapperRemoteDesktopSess
 
 func (c *WrapperClient) ProjectBrowserSession(req WrapperBrowserSessionRequest) (WrapperBrowserSessionRecord, error) {
 	if c == nil {
-		return WrapperBrowserSessionRecord{}, invalidRuntimeClient("wrapper client is not initialized")
+		return WrapperBrowserSessionRecord{}, invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if err := validateWrapperSessionFacts(req.SessionID, req.OwnerURA, req.State); err != nil {
 		return WrapperBrowserSessionRecord{}, err
@@ -496,13 +496,13 @@ func (c *WrapperClient) ProjectBrowserSession(req WrapperBrowserSessionRequest) 
 
 func (c *WrapperClient) ProjectMediaSession(req WrapperMediaSessionRequest) (WrapperMediaSessionRecord, error) {
 	if c == nil {
-		return WrapperMediaSessionRecord{}, invalidRuntimeClient("wrapper client is not initialized")
+		return WrapperMediaSessionRecord{}, invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
 	}
 	if err := validateWrapperSessionFacts(req.SessionID, req.OwnerURA, req.State); err != nil {
 		return WrapperMediaSessionRecord{}, err
 	}
 	if req.MediaKind == "" {
-		return WrapperMediaSessionRecord{}, invalidRuntimePayload("wrapper media_kind is required", nil)
+		return WrapperMediaSessionRecord{}, invalidProfilePayload(wrappersProfile, "wrapper media_kind is required", nil)
 	}
 	record := WrapperMediaSessionRecord{
 		Profile:   wrappersProfile,
@@ -523,7 +523,7 @@ func (c *WrapperClient) ProjectMediaSession(req WrapperMediaSessionRequest) (Wra
 func NewWrapperFileRecordFromJSON(raw []byte) (WrapperFileRecord, error) {
 	var record WrapperFileRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return WrapperFileRecord{}, invalidRuntimePayload(fmt.Sprintf("decode wrapper file record JSON: %v", err), err)
+		return WrapperFileRecord{}, invalidProfilePayload(wrappersProfile, fmt.Sprintf("decode wrapper file record JSON: %v", err), err)
 	}
 	if err := validateWrapperFileRecord(record); err != nil {
 		return WrapperFileRecord{}, err
@@ -534,7 +534,7 @@ func NewWrapperFileRecordFromJSON(raw []byte) (WrapperFileRecord, error) {
 func NewWrapperTerminalSessionRecordFromJSON(raw []byte) (WrapperTerminalSessionRecord, error) {
 	var record WrapperTerminalSessionRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return WrapperTerminalSessionRecord{}, invalidRuntimePayload(fmt.Sprintf("decode wrapper terminal session JSON: %v", err), err)
+		return WrapperTerminalSessionRecord{}, invalidProfilePayload(wrappersProfile, fmt.Sprintf("decode wrapper terminal session JSON: %v", err), err)
 	}
 	if err := validateWrapperTerminalSessionRecord(record); err != nil {
 		return WrapperTerminalSessionRecord{}, err
@@ -545,7 +545,7 @@ func NewWrapperTerminalSessionRecordFromJSON(raw []byte) (WrapperTerminalSession
 func NewWrapperRemoteDesktopSessionRecordFromJSON(raw []byte) (WrapperRemoteDesktopSessionRecord, error) {
 	var record WrapperRemoteDesktopSessionRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return WrapperRemoteDesktopSessionRecord{}, invalidRuntimePayload(fmt.Sprintf("decode wrapper remote desktop session JSON: %v", err), err)
+		return WrapperRemoteDesktopSessionRecord{}, invalidProfilePayload(wrappersProfile, fmt.Sprintf("decode wrapper remote desktop session JSON: %v", err), err)
 	}
 	if err := validateWrapperRemoteDesktopSessionRecord(record); err != nil {
 		return WrapperRemoteDesktopSessionRecord{}, err
@@ -556,7 +556,7 @@ func NewWrapperRemoteDesktopSessionRecordFromJSON(raw []byte) (WrapperRemoteDesk
 func NewWrapperBrowserSessionRecordFromJSON(raw []byte) (WrapperBrowserSessionRecord, error) {
 	var record WrapperBrowserSessionRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return WrapperBrowserSessionRecord{}, invalidRuntimePayload(fmt.Sprintf("decode wrapper browser session JSON: %v", err), err)
+		return WrapperBrowserSessionRecord{}, invalidProfilePayload(wrappersProfile, fmt.Sprintf("decode wrapper browser session JSON: %v", err), err)
 	}
 	if err := validateWrapperBrowserSessionRecord(record); err != nil {
 		return WrapperBrowserSessionRecord{}, err
@@ -567,7 +567,7 @@ func NewWrapperBrowserSessionRecordFromJSON(raw []byte) (WrapperBrowserSessionRe
 func NewWrapperMediaSessionRecordFromJSON(raw []byte) (WrapperMediaSessionRecord, error) {
 	var record WrapperMediaSessionRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return WrapperMediaSessionRecord{}, invalidRuntimePayload(fmt.Sprintf("decode wrapper media session JSON: %v", err), err)
+		return WrapperMediaSessionRecord{}, invalidProfilePayload(wrappersProfile, fmt.Sprintf("decode wrapper media session JSON: %v", err), err)
 	}
 	if err := validateWrapperMediaSessionRecord(record); err != nil {
 		return WrapperMediaSessionRecord{}, err
@@ -582,7 +582,7 @@ func marshalWrapperExecutionRequest(req any) ([]byte, error) {
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode wrapper execution request: %v", err), err)
+		return nil, invalidProfilePayload(wrappersProfile, fmt.Sprintf("encode wrapper execution request: %v", err), err)
 	}
 	return raw, nil
 }
@@ -623,7 +623,7 @@ func wrapperExecutionPayload(req any) (map[string]any, error) {
 		putWrapperString(payload, "codec", value.Codec)
 		return payload, nil
 	default:
-		return nil, invalidRuntimePayload("unsupported wrapper execution request", nil)
+		return nil, invalidProfilePayload(wrappersProfile, "unsupported wrapper execution request", nil)
 	}
 }
 
@@ -694,13 +694,13 @@ func putWrapperString(payload map[string]any, key string, value string) {
 
 func validateWrapperFileRecordRequest(req WrapperFileRecordRequest) error {
 	if req.FileRef == "" || req.ContentType == "" {
-		return invalidRuntimePayload("wrapper file_ref and content_type are required", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper file_ref and content_type are required", nil)
 	}
 	if err := validateWrapperOwnerURA(req.OwnerURA); err != nil {
 		return err
 	}
 	if req.SizeBytes != nil && *req.SizeBytes < 0 {
-		return invalidRuntimePayload("wrapper size_bytes must be non-negative", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper size_bytes must be non-negative", nil)
 	}
 	return nil
 }
@@ -711,7 +711,7 @@ func validateWrapperFileTransferRequest(req any) error {
 		return err
 	}
 	if value.Operation != "" && strings.TrimSpace(value.Operation) != value.Operation {
-		return invalidRuntimePayload("wrapper operation must not contain surrounding whitespace", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper operation must not contain surrounding whitespace", nil)
 	}
 	return validateWrapperFileRecordRequest(value.WrapperFileRecordRequest)
 }
@@ -744,7 +744,7 @@ func validateWrapperBrowserStartRequest(req any) error {
 		return err
 	}
 	if value.URL != "" && strings.TrimSpace(value.URL) != value.URL {
-		return invalidRuntimePayload("wrapper url must not contain surrounding whitespace", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper url must not contain surrounding whitespace", nil)
 	}
 	return nil
 }
@@ -758,7 +758,7 @@ func validateWrapperMediaStartRequest(req any) error {
 		return err
 	}
 	if value.MediaKind == "" {
-		return invalidRuntimePayload("wrapper media_kind is required", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper media_kind is required", nil)
 	}
 	return nil
 }
@@ -766,7 +766,7 @@ func validateWrapperMediaStartRequest(req any) error {
 func validateWrapperCarrierBase(base WrapperCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
-		return invalidRuntimePayload("complete wrapper invocation carrier is required", nil)
+		return invalidProfilePayload(wrappersProfile, "complete wrapper invocation carrier is required", nil)
 	}
 	return nil
 }
@@ -774,7 +774,7 @@ func validateWrapperCarrierBase(base WrapperCarrierBase) error {
 func validateWrapperCommand(command []string) error {
 	for _, part := range command {
 		if part == "" || strings.TrimSpace(part) != part {
-			return invalidRuntimePayload("wrapper command parts must be non-empty without surrounding whitespace", nil)
+			return invalidProfilePayload(wrappersProfile, "wrapper command parts must be non-empty without surrounding whitespace", nil)
 		}
 	}
 	return nil
@@ -783,55 +783,55 @@ func validateWrapperCommand(command []string) error {
 func validateWrapperFileRecord(record WrapperFileRecord) error {
 	if record.Profile != wrappersProfile || record.Kind != "file_record" ||
 		record.FileRef == "" || record.ContentType == "" || record.Metadata == nil {
-		return invalidRuntimePayload("invalid wrapper file record projection", nil)
+		return invalidProfilePayload(wrappersProfile, "invalid wrapper file record projection", nil)
 	}
 	if err := validateWrapperOwnerURA(record.OwnerURA); err != nil {
 		return err
 	}
 	if record.SizeBytes != nil && *record.SizeBytes < 0 {
-		return invalidRuntimePayload("wrapper size_bytes must be non-negative", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper size_bytes must be non-negative", nil)
 	}
 	return nil
 }
 
 func validateWrapperTerminalSessionRecord(record WrapperTerminalSessionRecord) error {
 	if record.Profile != wrappersProfile || record.Kind != "terminal_session" || record.Metadata == nil {
-		return invalidRuntimePayload("invalid wrapper terminal session projection", nil)
+		return invalidProfilePayload(wrappersProfile, "invalid wrapper terminal session projection", nil)
 	}
 	return validateWrapperSessionFacts(record.SessionID, record.OwnerURA, record.State)
 }
 
 func validateWrapperRemoteDesktopSessionRecord(record WrapperRemoteDesktopSessionRecord) error {
 	if record.Profile != wrappersProfile || record.Kind != "remote_desktop_session" || record.Metadata == nil {
-		return invalidRuntimePayload("invalid wrapper remote desktop session projection", nil)
+		return invalidProfilePayload(wrappersProfile, "invalid wrapper remote desktop session projection", nil)
 	}
 	return validateWrapperSessionFacts(record.SessionID, record.OwnerURA, record.State)
 }
 
 func validateWrapperBrowserSessionRecord(record WrapperBrowserSessionRecord) error {
 	if record.Profile != wrappersProfile || record.Kind != "browser_session" || record.Metadata == nil {
-		return invalidRuntimePayload("invalid wrapper browser session projection", nil)
+		return invalidProfilePayload(wrappersProfile, "invalid wrapper browser session projection", nil)
 	}
 	return validateWrapperSessionFacts(record.SessionID, record.OwnerURA, record.State)
 }
 
 func validateWrapperMediaSessionRecord(record WrapperMediaSessionRecord) error {
 	if record.Profile != wrappersProfile || record.Kind != "media_session" || record.MediaKind == "" || record.Metadata == nil {
-		return invalidRuntimePayload("invalid wrapper media session projection", nil)
+		return invalidProfilePayload(wrappersProfile, "invalid wrapper media session projection", nil)
 	}
 	return validateWrapperSessionFacts(record.SessionID, record.OwnerURA, record.State)
 }
 
 func validateWrapperSessionFacts(sessionID, ownerURA, state string) error {
 	if sessionID == "" || state == "" {
-		return invalidRuntimePayload("wrapper session_id and state are required", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper session_id and state are required", nil)
 	}
 	return validateWrapperOwnerURA(ownerURA)
 }
 
 func validateWrapperOwnerURA(value string) error {
 	if value == "" || strings.TrimSpace(value) != value || !strings.HasPrefix(value, "easynet://") {
-		return invalidRuntimePayload("wrapper owner_ura must be an EasyNet URA", nil)
+		return invalidProfilePayload(wrappersProfile, "wrapper owner_ura must be an EasyNet URA", nil)
 	}
 	return nil
 }
@@ -881,7 +881,7 @@ func firstNonEmptyWrapper(values ...string) string {
 func wrapWrapperTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, wrappersProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(wrappersProfile, message, cause)
 }

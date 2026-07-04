@@ -86,3 +86,37 @@ func TestDecodeDaemonErrorJSONNullIsNoError(t *testing.T) {
 		t.Fatalf("err = %#v, want nil", err)
 	}
 }
+
+func TestProfileErrorDetailsAddsStableProfileRefs(t *testing.T) {
+	details := profileErrorDetails("publication", map[string]any{
+		"reason": "resource_ref_namespace_reserved",
+	})
+
+	if details["profile"] != "publication" {
+		t.Fatalf("profile detail = %#v, want publication", details["profile"])
+	}
+	if details["source_ref"] != "go_sdk.profile.publication" {
+		t.Fatalf("source_ref detail = %#v", details["source_ref"])
+	}
+	if details["reason"] != "resource_ref_namespace_reserved" {
+		t.Fatalf("reason detail not preserved: %#v", details)
+	}
+}
+
+func TestProfileErrorDetailsPreservesCallerRefs(t *testing.T) {
+	details := profileErrorDetails("mission", map[string]any{
+		"profile":    "custom",
+		"source_ref": "custom.source",
+		"operation":  "run_file",
+	})
+
+	if details["profile"] != "custom" {
+		t.Fatalf("profile detail overwritten: %#v", details)
+	}
+	if details["source_ref"] != "custom.source" {
+		t.Fatalf("source_ref detail overwritten: %#v", details)
+	}
+	if details["operation"] != "run_file" {
+		t.Fatalf("operation detail not preserved: %#v", details)
+	}
+}

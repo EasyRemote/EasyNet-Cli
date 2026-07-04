@@ -305,6 +305,65 @@ func TestPublicationClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestPublicationProfileErrorsIncludeSourceRefs(t *testing.T) {
+	transport := newMemoryPublicationTransport()
+	client, err := NewPublicationClient(transport)
+	if err != nil {
+		t.Fatalf("NewPublicationClient: %v", err)
+	}
+
+	_, err = client.BuildLocalResourceRef(context.Background(), LocalResourceRefRequest{Path: "relative", Capability: "read"})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	details := sdkErrorDetails(t, err)
+	if details["profile"] != publicationProfile {
+		t.Fatalf("profile detail = %#v, want %s", details["profile"], publicationProfile)
+	}
+	if details["source_ref"] != "go_sdk.profile.publication" {
+		t.Fatalf("source_ref detail = %#v", details["source_ref"])
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called for invalid request: %#v", transport.seenRequest)
+	}
+}
+
+func TestPublicationTransportSDKErrorGetsProfileSourceRefs(t *testing.T) {
+	err := wrapPublicationTransportError("publication failed", &SDKError{
+		Code:    ErrTimeout,
+		Stage:   "transport",
+		Retry:   RetrySafe,
+		Message: "deadline elapsed",
+		Details: map[string]any{"reason": "deadline"},
+	})
+
+	if !IsCode(err, ErrTimeout) {
+		t.Fatalf("error code = %v, want %s", err, ErrTimeout)
+	}
+	details := sdkErrorDetails(t, err)
+	if details["reason"] != "deadline" {
+		t.Fatalf("reason detail not preserved: %#v", details)
+	}
+	if details["profile"] != publicationProfile {
+		t.Fatalf("profile detail = %#v, want %s", details["profile"], publicationProfile)
+	}
+	if details["source_ref"] != "go_sdk.profile.publication" {
+		t.Fatalf("source_ref detail = %#v", details["source_ref"])
+	}
+}
+
+func sdkErrorDetails(t *testing.T, err error) map[string]any {
+	t.Helper()
+	sdkErr, ok := err.(*SDKError)
+	if !ok {
+		t.Fatalf("err = %T, want *SDKError", err)
+	}
+	if sdkErr.Details == nil {
+		t.Fatalf("SDKError.Details is nil")
+	}
+	return sdkErr.Details
+}
+
 const resourceRefFixtureJSON = `{
   "resource_ura": "easynet:///r/example/resource/device.dev-a/fs/tmp/easynet-weather-package",
   "owner_ura": "easynet:///r/example/device/dev-a",

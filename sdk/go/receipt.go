@@ -110,35 +110,35 @@ type ReceiptTransportFunc struct {
 
 func (f ReceiptTransportFunc) Fetch(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.FetchFunc == nil {
-		return nil, invalidRuntimeClient("receipt fetch transport function is required")
+		return nil, invalidProfileClient(receiptProfile, "receipt fetch transport function is required")
 	}
 	return f.FetchFunc(ctx, requestJSON)
 }
 
 func (f ReceiptTransportFunc) Project(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 	if f.ProjectFunc == nil {
-		return nil, invalidRuntimeClient("receipt project transport function is required")
+		return nil, invalidProfileClient(receiptProfile, "receipt project transport function is required")
 	}
 	return f.ProjectFunc(ctx, receiptJSON)
 }
 
 func (f ReceiptTransportFunc) Verify(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 	if f.VerifyFunc == nil {
-		return nil, invalidRuntimeClient("receipt verify transport function is required")
+		return nil, invalidProfileClient(receiptProfile, "receipt verify transport function is required")
 	}
 	return f.VerifyFunc(ctx, receiptJSON)
 }
 
 func (f ReceiptTransportFunc) VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.VerifyChainFunc == nil {
-		return nil, invalidRuntimeClient("receipt verify-chain transport function is required")
+		return nil, invalidProfileClient(receiptProfile, "receipt verify-chain transport function is required")
 	}
 	return f.VerifyChainFunc(ctx, requestJSON)
 }
 
 func (f ReceiptTransportFunc) CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 	if f.CausalRefFunc == nil {
-		return nil, invalidRuntimeClient("receipt causal-ref transport function is required")
+		return nil, invalidProfileClient(receiptProfile, "receipt causal-ref transport function is required")
 	}
 	return f.CausalRefFunc(ctx, receiptJSON)
 }
@@ -151,7 +151,7 @@ type ReceiptClient struct {
 
 func NewReceiptClient(transport ReceiptTransport) (*ReceiptClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("receipt transport is required")
+		return nil, invalidProfileClient(receiptProfile, "receipt transport is required")
 	}
 	return &ReceiptClient{transport: transport}, nil
 }
@@ -165,7 +165,7 @@ func (c *ReceiptClient) Fetch(ctx context.Context, req ReceiptFetchRequest) (Rec
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return ReceiptSummary{}, invalidRuntimePayload(fmt.Sprintf("encode receipt fetch request: %v", err), err)
+		return ReceiptSummary{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("encode receipt fetch request: %v", err), err)
 	}
 	raw, err := c.transport.Fetch(ctx, requestJSON)
 	if err != nil {
@@ -219,7 +219,7 @@ func (c *ReceiptClient) Project(ctx context.Context, receiptJSON []byte) (Receip
 		return ReceiptSummary{}, err
 	}
 	if len(receiptJSON) == 0 {
-		return ReceiptSummary{}, invalidRuntimePayload("receipt JSON is required", nil)
+		return ReceiptSummary{}, invalidProfilePayload(receiptProfile, "receipt JSON is required", nil)
 	}
 	raw, err := c.transport.Project(ctx, receiptJSON)
 	if err != nil {
@@ -233,7 +233,7 @@ func (c *ReceiptClient) Verify(ctx context.Context, receiptJSON []byte) (Receipt
 		return ReceiptVerification{}, err
 	}
 	if len(receiptJSON) == 0 {
-		return ReceiptVerification{}, invalidRuntimePayload("receipt JSON is required", nil)
+		return ReceiptVerification{}, invalidProfilePayload(receiptProfile, "receipt JSON is required", nil)
 	}
 	raw, err := c.transport.Verify(ctx, receiptJSON)
 	if err != nil {
@@ -251,7 +251,7 @@ func (c *ReceiptClient) VerifyChain(ctx context.Context, req ReceiptChainVerific
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return ReceiptChainVerification{}, invalidRuntimePayload(fmt.Sprintf("encode receipt chain verification request: %v", err), err)
+		return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("encode receipt chain verification request: %v", err), err)
 	}
 	raw, err := c.transport.VerifyChain(ctx, requestJSON)
 	if err != nil {
@@ -265,7 +265,7 @@ func (c *ReceiptClient) CausalRef(ctx context.Context, receiptJSON []byte) (Caus
 		return CausalRef{}, err
 	}
 	if len(receiptJSON) == 0 {
-		return CausalRef{}, invalidRuntimePayload("receipt JSON is required", nil)
+		return CausalRef{}, invalidProfilePayload(receiptProfile, "receipt JSON is required", nil)
 	}
 	raw, err := c.transport.CausalRef(ctx, receiptJSON)
 	if err != nil {
@@ -276,14 +276,14 @@ func (c *ReceiptClient) CausalRef(ctx context.Context, receiptJSON []byte) (Caus
 
 func (c *ReceiptClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("receipt client is not initialized")
+		return invalidProfileClient(receiptProfile, "receipt client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "receipt")
 }
 
 func (c *ReceiptClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("receipt client is not initialized")
+		return invalidProfileClient(receiptProfile, "receipt client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "receipt")
 }
@@ -300,14 +300,14 @@ func NewReceiptSummaryFromJSON(raw []byte) (ReceiptSummary, error) {
 		Metadata     map[string]any  `json:"metadata"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
-		return ReceiptSummary{}, invalidRuntimePayload(fmt.Sprintf("decode receipt summary JSON: %v", err), err)
+		return ReceiptSummary{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt summary JSON: %v", err), err)
 	}
 	if dto.State == "" || dto.Output == nil {
-		return ReceiptSummary{}, invalidRuntimePayload("invalid receipt summary", nil)
+		return ReceiptSummary{}, invalidProfilePayload(receiptProfile, "invalid receipt summary", nil)
 	}
 	var output any
 	if err := json.Unmarshal(dto.Output, &output); err != nil {
-		return ReceiptSummary{}, invalidRuntimePayload(fmt.Sprintf("decode receipt output JSON: %v", err), err)
+		return ReceiptSummary{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt output JSON: %v", err), err)
 	}
 	var sdkErr *SDKError
 	if len(dto.Error) > 0 && string(dto.Error) != "null" {
@@ -335,10 +335,10 @@ func NewReceiptSummaryFromJSON(raw []byte) (ReceiptSummary, error) {
 func NewReceiptVerificationFromJSON(raw []byte) (ReceiptVerification, error) {
 	var result ReceiptVerification
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return ReceiptVerification{}, invalidRuntimePayload(fmt.Sprintf("decode receipt verification JSON: %v", err), err)
+		return ReceiptVerification{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt verification JSON: %v", err), err)
 	}
 	if result.Method == "" {
-		return ReceiptVerification{}, invalidRuntimePayload("verification method is required", nil)
+		return ReceiptVerification{}, invalidProfilePayload(receiptProfile, "verification method is required", nil)
 	}
 	if result.Metadata == nil {
 		result.Metadata = map[string]any{}
@@ -349,24 +349,24 @@ func NewReceiptVerificationFromJSON(raw []byte) (ReceiptVerification, error) {
 func NewReceiptChainVerificationFromJSON(raw []byte) (ReceiptChainVerification, error) {
 	var result ReceiptChainVerification
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return ReceiptChainVerification{}, invalidRuntimePayload(fmt.Sprintf("decode receipt chain verification JSON: %v", err), err)
+		return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt chain verification JSON: %v", err), err)
 	}
 	if result.Method == "" {
-		return ReceiptChainVerification{}, invalidRuntimePayload("chain verification method is required", nil)
+		return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, "chain verification method is required", nil)
 	}
 	if result.ReceiptCount <= 0 || len(result.Items) == 0 {
-		return ReceiptChainVerification{}, invalidRuntimePayload("chain verification items are required", nil)
+		return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, "chain verification items are required", nil)
 	}
 	if result.ReceiptCount != len(result.Items) {
-		return ReceiptChainVerification{}, invalidRuntimePayload("receipt_count must match items length", nil)
+		return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, "receipt_count must match items length", nil)
 	}
 	for index := range result.Items {
 		item := &result.Items[index]
 		if item.Index != index {
-			return ReceiptChainVerification{}, invalidRuntimePayload("chain item index must match position", nil)
+			return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, "chain item index must match position", nil)
 		}
 		if item.ReceiptURA == "" || item.ReceiptHashHex == "" {
-			return ReceiptChainVerification{}, invalidRuntimePayload("chain item receipt_ura and receipt_hash_hex are required", nil)
+			return ReceiptChainVerification{}, invalidProfilePayload(receiptProfile, "chain item receipt_ura and receipt_hash_hex are required", nil)
 		}
 		if item.Metadata == nil {
 			item.Metadata = map[string]any{}
@@ -381,10 +381,10 @@ func NewReceiptChainVerificationFromJSON(raw []byte) (ReceiptChainVerification, 
 func NewCausalRefFromJSON(raw []byte) (CausalRef, error) {
 	var ref CausalRef
 	if err := json.Unmarshal(raw, &ref); err != nil {
-		return CausalRef{}, invalidRuntimePayload(fmt.Sprintf("decode causal ref JSON: %v", err), err)
+		return CausalRef{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode causal ref JSON: %v", err), err)
 	}
 	if ref.CausalRef == "" {
-		return CausalRef{}, invalidRuntimePayload("causal_ref is required", nil)
+		return CausalRef{}, invalidProfilePayload(receiptProfile, "causal_ref is required", nil)
 	}
 	if ref.Metadata == nil {
 		ref.Metadata = map[string]any{}
@@ -394,10 +394,10 @@ func NewCausalRefFromJSON(raw []byte) (CausalRef, error) {
 
 func validateReceiptFetchRequest(req ReceiptFetchRequest) error {
 	if req.CallerURA == "" || req.CalleeURA == "" || req.DescriptorRef == "" || req.SubjectURA == "" || req.DescriptorVersion == "" || req.NonceBase64 == "" {
-		return invalidRuntimePayload("caller_ura, callee_ura, descriptor_ref, subject_ura, descriptor_version, and nonce_base64 are required", nil)
+		return invalidProfilePayload(receiptProfile, "caller_ura, callee_ura, descriptor_ref, subject_ura, descriptor_version, and nonce_base64 are required", nil)
 	}
 	if req.CausalContext == nil {
-		return invalidRuntimePayload("causal_context is required", nil)
+		return invalidProfilePayload(receiptProfile, "causal_context is required", nil)
 	}
 	keys := 0
 	if req.InvocationURA != "" {
@@ -410,7 +410,7 @@ func validateReceiptFetchRequest(req ReceiptFetchRequest) error {
 		keys++
 	}
 	if keys != 1 {
-		return invalidRuntimePayload("exactly one receipt lookup key is required", nil)
+		return invalidProfilePayload(receiptProfile, "exactly one receipt lookup key is required", nil)
 	}
 	return nil
 }
@@ -425,37 +425,37 @@ func receiptFetchArgs(req ReceiptFetchRequest) (map[string]any, error) {
 	case req.TraceID != "":
 		key["trace_id"] = req.TraceID
 	default:
-		return nil, invalidRuntimePayload("exactly one receipt lookup key is required", nil)
+		return nil, invalidProfilePayload(receiptProfile, "exactly one receipt lookup key is required", nil)
 	}
 	return map[string]any{"key": key}, nil
 }
 
 func validateReceiptChainVerificationRequest(req ReceiptChainVerificationRequest) error {
 	if len(req.Receipts) == 0 {
-		return invalidRuntimePayload("at least one receipt is required", nil)
+		return invalidProfilePayload(receiptProfile, "at least one receipt is required", nil)
 	}
 	seenURAs := map[string]struct{}{}
 	seenHashes := map[string]struct{}{}
 	for index, raw := range req.Receipts {
 		if len(raw) == 0 {
-			return invalidRuntimePayload(fmt.Sprintf("receipt[%d] JSON is required", index), nil)
+			return invalidProfilePayload(receiptProfile, fmt.Sprintf("receipt[%d] JSON is required", index), nil)
 		}
 		var obj map[string]any
 		if err := json.Unmarshal(raw, &obj); err != nil {
-			return invalidRuntimePayload(fmt.Sprintf("decode receipt[%d] JSON: %v", index, err), err)
+			return invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt[%d] JSON: %v", index, err), err)
 		}
 		if ura, ok := receiptStringField(obj, "receipt_ura"); ok {
 			if _, exists := seenURAs[ura]; exists {
-				return invalidRuntimePayload("duplicate receipt_ura in chain request", nil)
+				return invalidProfilePayload(receiptProfile, "duplicate receipt_ura in chain request", nil)
 			}
 			seenURAs[ura] = struct{}{}
 		}
 		if hash, ok := receiptHashField(obj); ok {
 			if _, err := hex.DecodeString(hash); err != nil || len(hash) != 64 {
-				return invalidRuntimePayload("receipt hash must decode to exactly 32 bytes", err)
+				return invalidProfilePayload(receiptProfile, "receipt hash must decode to exactly 32 bytes", err)
 			}
 			if _, exists := seenHashes[hash]; exists {
-				return invalidRuntimePayload("duplicate receipt hash in chain request", nil)
+				return invalidProfilePayload(receiptProfile, "duplicate receipt hash in chain request", nil)
 			}
 			seenHashes[hash] = struct{}{}
 		}
@@ -490,7 +490,7 @@ func receiptHashField(obj map[string]any) (string, bool) {
 func wrapReceiptTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, receiptProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(receiptProfile, message, cause)
 }

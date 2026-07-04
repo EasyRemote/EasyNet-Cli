@@ -204,77 +204,77 @@ type PublicationTransportFunc struct {
 
 func (f PublicationTransportFunc) BuildResourceRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildResourceRefFunc == nil {
-		return nil, invalidRuntimeClient("publication resource-ref transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication resource-ref transport function is required")
 	}
 	return f.BuildResourceRefFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) ValidatePackage(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ValidatePackageFunc == nil {
-		return nil, invalidRuntimeClient("publication validate-package transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication validate-package transport function is required")
 	}
 	return f.ValidatePackageFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) DeployAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.DeployAbilityFunc == nil {
-		return nil, invalidRuntimeClient("publication deploy transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication deploy transport function is required")
 	}
 	return f.DeployAbilityFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) BuildDeployInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildDeployInvocationFunc == nil {
-		return nil, invalidRuntimeClient("publication deploy-invocation transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication deploy-invocation transport function is required")
 	}
 	return f.BuildDeployInvocationFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) InstallPlugin(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.InstallPluginFunc == nil {
-		return nil, invalidRuntimeClient("publication install-plugin transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication install-plugin transport function is required")
 	}
 	return f.InstallPluginFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) ListAbilities(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ListAbilitiesFunc == nil {
-		return nil, invalidRuntimeClient("publication list transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication list transport function is required")
 	}
 	return f.ListAbilitiesFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) ShowAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.ShowAbilityFunc == nil {
-		return nil, invalidRuntimeClient("publication show transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication show transport function is required")
 	}
 	return f.ShowAbilityFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) EnableAbilityImpl(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.EnableAbilityImplFunc == nil {
-		return nil, invalidRuntimeClient("publication enable transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication enable transport function is required")
 	}
 	return f.EnableAbilityImplFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) DisableAbilityImpl(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.DisableAbilityImplFunc == nil {
-		return nil, invalidRuntimeClient("publication disable transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication disable transport function is required")
 	}
 	return f.DisableAbilityImplFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) BuildUnpublishInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.BuildUnpublishInvocationFunc == nil {
-		return nil, invalidRuntimeClient("publication unpublish-invocation transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication unpublish-invocation transport function is required")
 	}
 	return f.BuildUnpublishInvocationFunc(ctx, requestJSON)
 }
 
 func (f PublicationTransportFunc) UnpublishAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.UnpublishAbilityFunc == nil {
-		return nil, invalidRuntimeClient("publication unpublish transport function is required")
+		return nil, invalidProfileClient(publicationProfile, "publication unpublish transport function is required")
 	}
 	return f.UnpublishAbilityFunc(ctx, requestJSON)
 }
@@ -287,7 +287,7 @@ type PublicationClient struct {
 
 func NewPublicationClient(transport PublicationTransport) (*PublicationClient, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("publication transport is required")
+		return nil, invalidProfileClient(publicationProfile, "publication transport is required")
 	}
 	return &PublicationClient{transport: transport}, nil
 }
@@ -297,14 +297,14 @@ func (c *PublicationClient) BuildLocalResourceRef(ctx context.Context, req Local
 		return ResourceRef{}, err
 	}
 	if req.Path == "" || req.Capability == "" {
-		return ResourceRef{}, invalidRuntimePayload("path and capability are required", nil)
+		return ResourceRef{}, invalidProfilePayload(publicationProfile, "path and capability are required", nil)
 	}
 	if !filepath.IsAbs(req.Path) {
-		return ResourceRef{}, invalidRuntimePayload("absolute resource path is required", nil)
+		return ResourceRef{}, invalidProfilePayload(publicationProfile, "absolute resource path is required", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return ResourceRef{}, invalidRuntimePayload(fmt.Sprintf("encode resource-ref request: %v", err), err)
+		return ResourceRef{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode resource-ref request: %v", err), err)
 	}
 	raw, err := c.transport.BuildResourceRef(ctx, requestJSON)
 	if err != nil {
@@ -318,7 +318,7 @@ func (c *PublicationClient) ValidatePackage(ctx context.Context, path string, op
 		return PackageValidation{}, err
 	}
 	if path == "" && opts.Manifest == nil {
-		return PackageValidation{}, invalidRuntimePayload("package path or manifest is required", nil)
+		return PackageValidation{}, invalidProfilePayload(publicationProfile, "package path or manifest is required", nil)
 	}
 	requestJSON, err := json.Marshal(struct {
 		PackagePath string                  `json:"package_path,omitempty"`
@@ -326,7 +326,7 @@ func (c *PublicationClient) ValidatePackage(ctx context.Context, path string, op
 		Metadata    map[string]any          `json:"metadata,omitempty"`
 	}{PackagePath: path, Manifest: opts.Manifest, Metadata: opts.Metadata})
 	if err != nil {
-		return PackageValidation{}, invalidRuntimePayload(fmt.Sprintf("encode package validation request: %v", err), err)
+		return PackageValidation{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode package validation request: %v", err), err)
 	}
 	raw, err := c.transport.ValidatePackage(ctx, requestJSON)
 	if err != nil {
@@ -370,14 +370,14 @@ func (c *PublicationClient) InstallPlugin(ctx context.Context, source string, op
 		return PluginInstallResult{}, err
 	}
 	if source == "" {
-		return PluginInstallResult{}, invalidRuntimePayload("plugin source is required", nil)
+		return PluginInstallResult{}, invalidProfilePayload(publicationProfile, "plugin source is required", nil)
 	}
 	requestJSON, err := json.Marshal(struct {
 		Source   string         `json:"source"`
 		Metadata map[string]any `json:"metadata,omitempty"`
 	}{Source: source, Metadata: opts.Metadata})
 	if err != nil {
-		return PluginInstallResult{}, invalidRuntimePayload(fmt.Sprintf("encode plugin install request: %v", err), err)
+		return PluginInstallResult{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode plugin install request: %v", err), err)
 	}
 	raw, err := c.transport.InstallPlugin(ctx, requestJSON)
 	if err != nil {
@@ -396,7 +396,7 @@ func (c *PublicationClient) ListAbilities(ctx context.Context, query PublishedAb
 	}
 	requestJSON, err := json.Marshal(query)
 	if err != nil {
-		return PublishedAbilityPage{}, invalidRuntimePayload(fmt.Sprintf("encode publication list query: %v", err), err)
+		return PublishedAbilityPage{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode publication list query: %v", err), err)
 	}
 	raw, err := c.transport.ListAbilities(ctx, requestJSON)
 	if err != nil {
@@ -410,11 +410,11 @@ func (c *PublicationClient) ShowAbility(ctx context.Context, ref DescriptorRef) 
 		return PublishedAbility{}, err
 	}
 	if ref == "" {
-		return PublishedAbility{}, invalidRuntimePayload("descriptor_ref is required", nil)
+		return PublishedAbility{}, invalidProfilePayload(publicationProfile, "descriptor_ref is required", nil)
 	}
 	requestJSON, err := json.Marshal(ShowAbilityRequest{DescriptorRef: ref})
 	if err != nil {
-		return PublishedAbility{}, invalidRuntimePayload(fmt.Sprintf("encode publication show request: %v", err), err)
+		return PublishedAbility{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode publication show request: %v", err), err)
 	}
 	raw, err := c.transport.ShowAbility(ctx, requestJSON)
 	if err != nil {
@@ -473,11 +473,11 @@ func (c *PublicationClient) UnpublishAbility(ctx context.Context, ref Descriptor
 		return err
 	}
 	if ref == "" {
-		return invalidRuntimePayload("descriptor_ref is required", nil)
+		return invalidProfilePayload(publicationProfile, "descriptor_ref is required", nil)
 	}
 	requestJSON, err := json.Marshal(ShowAbilityRequest{DescriptorRef: ref})
 	if err != nil {
-		return invalidRuntimePayload(fmt.Sprintf("encode publication unpublish request: %v", err), err)
+		return invalidProfilePayload(publicationProfile, fmt.Sprintf("encode publication unpublish request: %v", err), err)
 	}
 	raw, err := c.transport.UnpublishAbility(ctx, requestJSON)
 	if err != nil {
@@ -488,14 +488,14 @@ func (c *PublicationClient) UnpublishAbility(ctx context.Context, ref Descriptor
 
 func (c *PublicationClient) Close(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("publication client is not initialized")
+		return invalidProfileClient(publicationProfile, "publication client is not initialized")
 	}
 	return c.lifecycle.Close(ctx, c.transport, "publication")
 }
 
 func (c *PublicationClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("publication client is not initialized")
+		return invalidProfileClient(publicationProfile, "publication client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "publication")
 }
@@ -503,7 +503,7 @@ func (c *PublicationClient) requireReady(ctx context.Context) error {
 func NewPackageValidationFromJSON(raw []byte) (PackageValidation, error) {
 	var validation PackageValidation
 	if err := json.Unmarshal(raw, &validation); err != nil {
-		return PackageValidation{}, invalidRuntimePayload(fmt.Sprintf("decode package validation JSON: %v", err), err)
+		return PackageValidation{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode package validation JSON: %v", err), err)
 	}
 	if validation.Profile != publicationProfile || validation.Kind != "package_validation" ||
 		validation.PackagePath == "" || validation.ManifestPath == "" ||
@@ -511,7 +511,7 @@ func NewPackageValidationFromJSON(raw []byte) (PackageValidation, error) {
 		validation.Manifest.Namespace == "" || validation.Manifest.WireKey == "" ||
 		validation.Manifest.DescriptorVersion == "" || validation.Manifest.ExecKind == "" ||
 		validation.Manifest.InputSchema == nil || validation.Errors == nil || validation.Metadata == nil {
-		return PackageValidation{}, invalidRuntimePayload("invalid package validation projection", nil)
+		return PackageValidation{}, invalidProfilePayload(publicationProfile, "invalid package validation projection", nil)
 	}
 	return validation, nil
 }
@@ -519,11 +519,11 @@ func NewPackageValidationFromJSON(raw []byte) (PackageValidation, error) {
 func NewAbilityDeployResultFromJSON(raw []byte) (AbilityDeployResult, error) {
 	var result AbilityDeployResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return AbilityDeployResult{}, invalidRuntimePayload(fmt.Sprintf("decode ability deploy result JSON: %v", err), err)
+		return AbilityDeployResult{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode ability deploy result JSON: %v", err), err)
 	}
 	if result.PublicName == "" || result.Namespace == "" || result.AbilityURA == "" ||
 		result.NodeID == "" || result.InstallID == "" || result.State == "" {
-		return AbilityDeployResult{}, invalidRuntimePayload("invalid ability deploy result projection", nil)
+		return AbilityDeployResult{}, invalidProfilePayload(publicationProfile, "invalid ability deploy result projection", nil)
 	}
 	return result, nil
 }
@@ -531,10 +531,10 @@ func NewAbilityDeployResultFromJSON(raw []byte) (AbilityDeployResult, error) {
 func NewPublishedAbilityFromJSON(raw []byte) (PublishedAbility, error) {
 	var ability PublishedAbility
 	if err := json.Unmarshal(raw, &ability); err != nil {
-		return PublishedAbility{}, invalidRuntimePayload(fmt.Sprintf("decode published ability JSON: %v", err), err)
+		return PublishedAbility{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode published ability JSON: %v", err), err)
 	}
 	if ability.Descriptor == nil || ability.Implementation == nil || ability.Metadata == nil {
-		return PublishedAbility{}, invalidRuntimePayload("invalid published ability projection", nil)
+		return PublishedAbility{}, invalidProfilePayload(publicationProfile, "invalid published ability projection", nil)
 	}
 	return ability, nil
 }
@@ -542,15 +542,15 @@ func NewPublishedAbilityFromJSON(raw []byte) (PublishedAbility, error) {
 func NewPublishedAbilityPageFromJSON(raw []byte) (PublishedAbilityPage, error) {
 	var page PublishedAbilityPage
 	if err := json.Unmarshal(raw, &page); err != nil {
-		return PublishedAbilityPage{}, invalidRuntimePayload(fmt.Sprintf("decode published ability page JSON: %v", err), err)
+		return PublishedAbilityPage{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode published ability page JSON: %v", err), err)
 	}
 	if page.Profile != publicationProfile || page.Kind == "" || page.ItemKind != "published_ability" ||
 		page.Source == "" || page.Limit <= 0 || page.Limit > MaxPublishedAbilityPageSize || page.Items == nil || page.Metadata == nil {
-		return PublishedAbilityPage{}, invalidRuntimePayload("invalid published ability page projection", nil)
+		return PublishedAbilityPage{}, invalidProfilePayload(publicationProfile, "invalid published ability page projection", nil)
 	}
 	for _, item := range page.Items {
 		if item.Descriptor == nil || item.Implementation == nil || item.Metadata == nil {
-			return PublishedAbilityPage{}, invalidRuntimePayload("invalid published ability item projection", nil)
+			return PublishedAbilityPage{}, invalidProfilePayload(publicationProfile, "invalid published ability item projection", nil)
 		}
 	}
 	return page, nil
@@ -559,11 +559,11 @@ func NewPublishedAbilityPageFromJSON(raw []byte) (PublishedAbilityPage, error) {
 func NewPluginInstallResultFromJSON(raw []byte) (PluginInstallResult, error) {
 	var result PluginInstallResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return PluginInstallResult{}, invalidRuntimePayload(fmt.Sprintf("decode plugin install result JSON: %v", err), err)
+		return PluginInstallResult{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode plugin install result JSON: %v", err), err)
 	}
 	if result.Profile != publicationProfile || result.Kind == "" || result.Source == "" ||
 		result.InstallID == "" || result.Status == "" || result.Metadata == nil {
-		return PluginInstallResult{}, invalidRuntimePayload("invalid plugin install projection", nil)
+		return PluginInstallResult{}, invalidProfilePayload(publicationProfile, "invalid plugin install projection", nil)
 	}
 	return result, nil
 }
@@ -572,14 +572,14 @@ func marshalAbilityDeployRequest(req AbilityDeployRequest) ([]byte, error) {
 	if req.CallerURA == "" || req.CalleeURA == "" || req.SubjectURA == "" ||
 		req.DescriptorVersion == "" || req.NonceBase64 == "" || req.NodeID == "" ||
 		req.CausalContext == nil {
-		return nil, invalidRuntimePayload("complete deploy invocation carrier is required", nil)
+		return nil, invalidProfilePayload(publicationProfile, "complete deploy invocation carrier is required", nil)
 	}
 	if err := validatePublicationResourceRef(req.ResourceRef); err != nil {
 		return nil, err
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode ability deploy request: %v", err), err)
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode ability deploy request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -588,22 +588,22 @@ func validatePublicationResourceRef(ref ResourceRef) error {
 	if ref.ResourceURA == "" || ref.OwnerURA == "" ||
 		ref.Namespace == "" || ref.Capability == "" ||
 		ref.Revision == "" {
-		return invalidRuntimePayload("valid resource_ref is required", nil)
+		return invalidProfilePayload(publicationProfile, "valid resource_ref is required", nil)
 	}
 	switch strings.ToLower(ref.Namespace) {
 	case "axon", "daemon", "easynet", "internal", "system":
-		return invalidRuntimePayload("resource_ref namespace is reserved", nil)
+		return invalidProfilePayload(publicationProfile, "resource_ref namespace is reserved", nil)
 	}
 	return nil
 }
 
 func marshalAbilityImplID(id AbilityImplID) ([]byte, error) {
 	if id.ImplID == "" || id.AbilityURA == "" {
-		return nil, invalidRuntimePayload("impl_id and ability_ura are required", nil)
+		return nil, invalidProfilePayload(publicationProfile, "impl_id and ability_ura are required", nil)
 	}
 	requestJSON, err := json.Marshal(id)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode ability impl id: %v", err), err)
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode ability impl id: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -612,11 +612,11 @@ func marshalUnpublishAbilityRequest(req UnpublishAbilityRequest) ([]byte, error)
 	if req.CallerURA == "" || req.CalleeURA == "" || req.SubjectURA == "" ||
 		req.DescriptorVersion == "" || req.NonceBase64 == "" || req.CausalContext == nil ||
 		req.AbilityURA == "" {
-		return nil, invalidRuntimePayload("complete unpublish invocation carrier is required", nil)
+		return nil, invalidProfilePayload(publicationProfile, "complete unpublish invocation carrier is required", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode unpublish request: %v", err), err)
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode unpublish request: %v", err), err)
 	}
 	return requestJSON, nil
 }
@@ -631,10 +631,10 @@ func normalizePublishedAbilityQuery(query PublishedAbilityQuery) PublishedAbilit
 func validatePublishedAbilityQuery(query PublishedAbilityQuery) error {
 	if query.CallerURA == "" || query.CalleeURA == "" || query.SubjectURA == "" ||
 		query.DescriptorVersion == "" || query.NonceBase64 == "" || query.CausalContext == nil {
-		return invalidRuntimePayload("complete publication query carrier is required", nil)
+		return invalidProfilePayload(publicationProfile, "complete publication query carrier is required", nil)
 	}
 	if query.Limit <= 0 || query.Limit > MaxPublishedAbilityPageSize {
-		return invalidRuntimePayload("publication query limit exceeds bounds", nil)
+		return invalidProfilePayload(publicationProfile, "publication query limit exceeds bounds", nil)
 	}
 	return nil
 }
@@ -642,10 +642,10 @@ func validatePublishedAbilityQuery(query PublishedAbilityQuery) error {
 func validatePublicationRecord(raw []byte, expectedKind string) error {
 	var record PublicationRecord
 	if err := json.Unmarshal(raw, &record); err != nil {
-		return invalidRuntimePayload(fmt.Sprintf("decode publication record JSON: %v", err), err)
+		return invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication record JSON: %v", err), err)
 	}
 	if record.Profile != publicationProfile || record.Kind != expectedKind || record.Metadata == nil {
-		return invalidRuntimePayload("invalid publication record projection", nil)
+		return invalidProfilePayload(publicationProfile, "invalid publication record projection", nil)
 	}
 	return nil
 }
@@ -653,7 +653,7 @@ func validatePublicationRecord(raw []byte, expectedKind string) error {
 func wrapPublicationTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
-		return sdkErr
+		return withProfileErrorDetails(sdkErr, publicationProfile)
 	}
-	return transportRuntimeError(message, cause)
+	return transportProfileError(publicationProfile, message, cause)
 }
