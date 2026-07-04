@@ -66,10 +66,12 @@ published-ability show execution through Runtime Core invoke,
 complete unpublish execution through Runtime Core invoke,
 deploy/show/unpublish Invocation carrier, deploy/show/unpublish result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
-exposes binding DTO, envelope decode, item/error/terminal frame encoding,
-output-hash folding seams, and a HostStreamFrameWriter lifecycle helper that
-delegates frame/hash semantics through the client plus per-call HostStreamSession
-state seams. MissionClient exposes run/run-file/track/cancel
+exposes binding DTO, typed cleanup/readiness/lifecycle ownership DTOs, envelope
+decode, item/error/terminal frame encoding, output-hash folding seams, and a
+HostStreamFrameWriter lifecycle helper that delegates frame/hash semantics
+through the client plus per-call HostStreamSession state seams. The package also
+exposes EasyRemote cutover audit helpers that reject raw FFI/Axon imports and raw
+Invocation JSON codecs in consumer code. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient
@@ -102,7 +104,7 @@ transport-backed helper close state seams, and record projections. Product Invoc
 direct daemon UDS transport, Axon-backed receipt verification, receipt URI
 construction, publication plugin install and ability implementation lifecycle
 adapters that require daemon/ABI lifecycle result contracts, warm host process execution
-and cleanup adapters, mission event streams, Admin hub lifecycle,
+and cleanup execution adapters, mission event streams, Admin hub lifecycle,
 pairing/credential lifecycle, and device-session create/delete adapters that
 require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,

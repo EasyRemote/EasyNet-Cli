@@ -242,13 +242,19 @@ method spelling.
   DTOs, and host binding bridge, EasyRemote decorator/package extraction, and
   plugin/skill lifecycle policy remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
-  decode, item/error/terminal frame encoding, output-hash folding seams with
-  shared conformance-pinned hash cursor invariants over schema-backed transport
+  decode, typed cleanup/readiness/lifecycle ownership DTOs,
+  item/error/terminal frame encoding, output-hash folding seams with shared
+  conformance-pinned hash cursor invariants over schema-backed transport
   projections, and a `HostStreamFrameWriter` lifecycle helper that delegates all
   frame/hash semantics through the client plus per-call `HostStreamSession`
-  state seams; product host
-  readiness execution, cleanup execution, EasyRemote warm host integration, and
-  behavior-executing host lifecycle conformance remain incomplete.
+  state seams; product host readiness execution, cleanup execution,
+  EasyRemote warm host integration, and behavior-executing host lifecycle
+  conformance remain incomplete.
+- Python EasyRemote cutover audit helpers expose source-tree checks for raw
+  FFI/Axon imports, raw C ABI symbols, and raw Invocation JSON codecs, with
+  shared conformance cases for no-raw-FFI, no-raw-invocation-codec, and
+  context-causal gates; actual EasyRemote repository extraction remains
+  incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, plus daemon `MissionStatus` and
