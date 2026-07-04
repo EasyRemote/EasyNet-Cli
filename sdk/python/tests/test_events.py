@@ -8,7 +8,10 @@ from easynet_sdk.events import (
     EventProjectionInput,
     EventTerminalInput,
     EventsCarrierBase,
+    EventsDeviceSubscriptionRequest,
     EventsDirectorySubscriptionRequest,
+    EventsInvocationSubscriptionRequest,
+    EventsSessionSubscriptionRequest,
 )
 
 
@@ -121,6 +124,16 @@ EVENTS_TERMINAL = b"""{
 }"""
 
 
+def event_stream(stream: str) -> bytes:
+    return (
+        b'{"stream":"'
+        + stream.encode("utf-8")
+        + b'","stream_id":"events-1","state":"Open","resume_token":"'
+        + stream.encode("utf-8")
+        + b':8","metadata":{"profile":"events"}}'
+    )
+
+
 class MemoryEventTransport:
     def __init__(self) -> None:
         self.seen: dict[str, dict[str, object]] = {}
@@ -132,9 +145,33 @@ class MemoryEventTransport:
         self._remember("build_directory_subscription", request_json)
         return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
 
+    def build_device_subscription_invocation(self, request_json: bytes) -> bytes:
+        self._remember("build_device_subscription", request_json)
+        return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
+
+    def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
+        self._remember("build_session_subscription", request_json)
+        return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
+
+    def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
+        self._remember("build_invocation_subscription", request_json)
+        return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
+
     def subscribe_directory(self, request_json: bytes) -> bytes:
         self._remember("subscribe_directory", request_json)
-        return b'{"stream":"directory","stream_id":"events-1","state":"Open","resume_token":"directory:8","metadata":{"profile":"events"}}'
+        return event_stream("directory")
+
+    def subscribe_devices(self, request_json: bytes) -> bytes:
+        self._remember("subscribe_devices", request_json)
+        return event_stream("device")
+
+    def subscribe_sessions(self, request_json: bytes) -> bytes:
+        self._remember("subscribe_sessions", request_json)
+        return event_stream("session")
+
+    def subscribe_invocations(self, request_json: bytes) -> bytes:
+        self._remember("subscribe_invocations", request_json)
+        return event_stream("invocation")
 
     def project_directory_event(self, event_json: bytes) -> bytes:
         self._remember("project_directory_event", event_json)
@@ -230,6 +267,45 @@ class EventClientTests(unittest.TestCase):
         self.assertTrue(terminal.terminal)
         self.assertEqual(terminal.kind, "directory.terminal")
 
+    def test_subscribes_device_session_and_invocation_streams(self) -> None:
+        transport = MemoryEventTransport()
+        client = EventClient(transport)
+
+        device_stream = client.subscribe_devices(
+            EventsDeviceSubscriptionRequest(
+                events_base(),
+                device_ura="easynet:///r/example/device/dev-a",
+                resume_cursor=EventCursor("device", 2),
+            )
+        )
+        self.assertEqual(device_stream.stream, "device")
+        self.assertEqual(transport.seen["subscribe_devices"]["stream"], "device")
+
+        session_stream = client.subscribe_sessions(
+            EventsSessionSubscriptionRequest(
+                events_base(),
+                session_ura="easynet:///r/example/session/sess-1",
+            )
+        )
+        self.assertEqual(session_stream.stream, "session")
+        self.assertEqual(
+            transport.seen["subscribe_sessions"]["session_ura"],
+            "easynet:///r/example/session/sess-1",
+        )
+
+        invocation_stream = client.subscribe_invocations(
+            EventsInvocationSubscriptionRequest(events_base(), invocation_id="inv-1")
+        )
+        self.assertEqual(invocation_stream.stream, "invocation")
+        self.assertEqual(
+            transport.seen["subscribe_invocations"]["invocation_id"], "inv-1"
+        )
+
+        client.build_device_subscription_invocation(
+            EventsDeviceSubscriptionRequest(events_base())
+        )
+        self.assertEqual(transport.seen["build_device_subscription"]["stream"], "device")
+
     def test_rejects_incomplete_carrier_and_invalid_cursors(self) -> None:
         client = EventClient(MemoryEventTransport())
 
@@ -241,6 +317,13 @@ class EventClientTests(unittest.TestCase):
             )
         with self.assertRaises(Exception):
             EventCursor("sessions", 1).to_json_dict()
+        with self.assertRaises(Exception):
+            client.subscribe_devices(
+                EventsDeviceSubscriptionRequest(
+                    events_base(),
+                    resume_cursor=EventCursor("session", 1),
+                )
+            )
         with self.assertRaises(Exception):
             client.project_drop_report(
                 EventDropReportInput(

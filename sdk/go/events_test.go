@@ -29,9 +29,39 @@ func (m *memoryEventTransport) BuildDirectorySubscriptionInvocation(_ context.Co
 	return []byte(m.invocation), nil
 }
 
+func (m *memoryEventTransport) BuildDeviceSubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_device_subscription", requestJSON)
+	return []byte(m.invocation), nil
+}
+
+func (m *memoryEventTransport) BuildSessionSubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_session_subscription", requestJSON)
+	return []byte(m.invocation), nil
+}
+
+func (m *memoryEventTransport) BuildInvocationSubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_invocation_subscription", requestJSON)
+	return []byte(m.invocation), nil
+}
+
 func (m *memoryEventTransport) SubscribeDirectory(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("subscribe_directory", requestJSON)
 	return []byte(m.stream), nil
+}
+
+func (m *memoryEventTransport) SubscribeDevices(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("subscribe_devices", requestJSON)
+	return []byte(eventStreamJSON("device")), nil
+}
+
+func (m *memoryEventTransport) SubscribeSessions(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("subscribe_sessions", requestJSON)
+	return []byte(eventStreamJSON("session")), nil
+}
+
+func (m *memoryEventTransport) SubscribeInvocations(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("subscribe_invocations", requestJSON)
+	return []byte(eventStreamJSON("invocation")), nil
 }
 
 func (m *memoryEventTransport) ProjectDirectoryEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
@@ -59,6 +89,10 @@ func eventsBaseForTest() EventsCarrierBase {
 		CausalContext:     map[string]any{"form": "none"},
 		Metadata:          map[string]any{"request_id": "events-directory-subscribe-1"},
 	}
+}
+
+func eventStreamJSON(stream string) string {
+	return `{"stream":"` + stream + `","stream_id":"events-1","state":"Open","resume_token":"` + stream + `:8","metadata":{"profile":"events"}}`
 }
 
 func TestEventsBuildsDirectorySubscriptionInvocation(t *testing.T) {
@@ -101,7 +135,7 @@ func TestEventsProjectsFramesAndStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport := &memoryEventTransport{
-		stream:   `{"stream":"directory","stream_id":"events-1","state":"Open","resume_token":"directory:8","metadata":{"profile":"events"}}`,
+		stream:   eventStreamJSON("directory"),
 		event:    eventsDirectoryEventJSON,
 		drop:     eventsDropReportJSON,
 		terminal: eventsTerminalJSON,
@@ -163,6 +197,62 @@ func TestEventsProjectsFramesAndStream(t *testing.T) {
 	}
 }
 
+func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
+	transport := &memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON}
+	client, err := NewEventClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deviceCursor, err := NewEventCursor("device", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceStream, err := client.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+		ResumeCursor:      &deviceCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deviceStream.Stream != "device" {
+		t.Fatalf("unexpected device stream: %#v", deviceStream)
+	}
+	if transport.seen["subscribe_devices"]["stream"] != "device" {
+		t.Fatalf("device subscription stream not normalized: %#v", transport.seen["subscribe_devices"])
+	}
+
+	sessionStream, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		SessionURA:        "easynet:///r/example/session/sess-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessionStream.Stream != "session" || transport.seen["subscribe_sessions"]["session_ura"] == "" {
+		t.Fatalf("unexpected session stream/request: stream=%#v request=%#v", sessionStream, transport.seen["subscribe_sessions"])
+	}
+
+	invocationStream, err := client.SubscribeInvocations(context.Background(), EventsInvocationSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		InvocationID:      "inv-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocationStream.Stream != "invocation" || transport.seen["subscribe_invocations"]["invocation_id"] != "inv-1" {
+		t.Fatalf("unexpected invocation stream/request: stream=%#v request=%#v", invocationStream, transport.seen["subscribe_invocations"])
+	}
+
+	if _, err := client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{EventsCarrierBase: eventsBaseForTest()}); err != nil {
+		t.Fatal(err)
+	}
+	if transport.seen["build_device_subscription"]["stream"] != "device" {
+		t.Fatalf("device invocation stream not normalized: %#v", transport.seen["build_device_subscription"])
+	}
+}
+
 func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
 	transport := &memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON, drop: eventsDropReportJSON}
 	client, err := NewEventClient(transport)
@@ -175,6 +265,13 @@ func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
 	}
 	if _, err := NewEventCursor("sessions", 1); err == nil {
 		t.Fatal("expected unsupported stream rejection")
+	}
+	sessionCursor, _ := NewEventCursor("session", 1)
+	if _, err := client.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		ResumeCursor:      &sessionCursor,
+	}); err == nil {
+		t.Fatal("expected cursor stream mismatch rejection")
 	}
 	cursor, _ := NewEventCursor("directory", 9)
 	if _, err := client.ProjectDropReport(context.Background(), EventDropReportInput{Cursor: cursor, OccurredUnixMS: 1, DroppedCount: 0}); err == nil {

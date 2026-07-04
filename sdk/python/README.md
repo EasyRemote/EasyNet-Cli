@@ -7,7 +7,7 @@ handles, Invocation JSON codecs, or host-stream wire/hash semantics.
 Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
 errors/connect-local lifecycle composition/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
 Directory + Identity, Receipt, Publication, Host Binding, Mission,
-Admin + Gateway, Events directory-stream, Surface page seam, and Compatibility
+Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compatibility
 OpenAI adapter seam, and Convenience Wrapper record seam
 partial. The package exposes typed
 feature/version discovery, runtime connection state, runtime health readiness
@@ -41,7 +41,7 @@ seams. Concrete daemon
 process spawn/default C ABI or UDS transport, directory subscriptions, signer key lifecycle,
 Axon-backed receipt verification, concrete publication/host-binding/mission
 carriers, mission event streams, pairing/credential/device-session Admin
-flows, device/session/invocation Events streams, surface health/status,
+flows, Events historical pages/daemon filtering/live adapters, surface health/status,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE
 product cutovers, wrapper execution helpers and backend HTTP/WebSocket bridges,
 concrete bidi adapters, and EasyRemote cutover gates remain incomplete. See

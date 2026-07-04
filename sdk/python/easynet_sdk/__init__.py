@@ -90,6 +90,8 @@ from .directory import (
 )
 from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
 from .events import (
+    DeviceEvent,
+    DeviceEventQuery,
     DirectoryEvent,
     DirectoryEventQuery,
     EventClient,
@@ -102,7 +104,15 @@ from .events import (
     EventTerminalInput,
     EventTransport,
     EventsCarrierBase,
+    EventsDeviceSubscriptionRequest,
     EventsDirectorySubscriptionRequest,
+    EventsInvocationSubscriptionRequest,
+    EventsSessionSubscriptionRequest,
+    EventsSubscriptionRequest,
+    InvocationEvent,
+    InvocationEventQuery,
+    SessionEvent,
+    SessionEventQuery,
 )
 from .health import HealthClient, HealthTransport, RuntimeHealth
 from .identity import (
@@ -288,6 +298,8 @@ __all__ = [
     "DirectoryPage",
     "DirectoryQueryBase",
     "DirectoryTransport",
+    "DeviceEvent",
+    "DeviceEventQuery",
     "Endpoints",
     "ErrorCode",
     "EventClient",
@@ -300,7 +312,11 @@ __all__ = [
     "EventTerminalInput",
     "EventTransport",
     "EventsCarrierBase",
+    "EventsDeviceSubscriptionRequest",
     "EventsDirectorySubscriptionRequest",
+    "EventsInvocationSubscriptionRequest",
+    "EventsSessionSubscriptionRequest",
+    "EventsSubscriptionRequest",
     "FeatureSet",
     "FileRecord",
     "GatewayListener",
@@ -327,6 +343,8 @@ __all__ = [
     "IdentityTransport",
     "InvocationBuilder",
     "InvocationDraft",
+    "InvocationEvent",
+    "InvocationEventQuery",
     "InvocationHandle",
     "InvocationHandleEvent",
     "InvocationCancel",
@@ -384,6 +402,8 @@ __all__ = [
     "RuntimeError",
     "RuntimeTransport",
     "SDKError",
+    "SessionEvent",
+    "SessionEventQuery",
     "SignedInvocation",
     "SignerPolicy",
     "SigningMaterial",

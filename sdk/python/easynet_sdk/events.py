@@ -12,6 +12,15 @@ from .invocation import InvocationDraft
 
 _PROFILE = "events"
 _DIRECTORY_STREAM = "directory"
+_DEVICE_STREAM = "device"
+_SESSION_STREAM = "session"
+_INVOCATION_STREAM = "invocation"
+_SUPPORTED_STREAMS = {
+    _DIRECTORY_STREAM,
+    _DEVICE_STREAM,
+    _SESSION_STREAM,
+    _INVOCATION_STREAM,
+}
 MIN_EVENT_HEARTBEAT_INTERVAL_MS = 1000
 MAX_EVENT_HEARTBEAT_INTERVAL_MS = 300000
 
@@ -61,7 +70,7 @@ class EventCursor:
 
 
 @dataclass(frozen=True)
-class EventsDirectorySubscriptionRequest:
+class EventsSubscriptionRequest:
     base: EventsCarrierBase
     realm: str = ""
     owner_ura: str = ""
@@ -69,20 +78,33 @@ class EventsDirectorySubscriptionRequest:
     agent_ura: str = ""
     resume_cursor: Optional[EventCursor] = None
     heartbeat_interval_ms: int = 0
+    stream: str = ""
+    session_ura: str = ""
+    invocation_id: str = ""
 
-    def to_json_bytes(self) -> bytes:
+    def to_json_bytes(self, expected_stream: str = _DIRECTORY_STREAM) -> bytes:
+        if expected_stream not in _SUPPORTED_STREAMS:
+            raise _invalid_events("unsupported event stream")
+        stream = self.stream or expected_stream
+        if stream != expected_stream:
+            raise _invalid_events("event subscription stream mismatch")
         value = self.base.to_json_dict()
+        value["stream"] = stream
         for key, raw in (
             ("realm", self.realm),
             ("owner_ura", self.owner_ura),
             ("device_ura", self.device_ura),
             ("agent_ura", self.agent_ura),
+            ("session_ura", self.session_ura),
+            ("invocation_id", self.invocation_id),
         ):
             if raw:
                 if raw.strip() != raw:
                     raise _invalid_events(f"{key} must not contain surrounding whitespace")
                 value[key] = raw
         if self.resume_cursor is not None:
+            if self.resume_cursor.stream != expected_stream:
+                raise _invalid_events("resume cursor stream mismatch")
             value["resume_cursor"] = self.resume_cursor.to_json_dict()
         if self.heartbeat_interval_ms:
             if not (
@@ -95,7 +117,14 @@ class EventsDirectorySubscriptionRequest:
         return _json_bytes(value)
 
 
+EventsDirectorySubscriptionRequest = EventsSubscriptionRequest
+EventsDeviceSubscriptionRequest = EventsSubscriptionRequest
+EventsSessionSubscriptionRequest = EventsSubscriptionRequest
+EventsInvocationSubscriptionRequest = EventsSubscriptionRequest
 DirectoryEventQuery = EventsDirectorySubscriptionRequest
+DeviceEventQuery = EventsDeviceSubscriptionRequest
+SessionEventQuery = EventsSessionSubscriptionRequest
+InvocationEventQuery = EventsInvocationSubscriptionRequest
 
 
 @dataclass(frozen=True)
@@ -184,7 +213,7 @@ class EventStream:
     @classmethod
     def from_json(cls, raw: bytes | str) -> "EventStream":
         decoded = _json_object(raw, "event stream")
-        if decoded.get("stream") != _DIRECTORY_STREAM:
+        if decoded.get("stream") not in _SUPPORTED_STREAMS:
             raise _invalid_events("invalid event stream projection")
         return cls(
             stream=_required_string(decoded, "stream"),
@@ -216,7 +245,7 @@ class EventFrame:
     @classmethod
     def from_json(cls, raw: bytes | str) -> "EventFrame":
         decoded = _json_object(raw, "event frame")
-        if decoded.get("profile") != _PROFILE or decoded.get("stream") != _DIRECTORY_STREAM:
+        if decoded.get("profile") != _PROFILE or decoded.get("stream") not in _SUPPORTED_STREAMS:
             raise _invalid_events("invalid event frame projection")
         cursor = _cursor_from_json(decoded.get("cursor"), require_token=True)
         dropped_count = _required_non_negative_int(decoded, "dropped_count")
@@ -248,6 +277,9 @@ class EventFrame:
 
 
 DirectoryEvent = EventFrame
+DeviceEvent = EventFrame
+SessionEvent = EventFrame
+InvocationEvent = EventFrame
 EventDropReport = EventFrame
 
 
@@ -258,7 +290,25 @@ class EventTransport(Protocol):
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def build_device_subscription_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
+        ...
+
     def subscribe_directory(self, request_json: bytes) -> bytes:
+        ...
+
+    def subscribe_devices(self, request_json: bytes) -> bytes:
+        ...
+
+    def subscribe_sessions(self, request_json: bytes) -> bytes:
+        ...
+
+    def subscribe_invocations(self, request_json: bytes) -> bytes:
         ...
 
     def project_directory_event(self, event_json: bytes) -> bytes:
@@ -284,20 +334,95 @@ class EventClient:
     def build_directory_subscription_invocation(
         self, request: EventsDirectorySubscriptionRequest
     ) -> InvocationDraft:
-        return self._invocation(
-            request.to_json_bytes(),
-            self.transport.build_directory_subscription_invocation,
-            "events directory subscription invocation failed",
-        )
+        return self._subscription_invocation(request, _DIRECTORY_STREAM)
+
+    def build_device_subscription_invocation(
+        self, request: EventsDeviceSubscriptionRequest
+    ) -> InvocationDraft:
+        return self._subscription_invocation(request, _DEVICE_STREAM)
+
+    def build_session_subscription_invocation(
+        self, request: EventsSessionSubscriptionRequest
+    ) -> InvocationDraft:
+        return self._subscription_invocation(request, _SESSION_STREAM)
+
+    def build_invocation_subscription_invocation(
+        self, request: EventsInvocationSubscriptionRequest
+    ) -> InvocationDraft:
+        return self._subscription_invocation(request, _INVOCATION_STREAM)
 
     def subscribe_directory(self, request: EventsDirectorySubscriptionRequest) -> EventStream:
+        return self._subscribe(request, _DIRECTORY_STREAM)
+
+    def subscribe_devices(self, request: EventsDeviceSubscriptionRequest) -> EventStream:
+        return self._subscribe(request, _DEVICE_STREAM)
+
+    def subscribe_sessions(self, request: EventsSessionSubscriptionRequest) -> EventStream:
+        return self._subscribe(request, _SESSION_STREAM)
+
+    def subscribe_invocations(
+        self, request: EventsInvocationSubscriptionRequest
+    ) -> EventStream:
+        return self._subscribe(request, _INVOCATION_STREAM)
+
+    def _subscription_invocation(
+        self, request: EventsSubscriptionRequest, stream: str
+    ) -> InvocationDraft:
+        fn, label = self._subscription_invocation_transport(stream)
+        return self._invocation(
+            request.to_json_bytes(stream),
+            fn,
+            label,
+        )
+
+    def _subscribe(self, request: EventsSubscriptionRequest, stream: str) -> EventStream:
+        fn, label = self._subscribe_transport(stream)
         try:
-            raw = self.transport.subscribe_directory(request.to_json_bytes())
+            raw = fn(request.to_json_bytes(stream))
         except SDKError:
             raise
         except Exception as exc:
-            raise _transport_error("events subscribe directory failed", exc) from exc
+            raise _transport_error(label, exc) from exc
         return EventStream.from_json(raw)
+
+    def _subscription_invocation_transport(
+        self, stream: str
+    ) -> tuple[Callable[[bytes], bytes], str]:
+        if stream == _DIRECTORY_STREAM:
+            return (
+                self.transport.build_directory_subscription_invocation,
+                "events directory subscription invocation failed",
+            )
+        if stream == _DEVICE_STREAM:
+            return (
+                self.transport.build_device_subscription_invocation,
+                "events device subscription invocation failed",
+            )
+        if stream == _SESSION_STREAM:
+            return (
+                self.transport.build_session_subscription_invocation,
+                "events session subscription invocation failed",
+            )
+        if stream == _INVOCATION_STREAM:
+            return (
+                self.transport.build_invocation_subscription_invocation,
+                "events invocation subscription invocation failed",
+            )
+        raise _invalid_events("unsupported event stream")
+
+    def _subscribe_transport(self, stream: str) -> tuple[Callable[[bytes], bytes], str]:
+        if stream == _DIRECTORY_STREAM:
+            return self.transport.subscribe_directory, "events subscribe directory failed"
+        if stream == _DEVICE_STREAM:
+            return self.transport.subscribe_devices, "events subscribe devices failed"
+        if stream == _SESSION_STREAM:
+            return self.transport.subscribe_sessions, "events subscribe sessions failed"
+        if stream == _INVOCATION_STREAM:
+            return (
+                self.transport.subscribe_invocations,
+                "events subscribe invocations failed",
+            )
+        raise _invalid_events("unsupported event stream")
 
     def project_directory_event(self, input: EventProjectionInput) -> DirectoryEvent:
         return self._frame(
@@ -363,7 +488,7 @@ def _validate_base(base: EventsCarrierBase) -> None:
 
 
 def _validate_cursor(cursor: EventCursor, *, require_token: bool) -> None:
-    if cursor.stream != _DIRECTORY_STREAM:
+    if cursor.stream not in _SUPPORTED_STREAMS:
         raise _invalid_events("unsupported event stream")
     if cursor.sequence < 0:
         raise _invalid_events("event cursor sequence must be non-negative")

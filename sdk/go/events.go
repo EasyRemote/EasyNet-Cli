@@ -9,7 +9,15 @@ import (
 )
 
 const eventsProfile = "events"
-const directoryEventStream = "directory"
+
+type EventStreamKind string
+
+const (
+	EventStreamDirectory  EventStreamKind = "directory"
+	EventStreamDevice     EventStreamKind = "device"
+	EventStreamSession    EventStreamKind = "session"
+	EventStreamInvocation EventStreamKind = "invocation"
+)
 
 const (
 	MinEventHeartbeatIntervalMS = 1000
@@ -38,7 +46,7 @@ func NewEventCursor(stream string, sequence uint64) (EventCursor, error) {
 	if stream == "" {
 		return EventCursor{}, invalidRuntimePayload("event cursor stream is required", nil)
 	}
-	if stream != directoryEventStream {
+	if !validEventStreamKind(EventStreamKind(stream)) {
 		return EventCursor{}, invalidRuntimePayload("unsupported event stream", nil)
 	}
 	return EventCursor{Stream: stream, Sequence: sequence}, nil
@@ -54,18 +62,28 @@ func (c EventCursor) ResumeToken() string {
 	return fmt.Sprintf("%s:%d", c.Stream, c.Sequence)
 }
 
-// EventsDirectorySubscriptionRequest builds a daemon directory stream carrier.
-type EventsDirectorySubscriptionRequest struct {
+// EventsSubscriptionRequest builds a daemon event stream carrier.
+type EventsSubscriptionRequest struct {
 	EventsCarrierBase
-	Realm               string       `json:"realm,omitempty"`
-	OwnerURA            string       `json:"owner_ura,omitempty"`
-	DeviceURA           string       `json:"device_ura,omitempty"`
-	AgentURA            string       `json:"agent_ura,omitempty"`
-	ResumeCursor        *EventCursor `json:"resume_cursor,omitempty"`
-	HeartbeatIntervalMS int          `json:"heartbeat_interval_ms,omitempty"`
+	Stream              EventStreamKind `json:"stream,omitempty"`
+	Realm               string          `json:"realm,omitempty"`
+	OwnerURA            string          `json:"owner_ura,omitempty"`
+	DeviceURA           string          `json:"device_ura,omitempty"`
+	AgentURA            string          `json:"agent_ura,omitempty"`
+	SessionURA          string          `json:"session_ura,omitempty"`
+	InvocationID        string          `json:"invocation_id,omitempty"`
+	ResumeCursor        *EventCursor    `json:"resume_cursor,omitempty"`
+	HeartbeatIntervalMS int             `json:"heartbeat_interval_ms,omitempty"`
 }
 
+type EventsDirectorySubscriptionRequest = EventsSubscriptionRequest
+type EventsDeviceSubscriptionRequest = EventsSubscriptionRequest
+type EventsSessionSubscriptionRequest = EventsSubscriptionRequest
+type EventsInvocationSubscriptionRequest = EventsSubscriptionRequest
 type DirectoryEventQuery = EventsDirectorySubscriptionRequest
+type DeviceEventQuery = EventsDeviceSubscriptionRequest
+type SessionEventQuery = EventsSessionSubscriptionRequest
+type InvocationEventQuery = EventsInvocationSubscriptionRequest
 
 // EventProjectionInput asks the daemon contract to project one raw directory event.
 type EventProjectionInput struct {
@@ -127,12 +145,21 @@ type EventFrame struct {
 }
 
 type DirectoryEvent = EventFrame
+type DeviceEvent = EventFrame
+type SessionEvent = EventFrame
+type InvocationEvent = EventFrame
 type EventDropReport = EventFrame
 
 // EventTransport supplies daemon Events operations behind the facade.
 type EventTransport interface {
 	BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildDeviceSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildSessionSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildInvocationSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeDevices(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeSessions(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
 	ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error)
 	ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error)
@@ -140,11 +167,17 @@ type EventTransport interface {
 
 // EventTransportFunc adapts functions into an EventTransport.
 type EventTransportFunc struct {
-	BuildDirectorySubscriptionInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	SubscribeDirectoryFunc                   func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	ProjectDirectoryEventFunc                func(ctx context.Context, eventJSON []byte) ([]byte, error)
-	ProjectDropReportFunc                    func(ctx context.Context, dropJSON []byte) ([]byte, error)
-	ProjectTerminalFunc                      func(ctx context.Context, terminalJSON []byte) ([]byte, error)
+	BuildDirectorySubscriptionInvocationFunc  func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildDeviceSubscriptionInvocationFunc     func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildSessionSubscriptionInvocationFunc    func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildInvocationSubscriptionInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeDirectoryFunc                    func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeDevicesFunc                      func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeSessionsFunc                     func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	SubscribeInvocationsFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ProjectDirectoryEventFunc                 func(ctx context.Context, eventJSON []byte) ([]byte, error)
+	ProjectDropReportFunc                     func(ctx context.Context, dropJSON []byte) ([]byte, error)
+	ProjectTerminalFunc                       func(ctx context.Context, terminalJSON []byte) ([]byte, error)
 }
 
 func (f EventTransportFunc) BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -154,11 +187,53 @@ func (f EventTransportFunc) BuildDirectorySubscriptionInvocation(ctx context.Con
 	return f.BuildDirectorySubscriptionInvocationFunc(ctx, requestJSON)
 }
 
+func (f EventTransportFunc) BuildDeviceSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildDeviceSubscriptionInvocationFunc == nil {
+		return nil, invalidRuntimeClient("events device-subscription invocation transport function is required")
+	}
+	return f.BuildDeviceSubscriptionInvocationFunc(ctx, requestJSON)
+}
+
+func (f EventTransportFunc) BuildSessionSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildSessionSubscriptionInvocationFunc == nil {
+		return nil, invalidRuntimeClient("events session-subscription invocation transport function is required")
+	}
+	return f.BuildSessionSubscriptionInvocationFunc(ctx, requestJSON)
+}
+
+func (f EventTransportFunc) BuildInvocationSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildInvocationSubscriptionInvocationFunc == nil {
+		return nil, invalidRuntimeClient("events invocation-subscription invocation transport function is required")
+	}
+	return f.BuildInvocationSubscriptionInvocationFunc(ctx, requestJSON)
+}
+
 func (f EventTransportFunc) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	if f.SubscribeDirectoryFunc == nil {
 		return nil, invalidRuntimeClient("events subscribe-directory transport function is required")
 	}
 	return f.SubscribeDirectoryFunc(ctx, requestJSON)
+}
+
+func (f EventTransportFunc) SubscribeDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.SubscribeDevicesFunc == nil {
+		return nil, invalidRuntimeClient("events subscribe-devices transport function is required")
+	}
+	return f.SubscribeDevicesFunc(ctx, requestJSON)
+}
+
+func (f EventTransportFunc) SubscribeSessions(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.SubscribeSessionsFunc == nil {
+		return nil, invalidRuntimeClient("events subscribe-sessions transport function is required")
+	}
+	return f.SubscribeSessionsFunc(ctx, requestJSON)
+}
+
+func (f EventTransportFunc) SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.SubscribeInvocationsFunc == nil {
+		return nil, invalidRuntimeClient("events subscribe-invocations transport function is required")
+	}
+	return f.SubscribeInvocationsFunc(ctx, requestJSON)
 }
 
 func (f EventTransportFunc) ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
@@ -195,33 +270,97 @@ func NewEventClient(transport EventTransport) (*EventClient, error) {
 }
 
 func (c *EventClient) BuildDirectorySubscriptionInvocation(ctx context.Context, req EventsDirectorySubscriptionRequest) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, req, EventStreamDirectory)
+}
+
+func (c *EventClient) BuildDeviceSubscriptionInvocation(ctx context.Context, req EventsDeviceSubscriptionRequest) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, req, EventStreamDevice)
+}
+
+func (c *EventClient) BuildSessionSubscriptionInvocation(ctx context.Context, req EventsSessionSubscriptionRequest) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, req, EventStreamSession)
+}
+
+func (c *EventClient) BuildInvocationSubscriptionInvocation(ctx context.Context, req EventsInvocationSubscriptionRequest) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, req, EventStreamInvocation)
+}
+
+func (c *EventClient) SubscribeDirectory(ctx context.Context, req EventsDirectorySubscriptionRequest) (EventStream, error) {
+	return c.subscribe(ctx, req, EventStreamDirectory)
+}
+
+func (c *EventClient) SubscribeDevices(ctx context.Context, req EventsDeviceSubscriptionRequest) (EventStream, error) {
+	return c.subscribe(ctx, req, EventStreamDevice)
+}
+
+func (c *EventClient) SubscribeSessions(ctx context.Context, req EventsSessionSubscriptionRequest) (EventStream, error) {
+	return c.subscribe(ctx, req, EventStreamSession)
+}
+
+func (c *EventClient) SubscribeInvocations(ctx context.Context, req EventsInvocationSubscriptionRequest) (EventStream, error) {
+	return c.subscribe(ctx, req, EventStreamInvocation)
+}
+
+func (c *EventClient) buildSubscriptionInvocation(ctx context.Context, req EventsSubscriptionRequest, stream EventStreamKind) (InvocationDraft, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return InvocationDraft{}, err
 	}
-	requestJSON, err := marshalEventsDirectorySubscriptionRequest(req)
+	requestJSON, err := marshalEventsSubscriptionRequest(req, stream)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	raw, err := c.transport.BuildDirectorySubscriptionInvocation(ctx, requestJSON)
+	fn, label := c.subscriptionInvocationTransport(stream)
+	raw, err := fn(ctx, requestJSON)
 	if err != nil {
-		return InvocationDraft{}, wrapEventsTransportError("events directory subscription invocation failed", err)
+		return InvocationDraft{}, wrapEventsTransportError(label, err)
 	}
 	return NewInvocationDraftFromJSON(raw)
 }
 
-func (c *EventClient) SubscribeDirectory(ctx context.Context, req EventsDirectorySubscriptionRequest) (EventStream, error) {
+func (c *EventClient) subscribe(ctx context.Context, req EventsSubscriptionRequest, stream EventStreamKind) (EventStream, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return EventStream{}, err
 	}
-	requestJSON, err := marshalEventsDirectorySubscriptionRequest(req)
+	requestJSON, err := marshalEventsSubscriptionRequest(req, stream)
 	if err != nil {
 		return EventStream{}, err
 	}
-	raw, err := c.transport.SubscribeDirectory(ctx, requestJSON)
+	fn, label := c.subscribeTransport(stream)
+	raw, err := fn(ctx, requestJSON)
 	if err != nil {
-		return EventStream{}, wrapEventsTransportError("events subscribe directory failed", err)
+		return EventStream{}, wrapEventsTransportError(label, err)
 	}
 	return NewEventStreamFromJSON(raw)
+}
+
+func (c *EventClient) subscriptionInvocationTransport(stream EventStreamKind) (func(context.Context, []byte) ([]byte, error), string) {
+	switch stream {
+	case EventStreamDirectory:
+		return c.transport.BuildDirectorySubscriptionInvocation, "events directory subscription invocation failed"
+	case EventStreamDevice:
+		return c.transport.BuildDeviceSubscriptionInvocation, "events device subscription invocation failed"
+	case EventStreamSession:
+		return c.transport.BuildSessionSubscriptionInvocation, "events session subscription invocation failed"
+	case EventStreamInvocation:
+		return c.transport.BuildInvocationSubscriptionInvocation, "events invocation subscription invocation failed"
+	default:
+		return nil, "events subscription invocation failed"
+	}
+}
+
+func (c *EventClient) subscribeTransport(stream EventStreamKind) (func(context.Context, []byte) ([]byte, error), string) {
+	switch stream {
+	case EventStreamDirectory:
+		return c.transport.SubscribeDirectory, "events subscribe directory failed"
+	case EventStreamDevice:
+		return c.transport.SubscribeDevices, "events subscribe devices failed"
+	case EventStreamSession:
+		return c.transport.SubscribeSessions, "events subscribe sessions failed"
+	case EventStreamInvocation:
+		return c.transport.SubscribeInvocations, "events subscribe invocations failed"
+	default:
+		return nil, "events subscribe failed"
+	}
 }
 
 func (c *EventClient) ProjectDirectoryEvent(ctx context.Context, input EventProjectionInput) (DirectoryEvent, error) {
@@ -269,7 +408,7 @@ func NewEventStreamFromJSON(raw []byte) (EventStream, error) {
 	if err := json.Unmarshal(raw, &stream); err != nil {
 		return EventStream{}, invalidRuntimePayload(fmt.Sprintf("decode event stream JSON: %v", err), err)
 	}
-	if stream.Stream != directoryEventStream || stream.State == "" || stream.Metadata == nil {
+	if !validEventStreamKind(EventStreamKind(stream.Stream)) || stream.State == "" || stream.Metadata == nil {
 		return EventStream{}, invalidRuntimePayload("invalid event stream projection", nil)
 	}
 	return stream, nil
@@ -280,7 +419,7 @@ func NewEventFrameFromJSON(raw []byte) (EventFrame, error) {
 	if err := json.Unmarshal(raw, &frame); err != nil {
 		return EventFrame{}, invalidRuntimePayload(fmt.Sprintf("decode event frame JSON: %v", err), err)
 	}
-	if frame.Profile != eventsProfile || frame.Stream != directoryEventStream ||
+	if frame.Profile != eventsProfile || !validEventStreamKind(EventStreamKind(frame.Stream)) ||
 		frame.Kind == "" || frame.EventID == "" || frame.ResumeToken == "" ||
 		frame.OccurredUnixMS < 0 || frame.OccurredAt == "" || frame.Metadata == nil {
 		return EventFrame{}, invalidRuntimePayload("invalid event frame projection", nil)
@@ -303,41 +442,56 @@ func NewEventFrameFromJSON(raw []byte) (EventFrame, error) {
 	return frame, nil
 }
 
-func marshalEventsDirectorySubscriptionRequest(req EventsDirectorySubscriptionRequest) ([]byte, error) {
-	if err := validateEventsDirectorySubscriptionRequest(req); err != nil {
+func marshalEventsSubscriptionRequest(req EventsSubscriptionRequest, expected EventStreamKind) ([]byte, error) {
+	normalized, err := normalizeEventsSubscriptionRequest(req, expected)
+	if err != nil {
 		return nil, err
 	}
-	requestJSON, err := json.Marshal(req)
+	requestJSON, err := json.Marshal(normalized)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode events directory subscription request: %v", err), err)
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode events subscription request: %v", err), err)
 	}
 	return requestJSON, nil
 }
 
-func validateEventsDirectorySubscriptionRequest(req EventsDirectorySubscriptionRequest) error {
+func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected EventStreamKind) (EventsSubscriptionRequest, error) {
+	if !validEventStreamKind(expected) {
+		return EventsSubscriptionRequest{}, invalidRuntimePayload("unsupported event stream", nil)
+	}
+	if req.Stream == "" {
+		req.Stream = expected
+	}
+	if req.Stream != expected {
+		return EventsSubscriptionRequest{}, invalidRuntimePayload("event subscription stream mismatch", nil)
+	}
 	if err := validateEventsCarrierBase(req.EventsCarrierBase); err != nil {
-		return err
+		return EventsSubscriptionRequest{}, err
 	}
 	for field, value := range map[string]string{
-		"realm":      req.Realm,
-		"owner_ura":  req.OwnerURA,
-		"device_ura": req.DeviceURA,
-		"agent_ura":  req.AgentURA,
+		"realm":         req.Realm,
+		"owner_ura":     req.OwnerURA,
+		"device_ura":    req.DeviceURA,
+		"agent_ura":     req.AgentURA,
+		"session_ura":   req.SessionURA,
+		"invocation_id": req.InvocationID,
 	} {
 		if strings.TrimSpace(value) != value {
-			return invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
+			return EventsSubscriptionRequest{}, invalidRuntimePayload(field+" must not contain surrounding whitespace", nil)
 		}
 	}
 	if req.ResumeCursor != nil {
 		if err := validateEventCursor(*req.ResumeCursor); err != nil {
-			return err
+			return EventsSubscriptionRequest{}, err
+		}
+		if EventStreamKind(req.ResumeCursor.Stream) != expected {
+			return EventsSubscriptionRequest{}, invalidRuntimePayload("resume cursor stream mismatch", nil)
 		}
 	}
 	if req.HeartbeatIntervalMS != 0 &&
 		(req.HeartbeatIntervalMS < MinEventHeartbeatIntervalMS || req.HeartbeatIntervalMS > MaxEventHeartbeatIntervalMS) {
-		return invalidRuntimePayload("heartbeat_interval_ms exceeds bounds", nil)
+		return EventsSubscriptionRequest{}, invalidRuntimePayload("heartbeat_interval_ms exceeds bounds", nil)
 	}
-	return nil
+	return req, nil
 }
 
 func validateEventsCarrierBase(base EventsCarrierBase) error {
@@ -385,7 +539,7 @@ func validateEventTerminalInput(input any) error {
 }
 
 func validateEventCursor(cursor EventCursor) error {
-	if cursor.Stream != directoryEventStream {
+	if !validEventStreamKind(EventStreamKind(cursor.Stream)) {
 		return invalidRuntimePayload("unsupported event stream", nil)
 	}
 	token := cursor.ResumeToken()
@@ -399,6 +553,15 @@ func validateEventCursor(cursor EventCursor) error {
 		return invalidRuntimePayload("event cursor token must match stream sequence", nil)
 	}
 	return nil
+}
+
+func validEventStreamKind(stream EventStreamKind) bool {
+	switch stream {
+	case EventStreamDirectory, EventStreamDevice, EventStreamSession, EventStreamInvocation:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateReconnectAfterMS(value *int) error {

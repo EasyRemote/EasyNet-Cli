@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, Compatibility seams, and Wrapper record seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events directory-stream, Surface seams, Compatibility seams, and Wrapper record seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions, Surface seams, Compatibility seams, and Wrapper record seams partial |
+| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions, Surface seams, Compatibility seams, and Wrapper record seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
 | Swift | P1 | macOS/iOS-adjacent clients | placeholder |
@@ -132,11 +132,11 @@ method spelling.
   `AdminAgentPage`, and lifecycle-result projection seams; pairing token flows,
   credential verification, certificate policy, concrete device-session CRUD,
   and backend route cutover remain incomplete.
-- Go Events facade exposes `EventClient` directory subscription Invocation
-  carrier builders plus `EventFrame` cursor, resume-token, drop-report, and
-  terminal projection seams; device/session/invocation streams, daemon-side
-  directory filtering, live stream transport adapters, and backend SSE/WebSocket
-  cutover remain incomplete.
+- Go Events facade exposes `EventClient` directory/device/session/invocation
+  subscription Invocation carrier builders plus `EventFrame` cursor,
+  resume-token, drop-report, and terminal projection seams; historical event
+  pages, daemon-side filtering, live stream transport adapters, and backend
+  SSE/WebSocket cutover remain incomplete.
 - Go Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
@@ -196,11 +196,11 @@ method spelling.
   pairing token flows, credential verification, certificate policy, concrete
   device-session CRUD, and EasyRemote Server/AgentControl extraction remain
   incomplete.
-- Python Events facade exposes `EventClient` directory subscription Invocation
-  carrier builders plus `EventFrame` cursor, resume-token, drop-report, and
-  terminal projection seams; device/session/invocation streams, daemon-side
-  directory filtering, live stream transport adapters, and product cutovers
-  remain incomplete.
+- Python Events facade exposes `EventClient` directory/device/session/invocation
+  subscription Invocation carrier builders plus `EventFrame` cursor,
+  resume-token, drop-report, and terminal projection seams; historical event
+  pages, daemon-side filtering, live stream transport adapters, and product
+  cutovers remain incomplete.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
