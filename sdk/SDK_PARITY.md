@@ -202,10 +202,10 @@ method spelling.
   actual EasyRemote repository extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
-  C ABI-backed fetch execution through Runtime Core invoke, and close state
-  seams over opaque receipt refs; Axon-backed cryptographic verification,
-  receipt URI construction after RFC-007, and EasyRemote context/receipt
-  extraction remain incomplete.
+  receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
+  through Runtime Core invoke, and close state seams over opaque receipt refs;
+  Axon-backed cryptographic verification, receipt URI construction after RFC-007,
+  and actual EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
   install projection, published-ability read-model seams, and close state seams; concrete daemon

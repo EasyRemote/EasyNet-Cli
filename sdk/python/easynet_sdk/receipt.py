@@ -9,6 +9,7 @@ from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 from .errors import ErrorCode, RetryHint, SDKError
 from ._lifecycle import ClientLifecycle
 from .invocation import InvocationBuilder, InvocationDraft
+from .runtime import InvocationResult, RuntimeReceipt
 
 
 _PROFILE = "receipt"
@@ -207,22 +208,36 @@ class ReceiptChainVerification:
 class CausalRef:
     """Daemon/Axon-returned causal reference for child invocations."""
 
-    causal_ref: str
-    receipt_ura: Optional[str] = None
+    receipt_ura: str
+    receipt_hash_hex: str
+    causal_context: Mapping[str, object]
+    causal_ref: str = ""
     invocation_id: Optional[str] = None
-    form: str = ""
+    verified: bool = False
+    form: str = "scalar"
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "CausalRef":
         decoded = _json_object(raw, "causal ref")
+        causal_context = _causal_context_from_projection(decoded)
+        receipt_ura = _required_string(causal_context, "receipt_ura")
+        receipt_hash_hex = _required_receipt_hash(causal_context)
         return cls(
-            causal_ref=_required_string(decoded, "causal_ref"),
-            receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura"),
+            receipt_ura=receipt_ura,
+            receipt_hash_hex=receipt_hash_hex,
+            causal_context=causal_context,
+            causal_ref=_optional_string(decoded.get("causal_ref"), "causal_ref") or "",
             invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id"),
-            form=_optional_string(decoded.get("form"), "form") or "",
+            verified=_optional_bool(decoded.get("verified"), "verified") or False,
+            form=_optional_string(causal_context.get("form"), "form") or "scalar",
             metadata=_optional_mapping(decoded.get("metadata"), "metadata") or {},
         )
+
+    def to_causal_context(self) -> Mapping[str, object]:
+        """Return the child-Invocation `causal_context` DTO."""
+
+        return dict(self.causal_context)
 
 
 @runtime_checkable
@@ -329,6 +344,34 @@ class ReceiptClient:
         except Exception as exc:
             raise _transport_error("receipt causal-ref failed", exc) from exc
         return CausalRef.from_json(raw)
+
+    def causal_context(self, receipt_json: bytes) -> Mapping[str, object]:
+        """Project raw receipt JSON into child Invocation causal context."""
+
+        return self.causal_ref(receipt_json).to_causal_context()
+
+    def causal_context_from_runtime_receipt(
+        self, receipt: RuntimeReceipt
+    ) -> Mapping[str, object]:
+        """Project a terminal runtime receipt summary into child causal context."""
+
+        self._require_open()
+        if not receipt.has_causal_anchor():
+            raise _invalid_receipt("runtime receipt summary is missing causal anchor")
+        raw = json.dumps(
+            receipt.to_json_dict(), separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        return self.causal_context(raw)
+
+    def causal_context_from_invocation_result(
+        self, result: InvocationResult
+    ) -> Mapping[str, object]:
+        """Project an invocation result receipt summary into child causal context."""
+
+        self._require_open()
+        if result.receipt_summary is None:
+            raise _invalid_receipt("invocation result has no receipt summary")
+        return self.causal_context_from_runtime_receipt(result.receipt_summary)
 
     def close(self) -> None:
         self._lifecycle.close(self.transport)
@@ -456,6 +499,41 @@ def _receipt_hash_field(decoded: Mapping[str, object]) -> str:
     return ""
 
 
+def _required_receipt_hash(decoded: Mapping[str, object]) -> str:
+    receipt_hash = _receipt_hash_field(decoded)
+    if not receipt_hash:
+        raise _invalid_receipt("receipt_hash_hex is required")
+    try:
+        digest = bytes.fromhex(receipt_hash)
+    except ValueError as exc:
+        raise _invalid_receipt(
+            "receipt hash must decode to exactly 32 bytes", exc
+        ) from exc
+    if len(digest) != 32:
+        raise _invalid_receipt("receipt hash must decode to exactly 32 bytes")
+    return receipt_hash
+
+
+def _causal_context_from_projection(
+    decoded: Mapping[str, object],
+) -> Mapping[str, object]:
+    context = _optional_mapping(decoded.get("causal_context"), "causal_context")
+    if context is not None:
+        if not _optional_string(context.get("form"), "form"):
+            raise _invalid_receipt("causal_context.form is required")
+        _required_string(context, "receipt_ura")
+        _required_receipt_hash(context)
+        return dict(context)
+    receipt_ura = _required_string(decoded, "receipt_ura")
+    receipt_hash_hex = _required_receipt_hash(decoded)
+    form = _optional_string(decoded.get("form"), "form") or "scalar"
+    return {
+        "form": form,
+        "receipt_ura": receipt_ura,
+        "receipt_hash_hex": receipt_hash_hex,
+    }
+
+
 def _required_string(decoded: Mapping[str, object], field_name: str) -> str:
     value = decoded.get(field_name)
     if not isinstance(value, str) or value.strip() == "":
@@ -475,6 +553,14 @@ def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:
     value = decoded.get(field_name)
     if not isinstance(value, bool):
         raise _invalid_receipt(f"{field_name} must be a boolean")
+    return value
+
+
+def _optional_bool(value: object, field_name: str) -> Optional[bool]:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise _invalid_receipt(f"{field_name} must be a boolean or null")
     return value
 
 

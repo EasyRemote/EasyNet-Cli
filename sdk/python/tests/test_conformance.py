@@ -2920,6 +2920,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 ReceiptClient,
                 {
                     "build_fetch_invocation": "receipt.build_fetch_invocation",
+                    "causal_context": "receipt.causal_context",
+                    "causal_context_from_invocation_result": "receipt.causal_context_from_invocation_result",
+                    "causal_context_from_runtime_receipt": "receipt.causal_context_from_runtime_receipt",
                     "causal_ref": "receipt.causal_ref",
                     "close": "receipt.close",
                     "fetch": "receipt.fetch",

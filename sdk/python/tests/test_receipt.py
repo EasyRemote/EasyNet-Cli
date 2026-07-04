@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 
 from easynet_sdk import (
+    AbilityCallRequest,
+    InvocationResult,
     ErrorCode,
     ReceiptChainVerificationRequest,
     ReceiptClient,
@@ -61,8 +63,13 @@ class MemoryReceiptTransport:
             b'"metadata":{"chain_projection":"hash_continuity"}}'
         )
         self.causal_ref_json = (
-            b'{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1",'
+            b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            b'"verified":false,'
+            b'"causal_context":{"form":"scalar",'
             b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},'
+            b'"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1",'
             b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
         )
         self.fetch_invocation_json = shared_fixture("receipt-fetch-invocation.v4.json")
@@ -227,12 +234,122 @@ class ReceiptTests(unittest.TestCase):
         client = ReceiptClient(transport)
 
         verification = client.verify(b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1"}')
-        causal = client.causal_ref(b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1"}')
+        causal = client.causal_ref(
+            b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        )
 
         self.assertTrue(verification.verified)
         self.assertEqual(verification.method, "axon-full-receipt")
         self.assertEqual(causal.form, "scalar")
-        self.assertTrue(causal.causal_ref)
+        self.assertEqual(
+            causal.to_causal_context(),
+            {
+                "form": "scalar",
+                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_hash_hex": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+            },
+        )
+        self.assertEqual(
+            client.causal_context(
+                b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+                b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+            ),
+            causal.to_causal_context(),
+        )
+
+    def test_causal_context_from_runtime_receipt_and_invocation_result(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+        result = InvocationResult.from_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": (
+                            "easynet:///r/example/ability/"
+                            "device.dev-a.observe.health@1.0.0"
+                        ),
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "content_type": "application/json",
+                        "args": {},
+                    },
+                    "terminal_state": "Completed",
+                    "output_content_type": "application/json",
+                    "output_base64": "e30=",
+                    "output_json": {},
+                    "elapsed_ms": 8,
+                    "receipt": {
+                        "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                        "invocation_id": "inv-example-1",
+                        "self_hash_hex": (
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        ),
+                    },
+                    "error": None,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+
+        assert result.receipt_summary is not None
+        causal_context = client.causal_context_from_runtime_receipt(
+            result.receipt_summary
+        )
+
+        self.assertEqual(
+            causal_context,
+            {
+                "form": "scalar",
+                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_hash_hex": (
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ),
+            },
+        )
+        self.assertEqual(
+            client.causal_context_from_invocation_result(result),
+            causal_context,
+        )
+        child = AbilityCallRequest(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context=causal_context,
+            ability_name="child.echo",
+            args={},
+        )
+        self.assertEqual(child.causal_context["form"], "scalar")
+
+    def test_causal_context_rejects_unanchored_runtime_result(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+        result = InvocationResult.from_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": build_receipt_fetch_invocation(
+                        fetch_request()
+                    ).to_json_dict(),
+                    "terminal_state": "Completed",
+                    "receipt": {"invocation_id": "inv-example-1"},
+                    "error": None,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+
+        with self.assertRaises(SDKError):
+            client.causal_context_from_invocation_result(result)
 
     def test_verify_chain_preserves_receipt_bodies_and_decodes_continuity(self) -> None:
         transport = MemoryReceiptTransport()

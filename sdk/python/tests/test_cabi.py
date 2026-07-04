@@ -708,9 +708,13 @@ RECEIPT_CHAIN_VERIFICATION_PROJECTION = (
 )
 
 CAUSAL_REF_PROJECTION = (
-    b'{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1",'
+    b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+    b'"verified":false,'
+    b'"causal_context":{"form":"scalar",'
     b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
-    b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
+    b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},'
+    b'"invocation_id":"inv-example-1","metadata":{}}'
 )
 
 RECEIPT_FETCH_INVOCATION = (

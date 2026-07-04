@@ -41,7 +41,8 @@ AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ur
 IdentityClient descriptor/resource projection, signing-key lifecycle, and
 signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
-C ABI-backed fetch execution through Runtime Core invoke, and close state seams
+receipt-derived child `causal_context` adapters, C ABI-backed fetch execution
+through Runtime Core invoke, and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, published-ability read-model seams, and close state seams. HostBindingClient
