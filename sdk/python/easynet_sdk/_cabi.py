@@ -1170,6 +1170,18 @@ class CABIMissionTransport(_CABIProfileTransport):
 class CABIAdminTransport(_CABIProfileTransport):
     """Admin + Gateway carrier/projection transport backed by C ABI v4."""
 
+    daemon_handle: int = 0
+    owns_daemon_handle: bool = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        daemon_handle = self.daemon_handle
+        owns_daemon_handle = self.owns_daemon_handle
+        super().close()
+        if owns_daemon_handle and daemon_handle > 0:
+            self.lib.daemon_detach(daemon_handle)
+
     def build_agent_list_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_admin_build_agent_list_invocation", request_json)
 
@@ -1188,7 +1200,22 @@ class CABIAdminTransport(_CABIProfileTransport):
         return self._call("easynet_admin_build_session_list_invocation", request_json)
 
     def gateway_status(self, request_json: bytes) -> bytes:
-        return self._missing("admin gateway status")
+        if self.daemon_handle <= 0:
+            raise SDKError(
+                code=ErrorCode.INVALID_HANDLE,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="admin gateway status requires a daemon lifecycle handle",
+            )
+        status = _json_object(
+            self.lib.daemon_status(self.daemon_handle), "daemon status"
+        )
+        request = _json_object(request_json, "admin gateway status request")
+        return self._call(
+            "easynet_admin_project_gateway_status",
+            _admin_gateway_status_projection_input(status, request),
+        )
 
     def list_agents(self, request_json: bytes) -> bytes:
         return self._invoke_output_projected(
@@ -2303,10 +2330,21 @@ def open_cabi_admin_transport(
 ) -> CABIAdminTransport:
     """Open an owned C ABI Admin + Gateway profile transport."""
 
-    return _open_cabi_profile_transport(
-        CABIAdminTransport,
-        control_path=control_path,
-        library_path=library_path,
+    lib = CLILibrary.load(library_path)
+    handle = lib.init(control_path)
+    try:
+        daemon_handle = lib.daemon_attach(
+            _json_bytes({"control_path": control_path} if control_path else {})
+        )
+    except BaseException:
+        lib.shutdown(handle)
+        raise
+    return CABIAdminTransport(
+        lib=lib,
+        handle=handle,
+        owns_handle=True,
+        daemon_handle=daemon_handle,
+        owns_daemon_handle=True,
     )
 
 
@@ -2429,6 +2467,22 @@ def _projection_request_json(
         value = request.get(key)
         if value is not None:
             projection[key] = value
+    return _json_bytes(projection)
+
+
+def _admin_gateway_status_projection_input(
+    daemon_status: dict[str, object], request: dict[str, object]
+) -> bytes:
+    projection: dict[str, object] = {
+        "runtime_status": _daemon_state_from_cabi(daemon_status),
+        "daemon": dict(daemon_status),
+    }
+    require_public_listener = request.get("require_public_listener")
+    if isinstance(require_public_listener, bool):
+        projection["require_public_listener"] = require_public_listener
+    metadata = request.get("metadata")
+    if isinstance(metadata, dict):
+        projection["metadata"] = dict(metadata)
     return _json_bytes(projection)
 
 

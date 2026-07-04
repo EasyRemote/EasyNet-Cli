@@ -1,6 +1,7 @@
 import ctypes
 import json
 import unittest
+from unittest.mock import patch
 
 from easynet_sdk import (
     AttachOptions,
@@ -28,6 +29,7 @@ from easynet_sdk import (
     AdminAgentStopRequest,
     AdminCarrierBase,
     AdminClient,
+    AdminGatewayStatusRequest,
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
@@ -98,6 +100,7 @@ from easynet_sdk._cabi import (
     CLILibrary,
     EXPECTED_ABI_VERSION,
     _JSON_HANDLE_OUTPUT_SYMBOLS,
+    open_cabi_admin_transport,
 )
 
 from test_runtime import complete_draft
@@ -1431,9 +1434,13 @@ EVENT_FRAME_PROJECTION = (
 )
 
 GATEWAY_STATUS_PROJECTION = (
-    b'{"profile":"admin_gateway","kind":"gateway_status","state":"ready",'
-    b'"ready":true,"public_endpoint":"https://hub.example",'
-    b'"listeners":[],"checks":[],"metadata":{}}'
+    b'{"profile":"admin_gateway","gateway_id":"local-daemon",'
+    b'"state":"ready","ready":true,"process_live":true,'
+    b'"control_ready":true,"runtime_ready":true,"directory_ready":true,'
+    b'"trust_ready":true,"public_listener_ready":false,'
+    b'"listeners":[],"identity":null,'
+    b'"metadata":{"profile":"admin_gateway",'
+    b'"source":"daemon_lifecycle_status"}}'
 )
 
 ADMIN_AGENT_PAGE_PROJECTION = (
@@ -2578,6 +2585,45 @@ class CABITransportTests(unittest.TestCase):
         self.assertTrue(raw.profile_requests[5][2]["ack"])
         self.assertEqual(raw.profile_requests[7][2]["agents_scanned"], 1)
         self.assertEqual(raw.buffers, {})
+
+    def test_admin_gateway_status_uses_daemon_lifecycle_status_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = AdminClient(
+            CABIAdminTransport(lib, handle=7, daemon_handle=707)
+        )
+
+        status = client.gateway_status(
+            AdminGatewayStatusRequest(require_public_listener=False)
+        )
+
+        self.assertEqual(status.profile, "admin_gateway")
+        self.assertTrue(status.ready)
+        self.assertEqual(status.gateway_id, "local-daemon")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_admin_project_gateway_status"],
+        )
+        self.assertEqual(raw.profile_requests[0][2]["runtime_status"], "Running")
+        self.assertEqual(raw.profile_requests[0][2]["daemon"]["pid"], 42)
+        self.assertEqual(
+            raw.profile_requests[0][2]["require_public_listener"], False
+        )
+
+    def test_open_cabi_admin_transport_attaches_and_detaches_daemon_handle(self) -> None:
+        raw = FakeRawCABI()
+        with patch("easynet_sdk._cabi.CLILibrary.load", return_value=CLILibrary(raw)):
+            transport = open_cabi_admin_transport(control_path="/tmp/control.json")
+            self.assertIsInstance(transport, CABIAdminTransport)
+            self.assertEqual(transport.daemon_handle, 707)
+            self.assertEqual(
+                raw.daemon_attaches,
+                [{"control_path": "/tmp/control.json"}],
+            )
+            transport.close()
+
+        self.assertEqual(raw.shutdown_handles, [42])
+        self.assertEqual(raw.daemon_detaches, [707])
 
     def test_surface_live_methods_use_carrier_invoke_and_projection(self) -> None:
         raw = FakeRawCABI()

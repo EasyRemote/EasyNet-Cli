@@ -219,9 +219,11 @@ method spelling.
   EasyRemote decorator/package extraction, and plugin/skill lifecycle policy
   remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
-  decode, item/error/terminal frame encoding, and output-hash folding seams over
-  schema-backed transport projections plus close state seams; product host readiness execution,
-  cleanup execution, local canonical JSON/hash implementation, EasyRemote warm
+  decode, item/error/terminal frame encoding, output-hash folding seams over
+  schema-backed transport projections, and a `HostStreamFrameWriter` lifecycle
+  helper that delegates all frame/hash semantics through the client plus close
+  state seams; product host readiness execution,
+  cleanup execution, EasyRemote warm
   host integration, and behavior-executing conformance remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
@@ -232,11 +234,11 @@ method spelling.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders,
   C ABI-backed agent list/start/stop/refresh execution through Runtime Core,
-  plus `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token,
-  device credential, credential verification, and typed device-session
-  projection seams plus close state seams; gateway live status carriers,
-  concrete daemon trust/session carriers, certificate policy, and EasyRemote
-  Server/AgentControl extraction remain incomplete.
+  C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
+  `AdminAgentPage`, lifecycle-result, pairing token, device credential,
+  credential verification, and typed device-session projection seams plus close
+  state seams; concrete daemon trust/session carriers, certificate policy, and
+  EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
