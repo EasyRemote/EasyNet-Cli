@@ -72,7 +72,9 @@ published-ability list execution through Runtime Core invoke,
 published-ability show execution through Runtime Core invoke,
 complete unpublish execution through Runtime Core invoke,
 deploy/show/unpublish Invocation carrier, deploy/show/unpublish result, plugin
-install projection, published-ability read-model seams, and close state seams. HostBindingClient
+install projection, published-ability read-model seams, SDK-owned
+`EasyRemotePublicationCatalogFacade` product catalogue install/list/list-device/
+list-user/show projection, and close state seams. HostBindingClient
 exposes binding DTO, typed cleanup/readiness/lifecycle ownership DTOs, envelope
 decode, item/error/terminal frame encoding, output-hash folding seams, and a
 HostStreamFrameWriter lifecycle helper that delegates frame/hash semantics
@@ -126,7 +128,7 @@ require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-profile-specific stream/bidi execution adapters, EasyRemote publication product
-extraction, EasyRemote Pipeline live-tail/conformance cutover, and full
+profile-specific stream/bidi execution adapters, EasyRemote Pipeline live-tail/
+conformance cutover, and full
 EasyRemote AgentControl/Server product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

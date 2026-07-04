@@ -8,7 +8,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Mapping, Optional, Protocol, cast, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
@@ -28,6 +28,12 @@ _PROFILE = "publication"
 _RESOURCE_NAMESPACE_FS = "fs"
 _RESOURCE_REF_REVISION = "fs-local-mapping-v1"
 _RESOURCE_REF_TTL_MS = 5 * 60 * 1000
+
+
+class _UraProjectionLike(Protocol):
+    @property
+    def kind(self) -> object:
+        ...
 
 
 @dataclass(frozen=True)
@@ -500,11 +506,12 @@ class EasyRemotePublicationAdapter:
     def install_ability(
         self, path: str | Path, *, node_id: str = "local"
     ) -> EasyRemoteAbilityInstallProjection:
-        node = _required_clean_string(node_id, "node_id")
+        node = _required_clean_string(node_id, "node_id", reason="empty_node")
         package = Path(path)
         if not package.is_dir():
             raise _invalid_publication(
-                f"ability package path is not a directory: {package}"
+                f"ability package path is not a directory: {package}",
+                reason="ability_package_not_directory",
             )
         ref = _EasyRemoteLocalFilesystemResourceRefs(
             self._identity(),
@@ -529,7 +536,10 @@ class EasyRemotePublicationAdapter:
         scope: str = "local",
     ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
         if scope not in {"local", "realm"}:
-            raise _invalid_publication(f"unsupported ability list scope {scope!r}")
+            raise _invalid_publication(
+                f"unsupported ability list scope {scope!r}",
+                reason="invalid_ability_scope",
+            )
         request: dict[str, object] = {}
         if scope == "realm":
             request["scope"] = scope
@@ -563,6 +573,23 @@ class EasyRemotePublicationAdapter:
     def local_device_owner_ura(self) -> str:
         return _required_object_attr(self._identity(), "device_ura")
 
+    def local_username(self) -> str:
+        identity = self._identity()
+        raw = getattr(identity, "username", "")
+        return raw if isinstance(raw, str) else ""
+
+    def validate_ability_ura(self, value: str, *, reason: str = "") -> str:
+        return _validated_ability_ura(
+            value,
+            addressing=self._addressing,
+            reason=reason,
+        )
+
+    def record_belongs_to_user(
+        self, record: EasyRemotePublishedAbilityRecord, user_id: str
+    ) -> bool:
+        return _record_belongs_to_user(record, user_id, addressing=self._addressing)
+
     def _system_target(self, ability: str, *, node: str | None) -> object:
         if node is None or node.strip() == "" or node.strip() == "local":
             return self._target(ability)
@@ -581,6 +608,103 @@ class EasyRemotePublicationAdapter:
 
     def _call_client_method(self, name: str, *args: object, **kwargs: object) -> object:
         return _call_method(self._client, name, *args, **kwargs)
+
+
+class EasyRemotePublicationCatalogFacade:
+    """EasyRemote product catalogue facade over SDK-owned publication calls."""
+
+    def __init__(self, client: object, *, addressing: object | None = None) -> None:
+        self._publication = EasyRemotePublicationAdapter(
+            client,
+            addressing=addressing,
+        )
+
+    def install(
+        self, path: str | Path, *, node: str = "local"
+    ) -> EasyRemoteAbilityInstallProjection:
+        node_id = _required_clean_string(node, "node_id", reason="empty_node")
+        return self._publication.install_ability(path, node_id=node_id)
+
+    def list(
+        self,
+        *,
+        node: str | None = None,
+        owner_ura: str = "",
+        user_id: str = "",
+        subject_ura: str = "",
+        scope: str = "local",
+    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
+        _validate_easyremote_catalog_scope(scope)
+        user = user_id.strip()
+        if user_id and not user:
+            raise _invalid_publication(
+                "user_id must not be empty",
+                reason="empty_user_id",
+            )
+        records = self._publication.list_abilities(
+            node=node,
+            owner_ura=owner_ura,
+            subject_ura=subject_ura,
+            scope=scope,
+        )
+        if not user:
+            return records
+        return tuple(
+            record
+            for record in records
+            if self._publication.record_belongs_to_user(record, user)
+        )
+
+    def list_device(
+        self, device: str | None = None
+    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
+        owner = (
+            self._publication.local_device_owner_ura()
+            if device is None
+            else self._publication.device_owner_ura(device)
+        )
+        return self.list(owner_ura=owner)
+
+    def list_user(
+        self, user_id: str | None = None, *, scope: str = "realm"
+    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
+        _validate_easyremote_catalog_scope(scope)
+        user = user_id if user_id is not None else self._publication.local_username()
+        if user_id is not None and not user.strip():
+            raise _invalid_publication(
+                "user_id must not be empty",
+                reason="empty_user_id",
+            )
+        user = user.strip()
+        if not user:
+            raise _invalid_publication(
+                "user_id is required because credentials have no username",
+                reason="missing_user_id",
+            )
+        return self.list(user_id=user, scope=scope)
+
+    def show(
+        self,
+        ability_ura: str,
+        *,
+        node: str | None = None,
+        scope: str = "local",
+    ) -> EasyRemotePublishedAbilityRecord:
+        target = self._publication.validate_ability_ura(
+            ability_ura,
+            reason="empty_ability_ura",
+        )
+        for record in self.list(node=node, subject_ura=target, scope=scope):
+            if record.ability_ura == target:
+                return record
+        raise SDKError(
+            code=ErrorCode.ABILITY_NOT_FOUND,
+            stage="publication",
+            retry=RetryHint.SAFE,
+            retryable=True,
+            message=f"ability {target!r} was not found in the daemon catalogue",
+            details={"reason": "ability_not_found"},
+        )
 
 
 class _EasyRemoteLocalFilesystemResourceRefs:
@@ -667,6 +791,9 @@ class PublicationTransport(Protocol):
     def unpublish_ability(self, request_json: bytes) -> bytes:
         ...
 
+    def close(self) -> None:
+        ...
+
 
 @dataclass
 class RuntimePublicationTransport:
@@ -695,7 +822,7 @@ class RuntimePublicationTransport:
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
                 message="publication deploy invocation failed",
-                cause=result.error,
+                cause=_exception_cause(result.error),
             )
         output = result.output_json
         if not isinstance(output, dict):
@@ -807,7 +934,7 @@ class RuntimePublicationTransport:
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
                 message=failure_message,
-                cause=result.error,
+                cause=_exception_cause(result.error),
             )
         output = result.output_json
         if not isinstance(output, dict):
@@ -1130,8 +1257,10 @@ def _validate_relative_resource_path(value: str) -> None:
         raise _invalid_publication(f"invalid resource relative path {value!r}")
 
 
-def _validated_ability_ura(value: str, *, addressing: object | None = None) -> str:
-    trimmed = _required_clean_string(value, "ability_ura")
+def _validated_ability_ura(
+    value: str, *, addressing: object | None = None, reason: str = ""
+) -> str:
+    trimmed = _required_clean_string(value, "ability_ura", reason=reason)
     parsed = _parse_ura_with_addressing(addressing, trimmed)
     if str(parsed.kind) != "ability":
         raise _invalid_publication(f"expected an Ability URA, got {trimmed!r}")
@@ -1146,7 +1275,9 @@ def _validated_owner_ura(value: str, *, addressing: object | None = None) -> str
     return trimmed
 
 
-def _parse_ura_with_addressing(addressing: object | None, value: str) -> object:
+def _parse_ura_with_addressing(
+    addressing: object | None, value: str
+) -> _UraProjectionLike:
     if addressing is None:
         try:
             return sdk_parse_ura(value)
@@ -1158,7 +1289,10 @@ def _parse_ura_with_addressing(addressing: object | None, value: str) -> object:
     if not callable(parse):
         raise _invalid_publication("publication addressing facade is missing parse_ura()")
     try:
-        return parse(value)
+        parsed = parse(value)
+        if not hasattr(parsed, "kind"):
+            raise _invalid_publication("URA projection is missing kind")
+        return cast(_UraProjectionLike, parsed)
     except SDKError:
         raise
     except Exception as exc:
@@ -1181,6 +1315,14 @@ def _resource_ura_for_addressing(
     realm = _required_object_attr(identity, "realm")
     node_id = _required_object_attr(identity, "node_id")
     try:
+        return build(owner_ura, path)
+    except TypeError:
+        pass
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _invalid_publication(f"build Resource URA: {exc}", exc) from exc
+    try:
         return build(realm, f"device.{node_id}", path)
     except SDKError:
         raise
@@ -1188,10 +1330,49 @@ def _resource_ura_for_addressing(
         raise _invalid_publication(f"build Resource URA: {exc}", exc) from exc
 
 
-def _required_clean_string(value: str, field_name: str) -> str:
+def _validate_easyremote_catalog_scope(scope: str) -> None:
+    if scope not in {"local", "realm"}:
+        raise _invalid_publication(
+            f"unsupported ability list scope {scope!r}",
+            reason="invalid_ability_scope",
+        )
+
+
+def _record_belongs_to_user(
+    record: EasyRemotePublishedAbilityRecord,
+    user_id: str,
+    *,
+    addressing: object | None,
+) -> bool:
+    if any(
+        str(record.metadata.get(key) or "") == user_id
+        for key in (
+            "owner_user",
+            "owner_user_id",
+            "user_id",
+            "local_user_id",
+        )
+    ):
+        return True
+    try:
+        parsed = _parse_ura_with_addressing(addressing, record.owner_ura)
+    except SDKError:
+        return False
+    if str(parsed.kind) == "user":
+        return record.owner_ura.rstrip("/").endswith(f"/user/{user_id}")
+    if str(parsed.kind) != "agent":
+        return False
+    marker = "/agent/"
+    _, _, tail = record.owner_ura.partition(marker)
+    return tail.split(".", 1)[0] == user_id
+
+
+def _required_clean_string(
+    value: str, field_name: str, *, reason: str = ""
+) -> str:
     trimmed = value.strip()
     if not trimmed:
-        raise _invalid_publication(f"{field_name} must not be empty")
+        raise _invalid_publication(f"{field_name} must not be empty", reason=reason)
     return trimmed
 
 
@@ -1228,6 +1409,10 @@ def _call_method(
         raise
     except Exception as exc:
         raise _transport_error(f"EasyRemote publication {name} failed", exc) from exc
+
+
+def _exception_cause(value: object) -> BaseException | None:
+    return value if isinstance(value, BaseException) else None
 
 
 def _published_ability(value: object) -> PublishedAbility:
@@ -1316,14 +1501,16 @@ def _required_mapping(decoded: Mapping[str, object], field_name: str) -> Mapping
 
 
 def _invalid_publication(
-    message: str, cause: BaseException | None = None
+    message: str, cause: BaseException | None = None, *, reason: str = ""
 ) -> SDKError:
+    details: Mapping[str, object] = {"reason": reason} if reason else {}
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="publication",
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=details,
         cause=cause,
     )
 

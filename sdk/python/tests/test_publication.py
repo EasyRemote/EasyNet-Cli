@@ -7,6 +7,7 @@ from easynet_sdk import (
     AbilityDeployRequest,
     AbilityImplID,
     EasyRemotePublicationAdapter,
+    EasyRemotePublicationCatalogFacade,
     ErrorCode,
     LocalResourceRefRequest,
     PublicationClient,
@@ -466,6 +467,70 @@ class PublicationTests(unittest.TestCase):
                 "agent_ura": "easynet:///r/example/device/gpu-2",
                 "scope": "realm",
             },
+        )
+
+    def test_easyremote_catalog_facade_filters_user_catalogue_rows(self) -> None:
+        rows = [
+            {
+                "ability_ura": "easynet:///r/example/ability/alice.caesura.chat",
+                "owner_ura": "easynet:///r/example/agent/alice.caesura",
+            },
+            {
+                "ability_ura": "easynet:///r/example/ability/bob.caesura.chat",
+                "owner_ura": "easynet:///r/example/agent/bob.caesura",
+            },
+            {
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.fn",
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "metadata": {"owner_user": "alice"},
+            },
+        ]
+        client = _EasyRemoteClient({"abilities": rows})
+
+        records = EasyRemotePublicationCatalogFacade(
+            client,
+            addressing=_EasyRemoteAddressing(),
+        ).list_user("alice")
+
+        self.assertEqual(
+            [record.owner_ura for record in records],
+            [
+                "easynet:///r/example/agent/alice.caesura",
+                "easynet:///r/example/device/dev-a",
+            ],
+        )
+        self.assertEqual(client.invocations[0]["args"], {"scope": "realm"})
+
+    def test_easyremote_catalog_facade_show_projects_not_found(self) -> None:
+        client = _EasyRemoteClient({"abilities": []})
+        facade = EasyRemotePublicationCatalogFacade(
+            client,
+            addressing=_EasyRemoteAddressing(),
+        )
+
+        with self.assertRaises(SDKError) as raised:
+            facade.show("easynet:///r/example/ability/device.dev-a.er.weather")
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.ABILITY_NOT_FOUND))
+        self.assertEqual(raised.exception.details["reason"], "ability_not_found")
+
+    def test_easyremote_catalog_facade_lists_device_owner(self) -> None:
+        row = {
+            "name": "er.fn",
+            "ability_ura": "easynet:///r/example/ability/device.gpu-2.er.fn",
+            "owner_ura": "easynet:///r/example/device/gpu-2",
+        }
+        client = _EasyRemoteClient({"abilities": [row]})
+
+        records = EasyRemotePublicationCatalogFacade(
+            client,
+            addressing=_EasyRemoteAddressing(),
+        ).list_device("gpu-2")
+
+        self.assertEqual(records[0].ability_ura, row["ability_ura"])
+        self.assertEqual(
+            client.invocations[0]["args"],
+            {"agent_ura": "easynet:///r/example/device/gpu-2"},
         )
 
     def test_build_resource_ref_and_validate_package(self) -> None:

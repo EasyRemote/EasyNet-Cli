@@ -248,8 +248,9 @@ method spelling.
   C ABI-backed deploy-result projection,
   published-ability list/show execution through Runtime Core invoke, complete unpublish
   execution through Runtime Core invoke, deploy/show/unpublish Invocation carrier,
-  deploy/show/unpublish result, published-ability read-model seams, and close
-  state seams; ability implementation enable/disable live adapters require
+  deploy/show/unpublish result, published-ability read-model seams,
+  SDK-owned EasyRemote publication catalogue install/list/list-device/list-user/
+  show projection, and close state seams; ability implementation enable/disable live adapters require
   daemon/ABI lifecycle result contracts rather than projecting published-ability
   read-model rows into mutation DTOs, and host binding bridge, EasyRemote
   decorator/package extraction, and broader plugin/skill lifecycle policy
@@ -277,8 +278,8 @@ method spelling.
   addressing helpers, warm host frame/hash substrate, receipt continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
-  Pipeline event access now pass static gates, while publication product
-  extraction, Pipeline live-tail/conformance cutover, full AgentControl/Server
+  Pipeline event access plus publication product catalogue extraction now pass
+  static gates, while Pipeline live-tail/conformance cutover, full AgentControl/Server
   cutover, and full receipt verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
