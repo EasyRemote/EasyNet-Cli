@@ -27,6 +27,8 @@ class MemoryRuntimeTransport:
         self.seen_await_id = 0
         self.seen_free_id = 0
         self.seen_cancel_reason = ""
+        self.close_calls = 0
+        self.close_error: BaseException | None = None
         self.handle_json = (
             b'{"handle_id":7,"state":"Submitted","terminal":false,'
             b'"events":[{"sequence":1,"kind":"submitted",'
@@ -122,6 +124,11 @@ class MemoryRuntimeTransport:
 
     def free_handle(self, handle_id: int) -> None:
         self.seen_free_id = handle_id
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 def complete_draft():
@@ -302,6 +309,34 @@ class RuntimeTests(unittest.TestCase):
             InvocationResult.from_json(json.dumps(result))
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.invoke(complete_draft())
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_draft)
+
+    def test_close_failure_is_terminal(self) -> None:
+        transport = MemoryRuntimeTransport()
+        transport.close_error = RuntimeError("close failed")
+        client = RuntimeClient(transport)
+
+        with self.assertRaises(SDKError) as close_caught:
+            client.close()
+        self.assertTrue(is_code(close_caught.exception, ErrorCode.TRANSPORT))
+        self.assertIsInstance(close_caught.exception.cause, RuntimeError)
+
+        with self.assertRaises(SDKError) as invoke_caught:
+            client.invoke(complete_draft())
+        self.assertTrue(is_code(invoke_caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_draft)
 
 
 if __name__ == "__main__":

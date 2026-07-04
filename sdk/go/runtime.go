@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // RuntimeTransport is the narrow Runtime Core invocation transport seam.
@@ -18,6 +19,7 @@ type RuntimeTransport interface {
 	CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error)
 	HandleEvents(ctx context.Context, handleID uint64) ([]byte, error)
 	FreeHandle(ctx context.Context, handleID uint64) error
+	Close(ctx context.Context) error
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
@@ -31,6 +33,7 @@ type RuntimeTransportFunc struct {
 	CancelHandleFunc func(ctx context.Context, handleID uint64, reason string) ([]byte, error)
 	HandleEventsFunc func(ctx context.Context, handleID uint64) ([]byte, error)
 	FreeHandleFunc   func(ctx context.Context, handleID uint64) error
+	CloseFunc        func(ctx context.Context) error
 }
 
 func (f RuntimeTransportFunc) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -96,9 +99,18 @@ func (f RuntimeTransportFunc) FreeHandle(ctx context.Context, handleID uint64) e
 	return f.FreeHandleFunc(ctx, handleID)
 }
 
+func (f RuntimeTransportFunc) Close(ctx context.Context) error {
+	if f.CloseFunc == nil {
+		return nil
+	}
+	return f.CloseFunc(ctx)
+}
+
 // RuntimeClient is the Runtime Core invocation facade.
 type RuntimeClient struct {
+	mu        sync.Mutex
 	transport RuntimeTransport
+	closed    bool
 }
 
 // NewRuntimeClient creates a Runtime Core facade over a daemon invocation transport.
@@ -115,6 +127,24 @@ func NewRuntimeClient(transport RuntimeTransport) (*RuntimeClient, error) {
 	return &RuntimeClient{transport: transport}, nil
 }
 
+func (c *RuntimeClient) runtimeTransport(ctx context.Context) (RuntimeTransport, error) {
+	if c == nil {
+		return nil, invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return nil, invalidRuntimeClient("context is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, invalidRuntimeClient("runtime client is closed")
+	}
+	if c.transport == nil {
+		return nil, invalidRuntimeClient("runtime client is not initialized")
+	}
+	return c.transport, nil
+}
+
 // PrepareOptions are daemon-owned prepare policy knobs.
 type PrepareOptions struct {
 	ResolveDescriptor bool  `json:"resolve_descriptor,omitempty"`
@@ -125,17 +155,15 @@ type PrepareOptions struct {
 
 // Invoke submits a complete Invocation tuple and decodes the daemon result projection.
 func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (InvocationResult, error) {
-	if c == nil || c.transport == nil {
-		return InvocationResult{}, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return InvocationResult{}, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationResult{}, err
 	}
 	draftJSON, err := json.Marshal(draft)
 	if err != nil {
 		return InvocationResult{}, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
 	}
-	raw, err := c.transport.Invoke(ctx, draftJSON)
+	raw, err := transport.Invoke(ctx, draftJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -148,17 +176,15 @@ func (c *RuntimeClient) Invoke(ctx context.Context, draft InvocationDraft) (Invo
 
 // InvokeStream opens a server stream over a complete Invocation tuple.
 func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft) (*StreamHandle, error) {
-	if c == nil || c.transport == nil {
-		return nil, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return nil, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return nil, err
 	}
 	draftJSON, err := json.Marshal(draft)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
 	}
-	streamTransport, rawOpen, err := c.transport.OpenStream(ctx, draftJSON)
+	streamTransport, rawOpen, err := transport.OpenStream(ctx, draftJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -171,11 +197,9 @@ func (c *RuntimeClient) InvokeStream(ctx context.Context, draft InvocationDraft)
 
 // OpenBidi opens a bidirectional session over a complete Invocation tuple.
 func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, streams []BidiStreamDescriptor) (*BidiSession, error) {
-	if c == nil || c.transport == nil {
-		return nil, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return nil, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return nil, err
 	}
 	draftJSON, err := json.Marshal(draft)
 	if err != nil {
@@ -185,7 +209,7 @@ func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, str
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode bidi stream descriptors: %v", err), err)
 	}
-	bidiTransport, rawOpen, err := c.transport.OpenBidi(ctx, draftJSON, streamsJSON)
+	bidiTransport, rawOpen, err := transport.OpenBidi(ctx, draftJSON, streamsJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -198,11 +222,9 @@ func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, str
 
 // Prepare delegates canonical material generation to the daemon transport.
 func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) {
-	if c == nil || c.transport == nil {
-		return PreparedInvocation{}, SigningMaterial{}, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return PreparedInvocation{}, SigningMaterial{}, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return PreparedInvocation{}, SigningMaterial{}, err
 	}
 	draftJSON, err := json.Marshal(draft)
 	if err != nil {
@@ -212,7 +234,7 @@ func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts
 	if err != nil {
 		return PreparedInvocation{}, SigningMaterial{}, invalidRuntimePayload(fmt.Sprintf("encode prepare options: %v", err), err)
 	}
-	raw, err := c.transport.Prepare(ctx, draftJSON, optionsJSON)
+	raw, err := transport.Prepare(ctx, draftJSON, optionsJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -229,11 +251,9 @@ func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts
 
 // SubmitSigned submits an immutable signed envelope and returns an observation handle.
 func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocation) (InvocationHandle, error) {
-	if c == nil || c.transport == nil {
-		return InvocationHandle{}, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return InvocationHandle{}, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationHandle{}, err
 	}
 	if !signed.SubmitReady() {
 		return InvocationHandle{}, invalidRuntimePayload("signed invocation is not submit-ready", nil)
@@ -242,7 +262,7 @@ func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocatio
 	if err != nil {
 		return InvocationHandle{}, invalidRuntimePayload(fmt.Sprintf("encode signed invocation: %v", err), err)
 	}
-	raw, err := c.transport.SubmitSigned(ctx, signedJSON)
+	raw, err := transport.SubmitSigned(ctx, signedJSON)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -255,16 +275,14 @@ func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocatio
 
 // Await waits for a submitted invocation handle to reach a terminal result.
 func (c *RuntimeClient) Await(ctx context.Context, handle InvocationHandle) (InvocationResult, error) {
-	if c == nil || c.transport == nil {
-		return InvocationResult{}, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return InvocationResult{}, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationResult{}, err
 	}
 	if handle.HandleID() == 0 {
 		return InvocationResult{}, invalidRuntimePayload("handle_id is required", nil)
 	}
-	raw, err := c.transport.AwaitHandle(ctx, handle.HandleID())
+	raw, err := transport.AwaitHandle(ctx, handle.HandleID())
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -277,16 +295,14 @@ func (c *RuntimeClient) Await(ctx context.Context, handle InvocationHandle) (Inv
 
 // Cancel requests terminal cancellation for a submitted invocation handle.
 func (c *RuntimeClient) Cancel(ctx context.Context, handle InvocationHandle, reason string) (InvocationCancel, error) {
-	if c == nil || c.transport == nil {
-		return InvocationCancel{}, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return InvocationCancel{}, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationCancel{}, err
 	}
 	if handle.HandleID() == 0 {
 		return InvocationCancel{}, invalidRuntimePayload("handle_id is required", nil)
 	}
-	raw, err := c.transport.CancelHandle(ctx, handle.HandleID(), reason)
+	raw, err := transport.CancelHandle(ctx, handle.HandleID(), reason)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -299,16 +315,14 @@ func (c *RuntimeClient) Cancel(ctx context.Context, handle InvocationHandle, rea
 
 // Events returns the current event snapshot for a submitted invocation handle.
 func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (InvocationHandle, error) {
-	if c == nil || c.transport == nil {
-		return InvocationHandle{}, invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return InvocationHandle{}, invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return InvocationHandle{}, err
 	}
 	if handle.HandleID() == 0 {
 		return InvocationHandle{}, invalidRuntimePayload("handle_id is required", nil)
 	}
-	raw, err := c.transport.HandleEvents(ctx, handle.HandleID())
+	raw, err := transport.HandleEvents(ctx, handle.HandleID())
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -321,21 +335,50 @@ func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (In
 
 // CloseHandle releases daemon-side observation state for a submitted invocation handle.
 func (c *RuntimeClient) CloseHandle(ctx context.Context, handle InvocationHandle) error {
-	if c == nil || c.transport == nil {
-		return invalidRuntimeClient("runtime client is not initialized")
-	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return err
 	}
 	if handle.HandleID() == 0 {
 		return invalidRuntimePayload("handle_id is required", nil)
 	}
-	if err := c.transport.FreeHandle(ctx, handle.HandleID()); err != nil {
+	if err := transport.FreeHandle(ctx, handle.HandleID()); err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return sdkErr
 		}
 		return transportRuntimeError("free handle transport failed", err)
+	}
+	return nil
+}
+
+// Close releases the Runtime Core client transport without stopping the daemon.
+func (c *RuntimeClient) Close(ctx context.Context) error {
+	if c == nil {
+		return invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	transport := c.transport
+	c.closed = true
+	c.transport = nil
+	c.mu.Unlock()
+
+	if transport == nil {
+		return invalidRuntimeClient("runtime client is not initialized")
+	}
+	if err := transport.Close(ctx); err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return sdkErr
+		}
+		return transportRuntimeError("runtime close transport failed", err)
 	}
 	return nil
 }

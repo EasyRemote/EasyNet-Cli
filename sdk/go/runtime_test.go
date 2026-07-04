@@ -415,3 +415,72 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 		t.Fatalf("free did not use handle id: id=%d", seenFreeID)
 	}
 }
+
+func TestRuntimeClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	var closeCalls int
+	var invokeCalls int
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			invokeCalls++
+			return []byte(`{}`), nil
+		},
+		CloseFunc: func(ctx context.Context) error {
+			closeCalls++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	_, err = client.Invoke(context.Background(), completeDraftForRuntimeTest(t))
+	if err == nil {
+		t.Fatalf("Invoke after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if invokeCalls != 0 {
+		t.Fatalf("invoke reached transport after close: %d calls", invokeCalls)
+	}
+}
+
+func TestRuntimeClientCloseFailureIsTerminal(t *testing.T) {
+	down := errors.New("close failed")
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
+			t.Fatalf("Invoke should not be called after failed close")
+			return nil, nil
+		},
+		CloseFunc: func(ctx context.Context) error {
+			return down
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	err = client.Close(context.Background())
+	if err == nil {
+		t.Fatalf("Close succeeded, want transport error")
+	}
+	if !IsCode(err, ErrTransport) || !errors.Is(err, down) {
+		t.Fatalf("close error not wrapped as transport cause: %v", err)
+	}
+	_, err = client.Invoke(context.Background(), completeDraftForRuntimeTest(t))
+	if err == nil {
+		t.Fatalf("Invoke after failed close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}

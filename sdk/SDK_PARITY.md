@@ -102,7 +102,7 @@ method spelling.
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
-  invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow JSON
+  invoke/invoke-stream/open-bidi/prepare/submit-signed/close methods behind narrow JSON
   transport seams; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
@@ -169,7 +169,7 @@ method spelling.
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
-  RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow
+  RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed/close methods behind narrow
   transport protocols; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile
   error source refs, and conformance action execution remain incomplete before

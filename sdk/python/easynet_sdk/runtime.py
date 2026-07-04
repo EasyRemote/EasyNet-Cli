@@ -46,6 +46,9 @@ class RuntimeTransport(Protocol):
     def free_handle(self, handle_id: int) -> None:
         ...
 
+    def close(self) -> None:
+        ...
+
 
 @dataclass(frozen=True)
 class PrepareOptions:
@@ -226,10 +229,12 @@ class RuntimeClient:
         if transport is None:
             raise _invalid_runtime_client("runtime transport is required")
         self._transport = transport
+        self._closed = False
 
     def invoke(self, draft: InvocationDraft) -> InvocationResult:
+        transport = self._require_open()
         try:
-            raw = self._transport.invoke(draft.to_json().encode("utf-8"))
+            raw = transport.invoke(draft.to_json().encode("utf-8"))
         except SDKError:
             raise
         except Exception as exc:
@@ -237,8 +242,9 @@ class RuntimeClient:
         return InvocationResult.from_json(raw)
 
     def invoke_stream(self, draft: InvocationDraft) -> StreamHandle:
+        transport = self._require_open()
         try:
-            stream_transport, open_json = self._transport.open_stream(
+            stream_transport, open_json = transport.open_stream(
                 draft.to_json().encode("utf-8")
             )
         except SDKError:
@@ -252,13 +258,14 @@ class RuntimeClient:
         draft: InvocationDraft,
         streams: tuple[BidiStreamDescriptor, ...],
     ) -> BidiSession:
+        transport = self._require_open()
         try:
             streams_json = json.dumps(
                 [stream.to_json_dict() for stream in streams],
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode("utf-8")
-            bidi_transport, open_json = self._transport.open_bidi(
+            bidi_transport, open_json = transport.open_bidi(
                 draft.to_json().encode("utf-8"),
                 streams_json,
             )
@@ -273,10 +280,11 @@ class RuntimeClient:
         draft: InvocationDraft,
         options: PrepareOptions = PrepareOptions(),
     ) -> tuple[PreparedInvocation, SigningMaterial]:
+        transport = self._require_open()
         try:
             draft_json = draft.to_json().encode("utf-8")
             options_json = options.to_json_bytes()
-            raw = self._transport.prepare(draft_json, options_json)
+            raw = transport.prepare(draft_json, options_json)
         except SDKError:
             raise
         except Exception as exc:
@@ -285,10 +293,11 @@ class RuntimeClient:
         return prepared, prepared.signing_material
 
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
+        transport = self._require_open()
         if not signed.submit_ready():
             raise _invalid_runtime("signed invocation is not submit-ready")
         try:
-            raw = self._transport.submit_signed(signed.to_json().encode("utf-8"))
+            raw = transport.submit_signed(signed.to_json().encode("utf-8"))
         except SDKError:
             raise
         except Exception as exc:
@@ -296,9 +305,10 @@ class RuntimeClient:
         return InvocationHandle.from_json(raw)
 
     def await_result(self, handle: InvocationHandle) -> InvocationResult:
+        transport = self._require_open()
         _require_handle(handle)
         try:
-            raw = self._transport.await_handle(handle.handle_id)
+            raw = transport.await_handle(handle.handle_id)
         except SDKError:
             raise
         except Exception as exc:
@@ -306,9 +316,10 @@ class RuntimeClient:
         return InvocationResult.from_json(raw)
 
     def cancel(self, handle: InvocationHandle, reason: str = "") -> InvocationCancel:
+        transport = self._require_open()
         _require_handle(handle)
         try:
-            raw = self._transport.cancel_handle(handle.handle_id, reason)
+            raw = transport.cancel_handle(handle.handle_id, reason)
         except SDKError:
             raise
         except Exception as exc:
@@ -316,9 +327,10 @@ class RuntimeClient:
         return InvocationCancel.from_json(raw)
 
     def events(self, handle: InvocationHandle) -> InvocationHandle:
+        transport = self._require_open()
         _require_handle(handle)
         try:
-            raw = self._transport.handle_events(handle.handle_id)
+            raw = transport.handle_events(handle.handle_id)
         except SDKError:
             raise
         except Exception as exc:
@@ -326,13 +338,30 @@ class RuntimeClient:
         return InvocationHandle.from_json(raw)
 
     def close_handle(self, handle: InvocationHandle) -> None:
+        transport = self._require_open()
         _require_handle(handle)
         try:
-            self._transport.free_handle(handle.handle_id)
+            transport.free_handle(handle.handle_id)
         except SDKError:
             raise
         except Exception as exc:
             raise _transport_error("free handle transport failed", exc) from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._transport.close()
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("runtime close transport failed", exc) from exc
+
+    def _require_open(self) -> RuntimeTransport:
+        if self._closed:
+            raise _invalid_runtime_client("runtime client is closed")
+        return self._transport
 
 
 def _require_handle(handle: InvocationHandle) -> None:

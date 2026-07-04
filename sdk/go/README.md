@@ -18,7 +18,7 @@ Invocation draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
-invoke/invoke-stream/open-bidi/prepare/submit-signed
+invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
 read-model pages and directory subscription state seams plus IdentityClient descriptor/resource projection,
 signing-key lifecycle, and signer-handle seams.
