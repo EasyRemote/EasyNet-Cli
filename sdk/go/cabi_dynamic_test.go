@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+var _ DiscoveryTransport = (*CABIDiscoveryTransport)(nil)
+
 func TestCABIDiscoveryCandidatesPreferExplicitPath(t *testing.T) {
 	candidates := cabiLibraryCandidates("/opt/easynet/libeasynet_cli.custom")
 	if len(candidates) != 1 || candidates[0] != "/opt/easynet/libeasynet_cli.custom" {

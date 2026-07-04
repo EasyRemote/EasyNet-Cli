@@ -44,8 +44,10 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 }
 
 func allowedPrivateCABIAdapter(path, text string) bool {
-	return filepath.Base(path) == "cabi_dynamic.go" &&
-		strings.Contains(text, "easynet_cabi") &&
-		strings.Contains(text, "cgo") &&
-		strings.Contains(text, "type CABIDiscoveryTransport struct")
+	base := filepath.Base(path)
+	if !strings.Contains(text, "easynet_cabi") || !strings.Contains(text, "cgo") {
+		return false
+	}
+	return (base == "cabi_dynamic.go" && strings.Contains(text, "type CABIDiscoveryTransport struct")) ||
+		(base == "cabi_runtime.go" && strings.Contains(text, "type CABIDaemonTransport struct"))
 }
