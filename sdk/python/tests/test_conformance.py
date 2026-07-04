@@ -41,6 +41,7 @@ from easynet_sdk import (
     EventTerminalInput,
     EventsCarrierBase,
     EventsDirectorySubscriptionRequest,
+    EventsSessionSubscriptionRequest,
     GatewayStatus,
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
@@ -743,11 +744,17 @@ class SharedEventsTransport:
         self.expected_directory_subscription_request = (
             shared_events_directory_subscription_request_json()
         )
+        self.expected_session_subscription_request = (
+            shared_events_session_subscription_request_json()
+        )
         self.expected_directory_projection_input = shared_events_projection_input_json()
         self.expected_drop_report_input = shared_events_drop_report_input_json()
         self.expected_terminal_input = shared_events_terminal_input_json()
         self.directory_subscription_invocation_json = shared_fixture(
             "events-directory-subscription-invocation.v4.json"
+        )
+        self.session_subscription_invocation_json = shared_fixture(
+            "events-session-subscription-invocation.v4.json"
         )
         self.directory_event_json = shared_fixture("event.directory.v4.json")
         self.drop_report_json = shared_fixture("event.directory-drop-report.v4.json")
@@ -768,12 +775,10 @@ class SharedEventsTransport:
         )
 
     def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared events conformance fixture test",
+        assert_json_equivalent(
+            request_json, self.expected_session_subscription_request
         )
+        return self.session_subscription_invocation_json
 
     def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
         raise SDKError(
@@ -2519,6 +2524,52 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             EventFrame.from_json(shared_events_terminal_without_terminal_flag())
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_events_executes_shared_session_stream_conformance_case(self) -> None:
+        events_case = shared_case("events-session-stream.yaml")
+        self._require_case_id(events_case, "events/session_stream")
+        self._require_case_action(
+            events_case, "build_session_subscription_invocation"
+        )
+        self._require_case_fixture(
+            events_case, "events-session-subscription-request.v4.json"
+        )
+        self._require_case_expectation(
+            events_case,
+            "subscription_invocation_fixture: events-session-subscription-invocation.v4.json",
+        )
+        self._require_case_expectation(events_case, "stream_system_ability: session.attach")
+        self._require_case_expectation(events_case, "explicit_session_id_required: true")
+        self._require_case_expectation(
+            events_case, "product_session_ura_parsing_allowed: false"
+        )
+        self._require_case_expectation(
+            events_case, "resume_cursor_sequence_maps_to_since_seq: true"
+        )
+
+        events = EventClient(SharedEventsTransport())
+        subscription = events.build_session_subscription_invocation(
+            shared_events_session_subscription_request()
+        )
+
+        self.assertEqual(
+            subscription.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0",
+        )
+        self.assertEqual(subscription.metadata["system_ability"], "session.attach")
+        self.assertEqual(subscription.args["session_id"], "run-1")
+        self.assertEqual(subscription.args["since_seq"], 4)
+
+        product_session = shared_events_session_subscription_request()
+        with self.assertRaises(SDKError) as caught:
+            events.build_session_subscription_invocation(
+                EventsSessionSubscriptionRequest(
+                    base=product_session.base,
+                    stream="session",
+                    session_ura="easynet:///r/example/resource/daemon.browser/run-1",
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
     def test_python_surface_executes_shared_page_carrier_conformance_case(self) -> None:
         surface_case = shared_case("surface-page-carriers.yaml")
         self._require_case_id(surface_case, "surface/page_carriers")
@@ -3734,6 +3785,23 @@ def shared_events_directory_subscription_request() -> EventsDirectorySubscriptio
 
 def shared_events_directory_subscription_request_json() -> bytes:
     return shared_events_directory_subscription_request().to_json_bytes("directory")
+
+
+def shared_events_session_subscription_request() -> EventsSessionSubscriptionRequest:
+    decoded = json.loads(shared_fixture("events-session-subscription-request.v4.json"))
+    cursor = decoded.get("resume_cursor")
+    return EventsSessionSubscriptionRequest(
+        base=shared_events_carrier_base(
+            "events-session-subscription-request.v4.json"
+        ),
+        stream=decoded.get("stream", ""),
+        session_id=decoded.get("session_id", ""),
+        resume_cursor=EventCursor(cursor["stream"], cursor["sequence"]) if cursor else None,
+    )
+
+
+def shared_events_session_subscription_request_json() -> bytes:
+    return shared_events_session_subscription_request().to_json_bytes("session")
 
 
 def shared_events_projection_input() -> EventProjectionInput:
