@@ -2,6 +2,7 @@ import json
 import unittest
 
 from easynet_sdk import (
+    AddressingClient,
     DEFAULT_SIGNING_KEY_PAGE_SIZE,
     ErrorCode,
     MAX_SIGNING_KEY_PAGE_SIZE,
@@ -80,6 +81,46 @@ class MemoryIdentityTransport:
 
 
 class IdentityTests(unittest.TestCase):
+    def test_addressing_client_is_standalone_delegated_facade(self) -> None:
+        transport = MemoryIdentityTransport()
+        ability_projection = (
+            b'{"kind":"ability","valid":true,'
+            b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+            b'"public_name":"observe.health"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        descriptor_projection = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        transport.identity_json = ability_projection
+        transport.descriptor_json = descriptor_projection
+        client = AddressingClient(transport)
+
+        ability_ura = client.owner_ability_ura(
+            "easynet:///r/example/device/dev-a", "observe.health"
+        )
+        self.assertEqual(
+            client.owner_ura_for_ability(ability_ura),
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            client.canonical_ability_descriptor_ref(ability_ura, "1.0.0"),
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError):
+            client.parse_ura(ability_ura)
+
     def test_project_descriptor_ref_delegates_to_transport(self) -> None:
         transport = MemoryIdentityTransport()
         transport.descriptor_json = (

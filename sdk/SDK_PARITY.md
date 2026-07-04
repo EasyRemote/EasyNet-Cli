@@ -174,7 +174,8 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
-  transport protocols; private C ABI v4 profile carrier/projection bridges for
+  transport protocols; `SdkEnvironment.addressing_client()` for the
+  Axon-delegated URA/DescriptorRef helper subset; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; concrete default UDS transport,
   live profile execution adapters, EasyRemote extraction tests, per-profile
@@ -183,10 +184,11 @@ method spelling.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, list/resolve Invocation carrier
   builders, Directory projection helpers, directory subscription state seams,
-  and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
+  and close state seams plus `AddressingClient` and `IdentityClient`
   Axon-delegated `parse_ura`, `owner_ability_ura`,
   `owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helper
-  facade, signing-key lifecycle, signer-handle projection, and close state
+  facades, `IdentityClient` descriptor, identity, ResourceRef,
+  signing-key lifecycle, signer-handle projection, and close state
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, while

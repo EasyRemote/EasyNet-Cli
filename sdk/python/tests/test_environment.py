@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from easynet_sdk import (
     AbilityDeployRequest,
+    AddressingClient,
     AdminAgentListRequest,
     AdminCarrierBase,
     CompatibilityCarrierBase,
@@ -121,6 +122,36 @@ class SdkEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(raw.identity_requests[1][0], "project_ura")
         self.assertEqual(raw.identity_requests[2][0], "build_descriptor_ref")
+        self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_addressing_client_exposes_narrow_identity_helper_surface(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            addressing = env.addressing_client()
+            self.assertIsInstance(addressing, AddressingClient)
+            ability = addressing.owner_ability_ura(
+                "easynet:///r/example/device/dev-a",
+                "observe.health",
+            )
+            descriptor = addressing.canonical_ability_descriptor_ref(
+                ability,
+                "1.0.0",
+            )
+            env.close()
+
+        self.assertEqual(
+            ability,
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(
+            descriptor,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            [entry[0] for entry in raw.identity_requests],
+            ["build_ura", "project_ura", "build_descriptor_ref"],
+        )
         self.assertEqual(raw.shutdown_handles, [42])
 
     def test_runtime_and_health_clients_are_environment_owned(self) -> None:

@@ -353,8 +353,8 @@ class SignerHandle:
 
 
 @runtime_checkable
-class IdentityTransport(Protocol):
-    """Concrete identity projections supplied by the integration layer."""
+class AddressingTransport(Protocol):
+    """Axon-delegated URA and DescriptorRef projections."""
 
     def project_descriptor_ref(self, request_json: bytes) -> bytes:
         ...
@@ -367,6 +367,11 @@ class IdentityTransport(Protocol):
 
     def build_ura(self, request_json: bytes) -> bytes:
         ...
+
+
+@runtime_checkable
+class IdentityTransport(AddressingTransport, Protocol):
+    """Concrete identity projections supplied by the integration layer."""
 
     def build_resource_ref(self, request_json: bytes) -> bytes:
         ...
@@ -385,16 +390,16 @@ class IdentityTransport(Protocol):
 
 
 @dataclass(frozen=True)
-class IdentityClient:
-    """Directory + Identity projection facade."""
+class AddressingClient:
+    """Axon-delegated URA and AbilityDescriptorRef helper facade."""
 
-    transport: IdentityTransport
+    transport: AddressingTransport
     _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
-            raise _invalid_identity("identity transport is required")
-        object.__setattr__(self, "_lifecycle", ClientLifecycle("identity"))
+            raise _invalid_identity("addressing transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("addressing"))
 
     def project_descriptor_ref(self, request: DescriptorRefRequest) -> IdentityProjection:
         self._require_open()
@@ -485,6 +490,63 @@ class IdentityClient:
         except Exception as exc:
             raise _transport_error("identity projection failed", exc) from exc
         return IdentityProjection.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
+
+
+@dataclass(frozen=True)
+class IdentityClient:
+    """Directory + Identity profile facade."""
+
+    transport: IdentityTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
+    _addressing: AddressingClient = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.transport is None:
+            raise _invalid_identity("identity transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("identity"))
+        object.__setattr__(self, "_addressing", AddressingClient(self.transport))
+
+    def project_descriptor_ref(self, request: DescriptorRefRequest) -> IdentityProjection:
+        self._require_open()
+        return self._addressing.project_descriptor_ref(request)
+
+    def parse_ura(self, ura: str) -> IdentityProjection:
+        """Project a URA through the daemon/Axon identity boundary."""
+
+        self._require_open()
+        return self._addressing.parse_ura(ura)
+
+    def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
+        """Build a canonical Ability URA through the identity transport."""
+
+        self._require_open()
+        return self._addressing.owner_ability_ura(owner_ura, ability_name)
+
+    def owner_ura_for_ability(self, ability_ura: str) -> str:
+        """Return the Axon-projected owner URA for a canonical Ability URA."""
+
+        self._require_open()
+        return self._addressing.owner_ura_for_ability(ability_ura)
+
+    def canonical_ability_descriptor_ref(
+        self, value: str, descriptor_version: str = ""
+    ) -> str:
+        """Canonicalize or build an AbilityDescriptorRef via identity transport."""
+
+        self._require_open()
+        return self._addressing.canonical_ability_descriptor_ref(
+            value, descriptor_version
+        )
+
+    def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
+        self._require_open()
+        return self._addressing.project_identity(request)
 
     def build_resource_ref(self, request: LocalResourceRefRequest) -> ResourceRef:
         self._require_open()

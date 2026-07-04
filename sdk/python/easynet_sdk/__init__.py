@@ -144,6 +144,8 @@ from .events import (
 )
 from .health import HealthClient, HealthTransport, RuntimeHealth
 from .identity import (
+    AddressingClient,
+    AddressingTransport,
     DEFAULT_SIGNING_KEY_PAGE_SIZE,
     MAX_SIGNING_KEY_PAGE_SIZE,
     DescriptorRefRequest,
@@ -408,6 +410,8 @@ __all__ = [
     "HostStreamTerminalSummary",
     "AgentQuery",
     "DeviceQuery",
+    "AddressingClient",
+    "AddressingTransport",
     "IdentityClient",
     "IdentityProjection",
     "IdentityProjectionRequest",

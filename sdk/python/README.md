@@ -28,8 +28,10 @@ invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow transport protocols, plus DirectoryClient resolve/list
 read-model pages, C ABI-backed resolve/list read-model execution through Runtime
 Core invoke, list/resolve Invocation carrier builders, directory
-projection helpers, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
-Axon-delegated addressing helper facade, signing-key lifecycle, and
+projection helpers, directory subscription state seams, and close state seams plus
+AddressingClient Axon-delegated `parse_ura`, `owner_ability_ura`,
+`owner_ura_for_ability`, and `canonical_ability_descriptor_ref` helpers,
+IdentityClient descriptor/resource projection, signing-key lifecycle, and
 signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 C ABI-backed fetch execution through Runtime Core invoke, and close state seams

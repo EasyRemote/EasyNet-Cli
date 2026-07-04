@@ -15,7 +15,7 @@ from .errors import ErrorCode, RetryHint, SDKError
 from .events import EventClient
 from .health import HealthClient
 from .host_binding import HostBindingClient
-from .identity import IdentityClient
+from .identity import AddressingClient, IdentityClient
 from .mission import MissionClient
 from .publication import PublicationClient
 from .receipt import ReceiptClient
@@ -117,6 +117,18 @@ class SdkEnvironment:
             library_path=self.library_path,
         )
         return self._track(IdentityClient(transport))
+
+    def addressing_client(self) -> AddressingClient:
+        """Open the Axon-delegated URA and DescriptorRef helper facade."""
+
+        self._require_open()
+        from . import _cabi
+
+        transport = _cabi.open_cabi_identity_transport(
+            control_path=self.control_path,
+            library_path=self.library_path,
+        )
+        return self._track(AddressingClient(transport))
 
     def directory_client(self) -> DirectoryClient:
         """Open the Directory profile facade."""
