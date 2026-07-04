@@ -329,6 +329,30 @@ class SharedIdentityTransport:
             message="not used by shared identity conformance fixture test",
         )
 
+    def build_register_signing_key_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def build_list_signing_keys_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
+    def build_revoke_signing_key_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared identity conformance fixture test",
+        )
+
     def register_signing_key(self, request_json: bytes) -> bytes:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,
@@ -2922,6 +2946,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "directory_identity",
                 IdentityClient,
                 {
+                    "build_list_signing_keys_invocation": "directory_identity.identity.build_list_signing_keys_invocation",
+                    "build_register_signing_key_invocation": "directory_identity.identity.build_register_signing_key_invocation",
+                    "build_revoke_signing_key_invocation": "directory_identity.identity.build_revoke_signing_key_invocation",
                     "build_resource_ref": "directory_identity.identity.build_resource_ref",
                     "ability_ura_from_descriptor_ref": "directory_identity.identity.ability_ura_from_descriptor_ref",
                     "canonical_ability_descriptor_ref": "directory_identity.identity.canonical_ability_descriptor_ref",

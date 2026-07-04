@@ -33,6 +33,7 @@ from easynet_sdk import (
     DirectoryQueryBase,
     ErrorCode,
     HealthClient,
+    IdentityCarrierBase,
     IdentityClient,
     LocalResourceRefRequest,
     ResourceRef,
@@ -754,6 +755,12 @@ class FakeRawCABI:
         return self._write(out_ptr, self._profile_payload(symbol, request))
 
     def _profile_payload(self, symbol: str, request: object | None = None) -> bytes:
+        if symbol == "easynet_identity_build_register_signing_key_invocation":
+            return IDENTITY_REGISTER_SIGNING_KEY_INVOCATION
+        if symbol == "easynet_identity_build_list_signing_keys_invocation":
+            return IDENTITY_LIST_SIGNING_KEYS_INVOCATION
+        if symbol == "easynet_identity_build_revoke_signing_key_invocation":
+            return IDENTITY_REVOKE_SIGNING_KEY_INVOCATION
         if symbol == "easynet_directory_build_list_devices_invocation":
             return DIRECTORY_LIST_DEVICES_INVOCATION
         if symbol == "easynet_directory_build_list_agents_invocation":
@@ -1132,6 +1139,54 @@ DIRECTORY_RESOLVED_REF_PROJECTION = (
     b'"route_candidates":[],"records":[],"negative":null,'
     b'"release_profile":null,"authority":null,"cache_policy":null,'
     b'"metadata":{"source":"namespace.resolve"}}'
+)
+
+IDENTITY_REGISTER_SIGNING_KEY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.identity.register_pubkey@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/user/alice",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"agent_ura":"easynet:///r/example/user/alice",'
+    b'"public_key_b64":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",'
+    b'"role":"user"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity",'
+    b'"system_ability":"identity.register_pubkey",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+IDENTITY_LIST_SIGNING_KEYS_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.identity.list_user_pubkeys@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/user/alice",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"agent_ura":"easynet:///r/example/user/alice"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity",'
+    b'"system_ability":"identity.list_user_pubkeys",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+IDENTITY_REVOKE_SIGNING_KEY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.identity.revoke_user_pubkey@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/user/alice",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"agent_ura":"easynet:///r/example/user/alice",'
+    b'"public_key_b64":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity",'
+    b'"system_ability":"identity.revoke_user_pubkey",'
+    b'"carrier_owner":"daemon_sdk"}}'
 )
 
 HOST_BINDING_PROJECTION = (
@@ -1815,6 +1870,75 @@ class CABITransportTests(unittest.TestCase):
                     {"capability": "read", "path": "/tmp/package"},
                 )
             ],
+        )
+        self.assertEqual(raw.buffers, {})
+
+    def test_identity_transport_builds_signing_key_invocation_carriers(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = IdentityClient(CABIIdentityTransport(lib, handle=7))
+        base = IdentityCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/user/alice",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            metadata={"request_id": "identity-1"},
+        )
+
+        register = client.build_register_signing_key_invocation(
+            SigningKeyRegistrationRequest(
+                owner_ura="easynet:///r/example/user/alice",
+                key_id="alice-key-1",
+                algorithm="ed25519",
+                public_key_base64="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                usage=("invocation.sign",),
+                base=base,
+            )
+        )
+        listed = client.build_list_signing_keys_invocation(
+            SigningKeyListRequest(
+                owner_ura="easynet:///r/example/user/alice",
+                base=base,
+            )
+        )
+        revoked = client.build_revoke_signing_key_invocation(
+            SigningKeyRevokeRequest(
+                key_id="alice-key-1",
+                reason="rotation",
+                owner_ura="easynet:///r/example/user/alice",
+                public_key_base64="AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                base=base,
+            )
+        )
+
+        self.assertEqual(
+            register.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.identity.register_pubkey@1.0.0",
+        )
+        self.assertEqual(
+            listed.metadata["system_ability"], "identity.list_user_pubkeys"
+        )
+        self.assertEqual(
+            revoked.metadata["system_ability"], "identity.revoke_user_pubkey"
+        )
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_identity_build_register_signing_key_invocation",
+                "easynet_identity_build_list_signing_keys_invocation",
+                "easynet_identity_build_revoke_signing_key_invocation",
+            ],
+        )
+        self.assertEqual(raw.profile_requests[0][2]["role"], "user")
+        self.assertEqual(
+            raw.profile_requests[0][2]["caller_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(
+            raw.profile_requests[2][2]["public_key_base64"],
+            "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
         )
         self.assertEqual(raw.buffers, {})
 

@@ -44,6 +44,7 @@ pub mod execution;
 pub mod federation;
 pub mod host_stream_contract;
 pub mod identity;
+pub mod identity_contract;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod keyring;

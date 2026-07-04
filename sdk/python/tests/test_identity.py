@@ -23,6 +23,19 @@ class MemoryIdentityTransport:
         self.descriptor_json = b"{}"
         self.identity_json = b"{}"
         self.resource_json = b"{}"
+        self.invocation_json = (
+            b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+            b'"callee_ura":"easynet:///r/example/device/dev-a",'
+            b'"descriptor_ref":"easynet:///r/example/ability/'
+            b'device.dev-a.identity.register_pubkey@1.0.0",'
+            b'"subject_ura":"easynet:///r/example/user/alice",'
+            b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+            b'"causal_context":{"form":"none"},'
+            b'"args":{},'
+            b'"content_type":"application/json",'
+            b'"metadata":{"profile":"directory_identity",'
+            b'"system_ability":"identity.register_pubkey"}}'
+        )
         self.key_json = SIGNING_KEY_RECORD
         self.key_page_json = SIGNING_KEY_PAGE
         self.revoke_json = SIGNING_KEY_REVOKE
@@ -55,6 +68,21 @@ class MemoryIdentityTransport:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         self.seen_requests.append(self.seen_request)
         return self.resource_json
+
+    def build_register_signing_key_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
+        return self.invocation_json
+
+    def build_list_signing_keys_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
+        return self.invocation_json
+
+    def build_revoke_signing_key_invocation(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        self.seen_requests.append(self.seen_request)
+        return self.invocation_json
 
     def register_signing_key(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))

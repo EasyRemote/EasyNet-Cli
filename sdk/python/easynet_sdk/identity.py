@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, TypeVar, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+from .invocation import InvocationDraft
 from ._lifecycle import ClientLifecycle
 
 DEFAULT_SIGNING_KEY_PAGE_SIZE = 50
@@ -66,6 +67,31 @@ class LocalResourceRefRequest:
 
 
 @dataclass(frozen=True)
+class IdentityCarrierBase:
+    """Complete Invocation carrier fields for identity daemon abilities."""
+
+    caller_ura: str
+    callee_ura: str
+    subject_ura: str
+    descriptor_version: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_dict(self) -> dict[str, object]:
+        _validate_identity_base(self)
+        return {
+            "caller_ura": self.caller_ura,
+            "callee_ura": self.callee_ura,
+            "subject_ura": self.subject_ura,
+            "descriptor_version": self.descriptor_version,
+            "nonce_base64": self.nonce_base64,
+            "causal_context": dict(self.causal_context),
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
 class SigningKeyRegistrationRequest:
     """Register daemon-owned public signing-key metadata."""
 
@@ -74,7 +100,9 @@ class SigningKeyRegistrationRequest:
     algorithm: str
     public_key_base64: str
     usage: tuple[str, ...]
+    role: str = "user"
     metadata: Mapping[str, object] = field(default_factory=dict)
+    base: Optional[IdentityCarrierBase] = None
 
     def to_json_bytes(self) -> bytes:
         owner_ura = _required_clean_string(self.owner_ura, "owner_ura")
@@ -92,15 +120,23 @@ class SigningKeyRegistrationRequest:
             raise _invalid_identity(
                 "private key material must not be supplied to identity facade"
             )
+        role = _required_clean_string(self.role, "role")
+        value: dict[str, object] = {
+            "owner_ura": owner_ura,
+            "key_id": key_id,
+            "algorithm": algorithm,
+            "public_key_base64": public_key_base64,
+            "usage": list(usage),
+            "role": role,
+        }
+        if self.base is not None:
+            value.update(self.base.to_json_dict())
+            if self.metadata:
+                value["key_metadata"] = dict(self.metadata)
+        elif self.metadata:
+            value["metadata"] = dict(self.metadata)
         return _json_bytes(
-            {
-                "owner_ura": owner_ura,
-                "key_id": key_id,
-                "algorithm": algorithm,
-                "public_key_base64": public_key_base64,
-                "usage": list(usage),
-                **({"metadata": dict(self.metadata)} if self.metadata else {}),
-            }
+            value
         )
 
 
@@ -109,6 +145,7 @@ class SigningKeyListRequest:
     owner_ura: str = ""
     limit: int = 0
     cursor: str = ""
+    base: Optional[IdentityCarrierBase] = None
 
     def to_json_bytes(self) -> bytes:
         if self.owner_ura.strip() != self.owner_ura or self.cursor.strip() != self.cursor:
@@ -123,6 +160,8 @@ class SigningKeyListRequest:
             value["owner_ura"] = self.owner_ura
         if self.cursor:
             value["cursor"] = self.cursor
+        if self.base is not None:
+            value.update(self.base.to_json_dict())
         return _json_bytes(value)
 
 
@@ -130,14 +169,24 @@ class SigningKeyListRequest:
 class SigningKeyRevokeRequest:
     key_id: str
     reason: str
+    owner_ura: str = ""
+    public_key_base64: str = ""
+    base: Optional[IdentityCarrierBase] = None
 
     def to_json_bytes(self) -> bytes:
-        return _json_bytes(
-            {
-                "key_id": _required_clean_string(self.key_id, "key_id"),
-                "reason": _required_clean_string(self.reason, "reason"),
-            }
-        )
+        value: dict[str, object] = {
+            "key_id": _required_clean_string(self.key_id, "key_id"),
+            "reason": _required_clean_string(self.reason, "reason"),
+        }
+        if self.owner_ura:
+            value["owner_ura"] = _required_clean_string(self.owner_ura, "owner_ura")
+        if self.public_key_base64:
+            value["public_key_base64"] = _required_clean_string(
+                self.public_key_base64, "public_key_base64"
+            )
+        if self.base is not None:
+            value.update(self.base.to_json_dict())
+        return _json_bytes(value)
 
 
 @dataclass(frozen=True)
@@ -378,6 +427,15 @@ class IdentityTransport(AddressingTransport, Protocol):
     def build_resource_ref(self, request_json: bytes) -> bytes:
         ...
 
+    def build_register_signing_key_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_list_signing_keys_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_revoke_signing_key_invocation(self, request_json: bytes) -> bytes:
+        ...
+
     def register_signing_key(self, request_json: bytes) -> bytes:
         ...
 
@@ -603,6 +661,36 @@ class IdentityClient:
             raise _transport_error("identity resource-ref build failed", exc) from exc
         return ResourceRef.from_json(raw)
 
+    def build_register_signing_key_invocation(
+        self, request: SigningKeyRegistrationRequest
+    ) -> InvocationDraft:
+        self._require_open()
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_register_signing_key_invocation,
+            "identity register signing key invocation build failed",
+        )
+
+    def build_list_signing_keys_invocation(
+        self, request: SigningKeyListRequest
+    ) -> InvocationDraft:
+        self._require_open()
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_list_signing_keys_invocation,
+            "identity list signing keys invocation build failed",
+        )
+
+    def build_revoke_signing_key_invocation(
+        self, request: SigningKeyRevokeRequest
+    ) -> InvocationDraft:
+        self._require_open()
+        return self._build_invocation(
+            request.to_json_bytes(),
+            self.transport.build_revoke_signing_key_invocation,
+            "identity revoke signing key invocation build failed",
+        )
+
     def register_signing_key(
         self, request: SigningKeyRegistrationRequest
     ) -> SigningKeyRecord:
@@ -649,6 +737,17 @@ class IdentityClient:
 
     def close(self) -> None:
         self._lifecycle.close(self.transport)
+
+    def _build_invocation(
+        self, request_json: bytes, fn: Callable[[bytes], bytes], label: str
+    ) -> InvocationDraft:
+        try:
+            raw = fn(request_json)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
+        return InvocationDraft.from_json(raw)
 
     def _require_open(self) -> None:
         self._lifecycle.require_open()
@@ -790,6 +889,18 @@ def _json_object(raw: bytes | str, label: str) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise _invalid_identity(f"{label} JSON must be an object")
     return decoded
+
+
+def _validate_identity_base(base: IdentityCarrierBase) -> None:
+    if (
+        not base.caller_ura
+        or not base.callee_ura
+        or not base.subject_ura
+        or not base.descriptor_version
+        or not base.nonce_base64
+        or base.causal_context is None
+    ):
+        raise _invalid_identity("complete identity invocation carrier is required")
 
 
 def _required_string(decoded: Mapping[str, object], field_name: str) -> str:

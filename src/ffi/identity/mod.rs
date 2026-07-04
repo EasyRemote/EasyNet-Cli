@@ -37,11 +37,16 @@ use easynet_axon::invocation::{
 use crate::core::ura::{
     self, AbilityOwner, AbilitySelector, ParsedURA, URAKind, PROFILE_STRICT_V2,
 };
+use crate::daemon::identity_contract::{
+    build_list_signing_keys_invocation, build_register_signing_key_invocation,
+    build_revoke_signing_key_invocation, IdentitySdkError,
+};
 use crate::ffi::client::handle::{get, EasynetHandle};
 use crate::ffi::errors::{
     clear_last_error, set_last_error_code, EASYNET_OK, ERR_GENERIC, ERR_INVALID_ARG,
     ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
 
 /// Project a canonical EasyNet URA into a typed identity DTO.
@@ -204,6 +209,95 @@ pub unsafe extern "C" fn easynet_identity_build_descriptor_ref(
         "easynet_identity_build_descriptor_ref",
         out_descriptor_json,
         projection,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for `identity.register_pubkey`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_build_register_signing_key_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_identity_build_register_signing_key_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_register_signing_key_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for `identity.list_user_pubkeys`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_build_list_signing_keys_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_identity_build_list_signing_keys_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_list_signing_keys_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for `identity.revoke_user_pubkey`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_identity_build_revoke_signing_key_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_identity_profile_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_identity_build_revoke_signing_key_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_revoke_signing_key_invocation,
+    )
+}
+
+fn project_identity_profile_json(
+    handle: EasynetHandle,
+    input: *const c_char,
+    output: *mut *mut c_char,
+    function: &'static str,
+    output_name: &'static str,
+    input_name: &'static str,
+    project: fn(&serde_json::Value) -> Result<serde_json::Value, IdentitySdkError>,
+) -> i32 {
+    project_profile_json(
+        handle,
+        input,
+        output,
+        ProfileJsonSpec {
+            function,
+            output_name,
+            input_name,
+            profile: "directory_identity",
+        },
+        project,
     )
 }
 
@@ -790,6 +884,96 @@ mod tests {
 
         assert_eq!(code, ERR_INVALID_ARG);
         assert!(out.is_null());
+        release(handle);
+    }
+
+    fn base_request(extra: serde_json::Value) -> CString {
+        let mut request = serde_json::json!({
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": "easynet:///r/example/user/alice",
+            "descriptor_version": "1.0.0",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "metadata": {"request_id": "identity-1"}
+        });
+        let serde_json::Value::Object(extra) = extra else {
+            return CString::new(request.to_string()).unwrap();
+        };
+        let obj = request.as_object_mut().unwrap();
+        for (key, value) in extra {
+            obj.insert(key, value);
+        }
+        CString::new(request.to_string()).unwrap()
+    }
+
+    #[test]
+    fn identity_build_signing_key_invocations_project_complete_carriers() {
+        let handle = handle();
+        let public_key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        let register = base_request(serde_json::json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "key_id": "alice-key-1",
+            "algorithm": "ed25519",
+            "public_key_base64": public_key,
+            "usage": ["invocation.sign"],
+            "role": "user"
+        }));
+        let list = base_request(serde_json::json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "limit": 25
+        }));
+        let revoke = base_request(serde_json::json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "key_id": "alice-key-1",
+            "public_key_base64": public_key,
+            "reason": "rotation"
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_identity_build_register_signing_key_invocation(
+                handle,
+                register.as_ptr(),
+                &mut out,
+            )
+        };
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "identity.register_pubkey"
+        );
+        assert_eq!(
+            value["args"]["agent_ura"],
+            "easynet:///r/example/user/alice"
+        );
+        assert_eq!(value["args"]["public_key_b64"], public_key);
+
+        let code = unsafe {
+            easynet_identity_build_list_signing_keys_invocation(handle, list.as_ptr(), &mut out)
+        };
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.identity.list_user_pubkeys@1.0.0"
+        );
+        assert_eq!(
+            value["args"]["agent_ura"],
+            "easynet:///r/example/user/alice"
+        );
+
+        let code = unsafe {
+            easynet_identity_build_revoke_signing_key_invocation(handle, revoke.as_ptr(), &mut out)
+        };
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "identity.revoke_user_pubkey"
+        );
+        assert_eq!(value["args"]["public_key_b64"], public_key);
         release(handle);
     }
 

@@ -30,6 +30,9 @@ _CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
 _NEXT_CALLBACK_TOKEN = 1
 
 _JSON_HANDLE_OUTPUT_SYMBOLS = (
+    "easynet_identity_build_register_signing_key_invocation",
+    "easynet_identity_build_list_signing_keys_invocation",
+    "easynet_identity_build_revoke_signing_key_invocation",
     "easynet_directory_build_list_devices_invocation",
     "easynet_directory_build_list_agents_invocation",
     "easynet_directory_build_list_abilities_invocation",
@@ -715,6 +718,27 @@ class CABIIdentityTransport:
     def build_resource_ref(self, request_json: bytes) -> bytes:
         return self.lib.json_handle_output(
             "easynet_publication_build_resource_ref",
+            self._require_open(),
+            request_json,
+        )
+
+    def build_register_signing_key_invocation(self, request_json: bytes) -> bytes:
+        return self.lib.json_handle_output(
+            "easynet_identity_build_register_signing_key_invocation",
+            self._require_open(),
+            request_json,
+        )
+
+    def build_list_signing_keys_invocation(self, request_json: bytes) -> bytes:
+        return self.lib.json_handle_output(
+            "easynet_identity_build_list_signing_keys_invocation",
+            self._require_open(),
+            request_json,
+        )
+
+    def build_revoke_signing_key_invocation(self, request_json: bytes) -> bytes:
+        return self.lib.json_handle_output(
+            "easynet_identity_build_revoke_signing_key_invocation",
             self._require_open(),
             request_json,
         )
