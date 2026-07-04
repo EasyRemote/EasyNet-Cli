@@ -191,7 +191,8 @@ method spelling.
   builders, Directory projection helpers, directory subscription state seams,
   and close state seams plus `AddressingClient` and `IdentityClient`
   Axon-delegated `parse_ura`, `owner_ability_ura`,
-  `owner_ura_for_ability`, `owner_ability_descriptor_ref`, and
+  `owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
+  `owner_ability_descriptor_ref`, and
   `canonical_ability_descriptor_ref` helper
   facades, `IdentityClient` descriptor, identity, ResourceRef,
   signing-key lifecycle, signer-handle projection, and close state

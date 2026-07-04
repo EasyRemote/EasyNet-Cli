@@ -114,6 +114,12 @@ class IdentityTests(unittest.TestCase):
             client.canonical_ability_descriptor_ref(ability_ura, "1.0.0"),
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+        self.assertEqual(
+            client.ability_ura_from_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            ),
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
         client.close()
         client.close()
 
@@ -186,6 +192,7 @@ class IdentityTests(unittest.TestCase):
         )
         built_ref = client.canonical_ability_descriptor_ref(ability_ura, "1.0.0")
         projected_ref = client.canonical_ability_descriptor_ref(built_ref)
+        ability_from_ref = client.ability_ura_from_descriptor_ref(built_ref)
 
         self.assertEqual(parsed.kind, "ability")
         self.assertEqual(
@@ -198,6 +205,7 @@ class IdentityTests(unittest.TestCase):
         )
         self.assertEqual(owner_ref, built_ref)
         self.assertEqual(projected_ref, built_ref)
+        self.assertEqual(ability_from_ref, ability_ura)
         self.assertEqual(
             transport.seen_requests,
             [
@@ -220,6 +228,9 @@ class IdentityTests(unittest.TestCase):
                 {
                     "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
                     "descriptor_version": "1.0.0",
+                },
+                {
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
                 },
                 {
                     "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"

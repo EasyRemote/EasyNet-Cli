@@ -9,6 +9,8 @@ description: Invocation carriers consume daemon/Axon-projected DescriptorRef val
 steps:
   - action: project_descriptor_ref
     input: easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0
+  - action: ability_ura_from_descriptor_ref
+    input: easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0
   - action: build_receipt_fetch_invocation
     fixture: receipt-fetch-request.v4.json
   - action: inspect_descriptor_ref_source

@@ -497,6 +497,14 @@ class AddressingClient:
             raise _invalid_identity("invalid descriptor_ref projection")
         return projection.descriptor_ref
 
+    def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
+        """Project the Ability URA from an AbilityDescriptorRef via Axon helper."""
+
+        projection = self.project_descriptor_ref(DescriptorRefRequest(descriptor_ref))
+        if projection.kind != "descriptor_ref" or not projection.ability_ura:
+            raise _invalid_identity("invalid descriptor_ref ability projection")
+        return projection.ability_ura
+
     def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
         self._require_open()
         try:
@@ -574,6 +582,12 @@ class IdentityClient:
         return self._addressing.canonical_ability_descriptor_ref(
             value, descriptor_version
         )
+
+    def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
+        """Project the Ability URA from an AbilityDescriptorRef via identity transport."""
+
+        self._require_open()
+        return self._addressing.ability_ura_from_descriptor_ref(descriptor_ref)
 
     def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
         self._require_open()
@@ -721,6 +735,21 @@ def canonical_ability_descriptor_ref(
             value,
             descriptor_version,
         ),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def ability_ura_from_descriptor_ref(
+    descriptor_ref: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Project the Ability URA from an AbilityDescriptorRef through the SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.ability_ura_from_descriptor_ref(descriptor_ref),
         library_path=library_path,
         control_path=control_path,
     )

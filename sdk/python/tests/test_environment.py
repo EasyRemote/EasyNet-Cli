@@ -50,6 +50,7 @@ from easynet_sdk import (
     WrapperRemoteDesktopStartRequest,
     WrapperTerminalSessionRequest,
     WrapperTerminalStartRequest,
+    ability_ura_from_descriptor_ref,
     canonical_ability_descriptor_ref,
     default_environment,
     is_code,
@@ -208,6 +209,10 @@ class SdkEnvironmentTests(unittest.TestCase):
                 "1.0.0",
                 control_path="/tmp/control.json",
             )
+            ability_from_ref = ability_ura_from_descriptor_ref(
+                descriptor,
+                control_path="/tmp/control.json",
+            )
             owner_descriptor = owner_ability_descriptor_ref(
                 "easynet:///r/example/device/dev-a",
                 "observe.health",
@@ -225,9 +230,10 @@ class SdkEnvironmentTests(unittest.TestCase):
             descriptor,
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+        self.assertEqual(ability_from_ref, ability)
         self.assertEqual(owner_descriptor, descriptor)
-        self.assertEqual(raw.init_paths, ["/tmp/control.json"] * 5)
-        self.assertEqual(raw.shutdown_handles, [42] * 5)
+        self.assertEqual(raw.init_paths, ["/tmp/control.json"] * 6)
+        self.assertEqual(raw.shutdown_handles, [42] * 6)
         self.assertEqual(
             [entry[0] for entry in raw.identity_requests],
             [
@@ -236,6 +242,7 @@ class SdkEnvironmentTests(unittest.TestCase):
                 "project_ura",
                 "project_ura",
                 "build_descriptor_ref",
+                "project_descriptor_ref",
                 "build_ura",
                 "project_ura",
                 "build_descriptor_ref",

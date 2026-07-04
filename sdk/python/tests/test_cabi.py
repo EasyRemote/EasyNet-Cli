@@ -34,6 +34,7 @@ from easynet_sdk import (
     ErrorCode,
     HealthClient,
     IdentityClient,
+    LocalResourceRefRequest,
     ResourceRef,
     InvocationSignature,
     MissionCancelRequest,
@@ -51,6 +52,10 @@ from easynet_sdk import (
     RetryHint,
     RuntimeClient,
     SDKError,
+    SignerRequest,
+    SigningKeyListRequest,
+    SigningKeyRegistrationRequest,
+    SigningKeyRevokeRequest,
     StartConfig,
     StreamState,
     SurfaceCarrierBase,
@@ -1781,6 +1786,81 @@ class CABITransportTests(unittest.TestCase):
                 ),
             ],
         )
+        self.assertEqual(raw.buffers, {})
+
+    def test_identity_transport_builds_resource_ref_through_cabi_projector(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = IdentityClient(CABIIdentityTransport(lib, handle=7))
+
+        ref = client.build_resource_ref(
+            LocalResourceRefRequest(
+                path="/tmp/package",
+                capability="read",
+            )
+        )
+
+        self.assertEqual(
+            ref.resource_ura,
+            "easynet:///r/example/resource/device.dev-a/fs/tmp/package",
+        )
+        self.assertEqual(ref.owner_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(ref.capability, "read")
+        self.assertEqual(
+            raw.profile_requests,
+            [
+                (
+                    "easynet_publication_build_resource_ref",
+                    7,
+                    {"capability": "read", "path": "/tmp/package"},
+                )
+            ],
+        )
+        self.assertEqual(raw.buffers, {})
+
+    def test_identity_transport_reports_missing_signing_key_cabi_contracts(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = IdentityClient(CABIIdentityTransport(lib, handle=7))
+
+        with self.assertRaises(SDKError) as caught:
+            client.register_signing_key(
+                SigningKeyRegistrationRequest(
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    key_id="alice-key-1",
+                    algorithm="ed25519",
+                    public_key_base64="cHVibGljLWtleQ==",
+                    usage=("invocation.sign",),
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+
+        with self.assertRaises(SDKError) as caught:
+            client.list_signing_keys(
+                SigningKeyListRequest(
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+
+        with self.assertRaises(SDKError) as caught:
+            client.revoke_signing_key(
+                SigningKeyRevokeRequest(
+                    key_id="alice-key-1",
+                    reason="rotation",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+
+        with self.assertRaises(SDKError) as caught:
+            client.signer(
+                SignerRequest(
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    key_id="alice-key-1",
+                    usage="invocation.sign",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
         self.assertEqual(raw.buffers, {})
 
     def test_owned_identity_transport_closes_handle_once(self) -> None:

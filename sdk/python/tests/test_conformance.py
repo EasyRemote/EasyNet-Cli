@@ -1966,6 +1966,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             ),
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+        self.assertEqual(
+            identity.ability_ura_from_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            ),
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
 
         with self.assertRaises(SDKError) as caught:
             IdentityProjection.from_json(
@@ -2917,6 +2923,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 IdentityClient,
                 {
                     "build_resource_ref": "directory_identity.identity.build_resource_ref",
+                    "ability_ura_from_descriptor_ref": "directory_identity.identity.ability_ura_from_descriptor_ref",
                     "canonical_ability_descriptor_ref": "directory_identity.identity.canonical_ability_descriptor_ref",
                     "close": "directory_identity.identity.close",
                     "list_signing_keys": "directory_identity.identity.list_signing_keys",

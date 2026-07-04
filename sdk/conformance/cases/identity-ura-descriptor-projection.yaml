@@ -16,6 +16,8 @@ steps:
       ability_name: observe.health
   - action: project_descriptor_ref
     input: easynet:///r/example/ability/device.dev-a.observe.health@1.0.0
+  - action: ability_ura_from_descriptor_ref
+    input: easynet:///r/example/ability/device.dev-a.observe.health@1.0.0
   - action: build_descriptor_ref
     request:
       owner_ura: easynet:///r/example/device/dev-a

@@ -36,7 +36,8 @@ C ABI-backed resolve/list read-model execution through Runtime Core invoke,
 list/resolve Invocation carrier builders, directory
 projection helpers, directory subscription state seams, and close state seams plus
 AddressingClient and package-level Axon-delegated `parse_ura`, `owner_ability_ura`,
-`owner_ura_for_ability`, `owner_ability_descriptor_ref`, and
+`owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
+`owner_ability_descriptor_ref`, and
 `canonical_ability_descriptor_ref` helpers,
 IdentityClient descriptor/resource projection, signing-key lifecycle, and
 signer-handle seams.

@@ -712,12 +712,40 @@ class CABIIdentityTransport:
     def build_ura(self, request_json: bytes) -> bytes:
         return self.lib.identity_build_ura(self._require_open(), request_json)
 
+    def build_resource_ref(self, request_json: bytes) -> bytes:
+        return self.lib.json_handle_output(
+            "easynet_publication_build_resource_ref",
+            self._require_open(),
+            request_json,
+        )
+
+    def register_signing_key(self, request_json: bytes) -> bytes:
+        return self._missing("identity register signing key")
+
+    def list_signing_keys(self, request_json: bytes) -> bytes:
+        return self._missing("identity list signing keys")
+
+    def revoke_signing_key(self, request_json: bytes) -> bytes:
+        return self._missing("identity revoke signing key")
+
+    def signer(self, request_json: bytes) -> bytes:
+        return self._missing("identity signer")
+
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         if self.owns_handle:
             self.lib.shutdown(self.handle)
+
+    def _missing(self, method: str) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message=f"{method} is not exposed by the C ABI identity bridge",
+        )
 
     def _require_open(self) -> int:
         if self._closed:
