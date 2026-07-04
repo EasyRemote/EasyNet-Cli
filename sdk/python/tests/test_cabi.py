@@ -3,6 +3,8 @@ import json
 import unittest
 
 from easynet_sdk import (
+    BidiFrame,
+    BidiStreamDescriptor,
     Client,
     ErrorCode,
     HealthClient,
@@ -11,6 +13,7 @@ from easynet_sdk import (
     PrepareOptions,
     RuntimeClient,
     SDKError,
+    StreamState,
     is_code,
 )
 from easynet_sdk._cabi import (
@@ -45,6 +48,21 @@ class FakeRawCABI:
         self.prepared_frees: list[int] = []
         self.signed_frees: list[int] = []
         self.handle_frees: list[tuple[int, int]] = []
+        self.stream_closes: list[int] = []
+        self.stream_cancels: list[int] = []
+        self.bidi_sends: list[dict[str, object]] = []
+        self.bidi_close_sends: list[int] = []
+        self.bidi_closes: list[int] = []
+        self.bidi_cancels: list[int] = []
+        self.callback_buffers: list[ctypes.Array[ctypes.c_char]] = []
+        self.stream_events = [
+            b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
+            b'"payload_json":{"step":1}}',
+            b'{"sequence":2,"kind":"terminal","state":"Completed","terminal":true}',
+        ]
+        self.bidi_frames = [
+            b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true}'
+        ]
         self.prepare_payload = PREPARED_FIXTURE
         self.easynet_abi_version = FakeSymbol(lambda: EXPECTED_ABI_VERSION)
         self.easynet_string_free = FakeSymbol(self._free)
@@ -86,6 +104,22 @@ class FakeRawCABI:
             self._prepared_invocation_free
         )
         self.easynet_signed_invocation_free = FakeSymbol(self._signed_invocation_free)
+        self.easynet_invocation_stream_open = FakeSymbol(
+            self._invocation_stream_open
+        )
+        self.easynet_invocation_stream_cancel = FakeSymbol(
+            self._invocation_stream_cancel
+        )
+        self.easynet_invocation_stream_close = FakeSymbol(
+            self._invocation_stream_close
+        )
+        self.easynet_invocation_bidi_open = FakeSymbol(self._invocation_bidi_open)
+        self.easynet_invocation_bidi_send = FakeSymbol(self._invocation_bidi_send)
+        self.easynet_invocation_bidi_close_send = FakeSymbol(
+            self._invocation_bidi_close_send
+        )
+        self.easynet_invocation_bidi_close = FakeSymbol(self._invocation_bidi_close)
+        self.easynet_invocation_bidi_cancel = FakeSymbol(self._invocation_bidi_cancel)
 
     def _write(self, out_ptr, payload: bytes) -> int:
         buffer = ctypes.create_string_buffer(payload)
@@ -331,6 +365,55 @@ class FakeRawCABI:
         self.signed_frees.append(int(signed_id.value))
         return 0
 
+    def _invoke_callback(self, callback, user_data, payload: bytes) -> None:
+        buffer = ctypes.create_string_buffer(payload)
+        self.callback_buffers.append(buffer)
+        callback(user_data, ctypes.cast(buffer, ctypes.c_void_p))
+
+    def _invocation_stream_open(
+        self, handle, raw, callback, user_data, out_stream_id
+    ) -> int:
+        self.runtime_requests.append(
+            ("stream_open", json.loads(raw.value.decode("utf-8")))
+        )
+        out_stream_id._obj.value = 404
+        for event in self.stream_events:
+            self._invoke_callback(callback, user_data, event)
+        return 0
+
+    def _invocation_stream_cancel(self, handle, stream_id) -> int:
+        self.stream_cancels.append(int(stream_id.value))
+        return 0
+
+    def _invocation_stream_close(self, handle, stream_id) -> int:
+        self.stream_closes.append(int(stream_id.value))
+        return 0
+
+    def _invocation_bidi_open(
+        self, handle, raw, callback, user_data, out_bidi_id
+    ) -> int:
+        self.runtime_requests.append(("bidi_open", json.loads(raw.value.decode("utf-8"))))
+        out_bidi_id._obj.value = 505
+        for frame in self.bidi_frames:
+            self._invoke_callback(callback, user_data, frame)
+        return 0
+
+    def _invocation_bidi_send(self, handle, bidi_id, frame_json) -> int:
+        self.bidi_sends.append(json.loads(frame_json.value.decode("utf-8")))
+        return 0
+
+    def _invocation_bidi_close_send(self, handle, bidi_id) -> int:
+        self.bidi_close_sends.append(int(bidi_id.value))
+        return 0
+
+    def _invocation_bidi_close(self, handle, bidi_id) -> int:
+        self.bidi_closes.append(int(bidi_id.value))
+        return 0
+
+    def _invocation_bidi_cancel(self, handle, bidi_id) -> int:
+        self.bidi_cancels.append(int(bidi_id.value))
+        return 0
+
 
 DESCRIPTOR_PROJECTION = (
     b'{"kind":"descriptor_ref","valid":true,'
@@ -539,20 +622,110 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
 
-    def test_runtime_transport_stream_and_bidi_are_explicitly_not_implemented(
-        self,
-    ) -> None:
+    def test_runtime_transport_stream_callbacks_drive_stream_handle(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
         client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
 
-        with self.assertRaises(SDKError) as caught_stream:
-            client.invoke_stream(complete_draft())
-        with self.assertRaises(SDKError) as caught_bidi:
-            client.open_bidi(complete_draft(), ())
+        stream = client.invoke_stream(complete_draft())
+        first = stream.next()
+        terminal = stream.next()
+        stream.close()
 
-        self.assertTrue(is_code(caught_stream.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertTrue(is_code(caught_bidi.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(stream.stream_id, "404")
+        self.assertEqual(first.payload_json, {"step": 1})
+        self.assertTrue(terminal.terminal)
+        self.assertEqual(stream.state, StreamState.CLOSED)
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
+
+    def test_runtime_transport_stream_cancel_is_terminal(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        stream = client.invoke_stream(complete_draft())
+        outcome = stream.cancel("client stop")
+
+        self.assertTrue(outcome.cancelled)
+        self.assertEqual(raw.stream_cancels, [404])
+
+    def test_runtime_transport_stream_callback_overflow_fails_bounded_queue(
+        self,
+    ) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = [
+            json.dumps(
+                {"sequence": index + 1, "kind": "chunk", "terminal": False},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            for index in range(1025)
+        ]
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        stream = client.invoke_stream(complete_draft())
+        with self.assertRaises(SDKError) as caught:
+            stream.next()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.PROTOCOL))
+        self.assertEqual(stream.state, StreamState.FAILED)
+        stream.close()
+
+    def test_runtime_transport_bidi_callbacks_drive_session(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        session = client.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1,
+                    content_type="application/json",
+                    ordering="STRICT",
+                ),
+            ),
+        )
+        ack = session.send(BidiFrame(sequence=1, kind="data", stream_id=1))
+        close_send = session.close_send()
+        frame = session.receive()
+        session.close()
+
+        self.assertEqual(session.session_id, "505")
+        self.assertEqual(ack.sequence, 1)
+        self.assertFalse(close_send.terminal)
+        self.assertTrue(frame.terminal)
+        self.assertEqual(raw.bidi_close_sends, [505])
+        self.assertEqual(raw.bidi_closes, [505])
+        self.assertEqual(raw.bidi_sends[0]["kind"], "data")
+        bidi_open = [item for item in raw.runtime_requests if item[0] == "bidi_open"][0]
+        self.assertEqual(
+            bidi_open[1]["bidi_streams"],
+            [
+                {
+                    "content_type": "application/json",
+                    "ordering": "STRICT",
+                    "stream_id": 1,
+                }
+            ],
+        )
+
+    def test_runtime_transport_bidi_cancel_is_terminal(self) -> None:
+        raw = FakeRawCABI()
+        raw.bidi_frames = []
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        session = client.open_bidi(
+            complete_draft(),
+            (BidiStreamDescriptor(stream_id=1, content_type="application/json"),),
+        )
+        outcome = session.cancel("client stop")
+
+        self.assertTrue(outcome.terminal)
+        self.assertEqual(raw.bidi_cancels, [505])
 
     def test_owned_runtime_transport_frees_prepared_handles_on_close(self) -> None:
         raw = FakeRawCABI()
@@ -568,6 +741,28 @@ class CABITransportTests(unittest.TestCase):
         transport.close()
 
         self.assertEqual(raw.prepared_frees, [101])
+        self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_owned_runtime_transport_closes_active_stream_and_bidi_on_close(
+        self,
+    ) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        raw.bidi_frames = []
+        lib = CLILibrary(raw)
+        handle = lib.init("")
+        transport = CABIRuntimeTransport(lib, handle=handle, owns_handle=True)
+        client = RuntimeClient(transport)
+
+        client.invoke_stream(complete_draft())
+        client.open_bidi(
+            complete_draft(),
+            (BidiStreamDescriptor(stream_id=1, content_type="application/json"),),
+        )
+        client.close()
+
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.bidi_closes, [505])
         self.assertEqual(raw.shutdown_handles, [42])
 
     def test_cabi_error_json_projects_sdk_error(self) -> None:

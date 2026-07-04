@@ -10,6 +10,8 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import json
+import queue as queue_module
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,13 @@ from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 
 EXPECTED_ABI_VERSION = 4
 EASYNET_OK = 0
+MAX_CABI_CALLBACK_QUEUE = 1024
+
+_StreamCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+_BidiCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+_CALLBACK_REGISTRY_LOCK = threading.Lock()
+_CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
+_NEXT_CALLBACK_TOKEN = 1
 
 
 class CLILibrary:
@@ -194,6 +203,88 @@ class CLILibrary:
         code = int(self._raw.easynet_signed_invocation_free(ctypes.c_uint64(signed_id)))
         self._raise_for_code(code)
 
+    def invocation_stream_open(
+        self, handle: int, invocation_json: bytes, callback_token: int
+    ) -> int:
+        out_stream_id = ctypes.c_uint64(0)
+        code = int(
+            self._raw.easynet_invocation_stream_open(
+                ctypes.c_uint64(handle),
+                ctypes.c_char_p(invocation_json),
+                _STREAM_CALLBACK_HANDLE,
+                ctypes.c_void_p(callback_token),
+                ctypes.byref(out_stream_id),
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_stream_id.value)
+
+    def invocation_stream_cancel(self, handle: int, stream_id: int) -> None:
+        code = int(
+            self._raw.easynet_invocation_stream_cancel(
+                ctypes.c_uint64(handle), ctypes.c_uint64(stream_id)
+            )
+        )
+        self._raise_for_code(code)
+
+    def invocation_stream_close(self, handle: int, stream_id: int) -> None:
+        code = int(
+            self._raw.easynet_invocation_stream_close(
+                ctypes.c_uint64(handle), ctypes.c_uint64(stream_id)
+            )
+        )
+        self._raise_for_code(code)
+
+    def invocation_bidi_open(
+        self, handle: int, invocation_json: bytes, callback_token: int
+    ) -> int:
+        out_bidi_id = ctypes.c_uint64(0)
+        code = int(
+            self._raw.easynet_invocation_bidi_open(
+                ctypes.c_uint64(handle),
+                ctypes.c_char_p(invocation_json),
+                _BIDI_CALLBACK_HANDLE,
+                ctypes.c_void_p(callback_token),
+                ctypes.byref(out_bidi_id),
+            )
+        )
+        self._raise_for_code(code)
+        return int(out_bidi_id.value)
+
+    def invocation_bidi_send(self, handle: int, bidi_id: int, frame_json: bytes) -> None:
+        code = int(
+            self._raw.easynet_invocation_bidi_send(
+                ctypes.c_uint64(handle),
+                ctypes.c_uint64(bidi_id),
+                ctypes.c_char_p(frame_json),
+            )
+        )
+        self._raise_for_code(code)
+
+    def invocation_bidi_close_send(self, handle: int, bidi_id: int) -> None:
+        code = int(
+            self._raw.easynet_invocation_bidi_close_send(
+                ctypes.c_uint64(handle), ctypes.c_uint64(bidi_id)
+            )
+        )
+        self._raise_for_code(code)
+
+    def invocation_bidi_close(self, handle: int, bidi_id: int) -> None:
+        code = int(
+            self._raw.easynet_invocation_bidi_close(
+                ctypes.c_uint64(handle), ctypes.c_uint64(bidi_id)
+            )
+        )
+        self._raise_for_code(code)
+
+    def invocation_bidi_cancel(self, handle: int, bidi_id: int) -> None:
+        code = int(
+            self._raw.easynet_invocation_bidi_cancel(
+                ctypes.c_uint64(handle), ctypes.c_uint64(bidi_id)
+            )
+        )
+        self._raise_for_code(code)
+
     def _bind_symbols(self) -> None:
         self._raw.easynet_abi_version.argtypes = []
         self._raw.easynet_abi_version.restype = ctypes.c_uint32
@@ -298,6 +389,53 @@ class CLILibrary:
         self._raw.easynet_prepared_invocation_free.restype = ctypes.c_int32
         self._raw.easynet_signed_invocation_free.argtypes = [ctypes.c_uint64]
         self._raw.easynet_signed_invocation_free.restype = ctypes.c_int32
+        self._raw.easynet_invocation_stream_open.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            _StreamCallback,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
+        self._raw.easynet_invocation_stream_open.restype = ctypes.c_int32
+        self._raw.easynet_invocation_stream_cancel.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+        ]
+        self._raw.easynet_invocation_stream_cancel.restype = ctypes.c_int32
+        self._raw.easynet_invocation_stream_close.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+        ]
+        self._raw.easynet_invocation_stream_close.restype = ctypes.c_int32
+        self._raw.easynet_invocation_bidi_open.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            _BidiCallback,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
+        self._raw.easynet_invocation_bidi_open.restype = ctypes.c_int32
+        self._raw.easynet_invocation_bidi_send.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+        ]
+        self._raw.easynet_invocation_bidi_send.restype = ctypes.c_int32
+        self._raw.easynet_invocation_bidi_close_send.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+        ]
+        self._raw.easynet_invocation_bidi_close_send.restype = ctypes.c_int32
+        self._raw.easynet_invocation_bidi_close.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+        ]
+        self._raw.easynet_invocation_bidi_close.restype = ctypes.c_int32
+        self._raw.easynet_invocation_bidi_cancel.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+        ]
+        self._raw.easynet_invocation_bidi_cancel.restype = ctypes.c_int32
 
     def _call_output(self, function: Any, *args: Any) -> bytes:
         out = ctypes.c_void_p()
@@ -418,6 +556,8 @@ class CABIRuntimeTransport:
     handle: int
     owns_handle: bool = False
     _prepared_ids: dict[str, int] = field(default_factory=dict)
+    _streams: dict[int, "_CABIStreamTransport"] = field(default_factory=dict)
+    _bidis: dict[int, "_CABIBidiTransport"] = field(default_factory=dict)
     _closed: bool = False
 
     def runtime_health(self) -> bytes:
@@ -427,22 +567,74 @@ class CABIRuntimeTransport:
         return self.lib.invocation_invoke(self._require_open(), draft_json)
 
     def open_stream(self, draft_json: bytes) -> tuple[Any, bytes]:
-        _ = draft_json
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            message="C ABI stream transport callback adapter is not implemented",
-        )
+        inbox = _CallbackInbox(MAX_CABI_CALLBACK_QUEUE)
+        token = _register_callback_inbox(inbox)
+        try:
+            stream_id = self.lib.invocation_stream_open(
+                self._require_open(), draft_json, token
+            )
+            if stream_id <= 0:
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="C ABI stream open returned an invalid stream id",
+                )
+            transport = _CABIStreamTransport(
+                owner=self, stream_id=stream_id, callback_token=token, inbox=inbox
+            )
+            self._streams[stream_id] = transport
+            return transport, _json_bytes(
+                {
+                    "stream_id": str(stream_id),
+                    "state": "Open",
+                    "max_buffered_events": MAX_CABI_CALLBACK_QUEUE,
+                }
+            )
+        except Exception:
+            _release_callback_inbox(token)
+            raise
 
     def open_bidi(self, draft_json: bytes, streams_json: bytes) -> tuple[Any, bytes]:
-        _ = (draft_json, streams_json)
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            message="C ABI bidi transport callback adapter is not implemented",
-        )
+        invocation_json = _merge_bidi_streams(draft_json, streams_json)
+        inbox = _CallbackInbox(MAX_CABI_CALLBACK_QUEUE)
+        token = _register_callback_inbox(inbox)
+        try:
+            bidi_id = self.lib.invocation_bidi_open(
+                self._require_open(), invocation_json, token
+            )
+            if bidi_id <= 0:
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="C ABI bidi open returned an invalid session id",
+                )
+            transport = _CABIBidiTransport(
+                owner=self, bidi_id=bidi_id, callback_token=token, inbox=inbox
+            )
+            self._bidis[bidi_id] = transport
+            return transport, _json_bytes(
+                {
+                    "session_id": str(bidi_id),
+                    "state": "Open",
+                    "max_buffered_frames": MAX_CABI_CALLBACK_QUEUE,
+                }
+            )
+        except Exception:
+            _release_callback_inbox(token)
+            raise
+
+    def _remove_stream(self, stream_id: int, callback_token: int) -> None:
+        self._streams.pop(stream_id, None)
+        _release_callback_inbox(callback_token)
+
+    def _remove_bidi(self, bidi_id: int, callback_token: int) -> None:
+        self._bidis.pop(bidi_id, None)
+        _release_callback_inbox(callback_token)
+
+    def _handle_if_open(self) -> int:
+        return self._require_open()
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         prepared_c_id, raw = self.lib.invocation_prepare(
@@ -519,8 +711,19 @@ class CABIRuntimeTransport:
     def close(self) -> None:
         if self._closed:
             return
-        self._closed = True
         first_error: SDKError | None = None
+        for stream in tuple(self._streams.values()):
+            try:
+                stream.close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+        for bidi in tuple(self._bidis.values()):
+            try:
+                bidi.close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
         for prepared_id in tuple(self._prepared_ids.values()):
             try:
                 self.lib.prepared_invocation_free(prepared_id)
@@ -528,6 +731,7 @@ class CABIRuntimeTransport:
                 if first_error is None:
                     first_error = exc
         self._prepared_ids.clear()
+        self._closed = True
         if self.owns_handle:
             try:
                 self.lib.shutdown(self.handle)
@@ -548,6 +752,199 @@ class CABIRuntimeTransport:
                 message="runtime transport handle is invalid",
             )
         return self.handle
+
+
+@dataclass
+class _CABIStreamTransport:
+    owner: CABIRuntimeTransport
+    stream_id: int
+    callback_token: int
+    inbox: "_CallbackInbox"
+    _terminal_action_done: bool = False
+
+    def recv(self) -> bytes:
+        if self._terminal_action_done:
+            raise _closed_error("stream transport is closed")
+        return self.inbox.recv()
+
+    def cancel(self, reason: str) -> bytes:
+        if not self._terminal_action_done:
+            self.owner.lib.invocation_stream_cancel(
+                self.owner._handle_if_open(), self.stream_id
+            )
+            self._terminal_action_done = True
+            self.owner._remove_stream(self.stream_id, self.callback_token)
+        return _json_bytes(
+            {
+                "stream_id": str(self.stream_id),
+                "cancelled": True,
+                "state": "Cancelled",
+                "terminal": True,
+            }
+        )
+
+    def close(self) -> None:
+        if self._terminal_action_done:
+            return
+        self.owner.lib.invocation_stream_close(
+            self.owner._handle_if_open(), self.stream_id
+        )
+        self._terminal_action_done = True
+        self.owner._remove_stream(self.stream_id, self.callback_token)
+
+
+@dataclass
+class _CABIBidiTransport:
+    owner: CABIRuntimeTransport
+    bidi_id: int
+    callback_token: int
+    inbox: "_CallbackInbox"
+    _terminal_action_done: bool = False
+
+    def send(self, frame_json: bytes) -> bytes:
+        if self._terminal_action_done:
+            raise _closed_error("bidi transport is closed")
+        self.owner.lib.invocation_bidi_send(
+            self.owner._handle_if_open(), self.bidi_id, frame_json
+        )
+        return frame_json
+
+    def recv(self) -> bytes:
+        if self._terminal_action_done:
+            raise _closed_error("bidi transport is closed")
+        return self.inbox.recv()
+
+    def close_send(self) -> bytes:
+        if self._terminal_action_done:
+            raise _closed_error("bidi transport is closed")
+        self.owner.lib.invocation_bidi_close_send(
+            self.owner._handle_if_open(), self.bidi_id
+        )
+        return _json_bytes(
+            {
+                "session_id": str(self.bidi_id),
+                "state": "HalfClosedLocal",
+                "terminal": False,
+            }
+        )
+
+    def close(self) -> None:
+        if self._terminal_action_done:
+            return
+        self.owner.lib.invocation_bidi_close(self.owner._handle_if_open(), self.bidi_id)
+        self._terminal_action_done = True
+        self.owner._remove_bidi(self.bidi_id, self.callback_token)
+
+    def cancel(self, reason: str) -> bytes:
+        if not self._terminal_action_done:
+            self.owner.lib.invocation_bidi_cancel(
+                self.owner._handle_if_open(), self.bidi_id
+            )
+            self._terminal_action_done = True
+            self.owner._remove_bidi(self.bidi_id, self.callback_token)
+        return _json_bytes(
+            {
+                "session_id": str(self.bidi_id),
+                "state": "Cancelled",
+                "terminal": True,
+                "reason": reason,
+            }
+        )
+
+
+@dataclass
+class _CallbackInbox:
+    max_items: int
+    _queue: queue_module.Queue[bytes | None] = field(init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+    _closed: bool = False
+    _failure: SDKError | None = None
+
+    def __post_init__(self) -> None:
+        self._queue = queue_module.Queue(maxsize=self.max_items)
+
+    def push(self, raw: bytes) -> None:
+        with self._lock:
+            if self._closed or self._failure is not None:
+                return
+            try:
+                self._queue.put_nowait(raw)
+            except queue_module.Full:
+                self._failure = SDKError(
+                    code=ErrorCode.PROTOCOL,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="C ABI callback queue limit exceeded",
+                )
+
+    def recv(self) -> bytes:
+        with self._lock:
+            failure = self._failure
+        if failure is not None:
+            raise failure
+        item = self._queue.get()
+        with self._lock:
+            failure = self._failure
+        if failure is not None:
+            raise failure
+        if item is None:
+            raise _closed_error("C ABI callback inbox is closed")
+        return item
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._queue.put_nowait(None)
+            except queue_module.Full:
+                pass
+
+
+def _register_callback_inbox(inbox: _CallbackInbox) -> int:
+    global _NEXT_CALLBACK_TOKEN
+    with _CALLBACK_REGISTRY_LOCK:
+        token = _NEXT_CALLBACK_TOKEN
+        _NEXT_CALLBACK_TOKEN += 1
+        _CALLBACK_INBOXES[token] = inbox
+        return token
+
+
+def _release_callback_inbox(token: int) -> None:
+    with _CALLBACK_REGISTRY_LOCK:
+        inbox = _CALLBACK_INBOXES.pop(token, None)
+    if inbox is not None:
+        inbox.close()
+
+
+def _callback_inbox(token: int) -> _CallbackInbox | None:
+    with _CALLBACK_REGISTRY_LOCK:
+        return _CALLBACK_INBOXES.get(token)
+
+
+def _stream_callback(user_data: int | None, chunk_json: int | None) -> None:
+    _push_callback_payload(user_data, chunk_json)
+
+
+def _bidi_callback(user_data: int | None, frame_json: int | None) -> None:
+    _push_callback_payload(user_data, frame_json)
+
+
+def _push_callback_payload(user_data: int | None, raw_ptr: int | None) -> None:
+    try:
+        if not user_data or not raw_ptr:
+            return
+        inbox = _callback_inbox(int(user_data))
+        if inbox is None:
+            return
+        inbox.push(ctypes.string_at(raw_ptr))
+    except BaseException:
+        return
+
+
+_STREAM_CALLBACK_HANDLE = _StreamCallback(_stream_callback)
+_BIDI_CALLBACK_HANDLE = _BidiCallback(_bidi_callback)
 
 
 def open_cabi_identity_transport(
@@ -578,6 +975,40 @@ def _optional_c_string(value: str) -> bytes | None:
     if not value:
         return None
     return value.encode("utf-8")
+
+
+def _json_bytes(value: dict[str, object]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _merge_bidi_streams(draft_json: bytes, streams_json: bytes) -> bytes:
+    draft = _json_object(draft_json, "bidi invocation")
+    try:
+        streams = json.loads(streams_json.decode("utf-8"))
+    except Exception as exc:
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="decode",
+            retry=RetryHint.NEVER,
+            message=f"decode bidi streams: {exc}",
+            cause=exc,
+        ) from exc
+    if not isinstance(streams, list) or not streams:
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            message="bidi_streams must be a non-empty array",
+        )
+    if any(not isinstance(stream, dict) for stream in streams):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            message="bidi_streams entries must be objects",
+        )
+    draft["bidi_streams"] = streams
+    return _json_bytes(draft)
 
 
 def _platform_library_candidates() -> tuple[str, ...]:
