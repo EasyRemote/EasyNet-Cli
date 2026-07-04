@@ -746,9 +746,7 @@ def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
 
 
 def _bidi_target(draft: InvocationDraft) -> Any:
-    return types_pb2.InvocationTarget(
-        ability=types_pb2.AbilityTarget(function_name=draft.descriptor_ref)
-    )
+    return types_pb2.InvocationTarget(ability_name=draft.descriptor_ref)
 
 
 def _bidi_open_mac(draft: InvocationDraft) -> bytes:
