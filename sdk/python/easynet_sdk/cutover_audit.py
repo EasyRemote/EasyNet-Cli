@@ -12,6 +12,7 @@ from typing import Iterable
 
 _RAW_SYMBOL_PREFIX = "easynet" + "_"
 _RAW_AXON_MODULE = "easynet" + "_" + "axon"
+_SDK_MODULE = "easynet" + "_" + "sdk"
 _RAW_ABI_SYMBOL = re.compile(r"\b" + _RAW_SYMBOL_PREFIX + r"(?!sdk\b)[A-Za-z0-9_]+")
 _RAW_FFI_MARKERS = (
     "ctypes.CDLL",
@@ -437,12 +438,13 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation,
         tree = ast.parse(text)
     except SyntaxError:
         return tuple(violations)
+    sdk_identity_facade = _is_sdk_identity_facade_module(path, tree)
     docstrings = _docstring_node_ids(tree)
     for node in ast.walk(tree):
         if id(node) in docstrings:
             continue
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name in _RAW_ADDRESSING_HELPER_NAMES:
+            if node.name in _RAW_ADDRESSING_HELPER_NAMES and not sdk_identity_facade:
                 violations.append(
                     CutoverViolation(
                         path=path,
@@ -470,6 +472,19 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation,
                 )
             )
     return tuple(violations)
+
+
+def _is_sdk_identity_facade_module(path: str, tree: ast.AST) -> bool:
+    if Path(path).name != "_sdk_identity.py":
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == _SDK_MODULE:
+                    return True
+        if isinstance(node, ast.ImportFrom) and node.module == _SDK_MODULE:
+            return True
+    return False
 
 
 def _is_descriptor_ref_assembly(node: ast.AST) -> bool:

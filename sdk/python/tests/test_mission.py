@@ -234,6 +234,40 @@ class MemoryMissionTransport:
         self.close_calls += 1
 
 
+class _FakeEasyRemoteIdentity:
+    device_ura = "easynet:///r/example/device/dev-a"
+
+
+class _FakeEasyRemoteInvocation:
+    def __init__(self, result: dict[str, object]) -> None:
+        self._result = result
+
+    def result(self) -> dict[str, object]:
+        return self._result
+
+
+class _FakeEasyRemoteClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.responses: list[dict[str, object]] = [
+            {
+                "run_id": "run-1",
+                "state": "running",
+                "run_dir": "/tmp/run-1",
+                "outputs": {"a": 1},
+            },
+            {"run_id": "run-1", "state": "running"},
+            {"run_id": "run-1", "cancelled": True},
+        ]
+
+    def _who(self) -> _FakeEasyRemoteIdentity:
+        return _FakeEasyRemoteIdentity()
+
+    def invoke(self, ability: str, **kwargs: object) -> _FakeEasyRemoteInvocation:
+        self.calls.append((ability, kwargs))
+        return _FakeEasyRemoteInvocation(self.responses.pop(0))
+
+
 def base() -> MissionCarrierBase:
     return MissionCarrierBase(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -272,6 +306,40 @@ class MissionTests(unittest.TestCase):
         self.assertEqual(transport.seen["run_eal"]["label"], "nightly")
         self.assertEqual(transport.seen["track"]["mission_id"], "run-1")
         self.assertEqual(transport.seen["cancel"]["mission_id"], "run-1")
+
+    def test_easyremote_factory_projects_raw_mission_results(self) -> None:
+        client = _FakeEasyRemoteClient()
+        adapter = EasyRemoteMissionAdapter.from_easyremote_client(client)
+
+        run = adapter.run_eal('mission "nightly" {}\n', label="nightly")
+        tracked = adapter.track("run-1")
+        cancelled = adapter.cancel("run-1")
+
+        self.assertEqual(run.run_id, "run-1")
+        self.assertEqual(run.run_dir, "/tmp/run-1")
+        self.assertEqual(run.outputs, {"a": 1})
+        self.assertEqual(
+            run.raw,
+            {
+                "run_id": "run-1",
+                "state": "running",
+                "run_dir": "/tmp/run-1",
+                "outputs": {"a": 1},
+            },
+        )
+        self.assertEqual(tracked, {"run_id": "run-1", "state": "running"})
+        self.assertEqual(cancelled, {"run_id": "run-1", "cancelled": True})
+        self.assertEqual(
+            client.calls,
+            [
+                (
+                    "mission.run",
+                    {"source": 'mission "nightly" {}\n', "label": "nightly"},
+                ),
+                ("mission.track", {"run_id": "run-1"}),
+                ("mission.cancel", {"run_id": "run-1"}),
+            ],
+        )
 
     def test_builds_run_track_cancel_invocations(self) -> None:
         client = MissionClient(MemoryMissionTransport())

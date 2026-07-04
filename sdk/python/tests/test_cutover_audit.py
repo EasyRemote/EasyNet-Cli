@@ -256,6 +256,66 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
+    def test_allows_sdk_identity_facade_helper_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "_sdk_identity.py").write_text(
+                textwrap.dedent(
+                    """
+                    import easynet_sdk
+
+                    class IdentityFacade:
+                        def parse_ura(self, value):
+                            raise NotImplementedError
+
+                        def owner_ability_ura(self, owner_ura, ability_name):
+                            raise NotImplementedError
+
+                        def owner_ura_for_ability(self, ability_ura):
+                            raise NotImplementedError
+
+                        def canonical_ability_descriptor_ref(self, value, version=""):
+                            raise NotImplementedError
+
+                    class SdkIdentityFacade:
+                        def parse_ura(self, value):
+                            return easynet_sdk.parse_ura(value)
+
+                        def owner_ability_ura(self, owner_ura, ability_name):
+                            return easynet_sdk.owner_ability_ura(owner_ura, ability_name)
+
+                        def owner_ura_for_ability(self, ability_ura):
+                            return easynet_sdk.owner_ura_for_ability(ability_ura)
+
+                        def canonical_ability_descriptor_ref(self, value, version=""):
+                            return easynet_sdk.canonical_ability_descriptor_ref(value, version)
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
+
+    def test_flags_non_sdk_identity_facade_helper_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "_sdk_identity.py").write_text(
+                textwrap.dedent(
+                    """
+                    def parse_ura(value):
+                        return value
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_addressing_helper", _rules(result))
+
     def test_flags_raw_addressing_helpers_and_descriptor_ref_assembly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
