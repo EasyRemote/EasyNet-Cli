@@ -10,6 +10,7 @@ from easynet_sdk import (
     PrepareOptions,
     PreparedInvocation,
     RuntimeClient,
+    RuntimeReceipt,
     SDKError,
     Signer,
     is_code,
@@ -179,6 +180,64 @@ class RuntimeTests(unittest.TestCase):
             transport.seen_draft["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+
+    def test_invocation_result_projects_runtime_receipt_summary(self) -> None:
+        result = InvocationResult.from_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": complete_draft().to_json_dict(),
+                    "terminal_state": "Completed",
+                    "output_content_type": "application/json",
+                    "output_base64": "e30=",
+                    "output_json": {},
+                    "elapsed_ms": 8,
+                    "receipt": {
+                        "receipt_ura": "easynet:///r/example/receipt/opaque",
+                        "invocation_id": "inv-1",
+                        "receipt_type": "terminal",
+                        "state": "completed",
+                        "index": 1,
+                        "timestamp_unix_ms": 1783100000123,
+                        "prev_receipt_hash_hex": "",
+                        "self_hash_hex": "00" * 32,
+                        "cleanup_complete": True,
+                        "reason": "",
+                        "child_invocation_id": "",
+                        "extra": {"daemon": "axon"},
+                    },
+                    "error": None,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+
+        self.assertIsInstance(result.receipt_summary, RuntimeReceipt)
+        assert result.receipt_summary is not None
+        self.assertEqual(result.receipt_summary.invocation_id, "inv-1")
+        self.assertTrue(result.receipt_summary.has_causal_anchor())
+        self.assertEqual(result.receipt_summary.raw["extra"], {"daemon": "axon"})
+        assert result.receipt is not None
+        self.assertEqual(result.receipt["invocation_id"], "inv-1")
+
+    def test_invocation_result_rejects_malformed_runtime_receipt_fields(self) -> None:
+        result = {
+            "ok": True,
+            "tuple": complete_draft().to_json_dict(),
+            "terminal_state": "Completed",
+            "output_content_type": "application/json",
+            "output_base64": "e30=",
+            "output_json": {},
+            "elapsed_ms": 8,
+            "receipt": {"cleanup_complete": "yes"},
+            "error": None,
+        }
+
+        with self.assertRaises(SDKError) as caught:
+            InvocationResult.from_json(json.dumps(result))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_invoke_stream_opens_stream_handle(self) -> None:
         transport = MemoryRuntimeTransport()

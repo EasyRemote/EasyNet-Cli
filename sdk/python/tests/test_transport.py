@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from easynet_sdk import (
@@ -28,6 +29,30 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             runtime.seen_draft["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+
+    def test_invoke_projects_runtime_receipt_summary_to_dict(self) -> None:
+        class ReceiptRuntimeTransport(MemoryRuntimeTransport):
+            def invoke(self, draft_json: bytes) -> bytes:
+                result = json.loads(super().invoke(draft_json).decode("utf-8"))
+                result["receipt"] = {
+                    "receipt_ura": "easynet:///r/example/receipt/opaque",
+                    "invocation_id": "inv-1",
+                    "state": "completed",
+                    "self_hash_hex": "00" * 32,
+                    "cleanup_complete": True,
+                }
+                return json.dumps(
+                    result, separators=(",", ":"), sort_keys=True
+                ).encode("utf-8")
+
+        runtime = ReceiptRuntimeTransport()
+        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+
+        result = transport.invoke(complete_draft().to_json_dict())
+
+        self.assertEqual(result["receipt"]["invocation_id"], "inv-1")
+        self.assertEqual(result["receipt_summary"]["invocation_id"], "inv-1")
+        self.assertTrue(result["receipt_summary"]["has_causal_anchor"])
 
     def test_stream_projects_sdk_events_to_dicts(self) -> None:
         runtime = MemoryRuntimeTransport()

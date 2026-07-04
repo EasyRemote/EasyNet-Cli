@@ -77,6 +77,7 @@ from easynet_sdk import (
     ResolveQuery,
     RuntimeClient,
     RuntimeHealth,
+    RuntimeReceipt,
     PrepareOptions,
     RetryHint,
     SDKError,
@@ -1278,7 +1279,15 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                         "output_base64": "e30=",
                         "output_json": {},
                         "elapsed_ms": 1,
-                        "receipt": {"receipt_id": "receipt-1"},
+                        "receipt": {
+                            "receipt_id": "receipt-1",
+                            "receipt_ura": "easynet:///r/example/receipt/opaque",
+                            "invocation_id": "inv-example-1",
+                            "receipt_type": "terminal",
+                            "state": "completed",
+                            "self_hash_hex": "00" * 32,
+                            "cleanup_complete": True,
+                        },
                         "error": None,
                     },
                     separators=(",", ":"),
@@ -1377,6 +1386,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         events = client.events(handle)
         self.assertTrue(result.ok)
         self.assertEqual(result.terminal_state, "Completed")
+        self.assertIsInstance(result.receipt_summary, RuntimeReceipt)
+        assert result.receipt_summary is not None
+        self.assertEqual(result.receipt_summary.invocation_id, "inv-example-1")
+        self.assertTrue(result.receipt_summary.has_causal_anchor())
         self.assertEqual(cancel.state, "Completed")
         self.assertTrue(cancel.terminal)
         self.assertTrue(events.terminal)
@@ -3332,6 +3345,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             PreparedInvocation,
             SignedInvocation,
             Signer,
+            RuntimeReceipt,
             StreamHandle,
             BidiSession,
         )

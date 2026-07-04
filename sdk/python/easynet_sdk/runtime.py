@@ -137,6 +137,64 @@ class InvocationFailure:
 
 
 @dataclass(frozen=True)
+class RuntimeReceipt:
+    """Non-verifying Runtime Core terminal receipt projection."""
+
+    raw: Mapping[str, object]
+    receipt_id: str = ""
+    receipt_ura: str = ""
+    invocation_id: str = ""
+    receipt_type: str = ""
+    state: str = ""
+    index: int = 0
+    timestamp_unix_ms: int = 0
+    prev_receipt_hash_hex: str = ""
+    self_hash_hex: str = ""
+    cleanup_complete: Optional[bool] = None
+    reason: str = ""
+    child_invocation_id: str = ""
+
+    @classmethod
+    def from_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
+        return cls(
+            raw=dict(decoded),
+            receipt_id=_optional_string(decoded.get("receipt_id"), "receipt_id") or "",
+            receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura") or "",
+            invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id")
+            or "",
+            receipt_type=_optional_string(decoded.get("receipt_type"), "receipt_type")
+            or "",
+            state=_optional_string(decoded.get("state"), "state") or "",
+            index=_optional_non_negative_int(decoded.get("index"), "index"),
+            timestamp_unix_ms=_optional_non_negative_int(
+                decoded.get("timestamp_unix_ms"), "timestamp_unix_ms"
+            ),
+            prev_receipt_hash_hex=_optional_string(
+                decoded.get("prev_receipt_hash_hex"), "prev_receipt_hash_hex"
+            )
+            or "",
+            self_hash_hex=_optional_string(decoded.get("self_hash_hex"), "self_hash_hex")
+            or "",
+            cleanup_complete=_optional_bool(
+                decoded.get("cleanup_complete"), "cleanup_complete"
+            ),
+            reason=_optional_string(decoded.get("reason"), "reason") or "",
+            child_invocation_id=_optional_string(
+                decoded.get("child_invocation_id"), "child_invocation_id"
+            )
+            or "",
+        )
+
+    def has_causal_anchor(self) -> bool:
+        """Return whether daemon/Axon supplied enough facts for causal linkage."""
+
+        return bool(self.receipt_ura and self.self_hash_hex)
+
+    def to_json_dict(self) -> dict[str, object]:
+        return dict(self.raw)
+
+
+@dataclass(frozen=True)
 class InvocationResult:
     """Unary invocation terminal result projection."""
 
@@ -150,6 +208,7 @@ class InvocationResult:
     scheduling_reason: str = ""
     elapsed_ms: int = 0
     receipt: Optional[Mapping[str, object]] = None
+    receipt_summary: Optional[RuntimeReceipt] = None
     error: Optional[InvocationFailure] = None
 
     @classmethod
@@ -171,6 +230,8 @@ class InvocationResult:
             raise _invalid_runtime("ok result must not include error")
         if not ok and failure is None:
             raise _invalid_runtime("failed result must include error")
+        receipt = _optional_mapping(decoded.get("receipt"), "receipt")
+        receipt_summary = RuntimeReceipt.from_mapping(receipt) if receipt else None
         return cls(
             ok=ok,
             tuple=draft,
@@ -191,7 +252,8 @@ class InvocationResult:
             )
             or "",
             elapsed_ms=elapsed_ms,
-            receipt=_optional_mapping(decoded.get("receipt"), "receipt"),
+            receipt=receipt,
+            receipt_summary=receipt_summary,
             error=failure,
         )
 

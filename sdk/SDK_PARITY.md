@@ -170,8 +170,8 @@ method spelling.
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, prepared/signed Invocation DTOs, signer workflow
-  objects over daemon-authorized handles, unary InvocationResult
-  projection, StreamHandle state observation, BidiSession frame ordering/
+  objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
+  receipt projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow

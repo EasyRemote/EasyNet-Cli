@@ -204,6 +204,7 @@ from .runtime import (
     InvocationResult,
     PrepareOptions,
     RuntimeClient,
+    RuntimeReceipt,
     RuntimeTransport,
 )
 from .receipt import (

@@ -213,9 +213,33 @@ def _invocation_result_dict(result: InvocationResult) -> dict[str, object]:
         "scheduling_reason": result.scheduling_reason,
         "elapsed_ms": result.elapsed_ms,
         "receipt": dict(result.receipt) if result.receipt is not None else None,
+        "receipt_summary": (
+            _runtime_receipt_dict(result.receipt_summary)
+            if result.receipt_summary is not None
+            else None
+        ),
         "error": _failure_dict(result.error) if result.error is not None else None,
     }
     return value
+
+
+def _runtime_receipt_dict(receipt) -> dict[str, object]:
+    return {
+        "receipt_id": receipt.receipt_id,
+        "receipt_ura": receipt.receipt_ura,
+        "invocation_id": receipt.invocation_id,
+        "receipt_type": receipt.receipt_type,
+        "state": receipt.state,
+        "index": receipt.index,
+        "timestamp_unix_ms": receipt.timestamp_unix_ms,
+        "prev_receipt_hash_hex": receipt.prev_receipt_hash_hex,
+        "self_hash_hex": receipt.self_hash_hex,
+        "cleanup_complete": receipt.cleanup_complete,
+        "reason": receipt.reason,
+        "child_invocation_id": receipt.child_invocation_id,
+        "has_causal_anchor": receipt.has_causal_anchor(),
+        "raw": receipt.to_json_dict(),
+    }
 
 
 def _failure_dict(error: InvocationFailure) -> dict[str, object]:
