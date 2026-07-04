@@ -107,13 +107,13 @@ method spelling.
   clients, backend import-ban integration, per-profile error source refs, and
   conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
-  read-model pages with bounded pagination and directory subscription state
-  seams plus `IdentityClient` descriptor, identity, ResourceRef, signing-key
-  lifecycle, and signer-handle projection seams; directory live transport
+  read-model pages with bounded pagination, directory subscription state seams,
+  and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
+  signing-key lifecycle, signer-handle projection, and close state seams; directory live transport
   adapters, local signer implementations, concrete daemon carriers, and backend
   route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
-  projection seams over opaque receipt refs; Axon-backed cryptographic
+  projection and close state seams over opaque receipt refs; Axon-backed cryptographic
   verification, concrete daemon carrier execution, receipt URI construction
   after RFC-007, and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
@@ -175,13 +175,13 @@ method spelling.
   error source refs, and conformance action execution remain incomplete before
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
-  read-model pages with bounded pagination and directory subscription state
-  seams plus `IdentityClient` descriptor, identity, ResourceRef, signing-key
-  lifecycle, and signer-handle projection seams; directory live transport
+  read-model pages with bounded pagination, directory subscription state seams,
+  and close state seams plus `IdentityClient` descriptor, identity, ResourceRef,
+  signing-key lifecycle, signer-handle projection, and close state seams; directory live transport
   adapters, local signer implementations, concrete daemon carriers, and
   EasyRemote extraction remain incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
-  projection seams over opaque receipt refs; Axon-backed cryptographic
+  projection and close state seams over opaque receipt refs; Axon-backed cryptographic
   verification, concrete daemon carrier execution, receipt URI construction
   after RFC-007, and EasyRemote context/receipt extraction remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,

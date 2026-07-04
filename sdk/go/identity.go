@@ -202,6 +202,7 @@ func (f IdentityTransportFunc) Signer(ctx context.Context, requestJSON []byte) (
 
 // IdentityClient is the Directory + Identity projection facade.
 type IdentityClient struct {
+	lifecycle profileClientLifecycle
 	transport IdentityTransport
 }
 
@@ -330,10 +331,14 @@ func (c *IdentityClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("identity client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
+	return c.lifecycle.RequireOpen(ctx, "identity")
+}
+
+func (c *IdentityClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("identity client is not initialized")
 	}
-	return nil
+	return c.lifecycle.Close(ctx, c.transport, "identity")
 }
 
 func NewIdentityProjectionFromJSON(raw []byte) (IdentityProjection, error) {

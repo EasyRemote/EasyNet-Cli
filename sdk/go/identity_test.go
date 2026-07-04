@@ -15,6 +15,7 @@ type memoryIdentityTransport struct {
 	revokeJSON     string
 	signerJSON     string
 	seenRequest    map[string]any
+	closeCalls     int
 }
 
 func (m *memoryIdentityTransport) ProjectDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -64,6 +65,11 @@ func (m *memoryIdentityTransport) Signer(ctx context.Context, requestJSON []byte
 		return nil, err
 	}
 	return []byte(m.signerJSON), nil
+}
+
+func (m *memoryIdentityTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func TestIdentityProjectDescriptorRefDelegatesToTransport(t *testing.T) {
@@ -226,6 +232,42 @@ func TestIdentitySigningKeyLifecycleRejectsInvalidInputs(t *testing.T) {
 	}
 	if _, err := client.RevokeSigningKey(context.Background(), SigningKeyRevokeRequest{KeyID: "alice-key-1"}); err == nil {
 		t.Fatal("expected revoke reason rejection")
+	}
+}
+
+func TestIdentityClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryIdentityTransport{descriptorJSON: `{
+		"kind":"descriptor_ref",
+		"valid":true,
+		"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",
+		"descriptor_version":"1.0.0",
+		"profile":"easynet-strict-v2",
+		"components":{"owner_ura":"easynet:///r/example/device/dev-a"},
+		"metadata":{}
+	}`}
+	client, err := NewIdentityClient(transport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.ProjectDescriptorRef(context.Background(), DescriptorRefRequest{DescriptorRef: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"})
+	if err == nil {
+		t.Fatalf("ProjectDescriptorRef after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }
 

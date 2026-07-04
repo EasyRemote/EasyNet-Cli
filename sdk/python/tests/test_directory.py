@@ -11,8 +11,10 @@ from easynet_sdk import (
     DirectoryQueryBase,
     DirectorySubscriptionCursor,
     DirectorySubscriptionRequest,
+    ErrorCode,
     ResolveQuery,
     SDKError,
+    is_code,
 )
 
 
@@ -25,6 +27,7 @@ class MemoryDirectoryTransport:
         self.subscription_invocation_json = b"{}"
         self.subscription_json = b"{}"
         self.seen_request: dict[str, object] | None = None
+        self.close_calls = 0
 
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -49,6 +52,9 @@ class MemoryDirectoryTransport:
     def subscribe_directory(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         return self.subscription_json
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def base_query(limit: int = 0) -> DirectoryQueryBase:
@@ -219,6 +225,24 @@ class DirectoryTests(unittest.TestCase):
 
         with self.assertRaises(SDKError):
             client.list_abilities(AbilityQuery(base_query(2), scope="local"))
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryDirectoryTransport()
+        transport.devices_json = (
+            b'{"profile":"directory_identity","kind":"device_page",'
+            b'"item_kind":"device","items":[],"next_cursor":null,'
+            b'"limit":50,"source":"read_model","metadata":{}}'
+        )
+        client = DirectoryClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.list_devices(DeviceQuery(base_query()))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
 
 DIRECTORY_SUBSCRIPTION_INVOCATION_JSON = b"""
 {

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+from ._lifecycle import ClientLifecycle
 
 
 DEFAULT_DIRECTORY_PAGE_SIZE = 50
@@ -375,16 +376,19 @@ class DirectoryClient:
     """Directory + Identity read-model facade."""
 
     transport: DirectoryTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_directory("directory transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("directory"))
 
     def build_directory_subscription_invocation(
         self, request: DirectorySubscriptionRequest
     ):
         from .invocation import InvocationDraft
 
+        self._require_open()
         try:
             raw = self.transport.build_directory_subscription_invocation(request.to_json_bytes())
         except SDKError:
@@ -394,6 +398,7 @@ class DirectoryClient:
         return InvocationDraft.from_json(raw)
 
     def subscribe_directory(self, request: DirectorySubscriptionRequest) -> DirectorySubscription:
+        self._require_open()
         try:
             raw = self.transport.subscribe_directory(request.to_json_bytes())
         except SDKError:
@@ -403,6 +408,7 @@ class DirectoryClient:
         return DirectorySubscription.from_json(raw)
 
     def resolve(self, query: ResolveQuery) -> ResolvedRef:
+        self._require_open()
         try:
             raw = self.transport.resolve(query.to_json_bytes())
         except SDKError:
@@ -430,6 +436,7 @@ class DirectoryClient:
         )
 
     def list_abilities(self, query: AbilityQuery) -> DirectoryPage:
+        self._require_open()
         try:
             raw = self.transport.list_abilities(query.to_json_bytes())
         except SDKError:
@@ -447,6 +454,7 @@ class DirectoryClient:
         item_kind: str,
         label: str,
     ) -> DirectoryPage:
+        self._require_open()
         base = base.with_default_limit()
         _validate_base(base, require_limit=True)
         try:
@@ -456,6 +464,12 @@ class DirectoryClient:
         except Exception as exc:
             raise _transport_error(label, exc) from exc
         return DirectoryPage.from_json(raw, kind=kind, item_kind=item_kind)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_base(base: DirectoryQueryBase, *, require_limit: bool) -> None:

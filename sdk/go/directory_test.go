@@ -14,6 +14,7 @@ type memoryDirectoryTransport struct {
 	agentsJSON                 string
 	abilitiesJSON              string
 	seenRequest                map[string]any
+	closeCalls                 int
 }
 
 func (m *memoryDirectoryTransport) BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -56,6 +57,11 @@ func (m *memoryDirectoryTransport) SubscribeDirectory(ctx context.Context, reque
 		return nil, err
 	}
 	return []byte(m.subscriptionJSON), nil
+}
+
+func (m *memoryDirectoryTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func baseDirectoryQuery() DirectoryQueryBase {
@@ -359,5 +365,41 @@ func TestDirectoryListAbilitiesRejectsWrongPageKind(t *testing.T) {
 	_, err = client.ListAbilities(context.Background(), AbilityQuery{DirectoryQueryBase: query, Scope: "local"})
 	if err == nil {
 		t.Fatalf("ListAbilities accepted wrong page kind")
+	}
+}
+
+func TestDirectoryClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryDirectoryTransport{devicesJSON: `{
+		"profile":"directory_identity",
+		"kind":"device_page",
+		"item_kind":"device",
+		"items":[],
+		"next_cursor":null,
+		"limit":50,
+		"source":"read_model",
+		"metadata":{}
+	}`}
+	client, err := NewDirectoryClient(transport)
+	if err != nil {
+		t.Fatalf("NewDirectoryClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.ListDevices(context.Background(), DeviceQuery{DirectoryQueryBase: baseDirectoryQuery()})
+	if err == nil {
+		t.Fatalf("ListDevices after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }

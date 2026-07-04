@@ -20,9 +20,9 @@ ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
-read-model pages and directory subscription state seams plus IdentityClient descriptor/resource projection,
+read-model pages, directory subscription state seams, and close state seams plus IdentityClient descriptor/resource projection,
 signing-key lifecycle, and signer-handle seams.
-It also exposes ReceiptClient fetch/project/verify/causal-ref projection seams
+It also exposes ReceiptClient fetch/project/verify/causal-ref projection and close state seams
 over opaque receipt refs, plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, and published-ability read-model seams. HostBindingClient

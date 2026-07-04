@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+from ._lifecycle import ClientLifecycle
 
 DEFAULT_SIGNING_KEY_PAGE_SIZE = 50
 MAX_SIGNING_KEY_PAGE_SIZE = 500
@@ -382,12 +383,15 @@ class IdentityClient:
     """Directory + Identity projection facade."""
 
     transport: IdentityTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_identity("identity transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("identity"))
 
     def project_descriptor_ref(self, request: DescriptorRefRequest) -> IdentityProjection:
+        self._require_open()
         try:
             raw = self.transport.project_descriptor_ref(request.to_json_bytes())
         except SDKError:
@@ -397,6 +401,7 @@ class IdentityClient:
         return IdentityProjection.from_json(raw)
 
     def project_identity(self, request: IdentityProjectionRequest) -> IdentityProjection:
+        self._require_open()
         try:
             raw = self.transport.project_identity(request.to_json_bytes())
         except SDKError:
@@ -406,6 +411,7 @@ class IdentityClient:
         return IdentityProjection.from_json(raw)
 
     def build_resource_ref(self, request: LocalResourceRefRequest) -> ResourceRef:
+        self._require_open()
         try:
             raw = self.transport.build_resource_ref(request.to_json_bytes())
         except SDKError:
@@ -417,6 +423,7 @@ class IdentityClient:
     def register_signing_key(
         self, request: SigningKeyRegistrationRequest
     ) -> SigningKeyRecord:
+        self._require_open()
         try:
             raw = self.transport.register_signing_key(request.to_json_bytes())
         except SDKError:
@@ -426,6 +433,7 @@ class IdentityClient:
         return SigningKeyRecord.from_json(raw)
 
     def list_signing_keys(self, request: SigningKeyListRequest) -> SigningKeyPage:
+        self._require_open()
         try:
             raw = self.transport.list_signing_keys(request.to_json_bytes())
         except SDKError:
@@ -437,6 +445,7 @@ class IdentityClient:
     def revoke_signing_key(
         self, request: SigningKeyRevokeRequest
     ) -> SigningKeyRevokeResult:
+        self._require_open()
         try:
             raw = self.transport.revoke_signing_key(request.to_json_bytes())
         except SDKError:
@@ -446,6 +455,7 @@ class IdentityClient:
         return SigningKeyRevokeResult.from_json(raw)
 
     def signer(self, request: SignerRequest) -> SignerHandle:
+        self._require_open()
         try:
             raw = self.transport.signer(request.to_json_bytes())
         except SDKError:
@@ -453,6 +463,12 @@ class IdentityClient:
         except Exception as exc:
             raise _transport_error("identity signer failed", exc) from exc
         return SignerHandle.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

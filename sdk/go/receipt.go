@@ -141,6 +141,7 @@ func (f ReceiptTransportFunc) CausalRef(ctx context.Context, receiptJSON []byte)
 
 // ReceiptClient is the Receipt profile facade.
 type ReceiptClient struct {
+	lifecycle profileClientLifecycle
 	transport ReceiptTransport
 }
 
@@ -233,10 +234,14 @@ func (c *ReceiptClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("receipt client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
+	return c.lifecycle.RequireOpen(ctx, "receipt")
+}
+
+func (c *ReceiptClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("receipt client is not initialized")
 	}
-	return nil
+	return c.lifecycle.Close(ctx, c.transport, "receipt")
 }
 
 func NewReceiptSummaryFromJSON(raw []byte) (ReceiptSummary, error) {

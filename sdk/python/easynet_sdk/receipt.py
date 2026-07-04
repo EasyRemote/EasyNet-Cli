@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
+from ._lifecycle import ClientLifecycle
 
 
 @dataclass(frozen=True)
@@ -242,12 +243,15 @@ class ReceiptClient:
     """Receipt profile facade."""
 
     transport: ReceiptTransport
+    _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport is None:
             raise _invalid_receipt("receipt transport is required")
+        object.__setattr__(self, "_lifecycle", ClientLifecycle("receipt"))
 
     def fetch(self, request: ReceiptFetchRequest) -> ReceiptSummary:
+        self._require_open()
         try:
             raw = self.transport.fetch(request.to_json_bytes())
         except SDKError:
@@ -257,6 +261,7 @@ class ReceiptClient:
         return ReceiptSummary.from_json(raw)
 
     def project(self, receipt_json: bytes) -> ReceiptSummary:
+        self._require_open()
         if not receipt_json:
             raise _invalid_receipt("receipt JSON is required")
         try:
@@ -268,6 +273,7 @@ class ReceiptClient:
         return ReceiptSummary.from_json(raw)
 
     def verify(self, receipt_json: bytes) -> ReceiptVerification:
+        self._require_open()
         if not receipt_json:
             raise _invalid_receipt("receipt JSON is required")
         try:
@@ -281,6 +287,7 @@ class ReceiptClient:
     def verify_chain(
         self, request: ReceiptChainVerificationRequest
     ) -> ReceiptChainVerification:
+        self._require_open()
         try:
             raw = self.transport.verify_chain(request.to_json_bytes())
         except SDKError:
@@ -290,6 +297,7 @@ class ReceiptClient:
         return ReceiptChainVerification.from_json(raw)
 
     def causal_ref(self, receipt_json: bytes) -> CausalRef:
+        self._require_open()
         if not receipt_json:
             raise _invalid_receipt("receipt JSON is required")
         try:
@@ -299,6 +307,12 @@ class ReceiptClient:
         except Exception as exc:
             raise _transport_error("receipt causal-ref failed", exc) from exc
         return CausalRef.from_json(raw)
+
+    def close(self) -> None:
+        self._lifecycle.close(self.transport)
+
+    def _require_open(self) -> None:
+        self._lifecycle.require_open()
 
 
 def _validate_fetch_request(request: ReceiptFetchRequest) -> None:

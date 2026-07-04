@@ -3,6 +3,7 @@ import unittest
 
 from easynet_sdk import (
     DEFAULT_SIGNING_KEY_PAGE_SIZE,
+    ErrorCode,
     MAX_SIGNING_KEY_PAGE_SIZE,
     DescriptorRefRequest,
     IdentityClient,
@@ -12,6 +13,7 @@ from easynet_sdk import (
     SigningKeyListRequest,
     SigningKeyRegistrationRequest,
     SigningKeyRevokeRequest,
+    is_code,
 )
 
 
@@ -25,6 +27,7 @@ class MemoryIdentityTransport:
         self.revoke_json = SIGNING_KEY_REVOKE
         self.signer_json = SIGNER_HANDLE
         self.seen_request: dict[str, object] | None = None
+        self.close_calls = 0
 
     def project_descriptor_ref(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -53,6 +56,9 @@ class MemoryIdentityTransport:
     def signer(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         return self.signer_json
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class IdentityTests(unittest.TestCase):
@@ -178,6 +184,31 @@ class IdentityTests(unittest.TestCase):
             )
         with self.assertRaises(SDKError):
             client.revoke_signing_key(SigningKeyRevokeRequest("alice-key-1", ""))
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryIdentityTransport()
+        transport.descriptor_json = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{}}'
+        )
+        client = IdentityClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.project_descriptor_ref(
+                DescriptorRefRequest(
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
 
 
 SIGNING_KEY_RECORD = (

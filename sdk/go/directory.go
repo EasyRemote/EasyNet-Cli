@@ -201,6 +201,7 @@ func (f DirectoryTransportFunc) SubscribeDirectory(ctx context.Context, requestJ
 
 // DirectoryClient is the Directory + Identity read-model facade.
 type DirectoryClient struct {
+	lifecycle profileClientLifecycle
 	transport DirectoryTransport
 }
 
@@ -315,10 +316,14 @@ func (c *DirectoryClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidRuntimeClient("directory client is not initialized")
 	}
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
+	return c.lifecycle.RequireOpen(ctx, "directory")
+}
+
+func (c *DirectoryClient) Close(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("directory client is not initialized")
 	}
-	return nil
+	return c.lifecycle.Close(ctx, c.transport, "directory")
 }
 
 // ResolvedRef is the daemon/Axon-owned directory resolution projection.

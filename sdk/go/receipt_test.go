@@ -15,6 +15,7 @@ type memoryReceiptTransport struct {
 	seenRequest      map[string]any
 	seenChainRequest map[string]any
 	seenReceiptRaw   string
+	closeCalls       int
 }
 
 func (m *memoryReceiptTransport) Fetch(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -44,6 +45,11 @@ func (m *memoryReceiptTransport) VerifyChain(ctx context.Context, requestJSON []
 func (m *memoryReceiptTransport) CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 	m.seenReceiptRaw = string(receiptJSON)
 	return []byte(m.causalRefJSON), nil
+}
+
+func (m *memoryReceiptTransport) Close(ctx context.Context) error {
+	m.closeCalls++
+	return nil
 }
 
 func baseReceiptFetchRequest() ReceiptFetchRequest {
@@ -228,6 +234,33 @@ func TestReceiptSummaryDecodesTypedErrorAndNullOutput(t *testing.T) {
 	}
 	if summary.Error.Details["field"] != "receipt_ura" {
 		t.Fatalf("error details not preserved: %#v", summary.Error.Details)
+	}
+}
+
+func TestReceiptClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
+	transport := &memoryReceiptTransport{fetchJSON: `{"receipt_ura":null,"invocation_id":"inv-example-1","state":"completed","verified":false,"output":{},"error":null,"metadata":{}}`}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if transport.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
+	}
+	_, err = client.Fetch(context.Background(), baseReceiptFetchRequest())
+	if err == nil {
+		t.Fatalf("Fetch after close succeeded")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
 }
 

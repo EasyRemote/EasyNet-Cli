@@ -8,6 +8,7 @@ from easynet_sdk import (
     ReceiptFetchRequest,
     ReceiptSummary,
     SDKError,
+    is_code,
 )
 
 
@@ -49,6 +50,7 @@ class MemoryReceiptTransport:
         self.seen_request: dict[str, object] | None = None
         self.seen_chain_request: dict[str, object] | None = None
         self.seen_receipt_raw = b""
+        self.close_calls = 0
 
     def fetch(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
@@ -69,6 +71,9 @@ class MemoryReceiptTransport:
     def causal_ref(self, receipt_json: bytes) -> bytes:
         self.seen_receipt_raw = receipt_json
         return self.causal_ref_json
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 def fetch_request() -> ReceiptFetchRequest:
@@ -227,6 +232,19 @@ class ReceiptTests(unittest.TestCase):
     def test_summary_requires_output_field(self) -> None:
         with self.assertRaises(SDKError):
             ReceiptSummary.from_json(b'{"state":"completed","verified":false,"metadata":{}}')
+
+    def test_close_delegates_once_and_fails_closed(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+
+        client.close()
+        client.close()
+
+        self.assertEqual(transport.close_calls, 1)
+        with self.assertRaises(SDKError) as caught:
+            client.fetch(fetch_request())
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
 
 
 if __name__ == "__main__":
