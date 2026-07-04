@@ -11,6 +11,13 @@ from easynet_sdk import (
     ConnectOptions,
     DaemonControl,
     DaemonMode,
+    CompatibilityCarrierBase,
+    CompatibilityChatCompletionRequest,
+    CompatibilityClient,
+    CompatibilityFileDeleteRequest,
+    CompatibilityFileRequest,
+    CompatibilityFileUploadRequest,
+    CompatibilityListModelsRequest,
     AbilityQuery,
     AgentQuery,
     AdminAgentListRequest,
@@ -53,6 +60,7 @@ from easynet_sdk import (
 )
 from easynet_sdk._cabi import (
     CABIAdminTransport,
+    CABICompatibilityTransport,
     CABIDirectoryTransport,
     CABIDiscoveryTransport,
     CABIDaemonTransport,
@@ -438,6 +446,52 @@ class FakeRawCABI:
             }
         if system_ability == "pages.unpublish":
             return {"project_id": "docs", "removed": True}
+        if system_ability == "openai.list_models":
+            return {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "easynet:///r/example/ability/alice.codex.chat",
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "easynet",
+                        "ability": "codex.chat",
+                    }
+                ],
+            }
+        if system_ability == "openai.chat_completions":
+            return {
+                "id": "chatcmpl-example",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "easynet:///r/example/ability/alice.codex.chat",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 1,
+                    "total_tokens": 4,
+                },
+            }
+        if system_ability in {"openai.files.upload", "openai.files.retrieve"}:
+            return {
+                "id": "file-easynet-docs-1",
+                "file_ref": "easynet:///r/example/resource/alice.files/prompt.jsonl",
+                "filename": "prompt.jsonl",
+                "purpose": "batch",
+                "bytes": 19,
+                "created_at": 1783094400,
+                "status": "processed",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "content_type": "application/jsonl",
+            }
+        if system_ability == "openai.files.delete":
+            return {"id": "file-easynet-docs-1", "deleted": True}
         if system_ability == "namespace.resolve":
             return {
                 "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
@@ -679,6 +733,16 @@ class FakeRawCABI:
             return SURFACE_DELETE_PAGE_INVOCATION
         if symbol == "easynet_surface_build_manifest_invocation":
             return SURFACE_MANIFEST_INVOCATION
+        if symbol == "easynet_compatibility_build_list_models_invocation":
+            return COMPAT_LIST_MODELS_INVOCATION
+        if symbol == "easynet_compatibility_build_chat_completion_invocation":
+            return COMPAT_CHAT_COMPLETION_INVOCATION
+        if symbol == "easynet_compatibility_build_file_upload_invocation":
+            return COMPAT_FILE_UPLOAD_INVOCATION
+        if symbol == "easynet_compatibility_build_file_retrieve_invocation":
+            return COMPAT_FILE_RETRIEVE_INVOCATION
+        if symbol == "easynet_compatibility_build_file_delete_invocation":
+            return COMPAT_FILE_DELETE_INVOCATION
         if symbol.endswith("_invocation"):
             return json.dumps(
                 complete_draft().to_json_dict(),
@@ -1280,15 +1344,97 @@ SURFACE_MUTATION_PROJECTION = (
     b'"metadata":{"profile":"surface","source_ability":"pages.unpublish"}}'
 )
 
+COMPAT_LIST_MODELS_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.openai.list_models@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"auth_token":"tok_example"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"compatibility","system_ability":"openai.list_models",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+COMPAT_CHAT_COMPLETION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"request":{"model":"easynet:///r/example/ability/alice.codex.chat",'
+    b'"messages":[{"role":"user","content":"reply with: ok"}]}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"compatibility",'
+    b'"system_ability":"openai.chat_completions",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+COMPAT_FILE_UPLOAD_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.openai.files.upload@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"file_ref":"easynet:///r/example/resource/alice.files/prompt.jsonl",'
+    b'"purpose":"batch"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"compatibility",'
+    b'"system_ability":"openai.files.upload",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+COMPAT_FILE_RETRIEVE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.openai.files.retrieve@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"file_id":"file-easynet-docs-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"compatibility",'
+    b'"system_ability":"openai.files.retrieve",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+COMPAT_FILE_DELETE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.openai.files.delete@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"file_id":"file-easynet-docs-1","deleted":true},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"compatibility",'
+    b'"system_ability":"openai.files.delete",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 COMPAT_MODEL_PAGE_PROJECTION = (
     b'{"profile":"compatibility","kind":"model_page","object":"list",'
-    b'"data":[],"metadata":{}}'
+    b'"data":[{"profile":"compatibility","kind":"model",'
+    b'"id":"easynet:///r/example/ability/alice.codex.chat",'
+    b'"object":"model","created":0,"owned_by":"easynet",'
+    b'"ability_ref":"easynet:///r/example/ability/alice.codex.chat",'
+    b'"metadata":{"profile":"compatibility","source":"openai.list_models"}}],'
+    b'"next_cursor":null,'
+    b'"metadata":{"profile":"compatibility","source":"openai.list_models",'
+    b'"count":1}}'
 )
 
 COMPAT_CHAT_PROJECTION = (
-    b'{"profile":"compatibility","kind":"chat_completion","id":"chatcmpl-1",'
-    b'"object":"chat.completion","created":1000,"model":"model-1",'
-    b'"choices":[],"usage":null,"metadata":{}}'
+    b'{"profile":"compatibility","kind":"chat_completion",'
+    b'"id":"chatcmpl-example","object":"chat.completion","created":1,'
+    b'"model":"easynet:///r/example/ability/alice.codex.chat",'
+    b'"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},'
+    b'"finish_reason":"stop"}],'
+    b'"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4},'
+    b'"metadata":{"profile":"compatibility","source":"openai.chat_completions"}}'
 )
 
 COMPAT_STREAM_PROJECTION = (
@@ -1297,14 +1443,17 @@ COMPAT_STREAM_PROJECTION = (
 )
 
 COMPAT_FILE_PROJECTION = (
-    b'{"profile":"compatibility","kind":"file","id":"file-1","object":"file",'
-    b'"bytes":1,"created_at":1000,"filename":"input.json","purpose":"assistants",'
-    b'"status":"processed","metadata":{}}'
+    b'{"profile":"compatibility","kind":"file","id":"file-easynet-docs-1",'
+    b'"object":"file","bytes":19,"created_at":1783094400,'
+    b'"filename":"prompt.jsonl","purpose":"batch","status":"processed",'
+    b'"metadata":{"profile":"compatibility","source":"compatibility.file",'
+    b'"file_ref":"easynet:///r/example/resource/alice.files/prompt.jsonl"}}'
 )
 
 COMPAT_FILE_DELETE_PROJECTION = (
-    b'{"profile":"compatibility","kind":"file_delete_result","id":"file-1",'
-    b'"object":"file","deleted":true,"metadata":{}}'
+    b'{"profile":"compatibility","kind":"file_delete_result",'
+    b'"id":"file-easynet-docs-1","object":"file","deleted":true,'
+    b'"metadata":{"profile":"compatibility","source":"openai.files.delete"}}'
 )
 
 WRAPPER_FILE_PROJECTION = (
@@ -1913,6 +2062,94 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.profile_requests[3][2]["page_id"], "docs")
         self.assertEqual(raw.profile_requests[5][2]["public_ref"], "https://example/web/alice/docs/")
         self.assertEqual(raw.profile_requests[8][2]["project_id"], "docs")
+        self.assertEqual(raw.buffers, {})
+
+    def test_compatibility_unary_methods_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = CompatibilityClient(CABICompatibilityTransport(lib, handle=7))
+        base = CompatibilityCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            auth_token="tok_example",
+        )
+        chat_request = {
+            "model": "easynet:///r/example/ability/alice.codex.chat",
+            "messages": [{"role": "user", "content": "reply with: ok"}],
+        }
+
+        models = client.list_models(CompatibilityListModelsRequest(base=base))
+        chat = client.create_chat_completion(
+            CompatibilityChatCompletionRequest(base=base, request=chat_request)
+        )
+        uploaded = client.upload_file(
+            CompatibilityFileUploadRequest(
+                base=base,
+                purpose="batch",
+                id="file-easynet-docs-1",
+                file_ref="easynet:///r/example/resource/alice.files/prompt.jsonl",
+                filename="prompt.jsonl",
+            )
+        )
+        retrieved = client.retrieve_file(
+            CompatibilityFileRequest(
+                base=base,
+                id="file-easynet-docs-1",
+                file_ref="easynet:///r/example/resource/alice.files/prompt.jsonl",
+                filename="prompt.jsonl",
+            )
+        )
+        deleted = client.delete_file(
+            CompatibilityFileDeleteRequest(
+                base=base,
+                id="file-easynet-docs-1",
+                file_ref="easynet:///r/example/resource/alice.files/prompt.jsonl",
+                deleted=True,
+            )
+        )
+
+        self.assertEqual(
+            models.data[0].id,
+            "easynet:///r/example/ability/alice.codex.chat",
+        )
+        self.assertEqual(chat.choices[0]["message"]["content"], "ok")
+        self.assertEqual(uploaded.id, "file-easynet-docs-1")
+        self.assertEqual(retrieved.filename, "prompt.jsonl")
+        self.assertTrue(deleted.deleted)
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_compatibility_build_list_models_invocation",
+                "easynet_compatibility_project_model_page",
+                "easynet_compatibility_build_chat_completion_invocation",
+                "easynet_compatibility_project_chat_completion",
+                "easynet_compatibility_build_file_upload_invocation",
+                "easynet_compatibility_project_file_upload",
+                "easynet_compatibility_build_file_retrieve_invocation",
+                "easynet_compatibility_project_file",
+                "easynet_compatibility_build_file_delete_invocation",
+                "easynet_compatibility_project_file_delete_result",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            [
+                "openai.list_models",
+                "openai.chat_completions",
+                "openai.files.upload",
+                "openai.files.retrieve",
+                "openai.files.delete",
+            ],
+        )
+        self.assertEqual(raw.profile_requests[1][2]["object"], "list")
+        self.assertEqual(raw.profile_requests[3][2]["id"], "chatcmpl-example")
+        self.assertEqual(raw.profile_requests[5][2]["purpose"], "batch")
+        self.assertEqual(raw.profile_requests[7][2]["id"], "file-easynet-docs-1")
+        self.assertTrue(raw.profile_requests[9][2]["deleted"])
         self.assertEqual(raw.buffers, {})
 
     def test_mission_live_methods_use_carrier_invoke_and_projection(self) -> None:

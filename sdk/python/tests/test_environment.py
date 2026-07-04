@@ -10,6 +10,7 @@ from easynet_sdk import (
     AdminAgentStartRequest,
     AdminCarrierBase,
     CompatibilityCarrierBase,
+    CompatibilityChatCompletionRequest,
     CompatibilityFileDeleteRequest,
     CompatibilityFileRequest,
     CompatibilityFileUploadRequest,
@@ -396,7 +397,32 @@ class SdkEnvironmentTests(unittest.TestCase):
             compatibility.build_list_models_invocation(
                 CompatibilityListModelsRequest(base=_compatibility_base())
             )
+            compatibility.list_models(
+                CompatibilityListModelsRequest(base=_compatibility_base())
+            )
+            compatibility.create_chat_completion(
+                CompatibilityChatCompletionRequest(
+                    base=_compatibility_base(),
+                    request={
+                        "model": "easynet:///r/example/ability/alice.codex.chat",
+                        "messages": [
+                            {"role": "user", "content": "reply with: ok"}
+                        ],
+                    },
+                )
+            )
             compatibility.build_file_upload_invocation(
+                CompatibilityFileUploadRequest(
+                    base=_compatibility_base(),
+                    purpose="batch",
+                    id="file-easynet-docs-1",
+                    file_ref=(
+                        "easynet:///r/example/resource/alice.files/prompt.jsonl"
+                    ),
+                    filename="prompt.jsonl",
+                )
+            )
+            compatibility.upload_file(
                 CompatibilityFileUploadRequest(
                     base=_compatibility_base(),
                     purpose="batch",
@@ -417,7 +443,27 @@ class SdkEnvironmentTests(unittest.TestCase):
                     filename="prompt.jsonl",
                 )
             )
+            compatibility.retrieve_file(
+                CompatibilityFileRequest(
+                    base=_compatibility_base(),
+                    id="file-easynet-docs-1",
+                    file_ref=(
+                        "easynet:///r/example/resource/alice.files/prompt.jsonl"
+                    ),
+                    filename="prompt.jsonl",
+                )
+            )
             compatibility.build_file_delete_invocation(
+                CompatibilityFileDeleteRequest(
+                    base=_compatibility_base(),
+                    id="file-easynet-docs-1",
+                    file_ref=(
+                        "easynet:///r/example/resource/alice.files/prompt.jsonl"
+                    ),
+                    deleted=True,
+                )
+            )
+            compatibility.delete_file(
                 CompatibilityFileDeleteRequest(
                     base=_compatibility_base(),
                     id="file-easynet-docs-1",
@@ -529,9 +575,15 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_surface_build_manifest_invocation", symbols)
         self.assertIn("easynet_surface_project_manifest", symbols)
         self.assertIn("easynet_compatibility_build_list_models_invocation", symbols)
+        self.assertIn("easynet_compatibility_project_model_page", symbols)
+        self.assertIn("easynet_compatibility_build_chat_completion_invocation", symbols)
+        self.assertIn("easynet_compatibility_project_chat_completion", symbols)
         self.assertIn("easynet_compatibility_build_file_upload_invocation", symbols)
+        self.assertIn("easynet_compatibility_project_file_upload", symbols)
         self.assertIn("easynet_compatibility_build_file_retrieve_invocation", symbols)
+        self.assertIn("easynet_compatibility_project_file", symbols)
         self.assertIn("easynet_compatibility_build_file_delete_invocation", symbols)
+        self.assertIn("easynet_compatibility_project_file_delete_result", symbols)
         self.assertIn("easynet_wrappers_build_file_transfer_invocation", symbols)
         self.assertIn("easynet_wrappers_build_terminal_session_invocation", symbols)
         self.assertIn(
@@ -549,6 +601,11 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("pages.list", runtime_abilities)
         self.assertIn("pages.publish", runtime_abilities)
         self.assertIn("pages.get", runtime_abilities)
+        self.assertIn("openai.list_models", runtime_abilities)
+        self.assertIn("openai.chat_completions", runtime_abilities)
+        self.assertIn("openai.files.upload", runtime_abilities)
+        self.assertIn("openai.files.retrieve", runtime_abilities)
+        self.assertIn("openai.files.delete", runtime_abilities)
 
     def test_publication_deploy_uses_cabi_carrier_and_runtime_core(self) -> None:
         raw = FakeRawCABI()

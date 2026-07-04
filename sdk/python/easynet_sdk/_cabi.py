@@ -1294,22 +1294,42 @@ class CABICompatibilityTransport(_CABIProfileTransport):
         )
 
     def list_models(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility list models")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_compatibility_build_list_models_invocation",
+            project_symbol="easynet_compatibility_project_model_page",
+        )
 
     def create_chat_completion(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility chat completion")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_compatibility_build_chat_completion_invocation",
+            project_symbol="easynet_compatibility_project_chat_completion",
+        )
 
     def stream_chat_completion(self, request_json: bytes) -> bytes:
         return self._missing("compatibility stream chat completion")
 
     def upload_file(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility upload file")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_compatibility_build_file_upload_invocation",
+            project_symbol="easynet_compatibility_project_file_upload",
+        )
 
     def retrieve_file(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility retrieve file")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_compatibility_build_file_retrieve_invocation",
+            project_symbol="easynet_compatibility_project_file",
+        )
 
     def delete_file(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility delete file")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_compatibility_build_file_delete_invocation",
+            project_symbol="easynet_compatibility_project_file_delete_result",
+        )
 
     def project_model_page(self, models_json: bytes) -> bytes:
         return self._call("easynet_compatibility_project_model_page", models_json)

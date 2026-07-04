@@ -249,10 +249,11 @@ method spelling.
 - Python Compatibility facade exposes `CompatibilityClient` list-models, chat,
   stream-chat, and file upload/get/delete Invocation carrier builders plus
   model, chat, stream, file, file-delete projection seams, and close state
-  seams; Python concrete C ABI transport now backs file carrier builders while product API-key
-  policy, quota/rate limits, billing, backend HTTP route shaping, multipart
-  storage execution, SSE/WebSocket fanout, and EasyRemote/Hub compatibility
-  cutovers remain incomplete.
+  seams; Python concrete C ABI transport now backs unary list-models,
+  non-stream chat, and file upload/get/delete execution through Runtime Core,
+  while product API-key policy, quota/rate limits, billing, backend HTTP route
+  shaping, multipart storage execution, SSE/WebSocket fanout, streaming chat
+  adapters, and EasyRemote/Hub compatibility cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session Invocation carrier builders, transport-backed
   helper close state seams, and record projections; Python concrete C ABI

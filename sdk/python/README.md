@@ -66,9 +66,10 @@ SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
 seams and close state seams. CompatibilityClient exposes
 OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
-Invocation carriers, including C ABI-backed concrete file carrier builders,
-plus model, chat, stream, file, and file-delete projection seams and close state
-seams. WrapperClient exposes
+Invocation carriers, including C ABI-backed unary list-models, non-stream chat,
+and file upload/get/delete execution through Runtime Core invoke, plus model,
+chat, stream, file, and file-delete projection seams and close state seams.
+WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed concrete carrier builders,
 transport-backed helper close state seams, and record projections. Direct daemon
