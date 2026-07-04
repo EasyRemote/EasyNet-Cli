@@ -20,3 +20,4 @@ class MissionSystemAbility(str, Enum):
     RUN = "mission.run"
     TRACK = "mission.track"
     CANCEL = "mission.cancel"
+    EVENTS = "mission.events"

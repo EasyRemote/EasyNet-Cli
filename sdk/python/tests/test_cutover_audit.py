@@ -442,6 +442,9 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
 
                     def cancel(client):
                         return client.invoke("mission.cancel", run_id="run-1")
+
+                    def events(client):
+                        return client.invoke("mission.events", run_id="run-1")
                     '''
                 ),
                 encoding="utf-8",

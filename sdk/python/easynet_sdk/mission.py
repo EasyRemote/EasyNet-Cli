@@ -351,6 +351,23 @@ class EasyRemoteMissionAdapter:
         )
         return _status_projection(status)
 
+    def events(
+        self,
+        run_id: str,
+        *,
+        cursor_sequence: int = 0,
+        limit: int = 0,
+    ) -> Mapping[str, object]:
+        page = self._client.events(
+            MissionEventListRequest(
+                base=self._base,
+                mission_id=_validated_easyremote_run_id(run_id),
+                cursor_sequence=cursor_sequence,
+                limit=limit,
+            )
+        )
+        return _event_page_projection(page)
+
 
 @runtime_checkable
 class MissionTransport(Protocol):
@@ -725,6 +742,29 @@ def _mission_outputs(status: MissionStatus) -> Mapping[str, object]:
         elif output.metadata:
             projected[output.kind] = dict(output.metadata)
     return projected
+
+
+def _event_page_projection(page: MissionEventPage) -> dict[str, object]:
+    return {
+        "mission_id": page.mission_id,
+        "cursor_sequence": page.cursor_sequence,
+        "next_cursor_sequence": page.next_cursor_sequence,
+        "has_more": page.has_more,
+        "dropped_count": page.dropped_count,
+        "events": [
+            {
+                "event_type": event.event_type,
+                "sequence": event.sequence,
+                "occurred_unix_ms": event.occurred_unix_ms,
+                "terminal": event.terminal,
+                "payload": event.payload,
+                "receipt": dict(event.receipt),
+                "metadata": dict(event.metadata),
+            }
+            for event in page.events
+        ],
+        "metadata": dict(page.metadata),
+    }
 
 
 def _status_projection(status: MissionStatus) -> dict[str, object]:

@@ -513,7 +513,7 @@ def _audit_mission_carrier_semantics(
         path,
         text,
         rule="raw_mission_carrier",
-        values={"mission.run", "mission.track", "mission.cancel"},
+        values={"mission.run", "mission.track", "mission.cancel", "mission.events"},
     )
 
 

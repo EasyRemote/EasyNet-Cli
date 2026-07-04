@@ -273,6 +273,19 @@ class MissionTests(unittest.TestCase):
         self.assertEqual(transport.seen["track"]["mission_id"], "run-1")
         self.assertEqual(transport.seen["cancel"]["mission_id"], "run-1")
 
+    def test_easyremote_adapter_exposes_mission_events(self) -> None:
+        transport = MemoryMissionTransport()
+        adapter = EasyRemoteMissionAdapter(MissionClient(transport), base())
+
+        page = adapter.events("run-1", cursor_sequence=4, limit=100)
+
+        self.assertEqual(page["next_cursor_sequence"], 7)
+        self.assertEqual(page["events"][0]["event_type"], "progress")
+        self.assertTrue(page["events"][1]["terminal"])
+        self.assertEqual(transport.seen["events"]["mission_id"], "run-1")
+        self.assertEqual(transport.seen["events"]["cursor_sequence"], 4)
+        self.assertEqual(transport.seen["events"]["limit"], 100)
+
     def test_builds_run_track_cancel_invocations(self) -> None:
         client = MissionClient(MemoryMissionTransport())
 

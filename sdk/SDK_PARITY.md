@@ -272,17 +272,19 @@ method spelling.
   host-stream-codec ownership, receipt-continuity ownership, context-causal
   gates, and admin/mission carrier gates; EasyRemote transport, invocation,
   addressing helpers, warm host frame/hash substrate, receipt continuity,
-  hosted-agent admin, Context child dispatch, and Mission transport extraction
-  now pass static gates, while publication product extraction, full Pipeline
-  cutover, full AgentControl/Server cutover, and full receipt verification
-  remain incomplete.
+  hosted-agent admin, Context child dispatch, Mission transport/event-page
+  extraction, and page-based Pipeline event access now pass static gates, while
+  publication product extraction, Pipeline live-tail/conformance cutover, full
+  AgentControl/Server cutover, and full receipt verification remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
-  projection seams, an SDK-owned EasyRemote Mission cutover adapter, raw mission
-  carrier audit gate for `mission.run/track/cancel`, and close state seams;
-  concrete live-tail adapters, child Invocation behavior conformance, full
-  EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
+  projection seams, an SDK-owned EasyRemote Mission cutover adapter with
+  event-page projection, EasyRemote `MissionControl`/`MissionRun` page-based
+  event access, raw mission carrier audit gate for
+  `mission.run/track/cancel/events`, and close state seams;
+  concrete live-tail adapters, child Invocation behavior conformance, Pipeline
+  execution conformance, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders,
   C ABI-backed agent list/start/stop/refresh and session-list execution through Runtime Core,

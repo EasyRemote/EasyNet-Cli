@@ -85,7 +85,7 @@ MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams, an EasyRemote Mission cutover adapter over typed Mission profile
-requests, and close state seams. AdminClient
+requests, EasyRemote page-based Mission event access, and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
 Core invoke, C ABI-backed session-list execution through Runtime Core invoke,
@@ -117,7 +117,7 @@ transport-backed helper close state seams, and record projections. Product Invoc
 direct daemon UDS transport, Axon-backed receipt verification, receipt URI
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
-and cleanup execution adapters, mission event streams, Admin hub lifecycle,
+and cleanup execution adapters, mission event live streams, Admin hub lifecycle,
 pairing/credential lifecycle, and device-session create/delete adapters that
 require daemon/ABI lifecycle result contracts,
 certificate policy, Events daemon filtering/live adapters,
