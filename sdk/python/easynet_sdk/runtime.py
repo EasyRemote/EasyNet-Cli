@@ -43,6 +43,9 @@ class RuntimeTransport(Protocol):
     def handle_events(self, handle_id: int) -> bytes:
         ...
 
+    def free_handle(self, handle_id: int) -> None:
+        ...
+
 
 @dataclass(frozen=True)
 class PrepareOptions:
@@ -321,6 +324,15 @@ class RuntimeClient:
         except Exception as exc:
             raise _transport_error("handle events transport failed", exc) from exc
         return InvocationHandle.from_json(raw)
+
+    def close_handle(self, handle: InvocationHandle) -> None:
+        _require_handle(handle)
+        try:
+            self._transport.free_handle(handle.handle_id)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("free handle transport failed", exc) from exc
 
 
 def _require_handle(handle: InvocationHandle) -> None:

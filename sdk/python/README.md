@@ -16,7 +16,7 @@ detach/open-runtime/connect-local state seams, schema-backed SDK error projectio
 Invocation draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, StreamHandle state observation, BidiSession frame
 ordering, half-close, cancel, and terminal-close observation, InvocationHandle
-await/cancel/events observation, and RuntimeClient
+await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed
 methods behind narrow transport protocols, plus DirectoryClient resolve/list
 read-model pages and directory subscription state seams plus IdentityClient descriptor/resource projection,

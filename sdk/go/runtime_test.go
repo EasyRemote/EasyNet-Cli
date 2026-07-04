@@ -335,6 +335,7 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 		t.Fatalf("Marshal draft: %v", err)
 	}
 	var seenAwaitID uint64
+	var seenFreeID uint64
 	var seenCancelReason string
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
 		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -376,6 +377,10 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 			}
 			return []byte(`{"handle_id": 7, "state": "Cancelled", "terminal": true, "events": [{"sequence": 1, "kind": "submitted", "state": "Submitted", "terminal": false}, {"sequence": 2, "kind": "cancelled", "state": "Cancelled", "terminal": true, "reason": "client stop"}], "result": null}`), nil
 		},
+		FreeHandleFunc: func(ctx context.Context, handleID uint64) error {
+			seenFreeID = handleID
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
@@ -402,5 +407,11 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 	}
 	if !events.Terminal() || len(events.Events()) != 2 || events.Events()[1].Reason() != "client stop" {
 		t.Fatalf("unexpected events: %#v", events.Events())
+	}
+	if err := client.CloseHandle(context.Background(), handle); err != nil {
+		t.Fatalf("CloseHandle: %v", err)
+	}
+	if seenFreeID != 7 {
+		t.Fatalf("free did not use handle id: id=%d", seenFreeID)
 	}
 }

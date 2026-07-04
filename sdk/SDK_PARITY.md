@@ -101,7 +101,7 @@ method spelling.
   construction, prepared/signed Invocation DTOs, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
-  await/cancel/events observation, and RuntimeClient
+  await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow JSON
   transport seams; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters, profile
   clients, backend import-ban integration, per-profile error source refs, and
@@ -168,7 +168,7 @@ method spelling.
   construction, prepared/signed Invocation DTOs, unary InvocationResult
   projection, StreamHandle state observation, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
-  await/cancel/events observation, and
+  await/cancel/events/close observation, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/submit-signed methods behind narrow
   transport protocols; concrete daemon process spawn/default C ABI or UDS transport, concrete bidi adapters,
   profile clients, host binding bridge, EasyRemote extraction tests, per-profile

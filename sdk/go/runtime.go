@@ -17,6 +17,7 @@ type RuntimeTransport interface {
 	AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error)
 	CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error)
 	HandleEvents(ctx context.Context, handleID uint64) ([]byte, error)
+	FreeHandle(ctx context.Context, handleID uint64) error
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
@@ -29,6 +30,7 @@ type RuntimeTransportFunc struct {
 	AwaitHandleFunc  func(ctx context.Context, handleID uint64) ([]byte, error)
 	CancelHandleFunc func(ctx context.Context, handleID uint64, reason string) ([]byte, error)
 	HandleEventsFunc func(ctx context.Context, handleID uint64) ([]byte, error)
+	FreeHandleFunc   func(ctx context.Context, handleID uint64) error
 }
 
 func (f RuntimeTransportFunc) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -85,6 +87,13 @@ func (f RuntimeTransportFunc) HandleEvents(ctx context.Context, handleID uint64)
 		return nil, invalidRuntimeClient("runtime handle-events transport function is required")
 	}
 	return f.HandleEventsFunc(ctx, handleID)
+}
+
+func (f RuntimeTransportFunc) FreeHandle(ctx context.Context, handleID uint64) error {
+	if f.FreeHandleFunc == nil {
+		return invalidRuntimeClient("runtime free-handle transport function is required")
+	}
+	return f.FreeHandleFunc(ctx, handleID)
 }
 
 // RuntimeClient is the Runtime Core invocation facade.
@@ -308,6 +317,27 @@ func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (In
 		return InvocationHandle{}, transportRuntimeError("handle events transport failed", err)
 	}
 	return NewInvocationHandleFromJSON(raw)
+}
+
+// CloseHandle releases daemon-side observation state for a submitted invocation handle.
+func (c *RuntimeClient) CloseHandle(ctx context.Context, handle InvocationHandle) error {
+	if c == nil || c.transport == nil {
+		return invalidRuntimeClient("runtime client is not initialized")
+	}
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	if handle.HandleID() == 0 {
+		return invalidRuntimePayload("handle_id is required", nil)
+	}
+	if err := c.transport.FreeHandle(ctx, handle.HandleID()); err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return sdkErr
+		}
+		return transportRuntimeError("free handle transport failed", err)
+	}
+	return nil
 }
 
 // InvocationResult is the unary invocation terminal result projection.

@@ -25,6 +25,7 @@ class MemoryRuntimeTransport:
         self.seen_streams: list[dict[str, object]] | None = None
         self.prepare_error: BaseException | None = None
         self.seen_await_id = 0
+        self.seen_free_id = 0
         self.seen_cancel_reason = ""
         self.handle_json = (
             b'{"handle_id":7,"state":"Submitted","terminal":false,'
@@ -118,6 +119,9 @@ class MemoryRuntimeTransport:
             b'"kind":"cancelled","state":"Cancelled","terminal":true,'
             b'"reason":"client stop"}],"result":null}'
         )
+
+    def free_handle(self, handle_id: int) -> None:
+        self.seen_free_id = handle_id
 
 
 def complete_draft():
@@ -248,6 +252,7 @@ class RuntimeTests(unittest.TestCase):
         result = client.await_result(handle)
         cancelled = client.cancel(handle, "client stop")
         events = client.events(handle)
+        client.close_handle(handle)
 
         self.assertTrue(result.ok)
         self.assertEqual(transport.seen_await_id, 7)
@@ -257,6 +262,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(events.terminal)
         self.assertEqual(len(events.events), 2)
         self.assertEqual(events.events[1].reason, "client stop")
+        self.assertEqual(transport.seen_free_id, 7)
 
     def test_prepare_wraps_transport_failure(self) -> None:
         transport = MemoryRuntimeTransport()
