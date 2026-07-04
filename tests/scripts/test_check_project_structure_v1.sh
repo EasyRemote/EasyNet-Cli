@@ -24,6 +24,7 @@ mkfinal() {
     "$dir/src/bin/easynet-daemon.rs" \
     "$dir/src/bin/easynet-keyring.rs" \
     "$dir/src/bin/gen-ability-tomls.rs" \
+    "$dir/src/bin/sdk-conformance-runner.rs" \
     "$dir/src/bin/real-user-smoke.rs" \
     "$dir/src/bin/real-publish-smoke.rs"
 
@@ -83,6 +84,18 @@ mkfinal() {
     "$dir/src/ffi/invocation" \
     "$dir/src/ffi/errors" \
     "$dir/src/ffi/strings" \
+    "$dir/src/ffi/profile_json" \
+    "$dir/src/ffi/identity" \
+    "$dir/src/ffi/directory" \
+    "$dir/src/ffi/receipt" \
+    "$dir/src/ffi/publication" \
+    "$dir/src/ffi/host_binding" \
+    "$dir/src/ffi/mission" \
+    "$dir/src/ffi/events" \
+    "$dir/src/ffi/admin_gateway" \
+    "$dir/src/ffi/surface" \
+    "$dir/src/ffi/compatibility" \
+    "$dir/src/ffi/wrappers" \
     "$dir/src/eal/parser" \
     "$dir/src/eal/interpreter" \
     "$dir/src/eal/runtime" \

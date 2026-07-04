@@ -1,7 +1,7 @@
 // EasyNet CLI — FFI profile JSON projection helper
 // =================================================
 //
-// File: src/ffi/profile_json.rs
+// File: src/ffi/profile_json/mod.rs
 // Description: Shared C ABI boundary helper for daemon SDK profile DTOs.
 //
 // Protocol Responsibility

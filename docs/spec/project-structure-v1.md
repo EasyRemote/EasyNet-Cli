@@ -44,6 +44,7 @@ EasyNet-Cli/
 │  │  ├─ easynet-daemon.rs
 │  │  ├─ easynet-keyring.rs
 │  │  ├─ gen-ability-tomls.rs
+│  │  ├─ sdk-conformance-runner.rs
 │  │  ├─ real-user-smoke.rs
 │  │  └─ real-publish-smoke.rs
 │  ├─ core/
@@ -109,7 +110,19 @@ EasyNet-Cli/
 │  │  ├─ client/
 │  │  ├─ invocation/
 │  │  ├─ errors/
-│  │  └─ strings/
+│  │  ├─ strings/
+│  │  ├─ profile_json/
+│  │  ├─ identity/
+│  │  ├─ directory/
+│  │  ├─ receipt/
+│  │  ├─ publication/
+│  │  ├─ host_binding/
+│  │  ├─ mission/
+│  │  ├─ events/
+│  │  ├─ admin_gateway/
+│  │  ├─ surface/
+│  │  ├─ compatibility/
+│  │  └─ wrappers/
 │  ├─ eal/
 │  │  ├─ parser/
 │  │  ├─ interpreter/
@@ -124,7 +137,12 @@ EasyNet-Cli/
 │  ├─ python/
 │  ├─ node/
 │  ├─ java/
-│  └─ swift/
+│  ├─ swift/
+│  ├─ schemas/
+│  └─ conformance/
+│     ├─ cases/
+│     ├─ fixtures/
+│     └─ runner/
 ├─ ability-descriptors/
 │  └─ system/
 │     ├─ agents/
@@ -223,6 +241,7 @@ Allowed binaries:
 - `easynet-daemon.rs`
 - `easynet-keyring.rs`
 - `gen-ability-tomls.rs`
+- `sdk-conformance-runner.rs`
 - `real-user-smoke.rs`
 - `real-publish-smoke.rs`
 
@@ -320,9 +339,13 @@ Rust/C ABI projection over daemon control and generic Invocation submission:
 - `invocation/`: complete Invocation submission/projection ABI.
 - `errors/`: stable FFI error representation.
 - `strings/`: allocation and string ownership ABI.
+- `profile_json/`: shared JSON boundary validation for profile projections.
+- `identity/`, `directory/`, `receipt/`, `publication/`, `host_binding/`,
+  `mission/`, `events/`, `admin_gateway/`, `surface/`, `compatibility/`, and
+  `wrappers/`: ABI v4 Daemon SDK profile projections over the same Runtime Core.
 
-The stable model is generic daemon/Invocation APIs, not one exported ABI method
-per Ability.
+The stable model is generic daemon/Invocation APIs plus profile-owned carrier
+and projection helpers, not one exported ABI method per user Ability.
 
 ### `src/eal/`
 

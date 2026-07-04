@@ -161,6 +161,7 @@ require_only_files src/bin \
   easynet-daemon.rs \
   easynet-keyring.rs \
   gen-ability-tomls.rs \
+  sdk-conformance-runner.rs \
   real-user-smoke.rs \
   real-publish-smoke.rs
 
@@ -192,7 +193,9 @@ require_only_dirs src/cli \
   commands presentation daemon_client mcp
 
 require_only_dirs src/ffi \
-  daemon client invocation errors strings
+  daemon client invocation errors strings profile_json \
+  identity directory receipt publication host_binding mission \
+  events admin_gateway surface compatibility wrappers
 
 require_only_dirs src/eal \
   parser interpreter runtime diagnostics
