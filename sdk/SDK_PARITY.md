@@ -265,12 +265,13 @@ method spelling.
   conformance remain incomplete.
 - Python EasyRemote cutover audit helpers expose source-tree checks for raw
   FFI/Axon imports, raw C ABI symbols, raw Invocation JSON codecs, and raw
-  host-stream frame/hash codecs, raw receipt-chain continuity checks, and raw
-  admin/mission carrier strings, plus manifest checks for raw Axon/ABI package
-  dependencies, with shared conformance cases for no-raw-FFI,
-  no-raw-invocation-codec, host-stream-codec ownership, receipt-continuity
-  ownership, context-causal gates, and admin/mission carrier gates; EasyRemote
-  transport, invocation, warm host frame/hash substrate, receipt continuity,
+  URA/DescriptorRef helpers, raw host-stream frame/hash codecs, raw
+  receipt-chain continuity checks, and raw admin/mission carrier strings, plus
+  manifest checks for raw Axon/ABI package dependencies, with shared conformance
+  cases for no-raw-FFI, no-raw-invocation-codec, addressing-helper ownership,
+  host-stream-codec ownership, receipt-continuity ownership, context-causal
+  gates, and admin/mission carrier gates; EasyRemote transport, invocation,
+  addressing helpers, warm host frame/hash substrate, receipt continuity,
   hosted-agent admin, and Mission transport extraction now pass static gates,
   while Context child dispatch, publication product extraction, full Pipeline
   cutover, full AgentControl/Server cutover, and full receipt verification

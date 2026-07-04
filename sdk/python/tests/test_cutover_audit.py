@@ -229,6 +229,62 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
         self.assertIn("raw_invocation_json_codec", _rules(result))
         self.assertNotIn("raw_c_abi_symbol", _rules(result))
 
+    def test_allows_sdk_addressing_helper_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "addressing.py").write_text(
+                textwrap.dedent(
+                    """
+                    from easynet_sdk import (
+                        ability_ura_from_descriptor_ref,
+                        canonical_ability_descriptor_ref,
+                        owner_ability_ura,
+                        owner_ura_for_ability,
+                        parse_ura,
+                    )
+
+                    def build(identity, owner, ability_name):
+                        ability = owner_ability_ura(owner, ability_name)
+                        descriptor = canonical_ability_descriptor_ref(ability, "1.0.0")
+                        return parse_ura(owner_ura_for_ability(ability)), descriptor
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertTrue(result.ok)
+
+    def test_flags_raw_addressing_helpers_and_descriptor_ref_assembly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "_addressing.py").write_text(
+                textwrap.dedent(
+                    '''
+                    def parse_ura(value):
+                        """Docstring can mention canonical_ability_descriptor_ref."""
+                        return value.split("/")
+
+                    def owner_ability_ura(owner_ura, ability_name):
+                        return f"{owner_ura}.ability.{ability_name}"
+
+                    def canonical_ability_descriptor_ref(ability_ura, version):
+                        return ability_ura + "@" + version
+
+                    def ability_ura_from_descriptor_ref(descriptor_ref):
+                        return descriptor_ref.split("@", 1)[0]
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_easyremote_cutover(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_addressing_helper", _rules(result))
+        self.assertIn("raw_descriptor_ref_assembly", _rules(result))
+
     def test_flags_raw_publication_carrier_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

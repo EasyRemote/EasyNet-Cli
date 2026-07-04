@@ -122,6 +122,7 @@ class EasyRemoteCutoverAuditor:
         violations.extend(_audit_publication_carrier_semantics(relative, text))
         violations.extend(_audit_admin_carrier_semantics(relative, text))
         violations.extend(_audit_mission_carrier_semantics(relative, text))
+        violations.extend(_audit_addressing_semantics(relative, text))
         return tuple(violations)
 
     def _audit_manifest(
@@ -419,6 +420,113 @@ def _audit_mission_carrier_semantics(
         rule="raw_mission_carrier",
         values={"mission.run", "mission.track", "mission.cancel"},
     )
+
+
+_RAW_ADDRESSING_HELPER_NAMES = {
+    "parse_ura",
+    "owner_ability_ura",
+    "owner_ura_for_ability",
+    "canonical_ability_descriptor_ref",
+    "ability_ura_from_descriptor_ref",
+}
+
+
+def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation, ...]:
+    violations: list[CutoverViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in _RAW_ADDRESSING_HELPER_NAMES:
+                violations.append(
+                    CutoverViolation(
+                        path=path,
+                        rule="raw_addressing_helper",
+                        detail=node.name,
+                        line=node.lineno,
+                    )
+                )
+        if _is_descriptor_ref_assembly(node):
+            violations.append(
+                CutoverViolation(
+                    path=path,
+                    rule="raw_descriptor_ref_assembly",
+                    detail="DescriptorRef must come from SDK/Axon helper",
+                    line=getattr(node, "lineno", 1),
+                )
+            )
+        if _is_descriptor_ref_split(node):
+            violations.append(
+                CutoverViolation(
+                    path=path,
+                    rule="raw_descriptor_ref_assembly",
+                    detail="DescriptorRef parsing must come from SDK/Axon helper",
+                    line=getattr(node, "lineno", 1),
+                )
+            )
+    return tuple(violations)
+
+
+def _is_descriptor_ref_assembly(node: ast.AST) -> bool:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _subtree_has_string(node, "@") and _subtree_mentions_descriptor_parts(node)
+    if isinstance(node, ast.JoinedStr):
+        return _joined_str_has_at(node) and _subtree_mentions_descriptor_parts(node)
+    return False
+
+
+def _is_descriptor_ref_split(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in {"split", "rsplit"}:
+        return False
+    if not node.args or not isinstance(node.args[0], ast.Constant) or node.args[0].value != "@":
+        return False
+    return _subtree_mentions_name(node.func.value, {"descriptor_ref", "ref"})
+
+
+def _joined_str_has_at(node: ast.JoinedStr) -> bool:
+    return any(
+        isinstance(value, ast.Constant)
+        and isinstance(value.value, str)
+        and "@" in value.value
+        for value in node.values
+    )
+
+
+def _subtree_has_string(node: ast.AST, value: str) -> bool:
+    return any(
+        isinstance(child, ast.Constant) and child.value == value
+        for child in ast.walk(node)
+    )
+
+
+def _subtree_mentions_descriptor_parts(node: ast.AST) -> bool:
+    return _subtree_mentions_name(
+        node,
+        {
+            "ability_ura",
+            "ability",
+            "descriptor_version",
+            "version",
+            "descriptor_ref",
+            "ref",
+        },
+    )
+
+
+def _subtree_mentions_name(node: ast.AST, names: set[str]) -> bool:
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id in names:
+            return True
+        if isinstance(child, ast.Attribute) and child.attr in names:
+            return True
+    return False
 
 
 def _audit_string_literals(
