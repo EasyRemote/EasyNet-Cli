@@ -6,8 +6,8 @@ import base64
 import binascii
 import hashlib
 import json
-from dataclasses import dataclass, field
-from typing import Mapping, Optional, Protocol
+from dataclasses import dataclass, field, replace
+from typing import Any, Mapping, Optional, Protocol
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .identity import SignerHandle
@@ -45,6 +45,7 @@ class PreparedInvocation:
     schema_hash_hex: str = ""
     canonical_hash_hex: str = ""
     expires_at_unix_ms: int = 0
+    _runtime: Any = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "PreparedInvocation":
@@ -102,6 +103,13 @@ class PreparedInvocation:
     def submit_ready(self) -> bool:
         return False
 
+    def sign(self, signer: "Signer") -> "SignedInvocation":
+        """Sign this prepared Invocation through an SDK signer workflow."""
+
+        if signer is None:
+            raise _invalid_prepared("signer is required")
+        return signer.sign(self)
+
     def sign_with_caller_signature(
         self, signature: InvocationSignature
     ) -> "SignedInvocation":
@@ -121,7 +129,11 @@ class PreparedInvocation:
             signature=signature,
             signer_id=signer_id,
             policy=self.signing_material.signer_policy,
+            _runtime=self._runtime,
         )
+
+    def _bind_runtime(self, runtime: object) -> "PreparedInvocation":
+        return replace(self, tuple=self.tuple._bind_runtime(runtime), _runtime=runtime)
 
 
 class SignatureProvider(Protocol):
@@ -255,6 +267,7 @@ class SignedInvocation:
     signature: InvocationSignature
     signer_id: str
     policy: Optional[SignerPolicy] = None
+    _runtime: Any = field(default=None, compare=False, repr=False)
 
     def submit_ready(self) -> bool:
         return (
@@ -293,6 +306,18 @@ class SignedInvocation:
 
     def to_json(self) -> str:
         return json.dumps(self.to_json_dict(), separators=(",", ":"), sort_keys=True)
+
+    def submit(self):
+        """Submit this signed Invocation through its bound RuntimeClient."""
+
+        return _require_runtime(self._runtime).submit_signed(self)
+
+    def _bind_runtime(self, runtime: object) -> "SignedInvocation":
+        return replace(
+            self,
+            prepared=self.prepared._bind_runtime(runtime),
+            _runtime=runtime,
+        )
 
 
 def _signing_material(
@@ -532,3 +557,15 @@ def _invalid_prepared(
         message=message,
         cause=cause,
     )
+
+
+def _require_runtime(runtime: object | None):
+    if runtime is None:
+        raise SDKError(
+            code=ErrorCode.INVALID_HANDLE,
+            stage="prepare",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message="invocation is not bound to a RuntimeClient",
+        )
+    return runtime

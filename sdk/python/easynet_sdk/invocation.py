@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional
 
 from .errors import ErrorCode, RetryHint, SDKError
@@ -46,6 +46,7 @@ class InvocationDraft:
     metadata: Mapping[str, object] = field(default_factory=dict)
     caller_signature: Optional[InvocationSignature] = None
     _has_args: bool = False
+    _runtime: Any = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationDraft":
@@ -114,6 +115,32 @@ class InvocationDraft:
     def to_json(self) -> str:
         return json.dumps(self.to_json_dict(), separators=(",", ":"), sort_keys=True)
 
+    def prepare(self, options: object | None = None):
+        """Prepare this draft through its bound RuntimeClient."""
+
+        runtime = _require_runtime(self._runtime)
+        if options is None:
+            return runtime.prepare(self)
+        return runtime.prepare(self, options)
+
+    def invoke(self):
+        """Submit this draft as one unary Invocation through its bound RuntimeClient."""
+
+        return _require_runtime(self._runtime).invoke(self)
+
+    def open_stream(self):
+        """Open this draft as one server-stream Invocation."""
+
+        return _require_runtime(self._runtime).invoke_stream(self)
+
+    def open_bidi(self, streams: tuple[object, ...] = ()):
+        """Open this draft as one bidirectional Invocation."""
+
+        return _require_runtime(self._runtime).open_bidi(self, streams)
+
+    def _bind_runtime(self, runtime: object) -> "InvocationDraft":
+        return replace(self, _runtime=runtime)
+
 
 class InvocationBuilder:
     """Mutable builder for a complete Invocation tuple."""
@@ -133,6 +160,7 @@ class InvocationBuilder:
         self._has_args = False
         self._has_arguments = False
         self._consumed = False
+        self._runtime: object | None = None
 
     def with_caller_ura(self, value: str) -> "InvocationBuilder":
         self._caller_ura = value
@@ -192,6 +220,25 @@ class InvocationBuilder:
 
         return self._inspect_draft()
 
+    def prepare(self, options: object | None = None):
+        """Prepare this builder through its bound RuntimeClient."""
+
+        runtime = _require_runtime(self._runtime)
+        if options is None:
+            return runtime.prepare_builder(self)
+        return runtime.prepare_builder(self, options)
+
+    def invoke(self):
+        """Submit this builder as one unary Invocation through its bound RuntimeClient."""
+
+        return _require_runtime(self._runtime).invoke_builder(self)
+
+    def _bind_runtime(self, runtime: object) -> "InvocationBuilder":
+        if self._consumed:
+            raise _invalid_handle("invocation builder handle is consumed")
+        self._runtime = runtime
+        return self
+
     def _consume(self) -> None:
         if self._consumed:
             raise _invalid_handle("invocation builder handle is consumed")
@@ -234,6 +281,7 @@ class InvocationBuilder:
             metadata=dict(self._metadata),
             caller_signature=self._caller_signature,
             _has_args=self._has_args,
+            _runtime=self._runtime,
         )
 
 
@@ -284,6 +332,18 @@ def _reject_unknown_fields(decoded: Mapping[str, object]) -> None:
     for name in decoded:
         if name not in allowed:
             raise _invalid_invocation(f"{name} is not an invocation field")
+
+
+def _require_runtime(runtime: object | None):
+    if runtime is None:
+        raise SDKError(
+            code=ErrorCode.INVALID_HANDLE,
+            stage="invocation",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message="invocation is not bound to a RuntimeClient",
+        )
+    return runtime
 
 
 def _invalid_invocation(

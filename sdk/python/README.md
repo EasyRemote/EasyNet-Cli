@@ -27,7 +27,8 @@ complete tuple build/invoke/stream/bidi convenience facade plus EasyRemote-style
 target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and explicit
 submit/await/cancel/events/close-handle observation helpers, prepared/signed Invocation DTOs, unary
 InvocationResult and non-verifying terminal receipt projection, StreamHandle state observation, BidiSession frame
-ordering, half-close, cancel, and terminal-close observation, signer workflow
+ordering, half-close, cancel, and terminal-close observation, object-bound
+Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
 observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close

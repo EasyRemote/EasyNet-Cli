@@ -5,6 +5,7 @@ from easynet_sdk import (
     BidiStreamDescriptor,
     ErrorCode,
     InvocationBuilder,
+    InvocationHandle,
     InvocationResult,
     InvocationSignature,
     PrepareOptions,
@@ -322,6 +323,115 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(handle.handle_id, 7)
         assert transport.seen_signed is not None
         self.assertEqual(transport.seen_signed["signer_id"], "signer-alice-key-1")
+
+    def test_bound_object_graph_delegates_full_lifecycle(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+        builder = (
+            client.new_invocation()
+            .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+            .with_subject_ura("easynet:///r/example/device/dev-a")
+            .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .with_causal_context({"form": "none"})
+            .with_json_args({})
+            .with_content_type("application/json")
+        )
+
+        prepared, material = builder.prepare(PrepareOptions(expires_in_ms=60000))
+        signed = prepared.sign(signer)
+        handle = signed.submit()
+        result = handle.await_result()
+        cancelled = handle.cancel("client stop")
+        refreshed = handle.refresh_events()
+        handle.close()
+
+        self.assertTrue(material.canonical_bytes_base64)
+        self.assertTrue(signed.submit_ready())
+        self.assertEqual(handle.handle_id, 7)
+        self.assertTrue(result.ok)
+        self.assertTrue(cancelled.cancelled)
+        self.assertTrue(refreshed.terminal)
+        self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
+        self.assertEqual(transport.seen_await_id, 7)
+        self.assertEqual(transport.seen_cancel_reason, "client stop")
+        self.assertEqual(transport.seen_free_id, 7)
+        assert transport.seen_signed is not None
+        self.assertEqual(transport.seen_signed["signer_id"], "signer-alice-key-1")
+        with self.assertRaises(SDKError) as caught:
+            builder.inspect()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
+
+    def test_bound_draft_invokes_streams_and_opens_bidi(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        draft = (
+            client.new_invocation()
+            .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_descriptor_ref(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+            .with_subject_ura("easynet:///r/example/device/dev-a")
+            .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .with_causal_context({"form": "none"})
+            .with_json_args({})
+            .with_content_type("application/json")
+            .inspect()
+        )
+
+        result = draft.invoke()
+        stream = draft.open_stream()
+        event = stream.next()
+        stream.close()
+        bidi = draft.open_bidi(
+            (
+                BidiStreamDescriptor(
+                    stream_id=1,
+                    content_type="application/json",
+                    ordering="ordered",
+                ),
+            )
+        )
+        bidi.cancel("test cleanup")
+        bidi.close()
+
+        self.assertTrue(result.ok)
+        self.assertTrue(event.terminal)
+        self.assertEqual(bidi.session_id, "bidi-1")
+        self.assertEqual(
+            transport.seen_streams,
+            [{"content_type": "application/json", "ordering": "ordered", "stream_id": 1}],
+        )
+
+    def test_unbound_lifecycle_objects_reject_object_methods(self) -> None:
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+        signed = PreparedInvocation.from_json(PREPARED_FIXTURE).sign(signer)
+        handle = InvocationHandle.from_json(
+            b'{"handle_id":7,"state":"Submitted","terminal":false}'
+        )
+
+        for action in (complete_draft().prepare, signed.submit, handle.await_result):
+            with self.subTest(action=action):
+                with self.assertRaises(SDKError) as caught:
+                    action()
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_HANDLE))
 
     def test_prepare_builder_consumes_only_after_success(self) -> None:
         transport = MemoryRuntimeTransport()

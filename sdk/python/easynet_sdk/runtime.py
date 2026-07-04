@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
@@ -98,6 +98,7 @@ class InvocationHandle:
     terminal: bool
     events: tuple[InvocationHandleEvent, ...] = field(default_factory=tuple)
     result: Optional[Mapping[str, object]] = None
+    _runtime: Any = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationHandle":
@@ -124,6 +125,29 @@ class InvocationHandle:
             events=events,
             result=result,
         )
+
+    def await_result(self) -> "InvocationResult":
+        """Await this submitted Invocation through its bound RuntimeClient."""
+
+        return _require_runtime(self._runtime).await_result(self)
+
+    def cancel(self, reason: str = "") -> "InvocationCancel":
+        """Cancel this submitted Invocation through its bound RuntimeClient."""
+
+        return _require_runtime(self._runtime).cancel(self, reason)
+
+    def refresh_events(self) -> "InvocationHandle":
+        """Fetch the latest handle event projection through the bound RuntimeClient."""
+
+        return _require_runtime(self._runtime).events(self)
+
+    def close(self) -> None:
+        """Release this submitted Invocation handle through its bound RuntimeClient."""
+
+        _require_runtime(self._runtime).close_handle(self)
+
+    def _bind_runtime(self, runtime: object) -> "InvocationHandle":
+        return replace(self, _runtime=runtime)
 
 
 @dataclass(frozen=True)
@@ -293,6 +317,12 @@ class RuntimeClient:
         self._transport = transport
         self._closed = False
 
+    def new_invocation(self) -> InvocationBuilder:
+        """Create a mutable Invocation builder bound to this RuntimeClient."""
+
+        self._require_open()
+        return InvocationBuilder()._bind_runtime(self)
+
     def invoke(self, draft: InvocationDraft) -> InvocationResult:
         transport = self._require_open()
         try:
@@ -302,6 +332,16 @@ class RuntimeClient:
         except Exception as exc:
             raise _transport_error("invoke transport failed", exc) from exc
         return InvocationResult.from_json(raw)
+
+    def invoke_builder(self, builder: InvocationBuilder) -> InvocationResult:
+        """Invoke a builder and consume it only after dispatch succeeds."""
+
+        if builder is None:
+            raise _invalid_runtime("invocation builder is required")
+        draft = builder.inspect()
+        result = self.invoke(draft)
+        builder._consume()
+        return result
 
     def invoke_stream(self, draft: InvocationDraft) -> StreamHandle:
         transport = self._require_open()
@@ -351,7 +391,7 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("prepare transport failed", exc) from exc
-        prepared = PreparedInvocation.from_json(raw)
+        prepared = PreparedInvocation.from_json(raw)._bind_runtime(self)
         return prepared, prepared.signing_material
 
     def prepare_builder(
@@ -379,7 +419,7 @@ class RuntimeClient:
         if signer is None:
             raise _invalid_runtime("signer is required")
         prepared, material = self.prepare(draft, options)
-        return signer.sign(prepared), material
+        return signer.sign(prepared)._bind_runtime(self), material
 
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
         transport = self._require_open()
@@ -391,7 +431,7 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("submit signed transport failed", exc) from exc
-        return InvocationHandle.from_json(raw)
+        return InvocationHandle.from_json(raw)._bind_runtime(self)
 
     def await_result(self, handle: InvocationHandle) -> InvocationResult:
         transport = self._require_open()
@@ -424,7 +464,7 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("handle events transport failed", exc) from exc
-        return InvocationHandle.from_json(raw)
+        return InvocationHandle.from_json(raw)._bind_runtime(self)
 
     def close_handle(self, handle: InvocationHandle) -> None:
         transport = self._require_open()
@@ -580,3 +620,15 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
         message=message,
         cause=cause,
     )
+
+
+def _require_runtime(runtime: object | None):
+    if runtime is None:
+        raise SDKError(
+            code=ErrorCode.INVALID_HANDLE,
+            stage="runtime",
+            retry=RetryHint.NEVER,
+            retryable=False,
+            message="invocation handle is not bound to a RuntimeClient",
+        )
+    return runtime
