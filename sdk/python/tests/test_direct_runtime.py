@@ -407,7 +407,11 @@ class DirectRuntimeTests(unittest.TestCase):
             envelope_open.envelope.subject.ura,
             "easynet:///r/example/device/dev-a",
         )
-        self.assertEqual(envelope_open.target.ability_name, complete_draft().descriptor_ref)
+        self.assertEqual(envelope_open.target.WhichOneof("typed_target"), "ability")
+        self.assertEqual(
+            envelope_open.target.ability.function_name,
+            complete_draft().descriptor_ref,
+        )
         self.assertEqual(envelope_open.initial_args, b"{}")
         self.assertEqual(envelope_open.args_content_type, "application/json")
         self.assertEqual(envelope_open.content_envelope.encoding, "identity")
