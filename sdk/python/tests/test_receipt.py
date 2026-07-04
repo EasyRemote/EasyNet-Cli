@@ -65,7 +65,9 @@ class MemoryReceiptTransport:
             b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
             b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
         )
+        self.fetch_invocation_json = shared_fixture("receipt-fetch-invocation.v4.json")
         self.seen_request: dict[str, object] | None = None
+        self.seen_fetch_invocation_request: dict[str, object] | None = None
         self.seen_chain_request: dict[str, object] | None = None
         self.seen_receipt_raw = b""
         self.close_calls = 0
@@ -73,6 +75,10 @@ class MemoryReceiptTransport:
     def fetch(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
         return self.fetch_json
+
+    def build_fetch_invocation(self, request_json: bytes) -> bytes:
+        self.seen_fetch_invocation_request = json.loads(request_json.decode("utf-8"))
+        return self.fetch_invocation_json
 
     def project(self, receipt_json: bytes) -> bytes:
         self.seen_receipt_raw = receipt_json
@@ -141,6 +147,22 @@ class ReceiptTests(unittest.TestCase):
             )
         )
 
+        assert_json_equivalent(
+            draft.to_json().encode("utf-8"),
+            shared_fixture("receipt-fetch-invocation.v4.json"),
+        )
+
+    def test_client_build_fetch_invocation_delegates_to_transport(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+
+        draft = client.build_fetch_invocation(fetch_request())
+
+        assert transport.seen_fetch_invocation_request is not None
+        self.assertEqual(
+            transport.seen_fetch_invocation_request["request_id"],
+            "inv-example-1",
+        )
         assert_json_equivalent(
             draft.to_json().encode("utf-8"),
             shared_fixture("receipt-fetch-invocation.v4.json"),

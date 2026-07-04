@@ -232,6 +232,9 @@ class ReceiptTransport(Protocol):
     def fetch(self, request_json: bytes) -> bytes:
         ...
 
+    def build_fetch_invocation(self, request_json: bytes) -> bytes:
+        ...
+
     def project(self, receipt_json: bytes) -> bytes:
         ...
 
@@ -271,7 +274,13 @@ class ReceiptClient:
         """Project receipt fetch into the daemon invocation.history.get carrier."""
 
         self._require_open()
-        return build_receipt_fetch_invocation(request)
+        try:
+            raw = self.transport.build_fetch_invocation(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("receipt fetch invocation failed", exc) from exc
+        return InvocationDraft.from_json(raw)
 
     def project(self, receipt_json: bytes) -> ReceiptSummary:
         self._require_open()

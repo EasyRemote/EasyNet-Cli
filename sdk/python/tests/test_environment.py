@@ -17,6 +17,7 @@ from easynet_sdk import (
     LocalResourceRefRequest,
     MissionCarrierBase,
     MissionRunRequest,
+    ReceiptFetchRequest,
     RuntimeClient,
     SDKError,
     SdkEnvironment,
@@ -172,11 +173,27 @@ class SdkEnvironmentTests(unittest.TestCase):
             compatibility.build_list_models_invocation(
                 CompatibilityListModelsRequest(base=_compatibility_base())
             )
+            receipt.build_fetch_invocation(
+                ReceiptFetchRequest(
+                    caller_ura=_CALLER,
+                    callee_ura=_CALLEE,
+                    descriptor_ref=(
+                        "easynet:///r/example/ability/"
+                        "device.dev-a.invocation.history.get@1.0.0"
+                    ),
+                    subject_ura=_SUBJECT,
+                    descriptor_version="1.0.0",
+                    nonce_base64=_NONCE,
+                    causal_context=_CAUSAL,
+                    request_id="inv-example-1",
+                )
+            )
             env.close()
 
         self.assertEqual(binding.lifecycle["frame_contract_owner"], "daemon_sdk")
         symbols = [item[0] for item in raw.profile_requests]
         self.assertIn("easynet_receipt_verify", symbols)
+        self.assertIn("easynet_receipt_build_fetch_invocation", symbols)
         self.assertIn("easynet_publication_build_resource_ref", symbols)
         self.assertIn("easynet_publication_build_deploy_invocation", symbols)
         self.assertIn("easynet_host_binding_build", symbols)
