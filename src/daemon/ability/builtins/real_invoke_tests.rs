@@ -3258,6 +3258,103 @@ fn real_device_openai_chat_completions_rejects_missing_request_arg() {
     );
 }
 
+#[test]
+fn real_device_openai_files_upload_retrieve_delete_round_trip() {
+    // Keep this fixture private instead of using the process-wide
+    // OpenAI compatibility singleton: the runtime is an object with an
+    // explicit dispatch handle and identity, so concurrent tests cannot
+    // rewrite the user slot underneath this invocation.
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let handle = Arc::new(std::sync::OnceLock::new());
+    let runtime =
+        crate::daemon::ability::builtins::integrations::openai_compat::OpenAICompatRuntime::from_pages_identity(
+            Arc::clone(&handle),
+            crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+                user: Some("test".to_string()),
+                realm: Some("example".to_string()),
+                listener_port: None,
+            },
+        );
+    let mut reg = AxonAbilityCatalog::new();
+    crate::daemon::ability::builtins::resources::files_store::register(
+        &mut reg,
+        crate::daemon::ability::builtins::resources::files_store::FilesConfig {
+            user: "test".to_string(),
+            realm: "example".to_string(),
+        },
+    );
+    let upload_runtime = runtime.clone();
+    reg.register_rpc_with_owner(
+        "openai.files.upload",
+        crate::daemon::ability::dispatch::OwnerKind::Device,
+        Arc::new(move |args| upload_runtime.handle_file_upload(args))
+            as crate::daemon::ability::dispatch::LocalRpcHandler,
+    );
+    let retrieve_runtime = runtime.clone();
+    reg.register_rpc_with_owner(
+        "openai.files.retrieve",
+        crate::daemon::ability::dispatch::OwnerKind::Device,
+        Arc::new(move |args| retrieve_runtime.handle_file_retrieve(args))
+            as crate::daemon::ability::dispatch::LocalRpcHandler,
+    );
+    let delete_runtime = runtime;
+    reg.register_rpc_with_owner(
+        "openai.files.delete",
+        crate::daemon::ability::dispatch::OwnerKind::Device,
+        Arc::new(move |args| delete_runtime.handle_file_delete(args))
+            as crate::daemon::ability::dispatch::LocalRpcHandler,
+    );
+    let reg = Arc::new(reg);
+    assert!(handle.set(Arc::clone(&reg)).is_ok());
+    let d = dispatcher_for(reg);
+
+    let upload = d
+        .execute_rpc(target(
+            "openai.files.upload",
+            json!({
+                "filename": "prompt.txt",
+                "purpose": "assistants",
+                "bytes_b64": "aGk=",
+                "content_type": "text/plain",
+            }),
+        ))
+        .expect("openai.files.upload");
+    assert_eq!(upload["kind"], "file");
+    assert_eq!(upload["filename"], "prompt.txt");
+    assert_eq!(upload["bytes"], 2);
+    let file_id = upload
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("upload id")
+        .to_string();
+
+    let retrieve = d
+        .execute_rpc(target(
+            "openai.files.retrieve",
+            json!({
+                "file_id": file_id,
+                "filename": "prompt.txt",
+                "purpose": "assistants",
+            }),
+        ))
+        .expect("openai.files.retrieve");
+    assert_eq!(retrieve["kind"], "file");
+    assert_eq!(retrieve["id"], upload["id"]);
+    assert_eq!(
+        retrieve.pointer("/metadata/bytes_b64"),
+        Some(&json!("aGk="))
+    );
+
+    let delete = d
+        .execute_rpc(target(
+            "openai.files.delete",
+            json!({ "file_id": retrieve["id"] }),
+        ))
+        .expect("openai.files.delete");
+    assert_eq!(delete["kind"], "file_delete_result");
+    assert_eq!(delete["deleted"], true);
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category D: user-rooted credential lifecycle (api_key.*)
 // ════════════════════════════════════════════════════════════════

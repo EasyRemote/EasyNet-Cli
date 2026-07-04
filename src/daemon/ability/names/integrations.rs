@@ -9,6 +9,9 @@ pub const MCP_CLIENT_CALL: &str = "mcp.client.call";
 
 pub const OPENAI_CHAT_COMPLETIONS: &str = "openai.chat_completions";
 pub const OPENAI_LIST_MODELS: &str = "openai.list_models";
+pub const OPENAI_FILES_UPLOAD: &str = "openai.files.upload";
+pub const OPENAI_FILES_RETRIEVE: &str = "openai.files.retrieve";
+pub const OPENAI_FILES_DELETE: &str = "openai.files.delete";
 
 pub const PLUGIN_RELOAD: &str = "plugin.reload";
 pub const PLUGIN_STATUS: &str = "plugin.status";

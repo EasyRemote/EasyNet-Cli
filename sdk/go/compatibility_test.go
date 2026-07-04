@@ -129,6 +129,7 @@ func compatibilityFileUploadRequest(base CompatibilityCarrierBase) Compatibility
 		Filename:                 "prompt.jsonl",
 		Purpose:                  "batch",
 		ContentType:              "application/jsonl",
+		BytesBase64:              "eyJwcm9tcHQiOiJoaSJ9Cg==",
 		ContentHash:              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		SizeBytes:                19,
 		CreatedAt:                1783094400,
@@ -401,6 +402,13 @@ func TestCompatibilityRejectsInvalidRequests(t *testing.T) {
 	}
 	if _, err := client.ProjectFileUpload(CompatibilityFileUploadRequest{Purpose: "batch"}); err == nil {
 		t.Fatal("expected incomplete file facts rejection")
+	}
+	if _, err := client.BuildFileUploadInvocation(context.Background(), CompatibilityFileUploadRequest{
+		CompatibilityCarrierBase: compatibilityBaseForTest(),
+		Purpose:                  "batch",
+		BytesBase64:              "AQID",
+	}); err == nil {
+		t.Fatal("expected file bytes without filename rejection")
 	}
 	if _, err := client.BuildFileUploadInvocation(context.Background(), CompatibilityFileUploadRequest{Purpose: "batch"}); err == nil {
 		t.Fatal("expected incomplete file carrier rejection")

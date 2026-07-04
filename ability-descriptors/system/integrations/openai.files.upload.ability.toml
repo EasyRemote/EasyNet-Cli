@@ -1,0 +1,27 @@
+schema_version = "1"
+name = "openai.files.upload"
+description = "OpenAI-compatible file upload served by the device daemon. Accepts Compatibility-profile file bytes, stores them in the user-rooted content-addressed files surface, and projects the stored blob as an OpenAI-compatible File object."
+
+[input_schema]
+type = "object"
+required = ["purpose", "filename", "bytes_b64"]
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."
+
+[input_schema.properties.bytes_b64]
+type = "string"
+description = "Standard base64-encoded file bytes."
+
+[input_schema.properties.content_type]
+type = "string"
+description = "Optional media type for the uploaded bytes."
+
+[input_schema.properties.filename]
+type = "string"
+description = "Client-visible file name to persist with the blob metadata."
+
+[input_schema.properties.purpose]
+type = "string"
+description = "OpenAI file purpose, e.g. assistants or batch."

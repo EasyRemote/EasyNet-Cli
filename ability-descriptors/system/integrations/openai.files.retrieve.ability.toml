@@ -1,0 +1,27 @@
+schema_version = "1"
+name = "openai.files.retrieve"
+description = "OpenAI-compatible file retrieval served by the device daemon. Resolves a Compatibility-profile file id through the user-rooted files surface and returns file metadata plus base64 content for the HTTP compatibility boundary."
+
+[input_schema]
+type = "object"
+required = ["file_id"]
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."
+
+[input_schema.properties.created_at]
+type = "integer"
+description = "Optional creation timestamp to preserve in the projected file object."
+
+[input_schema.properties.file_id]
+type = "string"
+description = "File id returned by openai.files.upload."
+
+[input_schema.properties.filename]
+type = "string"
+description = "Optional file name override for projected metadata."
+
+[input_schema.properties.purpose]
+type = "string"
+description = "Optional OpenAI file purpose for projected metadata."

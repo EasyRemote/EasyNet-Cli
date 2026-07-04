@@ -1,0 +1,15 @@
+schema_version = "1"
+name = "openai.files.delete"
+description = "OpenAI-compatible file deletion served by the device daemon. Projects a deterministic logical delete acknowledgement for content-addressed files whose bytes may be shared by refs."
+
+[input_schema]
+type = "object"
+required = ["file_id"]
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."
+
+[input_schema.properties.file_id]
+type = "string"
+description = "File id returned by openai.files.upload."

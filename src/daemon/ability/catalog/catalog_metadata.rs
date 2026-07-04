@@ -460,6 +460,23 @@ pub fn description_for(name: &str) -> &'static str {
              on, projected as OpenAI `Model` objects whose `id` is the \
              canonical agent-owned chat Ability URA."
         }
+        integration_names::OPENAI_FILES_UPLOAD => {
+            "OpenAI-compatible file upload served by the device daemon. \
+             Accepts Compatibility-profile file bytes, stores them in \
+             the user-rooted content-addressed files surface, and \
+             projects the stored blob as an OpenAI-compatible File object."
+        }
+        integration_names::OPENAI_FILES_RETRIEVE => {
+            "OpenAI-compatible file retrieval served by the device daemon. \
+             Resolves a Compatibility-profile file id through the \
+             user-rooted files surface and returns file metadata plus \
+             base64 content for the HTTP compatibility boundary."
+        }
+        integration_names::OPENAI_FILES_DELETE => {
+            "OpenAI-compatible file deletion served by the device daemon. \
+             Projects a deterministic logical delete acknowledgement for \
+             content-addressed files whose bytes may be shared by refs."
+        }
         _ if name.ends_with(".chat") => "Send a chat prompt to the locally-installed agent.",
         // `<user>.api_key.{create,list,revoke}` — user-rooted
         // credential-lifecycle abilities. `<user>` is the active
@@ -669,6 +686,72 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         integration_names::OPENAI_LIST_MODELS => serde_json::json!({
             "type": "object",
             "properties": {
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token bound to a `<user>.api_key` entry on this host."
+                }
+            }
+        }),
+        integration_names::OPENAI_FILES_UPLOAD => serde_json::json!({
+            "type": "object",
+            "required": ["purpose", "filename", "bytes_b64"],
+            "properties": {
+                "purpose": {
+                    "type": "string",
+                    "description": "OpenAI file purpose, e.g. assistants or batch."
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Client-visible file name to persist with the blob metadata."
+                },
+                "bytes_b64": {
+                    "type": "string",
+                    "description": "Standard base64-encoded file bytes."
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "Optional media type for the uploaded bytes."
+                },
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token bound to a `<user>.api_key` entry on this host."
+                }
+            }
+        }),
+        integration_names::OPENAI_FILES_RETRIEVE => serde_json::json!({
+            "type": "object",
+            "required": ["file_id"],
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "description": "File id returned by openai.files.upload."
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Optional file name override for projected metadata."
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": "Optional OpenAI file purpose for projected metadata."
+                },
+                "created_at": {
+                    "type": "integer",
+                    "description": "Optional creation timestamp to preserve in the projected file object."
+                },
+                "auth_token": {
+                    "type": "string",
+                    "description": "Bearer token bound to a `<user>.api_key` entry on this host."
+                }
+            }
+        }),
+        integration_names::OPENAI_FILES_DELETE => serde_json::json!({
+            "type": "object",
+            "required": ["file_id"],
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "description": "File id returned by openai.files.upload."
+                },
                 "auth_token": {
                     "type": "string",
                     "description": "Bearer token bound to a `<user>.api_key` entry on this host."
@@ -1002,6 +1085,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // than Introspection.
         | integration_names::OPENAI_CHAT_COMPLETIONS
         | integration_names::OPENAI_LIST_MODELS
+        | integration_names::OPENAI_FILES_UPLOAD
+        | integration_names::OPENAI_FILES_RETRIEVE
+        | integration_names::OPENAI_FILES_DELETE
         // RFC-012 §RemoteWebSurface — browser.* family.
         // Operational by intent: opening a WebView session,
         // streaming frames, injecting input, closing the

@@ -353,6 +353,9 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("browser.close_session", DeviceBrowser),
     local_rpc!("openai.chat_completions", DeviceOpenAiCompat),
     local_rpc!("openai.list_models", DeviceOpenAiCompat),
+    local_rpc!("openai.files.upload", DeviceOpenAiCompat),
+    local_rpc!("openai.files.retrieve", DeviceOpenAiCompat),
+    local_rpc!("openai.files.delete", DeviceOpenAiCompat),
 ];
 
 #[cfg(feature = "remote-desktop")]

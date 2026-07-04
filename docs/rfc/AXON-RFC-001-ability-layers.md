@@ -106,6 +106,7 @@ introspection simply because they use the `meta.*` namespace.
 | `ability.*` / `skill.*` mutation verbs | write/remove manifests or skill package state |
 | `fs.*`, `process.exec`, `shell.run`, `http.request` | host locomotion / execution work |
 | `terminal.*`, `mic.*`, `camera.*`, `screen.*`, `speaker.*`, `voice.*`, `browser.*`, `mission.*` | session, media, browser, or orchestration work |
+| `openai.chat_completions`, `openai.list_models`, `openai.files.*` | device-local OpenAI compatibility projection over host-local abilities and files |
 
 ## Cross-layer rules
 

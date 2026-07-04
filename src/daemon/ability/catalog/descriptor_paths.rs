@@ -169,6 +169,9 @@ impl SystemAbilityDescriptorGroup {
             | integrations::MCP_CLIENT_CALL
             | integrations::OPENAI_CHAT_COMPLETIONS
             | integrations::OPENAI_LIST_MODELS
+            | integrations::OPENAI_FILES_UPLOAD
+            | integrations::OPENAI_FILES_RETRIEVE
+            | integrations::OPENAI_FILES_DELETE
             | integrations::PLUGIN_RELOAD
             | integrations::PLUGIN_STATUS
             | integrations::PLUGIN_ACTIVATE_REALTIME

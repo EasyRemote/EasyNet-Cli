@@ -2,8 +2,8 @@
 // ====================================================
 //
 // File: src/daemon/ability/builtins/integrations/openai_compat.rs
-// Description: device-local abilities `openai.chat_completions`
-//              and `openai.list_models` that project EasyNet
+// Description: device-local abilities `openai.chat_completions`,
+//              `openai.list_models`, and `openai.files.*` that project EasyNet
 //              chat-base abilities through the OpenAI streaming
 //              completion wire shape (RFC-006-C v0.1).
 //
@@ -30,6 +30,13 @@ use serde_json::{json, Value};
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::daemon::ability::builtins::resources::pages::PagesIdentity;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
+use crate::daemon::ability::names::integrations::{
+    OPENAI_CHAT_COMPLETIONS, OPENAI_FILES_DELETE, OPENAI_FILES_RETRIEVE, OPENAI_FILES_UPLOAD,
+    OPENAI_LIST_MODELS,
+};
+use crate::daemon::compatibility_contract::{
+    project_file, project_file_delete_result, project_file_upload,
+};
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use crate::support::platform::process_singleton::ProcessSingleton;
 
@@ -100,6 +107,18 @@ impl OpenAICompatRuntime {
 
     pub(crate) fn handle_list_models(&self, args: Value) -> anyhow::Result<Value> {
         handle_list_models_with_context(&self.dispatch_handle, self.identity.as_ref(), args)
+    }
+
+    pub(crate) fn handle_file_upload(&self, args: Value) -> anyhow::Result<Value> {
+        handle_file_upload_with_context(&self.dispatch_handle, self.identity.as_ref(), args)
+    }
+
+    pub(crate) fn handle_file_retrieve(&self, args: Value) -> anyhow::Result<Value> {
+        handle_file_retrieve_with_context(&self.dispatch_handle, self.identity.as_ref(), args)
+    }
+
+    pub(crate) fn handle_file_delete(&self, args: Value) -> anyhow::Result<Value> {
+        handle_file_delete_with_context(self.identity.as_ref(), args)
     }
 }
 
@@ -522,6 +541,24 @@ pub fn handle_list_models(_args: Value) -> anyhow::Result<Value> {
     runtime.handle_list_models(serde_json::json!({}))
 }
 
+pub fn handle_file_upload(args: Value) -> anyhow::Result<Value> {
+    let runtime =
+        OpenAICompatRuntime::current().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    runtime.handle_file_upload(args)
+}
+
+pub fn handle_file_retrieve(args: Value) -> anyhow::Result<Value> {
+    let runtime =
+        OpenAICompatRuntime::current().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    runtime.handle_file_retrieve(args)
+}
+
+pub fn handle_file_delete(args: Value) -> anyhow::Result<Value> {
+    let runtime =
+        OpenAICompatRuntime::current().ok_or_else(|| anyhow::anyhow!("dispatch handle not set"))?;
+    runtime.handle_file_delete(args)
+}
+
 fn handle_list_models_with_context(
     dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
     identity: Option<&OpenAICompatIdentity>,
@@ -546,6 +583,156 @@ fn handle_list_models_with_context(
     }
 
     Ok(json!({ "object": "list", "data": models }))
+}
+
+fn handle_file_upload_with_context(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let (user, _realm) = compatibility_file_identity(identity)?;
+    let filename = args
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("blob")
+        .to_string();
+    let purpose = args
+        .get("purpose")
+        .and_then(Value::as_str)
+        .unwrap_or("assistants")
+        .to_string();
+    let bytes_b64 = args
+        .get("bytes_b64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("openai.files.upload: missing bytes_b64"))?;
+    let mut store_args = json!({
+        "filename": filename,
+        "bytes_b64": bytes_b64,
+    });
+    if let Some(content_type) = args.get("content_type").and_then(Value::as_str) {
+        store_args["content_type"] = Value::String(content_type.to_string());
+    }
+
+    let registry = registry_from_handle(dispatch_handle, "openai.files.upload")?;
+    let stored = registry
+        .invoke_rpc_json(&format!("{user}.files.put"), store_args)
+        .map_err(|err| anyhow::anyhow!("openai.files.upload: files.put failed: {err}"))?;
+    let sha = stored
+        .get("sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("openai.files.upload: files.put missing sha256"))?;
+    let file_ref = stored
+        .get("ura")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("openai.files.upload: files.put missing resource ref"))?;
+    let size = stored.get("size").and_then(Value::as_u64).unwrap_or(0);
+    let content_type = stored
+        .get("content_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+
+    project_file_upload(&json!({
+        "id": sha,
+        "file_ref": file_ref,
+        "filename": stored.get("filename").and_then(Value::as_str).unwrap_or("blob"),
+        "purpose": purpose,
+        "content_type": content_type,
+        "content_hash": format!("sha256:{sha}"),
+        "bytes": size,
+        "created_at": unix_now_seconds(),
+        "status": "processed",
+    }))
+    .map_err(|err| anyhow::anyhow!("openai.files.upload: project file: {err}"))
+}
+
+fn handle_file_retrieve_with_context(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let (user, _realm) = compatibility_file_identity(identity)?;
+    let file_id = args
+        .get("file_id")
+        .or_else(|| args.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("openai.files.retrieve: missing file_id"))?;
+    let registry = registry_from_handle(dispatch_handle, "openai.files.retrieve")?;
+    let stored = registry
+        .invoke_rpc_json(&format!("{user}.files.get"), json!({ "sha256": file_id }))
+        .map_err(|err| anyhow::anyhow!("openai.files.retrieve: files.get failed: {err}"))?;
+    let bytes_b64 = stored
+        .get("bytes_b64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("openai.files.retrieve: files.get missing bytes_b64"))?;
+    let sha = stored
+        .get("sha256")
+        .and_then(Value::as_str)
+        .unwrap_or(file_id);
+    let size = stored.get("size").and_then(Value::as_u64).unwrap_or(0);
+    let content_type = stored
+        .get("content_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    let realm = identity
+        .map(|value| value.realm.as_str())
+        .unwrap_or(crate::core::ura::REALM_EASYNET);
+    let file_ref = crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
+        realm, &user, sha,
+    );
+
+    project_file(&json!({
+        "id": sha,
+        "file_ref": file_ref,
+        "filename": args.get("filename").and_then(Value::as_str).unwrap_or(sha),
+        "purpose": args.get("purpose").and_then(Value::as_str).unwrap_or("assistants"),
+        "content_type": content_type,
+        "content_hash": format!("sha256:{sha}"),
+        "bytes": size,
+        "created_at": args.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+        "status": "processed",
+        "metadata": {
+            "bytes_b64": bytes_b64,
+        }
+    }))
+    .map_err(|err| anyhow::anyhow!("openai.files.retrieve: project file: {err}"))
+}
+
+fn handle_file_delete_with_context(
+    identity: Option<&OpenAICompatIdentity>,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let _ = compatibility_file_identity(identity)?;
+    let file_id = args
+        .get("file_id")
+        .or_else(|| args.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("openai.files.delete: missing file_id"))?;
+    project_file_delete_result(&json!({
+        "id": file_id,
+        "deleted": true,
+        "metadata": {
+            "delete_mode": "logical",
+        }
+    }))
+    .map_err(|err| anyhow::anyhow!("openai.files.delete: project delete: {err}"))
+}
+
+fn compatibility_file_identity(
+    identity: Option<&OpenAICompatIdentity>,
+) -> anyhow::Result<(String, String)> {
+    let identity = identity.ok_or_else(|| anyhow::anyhow!("openai.files: identity missing"))?;
+    let user = identity
+        .user
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("openai.files: user missing"))?;
+    Ok((user.to_string(), identity.realm.clone()))
+}
+
+fn unix_now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn registry_from_handle(
@@ -573,14 +760,29 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
     // pre-registers a `hub.*` name on behalf of the hub: that
     // would let the device daemon lie about what the hub offers.
     reg.register_rpc_with_owner(
-        "openai.chat_completions",
+        OPENAI_CHAT_COMPLETIONS,
         OwnerKind::Device,
         Arc::new(handle_chat_completions) as LocalRpcHandler,
     );
     reg.register_rpc_with_owner(
-        "openai.list_models",
+        OPENAI_LIST_MODELS,
         OwnerKind::Device,
         Arc::new(handle_list_models) as LocalRpcHandler,
+    );
+    reg.register_rpc_with_owner(
+        OPENAI_FILES_UPLOAD,
+        OwnerKind::Device,
+        Arc::new(handle_file_upload) as LocalRpcHandler,
+    );
+    reg.register_rpc_with_owner(
+        OPENAI_FILES_RETRIEVE,
+        OwnerKind::Device,
+        Arc::new(handle_file_retrieve) as LocalRpcHandler,
+    );
+    reg.register_rpc_with_owner(
+        OPENAI_FILES_DELETE,
+        OwnerKind::Device,
+        Arc::new(handle_file_delete) as LocalRpcHandler,
     );
 }
 
@@ -851,6 +1053,135 @@ mod tests {
         assert_eq!(
             project_model_id_with_identity(&reg, "device.chat", Some(&identity)),
             None
+        );
+    }
+
+    const FILE_SHA: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+    fn openai_file_runtime() -> OpenAICompatRuntime {
+        let handle = Arc::new(OnceLock::new());
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner(
+            "alice.files.put",
+            OwnerKind::User("alice".into()),
+            Arc::new(|args: Value| {
+                assert_eq!(args.get("filename").and_then(Value::as_str), Some("prompt.txt"));
+                assert_eq!(args.get("bytes_b64").and_then(Value::as_str), Some("aGk="));
+                assert_eq!(
+                    args.get("content_type").and_then(Value::as_str),
+                    Some("text/plain")
+                );
+                Ok(json!({
+                    "ura": crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
+                        "example",
+                        "alice",
+                        FILE_SHA
+                    ),
+                    "sha256": FILE_SHA,
+                    "size": 2,
+                    "content_type": "text/plain",
+                    "filename": "prompt.txt",
+                }))
+            }) as LocalRpcHandler,
+        );
+        reg.register_rpc_with_owner(
+            "alice.files.get",
+            OwnerKind::User("alice".into()),
+            Arc::new(|args: Value| {
+                assert_eq!(args.get("sha256").and_then(Value::as_str), Some(FILE_SHA));
+                Ok(json!({
+                    "bytes_b64": "aGk=",
+                    "sha256": FILE_SHA,
+                    "size": 2,
+                    "content_type": "text/plain",
+                }))
+            }) as LocalRpcHandler,
+        );
+        assert!(handle.set(Arc::new(reg)).is_ok());
+        OpenAICompatRuntime::from_pages_identity(
+            handle,
+            PagesIdentity {
+                user: Some("alice".into()),
+                realm: Some("example".into()),
+                listener_port: None,
+            },
+        )
+    }
+
+    #[test]
+    fn openai_file_upload_projects_local_store_result() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let runtime = openai_file_runtime();
+        let got = runtime
+            .handle_file_upload(json!({
+                "filename": "prompt.txt",
+                "purpose": "assistants",
+                "bytes_b64": "aGk=",
+                "content_type": "text/plain",
+            }))
+            .expect("upload should project file");
+
+        assert_eq!(got.get("kind").and_then(Value::as_str), Some("file"));
+        assert_eq!(got.get("id").and_then(Value::as_str), Some(FILE_SHA));
+        assert_eq!(
+            got.pointer("/metadata/file_ref").and_then(Value::as_str),
+            Some(
+                crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
+                    "example", "alice", FILE_SHA
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            got.pointer("/metadata/content_type")
+                .and_then(Value::as_str),
+            Some("text/plain")
+        );
+        assert_eq!(got.get("bytes").and_then(Value::as_u64), Some(2));
+    }
+
+    #[test]
+    fn openai_file_retrieve_projects_content_metadata() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let runtime = openai_file_runtime();
+        let got = runtime
+            .handle_file_retrieve(json!({
+                "file_id": FILE_SHA,
+                "filename": "prompt.txt",
+                "purpose": "assistants",
+            }))
+            .expect("retrieve should project file");
+
+        assert_eq!(got.get("kind").and_then(Value::as_str), Some("file"));
+        assert_eq!(got.get("id").and_then(Value::as_str), Some(FILE_SHA));
+        assert_eq!(
+            got.pointer("/metadata/bytes_b64").and_then(Value::as_str),
+            Some("aGk=")
+        );
+        assert_eq!(
+            got.pointer("/metadata/content_type")
+                .and_then(Value::as_str),
+            Some("text/plain")
+        );
+    }
+
+    #[test]
+    fn openai_file_delete_projects_logical_delete_result() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let runtime = openai_file_runtime();
+        let got = runtime
+            .handle_file_delete(json!({ "file_id": FILE_SHA }))
+            .expect("delete should project result");
+
+        assert_eq!(
+            got.get("kind").and_then(Value::as_str),
+            Some("file_delete_result")
+        );
+        assert_eq!(got.get("id").and_then(Value::as_str), Some(FILE_SHA));
+        assert_eq!(got.get("deleted").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            got.pointer("/metadata/delete_mode").and_then(Value::as_str),
+            Some("logical")
         );
     }
 }

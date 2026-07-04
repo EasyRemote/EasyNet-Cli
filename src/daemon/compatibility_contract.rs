@@ -50,9 +50,12 @@ const ABILITY_OPENAI_LIST_MODELS: &str =
     crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS;
 const ABILITY_OPENAI_CHAT_COMPLETIONS: &str =
     crate::daemon::ability::names::integrations::OPENAI_CHAT_COMPLETIONS;
-const ABILITY_OPENAI_FILES_UPLOAD: &str = "openai.files.upload";
-const ABILITY_OPENAI_FILES_RETRIEVE: &str = "openai.files.retrieve";
-const ABILITY_OPENAI_FILES_DELETE: &str = "openai.files.delete";
+const ABILITY_OPENAI_FILES_UPLOAD: &str =
+    crate::daemon::ability::names::integrations::OPENAI_FILES_UPLOAD;
+const ABILITY_OPENAI_FILES_RETRIEVE: &str =
+    crate::daemon::ability::names::integrations::OPENAI_FILES_RETRIEVE;
+const ABILITY_OPENAI_FILES_DELETE: &str =
+    crate::daemon::ability::names::integrations::OPENAI_FILES_DELETE;
 
 pub(crate) type CompatibilityError = SdkContractError;
 
@@ -103,7 +106,17 @@ pub(crate) fn build_file_upload_invocation(request: &Value) -> Result<Value, Com
     let purpose = required_string(obj, "purpose")?;
     let mut args = Map::new();
     args.insert("purpose".to_string(), Value::String(purpose.to_string()));
-    insert_file_ref_arg(obj, &mut args)?;
+    if let Some(bytes_b64) = optional_string_field(obj, "bytes_b64")? {
+        args.insert("bytes_b64".to_string(), Value::String(bytes_b64));
+        let filename = optional_string_field(obj, "filename")?
+            .ok_or(CompatibilityError::MissingField("filename"))?;
+        args.insert("filename".to_string(), Value::String(filename));
+        if let Some(content_type) = optional_string_field(obj, "content_type")? {
+            args.insert("content_type".to_string(), Value::String(content_type));
+        }
+    } else {
+        insert_file_ref_arg(obj, &mut args)?;
+    }
     insert_auth_arg(obj, &mut args)?;
     build_system_invocation(
         obj,
@@ -848,6 +861,34 @@ mod tests {
         assert_eq!(delete["metadata"]["system_ability"], "openai.files.delete");
         assert_eq!(delete["args"]["file_id"], "file-easynet-docs-1");
         assert_eq!(delete["args"]["deleted"], true);
+    }
+
+    #[test]
+    fn build_file_upload_invocation_accepts_inline_bytes() {
+        let upload = build_file_upload_invocation(&base_request(json!({
+            "purpose": "assistants",
+            "filename": "prompt.txt",
+            "content_type": "text/plain",
+            "bytes_b64": "aGVsbG8="
+        })))
+        .unwrap();
+
+        assert_eq!(upload["metadata"]["system_ability"], "openai.files.upload");
+        assert_eq!(upload["args"]["filename"], "prompt.txt");
+        assert_eq!(upload["args"]["bytes_b64"], "aGVsbG8=");
+        assert_eq!(upload["args"]["content_type"], "text/plain");
+        assert!(upload["args"].get("file_ref").is_none());
+    }
+
+    #[test]
+    fn build_file_upload_invocation_rejects_inline_bytes_without_filename() {
+        let err = build_file_upload_invocation(&base_request(json!({
+            "purpose": "assistants",
+            "bytes_b64": "aGVsbG8="
+        })))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("filename"));
     }
 
     #[test]

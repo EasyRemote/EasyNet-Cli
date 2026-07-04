@@ -48,6 +48,7 @@ type CompatibilityFileUploadRequest struct {
 	OwnerURA    string         `json:"owner_ura,omitempty"`
 	ContentType string         `json:"content_type,omitempty"`
 	ContentHash string         `json:"content_hash,omitempty"`
+	BytesBase64 string         `json:"bytes_b64,omitempty"`
 	Bytes       int64          `json:"bytes,omitempty"`
 	SizeBytes   int64          `json:"size_bytes,omitempty"`
 	CreatedAt   int64          `json:"created_at,omitempty"`
@@ -594,6 +595,7 @@ func marshalCompatibilityFileUploadRequest(req any, validate func(any) error) ([
 	putNonEmpty(payload, "owner_ura", value.OwnerURA)
 	putNonEmpty(payload, "content_type", value.ContentType)
 	putNonEmpty(payload, "content_hash", value.ContentHash)
+	putNonEmpty(payload, "bytes_b64", value.BytesBase64)
 	putNonZeroInt64(payload, "bytes", value.Bytes)
 	putNonZeroInt64(payload, "size_bytes", value.SizeBytes)
 	putNonZeroInt64(payload, "created_at", value.CreatedAt)
@@ -718,6 +720,12 @@ func validateCompatibilityModel(model CompatibilityModel) error {
 func validateCompatibilityFileUploadRequest(req CompatibilityFileUploadRequest) error {
 	if req.Purpose == "" {
 		return invalidProfilePayload(compatibilityProfile, "compatibility file purpose is required", nil)
+	}
+	if req.BytesBase64 != "" {
+		if req.Filename == "" {
+			return invalidProfilePayload(compatibilityProfile, "compatibility filename is required", nil)
+		}
+		return nil
 	}
 	return validateCompatibilityFileFacts(req.ID, req.FileID, req.FileRef, req.ResourceRef, req.ResourceURA, req.Filename, req.Bytes, req.SizeBytes, req.CreatedAt, 0)
 }
