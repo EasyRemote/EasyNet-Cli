@@ -9,7 +9,7 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
 | C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
+| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade and projection actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
 | Node/TypeScript | P1 | desktop tools and extensions | placeholder |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
@@ -27,8 +27,8 @@ method spelling.
 | complete invocation draft | partial | builder handles partial | partial | partial | gap | gap | gap |
 | prepare/sign/submit | partial | handle observation partial | transport seam partial + optional C ABI adapter | transport seam partial | gap | gap | gap |
 | unary invoke | partial | partial | transport seam partial + optional C ABI adapter | transport seam partial | gap | gap | gap |
-| stream | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
-| bidi | existing dispatch | lifecycle partial | state seam partial | state seam partial | gap | gap | gap |
+| stream | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
+| bidi | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
 | receipt | fetch/projection/ref partial | fetch/projection partial | projection/ref seam partial | projection seam partial | gap | gap | gap |
 | publication | carrier partial | carrier/deploy partial | carrier/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
@@ -98,7 +98,8 @@ method spelling.
   remain incomplete.
 - Go package exposes Runtime Core feature/version discovery with root client close and optional
   `easynet_cabi,cgo` C ABI v4 feature-discovery, daemon lifecycle/open-runtime,
-  runtime-health, unary invoke, prepare/sign/submit-handle, await/cancel/events/free-handle adapters, runtime connection
+  runtime-health, unary invoke, stream/bidi callback, prepare/sign/submit-handle,
+  await/cancel/events/free-handle adapters, runtime connection
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
   detach/open-runtime/connect-local state seams, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
@@ -107,7 +108,7 @@ method spelling.
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
-  transport seams; default C ABI stream/bidi callback adapters, direct UDS transport, concrete bidi adapters, profile
+  transport seams; direct UDS transport, profile
   clients, backend import-ban integration, per-profile error source refs, and
   remaining profile conformance action execution remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
