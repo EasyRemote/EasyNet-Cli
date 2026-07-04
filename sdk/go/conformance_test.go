@@ -561,6 +561,154 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 	}
 }
 
+func TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	adminCase := sharedCase(t, root, "admin-gateway-carrier-status.yaml")
+	requireCaseID(t, adminCase, "admin_gateway/carrier_status")
+	for _, action := range []string{
+		"build_agent_list_invocation",
+		"build_agent_start_invocation",
+		"build_agent_stop_invocation",
+		"build_agent_refresh_invocation",
+		"build_session_list_invocation",
+		"project_gateway_status",
+		"project_agent_records",
+		"project_agent_lifecycle_result",
+	} {
+		requireCaseAction(t, adminCase, action)
+	}
+	for _, fixture := range []string{
+		"admin-agent-list-request.v4.json",
+		"admin-agent-start-request.v4.json",
+		"admin-agent-stop-request.v4.json",
+		"admin-agent-refresh-request.v4.json",
+		"admin-session-list-request.v4.json",
+		"gateway-status.v4.json",
+		"admin-agent-records.v4.json",
+		"admin-agent-lifecycle-result.v4.json",
+	} {
+		requireCaseFixture(t, adminCase, fixture)
+	}
+	requireCaseExpectation(t, adminCase, "agent_start_invocation_fixture: admin-agent-start-invocation.v4.json")
+	requireCaseExpectation(t, adminCase, "agent_stop_invocation_fixture: admin-agent-stop-invocation.v4.json")
+	requireCaseExpectation(t, adminCase, "agent_list_invocation_fixture: admin-agent-list-invocation.v4.json")
+	requireCaseExpectation(t, adminCase, "session_list_invocation_fixture: admin-session-list-invocation.v4.json")
+	requireCaseExpectation(t, adminCase, "rejects_incomplete_invocation_tuple: true")
+	requireCaseExpectation(t, adminCase, "rejects_system_agent_lifecycle: true")
+	requireCaseExpectation(t, adminCase, "preserves_control_only_degraded_state: true")
+	requireCaseExpectation(t, adminCase, "pairing_and_device_session_crud: scaffold_only")
+
+	admin, err := NewAdminClient(&sharedAdminGatewayTransport{
+		t:                            t,
+		expectedAgentListRequest:     sharedFixture(t, root, "admin-agent-list-request.v4.json"),
+		expectedAgentStartRequest:    sharedFixture(t, root, "admin-agent-start-request.v4.json"),
+		expectedAgentStopRequest:     sharedFixture(t, root, "admin-agent-stop-request.v4.json"),
+		expectedAgentRefreshRequest:  sharedFixture(t, root, "admin-agent-refresh-request.v4.json"),
+		expectedSessionListRequest:   sharedFixture(t, root, "admin-session-list-request.v4.json"),
+		agentListInvocationJSON:      sharedFixture(t, root, "admin-agent-list-invocation.v4.json"),
+		agentStartInvocationJSON:     sharedFixture(t, root, "admin-agent-start-invocation.v4.json"),
+		agentStopInvocationJSON:      sharedFixture(t, root, "admin-agent-stop-invocation.v4.json"),
+		agentRefreshInvocationJSON:   sharedFixture(t, root, "admin-agent-refresh-invocation.v4.json"),
+		sessionListInvocationJSON:    sharedFixture(t, root, "admin-session-list-invocation.v4.json"),
+		gatewayStatusJSON:            sharedFixture(t, root, "gateway-status.v4.json"),
+		agentRecordsJSON:             sharedFixture(t, root, "admin-agent-records.v4.json"),
+		agentLifecycleResultJSON:     sharedFixture(t, root, "admin-agent-lifecycle-result.v4.json"),
+		expectedGatewayStatusRequest: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("NewAdminClient: %v", err)
+	}
+
+	agentList, err := admin.BuildAgentListInvocation(context.Background(), sharedAdminAgentListRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildAgentListInvocation(shared fixture): %v", err)
+	}
+	if agentList.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0" ||
+		agentList.Metadata()["system_ability"] != "agent.list" {
+		t.Fatalf("unexpected shared agent-list invocation: %#v", agentList)
+	}
+
+	agentStart, err := admin.BuildAgentStartInvocation(context.Background(), sharedAdminAgentStartRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildAgentStartInvocation(shared fixture): %v", err)
+	}
+	if agentStart.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.agent.start@1.0.0" ||
+		agentStart.Metadata()["system_ability"] != "agent.start" {
+		t.Fatalf("unexpected shared agent-start invocation: %#v", agentStart)
+	}
+
+	agentStop, err := admin.BuildAgentStopInvocation(context.Background(), sharedAdminAgentStopRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildAgentStopInvocation(shared fixture): %v", err)
+	}
+	if agentStop.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0" ||
+		agentStop.Metadata()["system_ability"] != "agent.stop" {
+		t.Fatalf("unexpected shared agent-stop invocation: %#v", agentStop)
+	}
+
+	agentRefresh, err := admin.BuildAgentRefreshInvocation(context.Background(), sharedAdminAgentRefreshRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildAgentRefreshInvocation(shared fixture): %v", err)
+	}
+	if agentRefresh.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0" ||
+		agentRefresh.Metadata()["system_ability"] != "agent.refresh" {
+		t.Fatalf("unexpected shared agent-refresh invocation: %#v", agentRefresh)
+	}
+
+	sessionList, err := admin.BuildSessionListInvocation(context.Background(), sharedAdminSessionListRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildSessionListInvocation(shared fixture): %v", err)
+	}
+	if sessionList.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.session.list@1.0.0" ||
+		sessionList.Metadata()["system_ability"] != "session.list" {
+		t.Fatalf("unexpected shared session-list invocation: %#v", sessionList)
+	}
+
+	status, err := admin.GatewayStatus(context.Background(), AdminGatewayStatusRequest{})
+	if err != nil {
+		t.Fatalf("GatewayStatus(shared fixture): %v", err)
+	}
+	if !status.Ready || !status.ControlReady || !status.RuntimeReady || status.PublicListenerReady {
+		t.Fatalf("unexpected shared gateway status: %#v", status)
+	}
+
+	agents, err := admin.ListAgents(context.Background(), sharedAdminAgentListRequest(t, root))
+	if err != nil {
+		t.Fatalf("ListAgents(shared fixture): %v", err)
+	}
+	if agents.Kind != "agent_records" || len(agents.Items) != 1 || agents.Items[0].Name != "codex" {
+		t.Fatalf("unexpected shared admin agent records: %#v", agents)
+	}
+
+	lifecycle, err := admin.AgentStart(context.Background(), sharedAdminAgentStartRequest(t, root))
+	if err != nil {
+		t.Fatalf("AgentStart(shared fixture): %v", err)
+	}
+	if lifecycle.Kind != "agent_lifecycle_result" || lifecycle.State != "ok" || lifecycle.RuntimeNotReady {
+		t.Fatalf("unexpected shared admin lifecycle result: %#v", lifecycle)
+	}
+
+	incomplete := sharedAdminAgentStartRequest(t, root)
+	incomplete.CallerURA = ""
+	if _, err := admin.BuildAgentStartInvocation(context.Background(), incomplete); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete admin carrier did not produce InvalidArgument: %v", err)
+	}
+
+	systemAgent := sharedAdminAgentStartRequest(t, root)
+	systemAgent.Name = "device"
+	if _, err := admin.BuildAgentStartInvocation(context.Background(), systemAgent); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("system agent lifecycle did not produce InvalidArgument: %v", err)
+	}
+
+	degraded, err := NewGatewayStatusFromJSON(sharedControlOnlyGatewayStatus(t, root))
+	if err != nil {
+		t.Fatalf("NewGatewayStatusFromJSON(control-only degraded fixture): %v", err)
+	}
+	if degraded.Ready || degraded.State != "degraded" || !degraded.ControlReady || degraded.RuntimeReady {
+		t.Fatalf("control-only degraded gateway state was not preserved: %#v", degraded)
+	}
+}
+
 func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
@@ -700,6 +848,114 @@ func (t *sharedMissionTransport) Events(context.Context, []byte) ([]byte, error)
 
 func (t *sharedMissionTransport) Close(context.Context) error {
 	return nil
+}
+
+type sharedAdminGatewayTransport struct {
+	t                            *testing.T
+	expectedAgentListRequest     []byte
+	expectedAgentStartRequest    []byte
+	expectedAgentStopRequest     []byte
+	expectedAgentRefreshRequest  []byte
+	expectedSessionListRequest   []byte
+	expectedGatewayStatusRequest []byte
+	agentListInvocationJSON      []byte
+	agentStartInvocationJSON     []byte
+	agentStopInvocationJSON      []byte
+	agentRefreshInvocationJSON   []byte
+	sessionListInvocationJSON    []byte
+	gatewayStatusJSON            []byte
+	agentRecordsJSON             []byte
+	agentLifecycleResultJSON     []byte
+}
+
+func (t *sharedAdminGatewayTransport) BuildAgentListInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentListRequest)
+	return t.agentListInvocationJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) BuildAgentStartInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentStartRequest)
+	return t.agentStartInvocationJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) BuildAgentStopInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentStopRequest)
+	return t.agentStopInvocationJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) BuildAgentRefreshInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentRefreshRequest)
+	return t.agentRefreshInvocationJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) BuildSessionListInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedSessionListRequest)
+	return t.sessionListInvocationJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) GatewayStatus(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedGatewayStatusRequest)
+	return t.gatewayStatusJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) ListAgents(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentListRequest)
+	return t.agentRecordsJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) AgentStart(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentStartRequest)
+	return t.agentLifecycleResultJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) AgentStop(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentStopRequest)
+	return t.agentLifecycleResultJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) AgentRefresh(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedAgentRefreshRequest)
+	return t.agentLifecycleResultJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) ListDeviceSessions(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) JoinHub(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) LeaveHub(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) PairingPreflight(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) ValidatePairing(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) VerifyDeviceCredential(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) CreatePairing(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) RevokeDevice(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) CreateDeviceSession(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+}
+
+func (t *sharedAdminGatewayTransport) DeleteDeviceSession(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
 type sharedPublicationTransport struct {
@@ -1081,6 +1337,73 @@ func sharedMissionStatusWithoutParentAnchor(t *testing.T, root string) []byte {
 	raw, err := json.Marshal(status)
 	if err != nil {
 		t.Fatalf("encode unanchored mission status: %v", err)
+	}
+	return raw
+}
+
+func sharedAdminAgentListRequest(t *testing.T, root string) AdminAgentListRequest {
+	t.Helper()
+	var request AdminAgentListRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-agent-list-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin agent-list request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminAgentStartRequest(t *testing.T, root string) AdminAgentStartRequest {
+	t.Helper()
+	var request AdminAgentStartRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-agent-start-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin agent-start request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminAgentStopRequest(t *testing.T, root string) AdminAgentStopRequest {
+	t.Helper()
+	var request AdminAgentStopRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-agent-stop-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin agent-stop request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminAgentRefreshRequest(t *testing.T, root string) AdminAgentRefreshRequest {
+	t.Helper()
+	var request AdminAgentRefreshRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-agent-refresh-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin agent-refresh request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminSessionListRequest(t *testing.T, root string) AdminSessionListRequest {
+	t.Helper()
+	var request AdminSessionListRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-session-list-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin session-list request: %v", err)
+	}
+	return request
+}
+
+func sharedControlOnlyGatewayStatus(t *testing.T, root string) []byte {
+	t.Helper()
+	status := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, root, "gateway-status.v4.json"), &status); err != nil {
+		t.Fatalf("decode shared gateway status fixture: %v", err)
+	}
+	status["ready"] = false
+	status["state"] = "degraded"
+	status["runtime_ready"] = false
+	status["directory_ready"] = false
+	metadata, ok := status["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway status metadata is not an object")
+	}
+	metadata["lifecycle_state"] = "control_only"
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("encode control-only gateway status: %v", err)
 	}
 	return raw
 }

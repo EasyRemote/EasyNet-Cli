@@ -6,12 +6,21 @@ from easynet_sdk import (
     AbilityQuery,
     AbilityDeployRequest,
     AbilityPackageManifest,
+    AdminAgentListRequest,
+    AdminAgentRefreshRequest,
+    AdminAgentStartRequest,
+    AdminAgentStopRequest,
+    AdminCarrierBase,
+    AdminClient,
+    AdminGatewayStatusRequest,
+    AdminSessionListRequest,
     AgentQuery,
     DescriptorRefRequest,
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
     ErrorCode,
+    GatewayStatus,
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
     HostBindingClient,
@@ -387,6 +396,168 @@ class SharedMissionTransport:
             stage="test",
             retry=RetryHint.NEVER,
             message="not used by shared mission conformance fixture test",
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class SharedAdminGatewayTransport:
+    def __init__(self) -> None:
+        self.expected_agent_list_request = shared_fixture(
+            "admin-agent-list-request.v4.json"
+        )
+        self.expected_agent_start_request = shared_fixture(
+            "admin-agent-start-request.v4.json"
+        )
+        self.expected_agent_stop_request = shared_fixture(
+            "admin-agent-stop-request.v4.json"
+        )
+        self.expected_agent_refresh_request = shared_fixture(
+            "admin-agent-refresh-request.v4.json"
+        )
+        self.expected_session_list_request = shared_fixture(
+            "admin-session-list-request.v4.json"
+        )
+        self.agent_list_invocation_json = shared_fixture(
+            "admin-agent-list-invocation.v4.json"
+        )
+        self.agent_start_invocation_json = shared_fixture(
+            "admin-agent-start-invocation.v4.json"
+        )
+        self.agent_stop_invocation_json = shared_fixture(
+            "admin-agent-stop-invocation.v4.json"
+        )
+        self.agent_refresh_invocation_json = shared_fixture(
+            "admin-agent-refresh-invocation.v4.json"
+        )
+        self.session_list_invocation_json = shared_fixture(
+            "admin-session-list-invocation.v4.json"
+        )
+        self.gateway_status_json = shared_fixture("gateway-status.v4.json")
+        self.agent_records_json = shared_fixture("admin-agent-records.v4.json")
+        self.agent_lifecycle_result_json = shared_fixture(
+            "admin-agent-lifecycle-result.v4.json"
+        )
+
+    def build_agent_list_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_list_request)
+        return self.agent_list_invocation_json
+
+    def build_agent_start_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_start_request)
+        return self.agent_start_invocation_json
+
+    def build_agent_stop_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_stop_request)
+        return self.agent_stop_invocation_json
+
+    def build_agent_refresh_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_refresh_request)
+        return self.agent_refresh_invocation_json
+
+    def build_session_list_invocation(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_session_list_request)
+        return self.session_list_invocation_json
+
+    def gateway_status(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, b"{}")
+        return self.gateway_status_json
+
+    def list_agents(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_list_request)
+        return self.agent_records_json
+
+    def agent_start(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_start_request)
+        return self.agent_lifecycle_result_json
+
+    def agent_stop(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_stop_request)
+        return self.agent_lifecycle_result_json
+
+    def agent_refresh(self, request_json: bytes) -> bytes:
+        assert_json_equivalent(request_json, self.expected_agent_refresh_request)
+        return self.agent_lifecycle_result_json
+
+    def list_device_sessions(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def join_hub(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def leave_hub(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def pairing_preflight(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def validate_pairing(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def verify_device_credential(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def create_pairing(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def revoke_device(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def create_device_session(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
+        )
+
+    def delete_device_session(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="not used by shared admin gateway conformance fixture test",
         )
 
     def close(self) -> None:
@@ -952,6 +1123,158 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             MissionStatus.from_json(shared_mission_status_without_parent_anchor())
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_python_admin_gateway_executes_shared_carrier_status_conformance_case(self) -> None:
+        admin_case = shared_case("admin-gateway-carrier-status.yaml")
+        self._require_case_id(admin_case, "admin_gateway/carrier_status")
+        for action in (
+            "build_agent_list_invocation",
+            "build_agent_start_invocation",
+            "build_agent_stop_invocation",
+            "build_agent_refresh_invocation",
+            "build_session_list_invocation",
+            "project_gateway_status",
+            "project_agent_records",
+            "project_agent_lifecycle_result",
+        ):
+            self._require_case_action(admin_case, action)
+        for fixture in (
+            "admin-agent-list-request.v4.json",
+            "admin-agent-start-request.v4.json",
+            "admin-agent-stop-request.v4.json",
+            "admin-agent-refresh-request.v4.json",
+            "admin-session-list-request.v4.json",
+            "gateway-status.v4.json",
+            "admin-agent-records.v4.json",
+            "admin-agent-lifecycle-result.v4.json",
+        ):
+            self._require_case_fixture(admin_case, fixture)
+        self._require_case_expectation(
+            admin_case,
+            "agent_start_invocation_fixture: admin-agent-start-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            admin_case,
+            "agent_stop_invocation_fixture: admin-agent-stop-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            admin_case,
+            "agent_list_invocation_fixture: admin-agent-list-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            admin_case,
+            "session_list_invocation_fixture: admin-session-list-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            admin_case, "rejects_incomplete_invocation_tuple: true"
+        )
+        self._require_case_expectation(
+            admin_case, "rejects_system_agent_lifecycle: true"
+        )
+        self._require_case_expectation(
+            admin_case, "preserves_control_only_degraded_state: true"
+        )
+        self._require_case_expectation(
+            admin_case, "pairing_and_device_session_crud: scaffold_only"
+        )
+
+        admin = AdminClient(SharedAdminGatewayTransport())
+
+        agent_list = admin.build_agent_list_invocation(shared_admin_agent_list_request())
+        self.assertEqual(
+            agent_list.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0",
+        )
+        self.assertEqual(agent_list.metadata["system_ability"], "agent.list")
+
+        agent_start = admin.build_agent_start_invocation(
+            shared_admin_agent_start_request()
+        )
+        self.assertEqual(
+            agent_start.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.agent.start@1.0.0",
+        )
+        self.assertEqual(agent_start.metadata["system_ability"], "agent.start")
+
+        agent_stop = admin.build_agent_stop_invocation(shared_admin_agent_stop_request())
+        self.assertEqual(
+            agent_stop.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0",
+        )
+        self.assertEqual(agent_stop.metadata["system_ability"], "agent.stop")
+
+        agent_refresh = admin.build_agent_refresh_invocation(
+            shared_admin_agent_refresh_request()
+        )
+        self.assertEqual(
+            agent_refresh.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0",
+        )
+        self.assertEqual(agent_refresh.metadata["system_ability"], "agent.refresh")
+
+        session_list = admin.build_session_list_invocation(
+            shared_admin_session_list_request()
+        )
+        self.assertEqual(
+            session_list.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.session.list@1.0.0",
+        )
+        self.assertEqual(session_list.metadata["system_ability"], "session.list")
+
+        status = admin.gateway_status(AdminGatewayStatusRequest())
+        self.assertTrue(status.ready)
+        self.assertTrue(status.control_ready)
+        self.assertTrue(status.runtime_ready)
+        self.assertFalse(status.public_listener_ready)
+
+        agents = admin.list_agents(shared_admin_agent_list_request())
+        self.assertEqual(agents.kind, "agent_records")
+        self.assertEqual(len(agents.items), 1)
+        self.assertEqual(agents.items[0].name, "codex")
+
+        lifecycle = admin.agent_start(shared_admin_agent_start_request())
+        self.assertEqual(lifecycle.kind, "agent_lifecycle_result")
+        self.assertEqual(lifecycle.state, "ok")
+        self.assertFalse(lifecycle.runtime_not_ready)
+
+        start_request = shared_admin_agent_start_request()
+        with self.assertRaises(SDKError) as caught:
+            admin.build_agent_start_invocation(
+                AdminAgentStartRequest(
+                    base=AdminCarrierBase(
+                        caller_ura="",
+                        callee_ura=start_request.base.callee_ura,
+                        subject_ura=start_request.base.subject_ura,
+                        descriptor_version=start_request.base.descriptor_version,
+                        nonce_base64=start_request.base.nonce_base64,
+                        causal_context=start_request.base.causal_context,
+                        metadata=start_request.base.metadata,
+                    ),
+                    name=start_request.name,
+                    agent_type=start_request.agent_type,
+                    model=start_request.model,
+                    label=start_request.label,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            admin.build_agent_start_invocation(
+                AdminAgentStartRequest(
+                    base=start_request.base,
+                    name="device",
+                    agent_type=start_request.agent_type,
+                    model=start_request.model,
+                    label=start_request.label,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        degraded = GatewayStatus.from_json(shared_control_only_gateway_status())
+        self.assertFalse(degraded.ready)
+        self.assertEqual(degraded.state, "degraded")
+        self.assertTrue(degraded.control_ready)
+        self.assertFalse(degraded.runtime_ready)
+
     def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
         wrapper_case = shared_case("wrapper-profile-records.yaml")
         self._require_case_id(wrapper_case, "wrappers/profile_records")
@@ -1159,6 +1482,71 @@ def shared_mission_cancel_request() -> MissionCancelRequest:
 def shared_mission_status_without_parent_anchor() -> bytes:
     status = json.loads(shared_fixture("mission-status.v4.json"))
     status["parent_receipt_ura"] = None
+    return json.dumps(status, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def shared_admin_carrier_base(fixture: str) -> AdminCarrierBase:
+    decoded = json.loads(shared_fixture(fixture))
+    return AdminCarrierBase(
+        caller_ura=decoded["caller_ura"],
+        callee_ura=decoded["callee_ura"],
+        subject_ura=decoded["subject_ura"],
+        descriptor_version=decoded["descriptor_version"],
+        nonce_base64=decoded["nonce_base64"],
+        causal_context=decoded["causal_context"],
+        metadata=decoded.get("metadata", {}),
+    )
+
+
+def shared_admin_agent_list_request() -> AdminAgentListRequest:
+    return AdminAgentListRequest(
+        base=shared_admin_carrier_base("admin-agent-list-request.v4.json")
+    )
+
+
+def shared_admin_agent_start_request() -> AdminAgentStartRequest:
+    decoded = json.loads(shared_fixture("admin-agent-start-request.v4.json"))
+    return AdminAgentStartRequest(
+        base=shared_admin_carrier_base("admin-agent-start-request.v4.json"),
+        name=decoded["name"],
+        agent_type=decoded.get("agent_type", ""),
+        model=decoded.get("model", ""),
+        label=decoded.get("label", ""),
+    )
+
+
+def shared_admin_agent_stop_request() -> AdminAgentStopRequest:
+    decoded = json.loads(shared_fixture("admin-agent-stop-request.v4.json"))
+    return AdminAgentStopRequest(
+        base=shared_admin_carrier_base("admin-agent-stop-request.v4.json"),
+        name=decoded.get("name", ""),
+        agent_ura=decoded.get("agent_ura", ""),
+    )
+
+
+def shared_admin_agent_refresh_request() -> AdminAgentRefreshRequest:
+    decoded = json.loads(shared_fixture("admin-agent-refresh-request.v4.json"))
+    return AdminAgentRefreshRequest(
+        base=shared_admin_carrier_base("admin-agent-refresh-request.v4.json"),
+        name=decoded.get("name", ""),
+    )
+
+
+def shared_admin_session_list_request() -> AdminSessionListRequest:
+    decoded = json.loads(shared_fixture("admin-session-list-request.v4.json"))
+    return AdminSessionListRequest(
+        base=shared_admin_carrier_base("admin-session-list-request.v4.json"),
+        include_terminated=decoded.get("include_terminated"),
+    )
+
+
+def shared_control_only_gateway_status() -> bytes:
+    status = json.loads(shared_fixture("gateway-status.v4.json"))
+    status["ready"] = False
+    status["state"] = "degraded"
+    status["runtime_ready"] = False
+    status["directory_ready"] = False
+    status["metadata"]["lifecycle_state"] = "control_only"
     return json.dumps(status, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
