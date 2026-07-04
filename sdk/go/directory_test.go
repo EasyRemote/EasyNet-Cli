@@ -11,6 +11,7 @@ type memoryDirectoryTransport struct {
 	subscriptionJSON           string
 	resolveJSON                string
 	devicesJSON                string
+	peerDevicesJSON            string
 	agentsJSON                 string
 	abilitiesJSON              string
 	seenRequest                map[string]any
@@ -36,6 +37,13 @@ func (m *memoryDirectoryTransport) ListDevices(ctx context.Context, requestJSON 
 		return nil, err
 	}
 	return []byte(m.devicesJSON), nil
+}
+
+func (m *memoryDirectoryTransport) ListPeerUserDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if err := json.Unmarshal(requestJSON, &m.seenRequest); err != nil {
+		return nil, err
+	}
+	return []byte(m.peerDevicesJSON), nil
 }
 
 func (m *memoryDirectoryTransport) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -163,6 +171,44 @@ func TestDirectoryListDevicesDefaultsBoundedPageSize(t *testing.T) {
 	}
 	if transport.seenRequest["limit"] != float64(DefaultDirectoryPageSize) {
 		t.Fatalf("default limit not sent to transport: %#v", transport.seenRequest)
+	}
+}
+
+func TestDirectoryListPeerUserDevicesRequiresExplicitPeerHubs(t *testing.T) {
+	transport := &memoryDirectoryTransport{peerDevicesJSON: `{
+		"profile":"directory_identity",
+		"kind":"peer_user_device_page",
+		"item_kind":"peer_user_device",
+		"items":[{"profile":"directory_identity","kind":"peer_user_device","agent_ura":"easynet:///r/peer/device/dev-peer","node_id":"dev-peer","status":"active","origin_realm":"peer","hub_endpoint":"https://peer.example","last_seen_unix_ms":1783100000123,"metadata":{}}],
+		"next_cursor":null,
+		"limit":50,
+		"source":"read_model",
+		"metadata":{"source_ability":"federation.proxy_list_user_devices"}
+	}`}
+	client, err := NewDirectoryClient(transport)
+	if err != nil {
+		t.Fatalf("NewDirectoryClient: %v", err)
+	}
+
+	page, err := client.ListPeerUserDevices(context.Background(), PeerUserDeviceQuery{
+		DirectoryQueryBase: baseDirectoryQuery(),
+		UserTenantID:       "user-tenant",
+		PeerHubURLs:        []string{"https://peer.example"},
+	})
+	if err != nil {
+		t.Fatalf("ListPeerUserDevices: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].NodeID != "dev-peer" || page.Items[0].OriginRealm != "peer" {
+		t.Fatalf("peer page not projected: %#v", page)
+	}
+	if transport.seenRequest["user_tenant_id"] != "user-tenant" {
+		t.Fatalf("user_tenant_id not sent: %#v", transport.seenRequest)
+	}
+	if _, err := client.ListPeerUserDevices(context.Background(), PeerUserDeviceQuery{
+		DirectoryQueryBase: baseDirectoryQuery(),
+		UserTenantID:       "user-tenant",
+	}); err == nil {
+		t.Fatalf("ListPeerUserDevices without peer_hub_urls succeeded")
 	}
 }
 

@@ -11,6 +11,7 @@ const (
 	directoryAbilityNamespaceResolve     = "namespace.resolve"
 	directoryAbilityProxyResolve         = "namespace.proxy_resolve"
 	directoryAbilityNodeList             = "node.list"
+	directoryAbilityProxyListUserDevices = "federation.proxy_list_user_devices"
 	directoryAbilityAgentList            = "agent.list"
 	directoryAbilityMetaListAbilities    = "meta.list_abilities"
 	directoryAbilitySubscribeDirectory   = "directory.subscribe"
@@ -88,6 +89,27 @@ func (t *DirectoryRuntimeTransport) ListDevices(ctx context.Context, requestJSON
 		return nil, err
 	}
 	return projectDirectoryDevicePage(output, base)
+}
+
+func (t *DirectoryRuntimeTransport) ListPeerUserDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodePeerUserDeviceQueryForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(
+		ctx,
+		requestJSON,
+		request.DirectoryQueryBase,
+		directoryAbilityProxyListUserDevices,
+		map[string]any{
+			"realm":         request.UserTenantID,
+			"peer_hub_urls": request.PeerHubURLs,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return projectDirectoryPeerUserDevicePage(output, request.DirectoryQueryBase)
 }
 
 func (t *DirectoryRuntimeTransport) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -217,6 +239,18 @@ func decodeDirectoryPageForRuntime(requestJSON []byte) (DirectoryQueryBase, map[
 		return DirectoryQueryBase{}, nil, err
 	}
 	return base, payload, nil
+}
+
+func decodePeerUserDeviceQueryForRuntime(requestJSON []byte) (PeerUserDeviceQuery, error) {
+	var request PeerUserDeviceQuery
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
+		return PeerUserDeviceQuery{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode peer user-device request: %v", err), err)
+	}
+	request.DirectoryQueryBase = normalizeDirectoryPageQuery(request.DirectoryQueryBase)
+	if err := validatePeerUserDeviceQuery(request); err != nil {
+		return PeerUserDeviceQuery{}, err
+	}
+	return request, nil
 }
 
 func decodeDirectorySubscriptionForRuntime(requestJSON []byte) (DirectorySubscriptionRequest, map[string]any, error) {
@@ -387,6 +421,37 @@ func projectDirectoryDevicePage(raw []byte, base DirectoryQueryBase) ([]byte, er
 	return directoryPageJSON("device_page", "device", directoryAbilityNodeList, base.Limit, items)
 }
 
+func projectDirectoryPeerUserDevicePage(raw []byte, base DirectoryQueryBase) ([]byte, error) {
+	payload, err := directoryOutputObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	rows := firstArray(payload, "devices", "items")
+	items := make([]any, 0, len(rows))
+	for _, row := range rows {
+		obj, ok := row.(map[string]any)
+		if !ok {
+			return nil, invalidProfilePayload(directoryIdentityProfile, "peer user-device row must be an object", nil)
+		}
+		agentURA := firstStringFromMap(obj, "agent_ura", "agentUra")
+		nodeID := firstStringFromMap(obj, "node_id", "nodeId")
+		status := firstNonEmpty(firstStringFromMap(obj, "status", "state"), "unknown")
+		items = append(items, map[string]any{
+			"profile":           directoryIdentityProfile,
+			"kind":              "peer_user_device",
+			"agent_ura":         agentURA,
+			"node_id":           nodeID,
+			"display_name":      firstStringFromMap(obj, "display_name", "displayName"),
+			"status":            status,
+			"origin_realm":      firstStringFromMap(obj, "origin_realm", "originRealm"),
+			"hub_endpoint":      firstStringFromMap(obj, "hub_endpoint", "hubEndpoint"),
+			"last_seen_unix_ms": numberArgInt64(obj, "last_seen_unix_ms", "lastSeenUnixMs"),
+			"metadata":          metadataWithSource(obj, directoryAbilityProxyListUserDevices),
+		})
+	}
+	return directoryPageJSON("peer_user_device_page", "peer_user_device", directoryAbilityProxyListUserDevices, base.Limit, items)
+}
+
 func projectDirectoryAgentPage(raw []byte, base DirectoryQueryBase) ([]byte, error) {
 	payload, err := directoryOutputObject(raw)
 	if err != nil {
@@ -529,6 +594,20 @@ func numberArg(values map[string]any, keys ...string) int {
 			return int(value)
 		case int:
 			return value
+		}
+	}
+	return 0
+}
+
+func numberArgInt64(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		switch value := values[key].(type) {
+		case float64:
+			return int64(value)
+		case int64:
+			return value
+		case int:
+			return int64(value)
 		}
 	}
 	return 0

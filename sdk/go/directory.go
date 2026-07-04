@@ -57,6 +57,13 @@ type DeviceQuery struct {
 	DirectoryQueryBase
 }
 
+// PeerUserDeviceQuery requests user-scoped devices reached through peer hubs.
+type PeerUserDeviceQuery struct {
+	DirectoryQueryBase
+	UserTenantID string   `json:"user_tenant_id"`
+	PeerHubURLs  []string `json:"peer_hub_urls"`
+}
+
 // AgentQuery requests a paginated agent read model page.
 type AgentQuery struct {
 	DirectoryQueryBase
@@ -142,6 +149,7 @@ type DirectoryTransport interface {
 	BuildDirectorySubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	Resolve(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListDevices(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListPeerUserDevices(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAbilities(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -152,6 +160,7 @@ type DirectoryTransportFunc struct {
 	BuildDirectorySubscriptionInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ResolveFunc                              func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListDevicesFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ListPeerUserDevicesFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAgentsFunc                           func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAbilitiesFunc                        func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	SubscribeDirectoryFunc                   func(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -176,6 +185,13 @@ func (f DirectoryTransportFunc) ListDevices(ctx context.Context, requestJSON []b
 		return nil, invalidProfileClient(directoryIdentityProfile, "directory list-devices transport function is required")
 	}
 	return f.ListDevicesFunc(ctx, requestJSON)
+}
+
+func (f DirectoryTransportFunc) ListPeerUserDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.ListPeerUserDevicesFunc == nil {
+		return nil, invalidProfileClient(directoryIdentityProfile, "directory list-peer-user-devices transport function is required")
+	}
+	return f.ListPeerUserDevicesFunc(ctx, requestJSON)
 }
 
 func (f DirectoryTransportFunc) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -278,6 +294,25 @@ func (c *DirectoryClient) ListDevices(ctx context.Context, query DeviceQuery) (D
 	return NewDevicePageFromJSON(raw)
 }
 
+func (c *DirectoryClient) ListPeerUserDevices(ctx context.Context, query PeerUserDeviceQuery) (PeerUserDevicePage, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return PeerUserDevicePage{}, err
+	}
+	query.DirectoryQueryBase = normalizeDirectoryPageQuery(query.DirectoryQueryBase)
+	if err := validatePeerUserDeviceQuery(query); err != nil {
+		return PeerUserDevicePage{}, err
+	}
+	requestJSON, err := json.Marshal(query)
+	if err != nil {
+		return PeerUserDevicePage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode peer user-device query: %v", err), err)
+	}
+	raw, err := c.transport.ListPeerUserDevices(ctx, requestJSON)
+	if err != nil {
+		return PeerUserDevicePage{}, wrapDirectoryTransportError("directory list peer user devices failed", err)
+	}
+	return NewPeerUserDevicePageFromJSON(raw)
+}
+
 func (c *DirectoryClient) ListAgents(ctx context.Context, query AgentQuery) (AgentPage, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return AgentPage{}, err
@@ -365,6 +400,19 @@ type DeviceRecord struct {
 	Metadata    map[string]any `json:"metadata"`
 }
 
+type PeerUserDeviceRecord struct {
+	Profile        string         `json:"profile"`
+	Kind           string         `json:"kind"`
+	AgentURA       string         `json:"agent_ura"`
+	NodeID         string         `json:"node_id"`
+	DisplayName    string         `json:"display_name,omitempty"`
+	Status         string         `json:"status"`
+	OriginRealm    string         `json:"origin_realm,omitempty"`
+	HubEndpoint    string         `json:"hub_endpoint,omitempty"`
+	LastSeenUnixMS int64          `json:"last_seen_unix_ms,omitempty"`
+	Metadata       map[string]any `json:"metadata"`
+}
+
 type AgentRecord struct {
 	Name      string         `json:"name"`
 	AgentURA  *string        `json:"agent_ura"`
@@ -404,6 +452,17 @@ type DevicePage struct {
 	Limit      int            `json:"limit"`
 	Source     string         `json:"source"`
 	Metadata   map[string]any `json:"metadata"`
+}
+
+type PeerUserDevicePage struct {
+	Profile    string                 `json:"profile"`
+	Kind       string                 `json:"kind"`
+	ItemKind   string                 `json:"item_kind"`
+	Items      []PeerUserDeviceRecord `json:"items"`
+	NextCursor *string                `json:"next_cursor"`
+	Limit      int                    `json:"limit"`
+	Source     string                 `json:"source"`
+	Metadata   map[string]any         `json:"metadata"`
 }
 
 type AgentPage struct {
@@ -449,6 +508,23 @@ func NewDevicePageFromJSON(raw []byte) (DevicePage, error) {
 	}
 	if err := validateDirectoryPage(page.Profile, page.Kind, page.ItemKind, page.Source, page.Limit, "device_page", "device"); err != nil {
 		return DevicePage{}, err
+	}
+	return page, nil
+}
+
+func NewPeerUserDevicePageFromJSON(raw []byte) (PeerUserDevicePage, error) {
+	var page PeerUserDevicePage
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return PeerUserDevicePage{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode peer user-device page JSON: %v", err), err)
+	}
+	if err := validateDirectoryPage(page.Profile, page.Kind, page.ItemKind, page.Source, page.Limit, "peer_user_device_page", "peer_user_device"); err != nil {
+		return PeerUserDevicePage{}, err
+	}
+	for _, item := range page.Items {
+		if item.Profile != directoryIdentityProfile || item.Kind != "peer_user_device" ||
+			item.AgentURA == "" || item.NodeID == "" || item.Status == "" || item.Metadata == nil {
+			return PeerUserDevicePage{}, invalidProfilePayload(directoryIdentityProfile, "invalid peer user-device record projection", nil)
+		}
 	}
 	return page, nil
 }
@@ -560,6 +636,24 @@ func validateDirectoryQueryBase(query DirectoryQueryBase, requireLimit bool) err
 	if requireLimit {
 		if query.Limit < 1 || query.Limit > MaxDirectoryPageSize {
 			return invalidProfilePayload(directoryIdentityProfile, "directory page limit exceeds bounds", nil)
+		}
+	}
+	return nil
+}
+
+func validatePeerUserDeviceQuery(query PeerUserDeviceQuery) error {
+	if err := validateDirectoryQueryBase(query.DirectoryQueryBase, true); err != nil {
+		return err
+	}
+	if strings.TrimSpace(query.UserTenantID) == "" {
+		return invalidProfilePayload(directoryIdentityProfile, "user_tenant_id is required", nil)
+	}
+	if len(query.PeerHubURLs) == 0 {
+		return invalidProfilePayload(directoryIdentityProfile, "peer_hub_urls is required", nil)
+	}
+	for _, endpoint := range query.PeerHubURLs {
+		if strings.TrimSpace(endpoint) == "" || strings.TrimSpace(endpoint) != endpoint {
+			return invalidProfilePayload(directoryIdentityProfile, "peer_hub_urls must contain non-empty trimmed endpoints", nil)
 		}
 	}
 	return nil

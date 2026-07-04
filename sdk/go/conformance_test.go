@@ -1923,6 +1923,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"ListAbilities":                        "directory_identity.directory.list_abilities",
 				"ListAgents":                           "directory_identity.directory.list_agents",
 				"ListDevices":                          "directory_identity.directory.list_devices",
+				"ListPeerUserDevices":                  "directory_identity.directory.list_peer_user_devices",
 				"Resolve":                              "directory_identity.directory.resolve",
 				"SubscribeDirectory":                   "directory_identity.directory.subscribe",
 			},
@@ -3076,6 +3077,7 @@ type sharedDirectoryTransport struct {
 	expectedAbilityRequest []byte
 	expectedResolveRequest []byte
 	devicesJSON            []byte
+	peerDevicesJSON        []byte
 	agentsJSON             []byte
 	abilitiesJSON          []byte
 	resolveJSON            []byte
@@ -3093,6 +3095,10 @@ func (t *sharedDirectoryTransport) Resolve(_ context.Context, requestJSON []byte
 func (t *sharedDirectoryTransport) ListDevices(_ context.Context, requestJSON []byte) ([]byte, error) {
 	assertJSONEquivalent(t.t, requestJSON, t.expectedDevicesRequest)
 	return t.devicesJSON, nil
+}
+
+func (t *sharedDirectoryTransport) ListPeerUserDevices(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
 func (t *sharedDirectoryTransport) ListAgents(_ context.Context, requestJSON []byte) ([]byte, error) {
