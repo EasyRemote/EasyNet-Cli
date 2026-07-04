@@ -7,6 +7,7 @@ from unittest.mock import patch
 from easynet_sdk import (
     BidiState,
     DaemonInvocationTransport,
+    EasyRemoteTransportAdapter,
     ErrorCode,
     RuntimeClient,
     SDKError,
@@ -38,6 +39,47 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             runtime.seen_draft["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+
+    def test_easyremote_adapter_projects_runtime_result_shape(self) -> None:
+        class EasyRemoteRuntimeTransport(MemoryRuntimeTransport):
+            def invoke(self, draft_json: bytes) -> bytes:
+                result = json.loads(super().invoke(draft_json).decode("utf-8"))
+                result.update(
+                    {
+                        "terminal_state": "Completed",
+                        "output_content_type": "application/json",
+                        "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
+                        "output_json": {"ready": True},
+                        "selected_node_id": "dev-a",
+                        "scheduling_reason": "direct",
+                        "elapsed_ms": 12,
+                        "receipt": {"invocation_id": "inv-1"},
+                    }
+                )
+                return json.dumps(
+                    result,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+
+        runtime = EasyRemoteRuntimeTransport()
+        adapter = EasyRemoteTransportAdapter.from_runtime_client(
+            RuntimeClient(runtime)
+        )
+
+        result = adapter.invoke(complete_draft().to_json_dict())
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], 5)
+        self.assertEqual(result["terminal_state"], "Completed")
+        self.assertEqual(result["result_json"], {"ready": True})
+        self.assertEqual(result["result_base64"], "eyJyZWFkeSI6dHJ1ZX0=")
+        self.assertEqual(result["result_content_type"], "application/json")
+        self.assertEqual(result["selected_node_id"], "dev-a")
+        self.assertEqual(result["scheduling_reason"], "direct")
+        self.assertEqual(result["elapsed_ms"], 12)
+        self.assertEqual(result["admission_receipt"], {"invocation_id": "inv-1"})
+        self.assertEqual(result["sdk_runtime_result"]["terminal_state"], "Completed")
 
     def test_invoke_projects_runtime_receipt_summary_to_dict(self) -> None:
         class ReceiptRuntimeTransport(MemoryRuntimeTransport):

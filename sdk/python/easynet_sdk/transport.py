@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Iterable, Mapping
 
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
 from .connection import (
@@ -20,7 +20,7 @@ from .connection import (
 )
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationDraft
-from .runtime import InvocationCancel, InvocationFailure, InvocationResult, RuntimeClient
+from .runtime import InvocationFailure, InvocationResult, RuntimeClient
 from .stream import StreamCancel, StreamEvent, StreamHandle
 
 
@@ -121,6 +121,62 @@ class DaemonInvocationTransport:
         if self._closed:
             raise _closed_transport("daemon invocation transport is closed")
         return self.runtime
+
+
+@dataclass
+class EasyRemoteTransportAdapter:
+    """EasyRemote cutover adapter over the SDK daemon Invocation transport."""
+
+    transport: DaemonInvocationTransport
+
+    @classmethod
+    def from_runtime_client(
+        cls, runtime: RuntimeClient
+    ) -> "EasyRemoteTransportAdapter":
+        return cls(DaemonInvocationTransport.from_runtime_client(runtime))
+
+    @classmethod
+    def connect(
+        cls,
+        *,
+        control_path: str = "",
+        library_path: str | None = None,
+        options: ConnectOptions = ConnectOptions(),
+    ) -> "EasyRemoteTransportAdapter":
+        return cls(
+            DaemonInvocationTransport.connect(
+                control_path=control_path,
+                library_path=library_path,
+                options=options,
+            )
+        )
+
+    def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> dict[str, object]:
+        """Submit one complete Invocation and return EasyRemote's result shape."""
+
+        return _easyremote_response_dict(self.transport.invoke(invocation))
+
+    def stream(
+        self, invocation: Mapping[str, object] | InvocationDraft
+    ) -> "DaemonFrameStream":
+        return self.transport.stream(invocation)
+
+    def bidi(
+        self,
+        invocation: Mapping[str, object] | InvocationDraft,
+        streams: Iterable[Mapping[str, object] | BidiStreamDescriptor] = (),
+    ) -> "DaemonBidiChannel":
+        return self.transport.bidi(invocation, streams)
+
+    def close(self) -> None:
+        self.transport.close()
+
+    def __enter__(self) -> "EasyRemoteTransportAdapter":
+        self.transport._require_open()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
 
 @dataclass
@@ -246,6 +302,66 @@ def _invocation_result_dict(result: InvocationResult) -> dict[str, object]:
     return value
 
 
+def _easyremote_response_dict(result: Mapping[str, object]) -> dict[str, object]:
+    if result.get("ok") is not True:
+        error = result.get("error")
+        message = "daemon invocation failed"
+        if isinstance(error, Mapping) and isinstance(error.get("message"), str):
+            message = error["message"]
+        raise SDKError(
+            code=ErrorCode.ABILITY_FAILED,
+            stage="transport",
+            retry=RetryHint.UNKNOWN,
+            retryable=False,
+            message=message,
+            details={"runtime_result": dict(result)},
+        )
+    receipt = result.get("receipt")
+    terminal_state = _terminal_state_name(result.get("terminal_state"))
+    response: dict[str, object] = {
+        "ok": result.get("ok") is True,
+        "state": _easyremote_state_code(terminal_state),
+        "terminal_state": terminal_state,
+        "result_content_type": _string_or_empty(result.get("output_content_type")),
+        "result_base64": _string_or_empty(result.get("output_base64")),
+        "result_json": result.get("output_json"),
+        "selected_node_id": _string_or_empty(result.get("selected_node_id")),
+        "scheduling_reason": _string_or_empty(result.get("scheduling_reason")),
+        "elapsed_ms": _non_negative_int(result.get("elapsed_ms")),
+        "admission_receipt": dict(receipt) if isinstance(receipt, Mapping) else None,
+        "sdk_runtime_result": dict(result),
+    }
+    if result.get("error") is not None:
+        response["error"] = result["error"]
+    return response
+
+
+def _terminal_state_name(value: object) -> str:
+    if isinstance(value, str) and value:
+        return value
+    return "Unspecified"
+
+
+_EASYREMOTE_STATE_CODES = {
+    "unspecified": 0,
+    "accepted": 1,
+    "admitted": 2,
+    "dispatched": 3,
+    "running": 4,
+    "completed": 5,
+    "failed": 6,
+    "timed_out": 7,
+    "timedout": 7,
+    "cancelled": 8,
+    "canceled": 8,
+}
+
+
+def _easyremote_state_code(value: str) -> int:
+    normalized = value.replace("-", "_").lower()
+    return _EASYREMOTE_STATE_CODES.get(normalized, 0)
+
+
 def _runtime_receipt_dict(receipt) -> dict[str, object]:
     return {
         "receipt_id": receipt.receipt_id,
@@ -319,6 +435,16 @@ def _optional_string(value: object, field_name: str) -> str:
     if not isinstance(value, str):
         raise _invalid_transport(f"{field_name} must be a string or null")
     return value
+
+
+def _string_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _non_negative_int(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0
 
 
 def _invalid_transport(message: str) -> SDKError:

@@ -329,7 +329,12 @@ from .surface import (
     SurfaceStatusRequest,
     SurfaceTransport,
 )
-from .transport import DaemonBidiChannel, DaemonFrameStream, DaemonInvocationTransport
+from .transport import (
+    DaemonBidiChannel,
+    DaemonFrameStream,
+    DaemonInvocationTransport,
+    EasyRemoteTransportAdapter,
+)
 from .wrappers import (
     BrowserSessionRecord,
     FileRecord,
@@ -418,6 +423,7 @@ __all__ = [
     "DaemonBidiChannel",
     "DaemonFrameStream",
     "DaemonInvocationTransport",
+    "EasyRemoteTransportAdapter",
     "DaemonLifecycleState",
     "DaemonMode",
     "DaemonStatus",
