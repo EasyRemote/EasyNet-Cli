@@ -65,6 +65,7 @@ type SigningKeyRegistrationRequest struct {
 	KeyID           string         `json:"key_id"`
 	Algorithm       string         `json:"algorithm"`
 	PublicKeyBase64 string         `json:"public_key_base64"`
+	Role            string         `json:"role,omitempty"`
 	Usage           []string       `json:"usage"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
 }
