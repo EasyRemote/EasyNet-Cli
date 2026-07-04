@@ -180,6 +180,126 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	}
 }
 
+func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	receiptCase := sharedCase(t, root, "receipt-projection-causal-ref.yaml")
+	requireCaseID(t, receiptCase, "receipt/projection_causal_ref")
+	for _, action := range []string{
+		"project_receipt_summary",
+		"verify_receipt_summary",
+		"build_causal_ref",
+	} {
+		requireCaseAction(t, receiptCase, action)
+	}
+	requireCaseFixture(t, receiptCase, "receipt.summary.v4.json")
+	requireCaseExpectation(t, receiptCase, "summary_verified: false")
+	requireCaseExpectation(t, receiptCase, "verify_summary_claims_cryptographic_validity: false")
+	requireCaseExpectation(t, receiptCase, "causal_ref_fixture_result: err_invalid_arg")
+
+	summary, err := NewReceiptSummaryFromJSON(sharedFixture(t, root, "receipt.summary.v4.json"))
+	if err != nil {
+		t.Fatalf("NewReceiptSummaryFromJSON(shared fixture): %v", err)
+	}
+	if summary.Verified || summary.State != "completed" || summary.ReceiptURA != nil {
+		t.Fatalf("unexpected receipt summary projection: %#v", summary)
+	}
+
+	verification, err := NewReceiptVerificationFromJSON([]byte(`{"verified":false,"method":"summary-only","reason":"full receipt required","metadata":{"source":"sdk_conformance"}}`))
+	if err != nil {
+		t.Fatalf("NewReceiptVerificationFromJSON(summary-only): %v", err)
+	}
+	if verification.Verified || verification.Method != "summary-only" {
+		t.Fatalf("summary-only verification claimed cryptographic validity: %#v", verification)
+	}
+
+	if _, err := NewCausalRefFromJSON([]byte(`{"metadata":{}}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("summary-only causal ref did not produce InvalidArgument: %v", err)
+	}
+}
+
+func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	wrapperCase := sharedCase(t, root, "wrapper-profile-records.yaml")
+	requireCaseID(t, wrapperCase, "wrappers/profile_records")
+	for _, action := range []string{
+		"project_file_record",
+		"project_terminal_session",
+		"project_remote_desktop_session",
+		"project_browser_session",
+		"project_media_session",
+	} {
+		requireCaseAction(t, wrapperCase, action)
+	}
+	for _, fixture := range []string{
+		"wrapper-file-record.v4.json",
+		"wrapper-terminal-session.v4.json",
+		"wrapper-remote-desktop-session.v4.json",
+		"wrapper-browser-session.v4.json",
+		"wrapper-media-session.v4.json",
+	} {
+		requireCaseFixture(t, wrapperCase, fixture)
+	}
+	requireCaseExpectation(t, wrapperCase, "execution_transport_owner: runtime_core")
+	requireCaseExpectation(t, wrapperCase, "product_http_websocket_owner: backend")
+	requireCaseExpectation(t, wrapperCase, "rejects_invalid_owner_ura: true")
+	requireCaseExpectation(t, wrapperCase, "rejects_missing_session_state: true")
+
+	file, err := NewWrapperFileRecordFromJSON(sharedFixture(t, root, "wrapper-file-record.v4.json"))
+	if err != nil {
+		t.Fatalf("NewWrapperFileRecordFromJSON(shared fixture): %v", err)
+	}
+	if file.Kind != "file_record" || file.Metadata["source"] != "wrappers.file_record" {
+		t.Fatalf("unexpected file wrapper record: %#v", file)
+	}
+
+	terminal, err := NewWrapperTerminalSessionRecordFromJSON(sharedFixture(t, root, "wrapper-terminal-session.v4.json"))
+	if err != nil {
+		t.Fatalf("NewWrapperTerminalSessionRecordFromJSON(shared fixture): %v", err)
+	}
+	if terminal.Kind != "terminal_session" || terminal.TerminalRef == nil {
+		t.Fatalf("unexpected terminal wrapper record: %#v", terminal)
+	}
+
+	remote, err := NewWrapperRemoteDesktopSessionRecordFromJSON(sharedFixture(t, root, "wrapper-remote-desktop-session.v4.json"))
+	if err != nil {
+		t.Fatalf("NewWrapperRemoteDesktopSessionRecordFromJSON(shared fixture): %v", err)
+	}
+	if remote.Kind != "remote_desktop_session" || remote.DisplayRef == nil {
+		t.Fatalf("unexpected remote desktop wrapper record: %#v", remote)
+	}
+
+	browser, err := NewWrapperBrowserSessionRecordFromJSON(sharedFixture(t, root, "wrapper-browser-session.v4.json"))
+	if err != nil {
+		t.Fatalf("NewWrapperBrowserSessionRecordFromJSON(shared fixture): %v", err)
+	}
+	if browser.Kind != "browser_session" || browser.State != "starting" {
+		t.Fatalf("unexpected browser wrapper record: %#v", browser)
+	}
+
+	media, err := NewWrapperMediaSessionRecordFromJSON(sharedFixture(t, root, "wrapper-media-session.v4.json"))
+	if err != nil {
+		t.Fatalf("NewWrapperMediaSessionRecordFromJSON(shared fixture): %v", err)
+	}
+	if media.Kind != "media_session" || media.MediaKind != "voice" || media.StreamRef == nil {
+		t.Fatalf("unexpected media wrapper record: %#v", media)
+	}
+
+	client := NewWrapperClient()
+	if _, err := client.ProjectFileRecord(WrapperFileRecordRequest{
+		FileRef:     file.FileRef,
+		OwnerURA:    "not-a-ura",
+		ContentType: file.ContentType,
+	}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("invalid wrapper owner_ura did not produce InvalidArgument: %v", err)
+	}
+	if _, err := client.ProjectTerminalSession(WrapperTerminalSessionRequest{
+		SessionID: terminal.SessionID,
+		OwnerURA:  terminal.OwnerURA,
+	}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing wrapper session state did not produce InvalidArgument: %v", err)
+	}
+}
+
 type sharedHostBindingTransport struct {
 	bindingJSON  []byte
 	requestJSON  []byte

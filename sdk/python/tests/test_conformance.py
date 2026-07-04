@@ -14,9 +14,20 @@ from easynet_sdk import (
     HostStreamTerminalSummary,
     InvocationDraft,
     PreparedInvocation,
+    ReceiptSummary,
+    ReceiptVerification,
     RuntimeHealth,
     RetryHint,
     SDKError,
+    WrapperBrowserSessionRecord,
+    WrapperFileRecord,
+    WrapperFileRecordRequest,
+    WrapperClient,
+    WrapperMediaSessionRecord,
+    WrapperRemoteDesktopSessionRecord,
+    WrapperTerminalSessionRecord,
+    WrapperTerminalSessionRequest,
+    CausalRef,
 )
 
 
@@ -215,6 +226,115 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 ),
                 2,
                 {"token": "skip"},
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_python_receipt_executes_shared_projection_conformance_case(self) -> None:
+        receipt_case = shared_case("receipt-projection-causal-ref.yaml")
+        self._require_case_id(receipt_case, "receipt/projection_causal_ref")
+        for action in (
+            "project_receipt_summary",
+            "verify_receipt_summary",
+            "build_causal_ref",
+        ):
+            self._require_case_action(receipt_case, action)
+        self._require_case_fixture(receipt_case, "receipt.summary.v4.json")
+        self._require_case_expectation(receipt_case, "summary_verified: false")
+        self._require_case_expectation(
+            receipt_case, "verify_summary_claims_cryptographic_validity: false"
+        )
+        self._require_case_expectation(
+            receipt_case, "causal_ref_fixture_result: err_invalid_arg"
+        )
+
+        summary = ReceiptSummary.from_json(shared_fixture("receipt.summary.v4.json"))
+        self.assertFalse(summary.verified)
+        self.assertEqual(summary.state, "completed")
+        self.assertIsNone(summary.receipt_ura)
+
+        verification = ReceiptVerification.from_json(
+            b'{"verified":false,"method":"summary-only",'
+            b'"reason":"full receipt required",'
+            b'"metadata":{"source":"sdk_conformance"}}'
+        )
+        self.assertFalse(verification.verified)
+        self.assertEqual(verification.method, "summary-only")
+
+        with self.assertRaises(SDKError) as caught:
+            CausalRef.from_json(b'{"metadata":{}}')
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_python_wrappers_execute_shared_projection_conformance_case(self) -> None:
+        wrapper_case = shared_case("wrapper-profile-records.yaml")
+        self._require_case_id(wrapper_case, "wrappers/profile_records")
+        for action in (
+            "project_file_record",
+            "project_terminal_session",
+            "project_remote_desktop_session",
+            "project_browser_session",
+            "project_media_session",
+        ):
+            self._require_case_action(wrapper_case, action)
+        for fixture in (
+            "wrapper-file-record.v4.json",
+            "wrapper-terminal-session.v4.json",
+            "wrapper-remote-desktop-session.v4.json",
+            "wrapper-browser-session.v4.json",
+            "wrapper-media-session.v4.json",
+        ):
+            self._require_case_fixture(wrapper_case, fixture)
+        self._require_case_expectation(wrapper_case, "execution_transport_owner: runtime_core")
+        self._require_case_expectation(wrapper_case, "product_http_websocket_owner: backend")
+        self._require_case_expectation(wrapper_case, "rejects_invalid_owner_ura: true")
+        self._require_case_expectation(wrapper_case, "rejects_missing_session_state: true")
+
+        file = WrapperFileRecord.from_json(shared_fixture("wrapper-file-record.v4.json"))
+        self.assertEqual(file.kind, "file_record")
+        self.assertEqual(file.metadata["source"], "wrappers.file_record")
+
+        terminal = WrapperTerminalSessionRecord.from_json(
+            shared_fixture("wrapper-terminal-session.v4.json")
+        )
+        self.assertEqual(terminal.kind, "terminal_session")
+        self.assertEqual(terminal.terminal_ref, "terminal-main")
+
+        remote = WrapperRemoteDesktopSessionRecord.from_json(
+            shared_fixture("wrapper-remote-desktop-session.v4.json")
+        )
+        self.assertEqual(remote.kind, "remote_desktop_session")
+        self.assertEqual(remote.display_ref, "display-main")
+
+        browser = WrapperBrowserSessionRecord.from_json(
+            shared_fixture("wrapper-browser-session.v4.json")
+        )
+        self.assertEqual(browser.kind, "browser_session")
+        self.assertEqual(browser.state, "starting")
+
+        media = WrapperMediaSessionRecord.from_json(
+            shared_fixture("wrapper-media-session.v4.json")
+        )
+        self.assertEqual(media.kind, "media_session")
+        self.assertEqual(media.media_kind, "voice")
+        self.assertEqual(media.stream_ref, "stream-voice-1")
+
+        client = WrapperClient()
+        with self.assertRaises(SDKError) as caught:
+            client.project_file_record(
+                WrapperFileRecordRequest(
+                    file_ref=file.file_ref,
+                    owner_ura="not-a-ura",
+                    content_type=file.content_type,
+                )
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as caught:
+            client.project_terminal_session(
+                WrapperTerminalSessionRequest(
+                    session_id=terminal.session_id,
+                    owner_ura=terminal.owner_ura,
+                    state="",
+                )
             )
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 

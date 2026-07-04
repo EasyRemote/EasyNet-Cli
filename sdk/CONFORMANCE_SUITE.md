@@ -54,8 +54,9 @@ A language runner must:
 
 Go and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
-shipped local DTO/actions. Inline samples may remain as focused unit tests, but
-they do not replace the shared case-aware parity gate.
+shipped local DTO/actions and projection-only profile behavior. Inline samples
+may remain as focused unit tests, but they do not replace the shared case-aware
+parity gate.
 
 ## Minimum Commands
 
