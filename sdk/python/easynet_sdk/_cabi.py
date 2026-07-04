@@ -1077,16 +1077,32 @@ class CABIAdminTransport(_CABIProfileTransport):
         return self._missing("admin gateway status")
 
     def list_agents(self, request_json: bytes) -> bytes:
-        return self._missing("admin list agents")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_admin_build_agent_list_invocation",
+            project_symbol="easynet_admin_project_agent_records",
+        )
 
     def agent_start(self, request_json: bytes) -> bytes:
-        return self._missing("admin agent start")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_admin_build_agent_start_invocation",
+            project_symbol="easynet_admin_project_agent_lifecycle_result",
+        )
 
     def agent_stop(self, request_json: bytes) -> bytes:
-        return self._missing("admin agent stop")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_admin_build_agent_stop_invocation",
+            project_symbol="easynet_admin_project_agent_lifecycle_result",
+        )
 
     def agent_refresh(self, request_json: bytes) -> bytes:
-        return self._missing("admin agent refresh")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_admin_build_agent_refresh_invocation",
+            project_symbol="easynet_admin_project_agent_lifecycle_result",
+        )
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
         return self._missing("admin list device sessions")

@@ -7,6 +7,7 @@ from easynet_sdk import (
     AbilityInvocationClient,
     AddressingClient,
     AdminAgentListRequest,
+    AdminAgentStartRequest,
     AdminCarrierBase,
     CompatibilityCarrierBase,
     CompatibilityFileDeleteRequest,
@@ -363,6 +364,14 @@ class SdkEnvironmentTests(unittest.TestCase):
             )
             mission.run_eal(MissionRunRequest(base=_mission_base(), source="mission weather"))
             admin.build_agent_list_invocation(AdminAgentListRequest(_admin_base()))
+            admin.list_agents(AdminAgentListRequest(_admin_base()))
+            admin.agent_start(
+                AdminAgentStartRequest(
+                    base=_admin_base(),
+                    name="codex",
+                    agent_type="codex",
+                )
+            )
             events.build_directory_subscription_invocation(
                 EventsSubscriptionRequest(base=_events_base())
             )
@@ -494,6 +503,9 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_mission_build_run_eal_invocation", symbols)
         self.assertIn("easynet_mission_project_status", symbols)
         self.assertIn("easynet_admin_build_agent_list_invocation", symbols)
+        self.assertIn("easynet_admin_project_agent_records", symbols)
+        self.assertIn("easynet_admin_build_agent_start_invocation", symbols)
+        self.assertIn("easynet_admin_project_agent_lifecycle_result", symbols)
         self.assertIn("easynet_events_build_directory_subscription_invocation", symbols)
         self.assertIn("easynet_directory_build_list_devices_invocation", symbols)
         self.assertIn("easynet_surface_build_list_pages_invocation", symbols)
@@ -508,6 +520,13 @@ class SdkEnvironmentTests(unittest.TestCase):
         )
         self.assertIn("easynet_wrappers_build_browser_session_invocation", symbols)
         self.assertIn("easynet_wrappers_build_media_session_invocation", symbols)
+        runtime_abilities = [
+            entry[1]["metadata"]["system_ability"]
+            for entry in raw.runtime_requests
+            if entry[0] == "invoke"
+        ]
+        self.assertIn("agent.list", runtime_abilities)
+        self.assertIn("agent.start", runtime_abilities)
 
     def test_publication_deploy_uses_cabi_carrier_and_runtime_core(self) -> None:
         raw = FakeRawCABI()

@@ -54,9 +54,10 @@ Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
-builders plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing token,
-device credential, credential verification, and typed device-session projection
-seams plus close state seams. EventClient exposes directory/device/session/invocation subscription
+builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
+Core invoke, plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing
+token, device credential, credential verification, and typed device-session
+projection seams plus close state seams. EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, device event history pages, and EventFrame
 cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers plus
@@ -73,8 +74,8 @@ transport-backed helper close state seams, and record projections. Direct daemon
 UDS transport, directory subscription live adapters, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication
 show/unpublish and plugin lifecycle live adapters, host-binding execution
-adapters, mission event streams, concrete Admin trust/session carriers,
-certificate policy, Events daemon filtering/live adapters, concrete surface health
+adapters, mission event streams, Admin gateway live status carriers, concrete
+Admin trust/session carriers, certificate policy, Events daemon filtering/live adapters, concrete surface health
 live adapters, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream/bidi execution adapters, and the actual EasyRemote

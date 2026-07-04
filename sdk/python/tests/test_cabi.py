@@ -13,6 +13,12 @@ from easynet_sdk import (
     DaemonMode,
     AbilityQuery,
     AgentQuery,
+    AdminAgentListRequest,
+    AdminAgentRefreshRequest,
+    AdminAgentStartRequest,
+    AdminAgentStopRequest,
+    AdminCarrierBase,
+    AdminClient,
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
@@ -40,6 +46,7 @@ from easynet_sdk import (
     is_code,
 )
 from easynet_sdk._cabi import (
+    CABIAdminTransport,
     CABIDirectoryTransport,
     CABIDiscoveryTransport,
     CABIDaemonTransport,
@@ -349,6 +356,26 @@ class FakeRawCABI:
                     }
                 ]
             }
+        if system_ability == "agent.start":
+            return {
+                "agent_ura": "easynet:///r/example/agent/alice.codex",
+                "replaced_prior": False,
+                "runtime_registered": 1,
+                "runtime_failed": 0,
+                "ack": True,
+            }
+        if system_ability == "agent.stop":
+            return {
+                "ack": True,
+                "runtime_removed": 1,
+                "runtime_failed": 0,
+            }
+        if system_ability == "agent.refresh":
+            return {
+                "agents_scanned": 1,
+                "runtime_registered": 1,
+                "runtime_failed": 0,
+            }
         if system_ability == "meta.list_abilities":
             return {
                 "abilities": [
@@ -577,9 +604,9 @@ class FakeRawCABI:
     def _profile_call(self, symbol: str, handle, raw, out_ptr) -> int:
         request = json.loads(raw.value.decode("utf-8"))
         self.profile_requests.append((symbol, int(handle.value), request))
-        return self._write(out_ptr, self._profile_payload(symbol))
+        return self._write(out_ptr, self._profile_payload(symbol, request))
 
-    def _profile_payload(self, symbol: str) -> bytes:
+    def _profile_payload(self, symbol: str, request: object | None = None) -> bytes:
         if symbol == "easynet_directory_build_list_devices_invocation":
             return DIRECTORY_LIST_DEVICES_INVOCATION
         if symbol == "easynet_directory_build_list_agents_invocation":
@@ -596,6 +623,14 @@ class FakeRawCABI:
             return PUBLICATION_LIST_INVOCATION
         if symbol == "easynet_publication_project_ability_page":
             return PUBLICATION_ABILITY_PAGE
+        if symbol == "easynet_admin_build_agent_list_invocation":
+            return ADMIN_AGENT_LIST_INVOCATION
+        if symbol == "easynet_admin_build_agent_start_invocation":
+            return ADMIN_AGENT_START_INVOCATION
+        if symbol == "easynet_admin_build_agent_stop_invocation":
+            return ADMIN_AGENT_STOP_INVOCATION
+        if symbol == "easynet_admin_build_agent_refresh_invocation":
+            return ADMIN_AGENT_REFRESH_INVOCATION
         if symbol in {
             "easynet_mission_build_run_eal_invocation",
             "easynet_mission_build_run_file_invocation",
@@ -658,7 +693,11 @@ class FakeRawCABI:
         if symbol == "easynet_admin_project_agent_records":
             return ADMIN_AGENT_PAGE_PROJECTION
         if symbol == "easynet_admin_project_agent_lifecycle_result":
-            return ADMIN_RESULT_PROJECTION
+            if isinstance(request, dict) and "agents_scanned" in request:
+                return ADMIN_REFRESH_RESULT_PROJECTION
+            if isinstance(request, dict) and "agent_ura" in request:
+                return ADMIN_START_RESULT_PROJECTION
+            return ADMIN_STOP_RESULT_PROJECTION
         if symbol == "easynet_surface_project_page_record":
             return SURFACE_PAGE_RECORD_PROJECTION
         if symbol == "easynet_surface_project_page_page":
@@ -997,6 +1036,58 @@ MISSION_CANCEL_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+ADMIN_AGENT_LIST_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.agent.list@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"agent.list",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_AGENT_START_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.agent.start@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"name":"codex","agent_type":"codex"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"agent.start",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_AGENT_STOP_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"name":"codex"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"agent.stop",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_AGENT_REFRESH_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"name":"codex"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"agent.refresh",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 MISSION_EVENT_PAGE_PROJECTION = (
     b'{"profile":"mission","kind":"mission_event_page",'
     b'"mission_id":"mission-1","cursor_sequence":0,"next_cursor_sequence":1,'
@@ -1020,13 +1111,30 @@ GATEWAY_STATUS_PROJECTION = (
 )
 
 ADMIN_AGENT_PAGE_PROJECTION = (
-    b'{"profile":"admin_gateway","kind":"agent_page","items":[],'
-    b'"next_cursor":null,"limit":50,"metadata":{}}'
+    b'{"profile":"admin_gateway","kind":"agent_records","items":[],'
+    b'"state":"ok","next_cursor":null,"limit":50,"metadata":{}}'
 )
 
-ADMIN_RESULT_PROJECTION = (
-    b'{"profile":"admin_gateway","kind":"admin_result","operation":"agent_start",'
-    b'"state":"completed","ok":true,"metadata":{}}'
+ADMIN_START_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"agent_lifecycle_result",'
+    b'"operation":"agent.start","state":"ok",'
+    b'"agent_ura":"easynet:///r/example/agent/alice.codex",'
+    b'"ack":true,"runtime_not_ready":false,'
+    b'"runtime_catalog_not_ready":false,"metadata":{}}'
+)
+
+ADMIN_STOP_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"agent_lifecycle_result",'
+    b'"operation":"agent.stop","state":"ok","agent_ura":null,'
+    b'"ack":true,"runtime_not_ready":false,'
+    b'"runtime_catalog_not_ready":false,"metadata":{}}'
+)
+
+ADMIN_REFRESH_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"agent_lifecycle_result",'
+    b'"operation":"agent.refresh","state":"ok","agent_ura":null,'
+    b'"ack":null,"runtime_not_ready":false,'
+    b'"runtime_catalog_not_ready":false,"metadata":{}}'
 )
 
 SURFACE_PAGE_RECORD_PROJECTION = (
@@ -1576,6 +1684,61 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertIn("result", raw.profile_requests[1][2])
         self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
+        self.assertEqual(raw.buffers, {})
+
+    def test_admin_live_agent_methods_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = AdminClient(CABIAdminTransport(lib, handle=7))
+        base = AdminCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        agents = client.list_agents(AdminAgentListRequest(base))
+        started = client.agent_start(
+            AdminAgentStartRequest(base=base, name="codex", agent_type="codex")
+        )
+        stopped = client.agent_stop(AdminAgentStopRequest(base=base, name="codex"))
+        refreshed = client.agent_refresh(
+            AdminAgentRefreshRequest(base=base, name="codex")
+        )
+
+        self.assertEqual(agents.profile, "admin_gateway")
+        self.assertEqual(started.operation, "agent.start")
+        self.assertEqual(stopped.operation, "agent.stop")
+        self.assertEqual(refreshed.operation, "agent.refresh")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_admin_build_agent_list_invocation",
+                "easynet_admin_project_agent_records",
+                "easynet_admin_build_agent_start_invocation",
+                "easynet_admin_project_agent_lifecycle_result",
+                "easynet_admin_build_agent_stop_invocation",
+                "easynet_admin_project_agent_lifecycle_result",
+                "easynet_admin_build_agent_refresh_invocation",
+                "easynet_admin_project_agent_lifecycle_result",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            ["agent.list", "agent.start", "agent.stop", "agent.refresh"],
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["agents"][0]["name"],
+            "codex",
+        )
+        self.assertEqual(
+            raw.profile_requests[3][2]["agent_ura"],
+            "easynet:///r/example/agent/alice.codex",
+        )
+        self.assertTrue(raw.profile_requests[5][2]["ack"])
+        self.assertEqual(raw.profile_requests[7][2]["agents_scanned"], 1)
         self.assertEqual(raw.buffers, {})
 
     def test_mission_live_methods_use_carrier_invoke_and_projection(self) -> None:

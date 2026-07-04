@@ -226,11 +226,13 @@ method spelling.
   child Invocation behavior conformance,
   EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
-  list/start/stop/refresh and session-list Invocation carrier builders plus
-  `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
-  credential, credential verification, and typed device-session projection
-  seams plus close state seams; certificate policy, concrete daemon trust/session carriers, and
-  EasyRemote Server/AgentControl extraction remain incomplete.
+  list/start/stop/refresh and session-list Invocation carrier builders,
+  C ABI-backed agent list/start/stop/refresh execution through Runtime Core,
+  plus `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token,
+  device credential, credential verification, and typed device-session
+  projection seams plus close state seams; gateway live status carriers,
+  concrete daemon trust/session carriers, certificate policy, and EasyRemote
+  Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
   resume-token, drop-report, terminal projection seams, and bounded device
