@@ -63,9 +63,10 @@ through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
-Core invoke, C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
+Core invoke, C ABI-backed session-list execution through Runtime Core invoke,
+C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
-verification, and typed device-session projection seams plus close state seams.
+verification, and C ABI-backed typed device-session page projection plus close state seams.
 EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, device event history pages, and EventFrame
 cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
@@ -87,7 +88,8 @@ UDS transport, directory subscription live adapters, daemon/ABI-backed signing-k
 lifecycle result contracts, local signer implementations,
 Axon-backed receipt verification, receipt URI construction, publication
 enable/disable and plugin lifecycle live adapters, warm host process execution
-and cleanup adapters, mission event streams, concrete Admin trust/session carriers,
+and cleanup adapters, mission event streams, concrete Admin trust/pairing carriers,
+device-session create/delete lifecycle,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,

@@ -722,6 +722,12 @@ int32_t easynet_admin_project_agent_lifecycle_result(
     const char* result_json,
     char** out_result_json
 );
+
+int32_t easynet_admin_project_device_session_page(
+    EasynetHandle handle,
+    const char* sessions_json,
+    char** out_sessions_json
+);
 ```
 
 Admin + Gateway functions are scoped to a live `EasynetHandle`, matching the
@@ -744,10 +750,15 @@ SDK `AgentRecord` page DTOs. Missing hosted-agent URAs remain null; the SDK
 derives owner refs only from valid Agent URAs and never fabricates identities.
 `easynet_admin_project_agent_lifecycle_result` normalizes daemon
 `agent.start`, `agent.stop`, and `agent.refresh` outcomes into typed lifecycle
-results. ABI v4 Admin + Gateway support is `carrier_status_partial`: pairing
+results. `easynet_admin_project_device_session_page` normalizes daemon
+`session.list` results into `DeviceSessionPage` DTOs. Raw daemon sessions may
+derive device and hub URAs only from explicit `tenant`/`node` facts, mark rows as
+`daemon_session`, and preserve original session facts in metadata; browser
+session ids and product account state are not accepted as daemon session refs.
+ABI v4 Admin + Gateway support is `carrier_status_session_partial`: pairing
 token creation/validation, credential verification, certificate policy,
-gateway onboarding UX, and full device-session CRUD remain future daemon or
-product-profile work.
+gateway onboarding UX, and create/delete device-session lifecycle remain future
+daemon or product-profile work.
 
 ### 2.15 Surface Page Carriers And Projections
 

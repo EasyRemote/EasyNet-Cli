@@ -190,6 +190,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "events_directory_stream": true,
             "admin_gateway_carriers": true,
             "admin_gateway_status_projection": true,
+            "admin_device_session_projection": true,
             "surface_carriers": true,
             "surface_projection": true,
             "compatibility_carriers": true,
@@ -379,6 +380,7 @@ mod tests {
         assert_eq!(json["symbols"]["events_directory_stream"], true);
         assert_eq!(json["symbols"]["admin_gateway_carriers"], true);
         assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
+        assert_eq!(json["symbols"]["admin_device_session_projection"], true);
         assert_eq!(json["symbols"]["surface_carriers"], true);
         assert_eq!(json["symbols"]["surface_projection"], true);
         assert_eq!(json["symbols"]["compatibility_carriers"], true);

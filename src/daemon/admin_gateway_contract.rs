@@ -221,6 +221,45 @@ pub(crate) fn project_agent_records(input: &Value) -> Result<Value, AdminGateway
     }))
 }
 
+pub(crate) fn project_device_session_page(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "DeviceSessionPageInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "DeviceSessionPage")?;
+    let raw_items = result_obj
+        .get("sessions")
+        .or_else(|| result_obj.get("items"))
+        .and_then(Value::as_array)
+        .ok_or(AdminGatewayError::MissingField("sessions"))?;
+    let items = raw_items
+        .iter()
+        .map(project_device_session)
+        .collect::<Result<Vec<_>, _>>()?;
+    let state = optional_string_field(result_obj, "state")?.unwrap_or_else(|| "ok".to_string());
+    let next_cursor = result_obj
+        .get("next_cursor")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let count = items.len();
+
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "device_sessions",
+        "state": state,
+        "items": items,
+        "next_cursor": next_cursor,
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": "session.list",
+            "count": count,
+            "raw_result": result,
+        },
+    }))
+}
+
 pub(crate) fn project_agent_lifecycle_result(input: &Value) -> Result<Value, AdminGatewayError> {
     let obj = object(input, "AgentLifecycleResultInput")?;
     let result = obj
@@ -254,6 +293,83 @@ pub(crate) fn project_agent_lifecycle_result(input: &Value) -> Result<Value, Adm
             "runtime_removed": optional_u64(result_obj, "runtime_removed").unwrap_or(0),
             "raw_result": result,
         },
+    }))
+}
+
+fn project_device_session(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "DeviceSession")?;
+    let session_id = first_optional_string_field(obj, "session_id", "id")?
+        .ok_or(AdminGatewayError::MissingField("session_id"))?;
+    let tenant = first_optional_string_field(obj, "tenant", "realm")?;
+    let node = first_optional_string_field(obj, "node", "node_id")?;
+    let device_ura = match optional_string_field(obj, "device_ura")? {
+        Some(device_ura) => {
+            validate_ura(&device_ura, "device_ura")?;
+            device_ura
+        }
+        None => match (tenant.as_deref(), node.as_deref()) {
+            (Some(tenant), Some(node)) => ura::device_ura(tenant, node),
+            _ => return Err(AdminGatewayError::MissingField("device_ura")),
+        },
+    };
+    let hub_ura = match optional_string_field(obj, "hub_ura")? {
+        Some(hub_ura) => {
+            validate_ura(&hub_ura, "hub_ura")?;
+            hub_ura
+        }
+        None => tenant
+            .as_deref()
+            .map(ura::hub_ura)
+            .ok_or(AdminGatewayError::MissingField("hub_ura"))?,
+    };
+    let state = first_optional_string_field(obj, "state", "status")?.unwrap_or_else(|| {
+        if obj
+            .get("ended_unix_ms")
+            .filter(|value| !value.is_null())
+            .is_some()
+        {
+            "terminated".to_string()
+        } else {
+            "active".to_string()
+        }
+    });
+    let session_kind = first_optional_string_field(obj, "session_kind", "kind")?
+        .unwrap_or_else(|| "daemon_session".to_string());
+    let created_unix_ms = optional_u64(obj, "created_unix_ms")
+        .or_else(|| optional_u64(obj, "started_unix_ms"))
+        .ok_or(AdminGatewayError::MissingField("created_unix_ms"))?;
+    let expires_unix_ms = optional_u64(obj, "expires_unix_ms")
+        .or_else(|| optional_u64(obj, "ended_unix_ms"))
+        .unwrap_or(0);
+    let mut metadata = obj
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    metadata.insert(
+        "profile".to_string(),
+        Value::String(ADMIN_PROFILE.to_string()),
+    );
+    metadata.insert(
+        "source".to_string(),
+        Value::String("session.list".to_string()),
+    );
+    copy_optional_value(obj, &mut metadata, "agent");
+    copy_optional_value(obj, &mut metadata, "tenant");
+    copy_optional_value(obj, &mut metadata, "node");
+    copy_optional_value(obj, &mut metadata, "ended_unix_ms");
+
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "device_session",
+        "session_id": session_id,
+        "device_ura": device_ura,
+        "hub_ura": hub_ura,
+        "state": state,
+        "session_kind": session_kind,
+        "created_unix_ms": created_unix_ms,
+        "expires_unix_ms": expires_unix_ms,
+        "metadata": metadata,
     }))
 }
 
@@ -722,6 +838,57 @@ mod tests {
         assert_eq!(projected["ready"], true);
         assert_eq!(projected["state"], "ready");
         assert_eq!(projected["public_listener_ready"], false);
+    }
+
+    #[test]
+    fn project_device_session_page_maps_daemon_session_list() {
+        let projected = project_device_session_page(&json!({
+            "sessions": [{
+                "id": "session-1",
+                "tenant": "example",
+                "node": "dev-a",
+                "agent": "assistant",
+                "started_unix_ms": 1767225600000i64
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(projected["profile"], ADMIN_PROFILE);
+        assert_eq!(projected["kind"], "device_sessions");
+        assert_eq!(projected["items"][0]["session_id"], "session-1");
+        assert_eq!(
+            projected["items"][0]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(projected["items"][0]["hub_ura"], "easynet:///r/example/hub");
+        assert_eq!(projected["items"][0]["session_kind"], "daemon_session");
+        assert_eq!(projected["items"][0]["state"], "active");
+        assert_eq!(projected["metadata"]["count"], 1);
+    }
+
+    #[test]
+    fn project_device_session_page_preserves_explicit_session_facts() {
+        let projected = project_device_session_page(&json!({
+            "result": {
+                "state": "ok",
+                "items": [{
+                    "session_id": "dev-session-1",
+                    "device_ura": "easynet:///r/example/device/dev-a",
+                    "hub_ura": "easynet:///r/example/hub",
+                    "state": "active",
+                    "session_kind": "remote_desktop",
+                    "created_unix_ms": 1767225600000i64,
+                    "expires_unix_ms": 1893456000000i64,
+                    "metadata": {"source": "daemon"}
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(projected["items"][0]["session_kind"], "remote_desktop");
+        assert_eq!(projected["items"][0]["metadata"]["source"], "session.list");
+        assert_eq!(projected["items"][0]["metadata"]["profile"], ADMIN_PROFILE);
+        assert_eq!(projected["items"][0]["expires_unix_ms"], 1893456000000i64);
     }
 
     #[test]

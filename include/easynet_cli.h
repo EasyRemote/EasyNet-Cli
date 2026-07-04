@@ -663,6 +663,12 @@ int32_t easynet_admin_project_agent_lifecycle_result(
     char **out_result_json
 );
 
+int32_t easynet_admin_project_device_session_page(
+    EasynetHandle handle,
+    const char *sessions_json,
+    char **out_sessions_json
+);
+
 int32_t easynet_surface_build_list_pages_invocation(
     EasynetHandle handle,
     const char *request_json,

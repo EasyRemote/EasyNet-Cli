@@ -30,6 +30,7 @@ from easynet_sdk import (
     AdminCarrierBase,
     AdminClient,
     AdminGatewayStatusRequest,
+    AdminSessionListRequest,
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
@@ -420,6 +421,18 @@ class FakeRawCABI:
                 "agents_scanned": 1,
                 "runtime_registered": 1,
                 "runtime_failed": 0,
+            }
+        if system_ability == "session.list":
+            return {
+                "sessions": [
+                    {
+                        "id": "dev-session-1",
+                        "tenant": "example",
+                        "node": "dev-a",
+                        "agent": "codex",
+                        "started_unix_ms": 1767225600000,
+                    }
+                ]
             }
         if system_ability == "meta.list_abilities":
             args = draft.get("args")
@@ -828,6 +841,8 @@ class FakeRawCABI:
             return ADMIN_AGENT_STOP_INVOCATION
         if symbol == "easynet_admin_build_agent_refresh_invocation":
             return ADMIN_AGENT_REFRESH_INVOCATION
+        if symbol == "easynet_admin_build_session_list_invocation":
+            return ADMIN_SESSION_LIST_INVOCATION
         if symbol in {
             "easynet_mission_build_run_eal_invocation",
             "easynet_mission_build_run_file_invocation",
@@ -925,6 +940,8 @@ class FakeRawCABI:
             if isinstance(request, dict) and "agent_ura" in request:
                 return ADMIN_START_RESULT_PROJECTION
             return ADMIN_STOP_RESULT_PROJECTION
+        if symbol == "easynet_admin_project_device_session_page":
+            return ADMIN_DEVICE_SESSION_PAGE_PROJECTION
         if symbol == "easynet_surface_project_page_record":
             return SURFACE_PAGE_RECORD_PROJECTION
         if symbol == "easynet_surface_project_page_page":
@@ -1417,6 +1434,19 @@ ADMIN_AGENT_REFRESH_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+ADMIN_SESSION_LIST_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.session.list@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"include_terminated":false},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"session.list",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 MISSION_EVENT_PAGE_PROJECTION = (
     b'{"profile":"mission","kind":"mission_event_page",'
     b'"mission_id":"mission-1","cursor_sequence":0,"next_cursor_sequence":1,'
@@ -1446,6 +1476,18 @@ GATEWAY_STATUS_PROJECTION = (
 ADMIN_AGENT_PAGE_PROJECTION = (
     b'{"profile":"admin_gateway","kind":"agent_records","items":[],'
     b'"state":"ok","next_cursor":null,"limit":50,"metadata":{}}'
+)
+
+ADMIN_DEVICE_SESSION_PAGE_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"device_sessions","state":"ok",'
+    b'"items":[{"profile":"admin_gateway","kind":"device_session",'
+    b'"session_id":"dev-session-1","device_ura":"easynet:///r/example/device/dev-a",'
+    b'"hub_ura":"easynet:///r/example/hub","state":"active",'
+    b'"session_kind":"daemon_session","created_unix_ms":1767225600000,'
+    b'"expires_unix_ms":0,"metadata":{"profile":"admin_gateway",'
+    b'"source":"session.list","agent":"codex"}}],'
+    b'"next_cursor":null,"metadata":{"profile":"admin_gateway",'
+    b'"source":"session.list","count":1}}'
 )
 
 ADMIN_START_RESULT_PROJECTION = (
@@ -2594,6 +2636,41 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertTrue(raw.profile_requests[5][2]["ack"])
         self.assertEqual(raw.profile_requests[7][2]["agents_scanned"], 1)
+        self.assertEqual(raw.buffers, {})
+
+    def test_admin_list_device_sessions_uses_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = AdminClient(CABIAdminTransport(lib, handle=7))
+        base = AdminCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        page = client.list_device_sessions(
+            AdminSessionListRequest(base=base, include_terminated=False)
+        )
+
+        self.assertEqual(page.profile, "admin_gateway")
+        self.assertEqual(page.items[0].session_id, "dev-session-1")
+        self.assertEqual(page.items[0].session_kind, "daemon_session")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_admin_build_session_list_invocation",
+                "easynet_admin_project_device_session_page",
+            ],
+        )
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"], "session.list"
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["sessions"][0]["id"], "dev-session-1"
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_admin_gateway_status_uses_daemon_lifecycle_status_projection(self) -> None:

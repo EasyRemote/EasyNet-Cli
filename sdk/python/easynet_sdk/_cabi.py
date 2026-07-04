@@ -80,6 +80,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_admin_project_gateway_status",
     "easynet_admin_project_agent_records",
     "easynet_admin_project_agent_lifecycle_result",
+    "easynet_admin_project_device_session_page",
     "easynet_surface_build_list_pages_invocation",
     "easynet_surface_build_create_page_invocation",
     "easynet_surface_build_delete_page_invocation",
@@ -1259,7 +1260,11 @@ class CABIAdminTransport(_CABIProfileTransport):
         )
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
-        return self._missing("admin list device sessions")
+        return self._invoke_output_projected(
+            request_json,
+            build_symbol="easynet_admin_build_session_list_invocation",
+            project_symbol="easynet_admin_project_device_session_page",
+        )
 
     def join_hub(self, request_json: bytes) -> bytes:
         return self._missing("admin join hub")
@@ -1298,6 +1303,9 @@ class CABIAdminTransport(_CABIProfileTransport):
         return self._call(
             "easynet_admin_project_agent_lifecycle_result", result_json
         )
+
+    def project_device_session_page(self, sessions_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_device_session_page", sessions_json)
 
 
 @dataclass

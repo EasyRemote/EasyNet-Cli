@@ -32,7 +32,7 @@ use std::os::raw::c_char;
 use crate::daemon::admin_gateway_contract::{
     build_agent_list_invocation, build_agent_refresh_invocation, build_agent_start_invocation,
     build_agent_stop_invocation, build_session_list_invocation, project_agent_lifecycle_result,
-    project_agent_records, project_gateway_status, AdminGatewayError,
+    project_agent_records, project_device_session_page, project_gateway_status, AdminGatewayError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -213,6 +213,28 @@ pub unsafe extern "C" fn easynet_admin_project_agent_lifecycle_result(
     )
 }
 
+/// Project daemon `session.list` JSON into SDK DeviceSessionPage DTOs.
+///
+/// # Safety
+/// `sessions_json` must be a valid UTF-8 C string and `out_sessions_json` must
+/// be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_device_session_page(
+    handle: EasynetHandle,
+    sessions_json: *const c_char,
+    out_sessions_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        sessions_json,
+        out_sessions_json,
+        "easynet_admin_project_device_session_page",
+        "out_sessions_json",
+        "sessions_json",
+        project_device_session_page,
+    )
+}
+
 fn project_admin_gateway_json(
     handle: EasynetHandle,
     input: *const c_char,
@@ -352,6 +374,37 @@ mod tests {
         assert_eq!(
             value["items"][0]["owner_ura"],
             "easynet:///r/example/user/alice"
+        );
+        release(handle);
+    }
+
+    #[test]
+    fn admin_project_device_sessions_maps_session_list_output() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "sessions": [{
+                    "id": "session-1",
+                    "tenant": "example",
+                    "node": "dev-a",
+                    "started_unix_ms": 1767225600000i64
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_admin_project_device_session_page(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "device_sessions");
+        assert_eq!(value["items"][0]["session_id"], "session-1");
+        assert_eq!(
+            value["items"][0]["device_ura"],
+            "easynet:///r/example/device/dev-a"
         );
         release(handle);
     }

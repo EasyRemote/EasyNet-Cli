@@ -34,7 +34,7 @@ method spelling.
 | publication | carrier partial | carrier/deploy partial | carrier/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
-| admin + gateway | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
+| admin + gateway | carrier/status/session partial | carrier/status partial | carrier/status/session seam partial | carrier/status seam partial | gap | gap | gap |
 | events | directory stream partial | directory stream partial | directory stream seam partial | directory stream seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
@@ -238,11 +238,11 @@ method spelling.
   EasyRemote Pipeline extraction, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh and session-list Invocation carrier builders,
-  C ABI-backed agent list/start/stop/refresh execution through Runtime Core,
+  C ABI-backed agent list/start/stop/refresh and session-list execution through Runtime Core,
   C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
-  credential verification, and typed device-session projection seams plus close
-  state seams; concrete daemon trust/session carriers, certificate policy, and
+  credential verification, and C ABI-backed typed device-session page projection plus close
+  state seams; concrete daemon trust/pairing carriers, device-session create/delete lifecycle, certificate policy, and
   EasyRemote Server/AgentControl extraction remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders plus `EventFrame` cursor,
