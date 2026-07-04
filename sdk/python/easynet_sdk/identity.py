@@ -34,20 +34,20 @@ class DescriptorRefRequest:
 
 @dataclass(frozen=True)
 class IdentityProjectionRequest:
-    """Request a daemon-owned identity projection."""
+    """Request a daemon-owned URA identity projection."""
 
     ura: str = ""
     kind: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def to_json_bytes(self) -> bytes:
-        if not self.ura and not self.kind:
-            raise _invalid_identity("ura or kind is required")
-        value: dict[str, object] = {}
-        if self.ura:
-            value["ura"] = self.ura
+        if not self.ura:
+            raise _invalid_identity("ura is required for identity projection")
         if self.kind:
-            value["kind"] = self.kind
+            raise _invalid_identity(
+                "kind is not an identity projection selector; use build_ura"
+            )
+        value: dict[str, object] = {"ura": self.ura}
         if self.metadata:
             value["metadata"] = dict(self.metadata)
         return _json_bytes(value)

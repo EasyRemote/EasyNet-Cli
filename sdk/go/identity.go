@@ -19,7 +19,7 @@ type DescriptorRefRequest struct {
 	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
-// IdentityProjectionRequest asks for a daemon-owned identity projection.
+// IdentityProjectionRequest asks for a daemon-owned URA identity projection.
 type IdentityProjectionRequest struct {
 	URA      string         `json:"ura,omitempty"`
 	Kind     string         `json:"kind,omitempty"`
@@ -268,8 +268,11 @@ func (c *IdentityClient) ProjectIdentity(ctx context.Context, req IdentityProjec
 	if err := c.requireReady(ctx); err != nil {
 		return IdentityProjection{}, err
 	}
-	if req.URA == "" && req.Kind == "" {
-		return IdentityProjection{}, invalidRuntimePayload("ura or kind is required", nil)
+	if req.URA == "" {
+		return IdentityProjection{}, invalidRuntimePayload("ura is required for identity projection", nil)
+	}
+	if req.Kind != "" {
+		return IdentityProjection{}, invalidRuntimePayload("kind is not an identity projection selector; use BuildURA", nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {

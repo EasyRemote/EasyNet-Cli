@@ -118,6 +118,31 @@ func TestIdentityProjectDescriptorRefDelegatesToTransport(t *testing.T) {
 	}
 }
 
+func TestIdentityProjectIdentityRequiresURABoundary(t *testing.T) {
+	transport := &memoryIdentityTransport{identityJSON: identityAbilityProjectionJSON}
+	client, err := NewIdentityClient(transport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+
+	if _, err := client.ProjectIdentity(context.Background(), IdentityProjectionRequest{Kind: "ability"}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("kind-only projection did not produce InvalidArgument: %v", err)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("kind-only projection crossed identity transport boundary: %#v", transport.seenRequest)
+	}
+
+	if _, err := client.ProjectIdentity(context.Background(), IdentityProjectionRequest{
+		URA:  "easynet:///r/example/ability/device.dev-a.observe.health",
+		Kind: "ability",
+	}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("kind selector projection did not produce InvalidArgument: %v", err)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("kind selector projection crossed identity transport boundary: %#v", transport.seenRequest)
+	}
+}
+
 func TestIdentityAddressingHelpersDelegateToTransport(t *testing.T) {
 	transport := &memoryIdentityTransport{
 		descriptorJSON: identityDescriptorProjectionJSON,

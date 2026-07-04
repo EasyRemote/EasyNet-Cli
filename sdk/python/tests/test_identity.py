@@ -8,6 +8,7 @@ from easynet_sdk import (
     MAX_SIGNING_KEY_PAGE_SIZE,
     DescriptorRefRequest,
     IdentityClient,
+    IdentityProjectionRequest,
     LocalResourceRefRequest,
     SDKError,
     SignerRequest,
@@ -185,6 +186,25 @@ class IdentityTests(unittest.TestCase):
             transport.seen_request["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
+
+    def test_project_identity_requires_ura_projection_boundary(self) -> None:
+        transport = MemoryIdentityTransport()
+        client = IdentityClient(transport)
+
+        with self.assertRaises(SDKError) as missing_ura:
+            client.project_identity(IdentityProjectionRequest(kind="ability"))
+        self.assertEqual(missing_ura.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertIsNone(transport.seen_request)
+
+        with self.assertRaises(SDKError) as kind_selector:
+            client.project_identity(
+                IdentityProjectionRequest(
+                    ura="easynet:///r/example/ability/device.dev-a.observe.health",
+                    kind="ability",
+                )
+            )
+        self.assertEqual(kind_selector.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertIsNone(transport.seen_request)
 
     def test_addressing_helpers_delegate_to_identity_transport(self) -> None:
         transport = MemoryIdentityTransport()
