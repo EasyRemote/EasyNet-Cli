@@ -38,7 +38,7 @@ method spelling.
 | events | directory stream partial | directory stream partial | directory stream seam partial | directory stream seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
-| wrappers | record projection partial | record projection partial | execution carrier seam partial | execution carrier seam partial | gap | gap | gap |
+| wrappers | carrier/projection partial | carrier/projection partial | execution carrier seam partial | execution carrier seam partial | gap | gap | gap |
 | conformance runner | manifest partial | manifest partial | case-aware local facade/projection actions partial | case-aware local facade/projection actions partial | gap | gap | gap |
 
 ## Known Gaps
@@ -90,10 +90,10 @@ method spelling.
   incomplete.
 - Directory subscribe convenience methods, Axon-backed receipt verification,
   and full surface status are schema/conformance scaffolds only.
-- Convenience wrapper record projections exist for Rust/C ABI over file,
-  terminal, remote desktop, browser, and media session DTOs; execution helpers,
-  backend HTTP/WebSocket bridges, storage policy, and language facades remain
-  incomplete.
+- Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
+  file, terminal, remote desktop, browser, and media session DTOs; execution
+  helpers, backend HTTP/WebSocket bridges, storage policy, and product cutovers
+  remain incomplete.
 - Go package exposes Runtime Core feature/version discovery with root client close, runtime connection
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
   detach/open-runtime/connect-local state seams, runtime health readiness facts,
@@ -176,7 +176,7 @@ method spelling.
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow
   transport protocols; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
-  Surface, Compatibility, and Wrapper records; concrete default UDS transport,
+  Surface, Compatibility, and Wrapper carriers/records; concrete default UDS transport,
   live profile execution adapters, EasyRemote extraction tests, per-profile
   error source refs, and remaining profile conformance action execution remain incomplete before
   EasyRemote cutover.
@@ -239,9 +239,10 @@ method spelling.
   cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session Invocation carrier builders, transport-backed
-  helper close state seams, and record projections; backend HTTP/WebSocket bridges, storage
-  policy, concrete stream/bidi adapters, and product wrapper cutovers remain
-  incomplete.
+  helper close state seams, and record projections; Python concrete C ABI
+  transport now backs wrapper carrier builders while backend HTTP/WebSocket
+  bridges, storage policy, concrete stream/bidi adapters, and product wrapper
+  cutovers remain incomplete.
 - C ABI stream/bidi now exposes local stream close and bidi close-send
   half-close controls; schema-backed terminal events, bounded backpressure
   conformance, and P1 language facades remain incomplete.

@@ -2,29 +2,30 @@
 // =================================================
 //
 // File: src/daemon/wrapper_contract.rs
-// Description: Shared daemon SDK contract for Convenience Wrapper record
-//              projections.
+// Description: Shared daemon SDK contract for Convenience Wrapper carriers and
+//              record projections.
 //
 // Protocol Responsibility
 // -----------------------
-// Own SDK wrapper DTO semantics for file, terminal, remote desktop, browser,
-// and media session records. This module does not start sessions, parse product
-// HTTP/WebSocket requests, execute abilities, or replace Runtime Core
-// Invocation/stream/bidi paths.
+// Own SDK wrapper DTO and carrier semantics for file, terminal, remote desktop,
+// browser, and media session records. This module does not start sessions,
+// parse product HTTP/WebSocket requests, execute abilities, or replace Runtime
+// Core Invocation/stream/bidi paths.
 //
 // Implementation Approach
 // -----------------------
-// Validate explicit daemon/resource facts, preserve owner URAs, and normalize
-// records into schema-backed DTOs with profile metadata. Session record
-// projection is centralized in a small value object so each wrapper family uses
-// the same identity and lifecycle rules.
+// Validate explicit daemon/resource facts, preserve owner URAs, lower carrier
+// requests into complete Runtime Core Invocation drafts, and normalize records
+// into schema-backed DTOs with profile metadata. Session record projection is
+// centralized in a small value object so each wrapper family uses the same
+// identity and lifecycle rules.
 //
 // Usage Contract
 // --------------
 // Callers pass object-shaped JSON with explicit identity and state fields.
 // Missing owner/session/file facts and invalid owner URAs are rejected. Product
 // facades may adapt HTTP/UI/session protocols above this boundary, but the SDK
-// record shape remains shared across languages.
+// carrier and record shapes remain shared across languages.
 //
 // Architectural Position
 // ----------------------
@@ -37,17 +38,90 @@ use std::fmt;
 use serde_json::{json, Map, Value};
 
 use crate::daemon::sdk_contract::{
-    object, optional_string_field, required_string, validate_ura, SdkContractError,
+    build_system_invocation, object, optional_string_field, required_string, validate_ura,
+    SdkContractError,
 };
 
 const WRAPPERS_PROFILE: &str = "wrappers";
+const ABILITY_WRAPPER_FILE_TRANSFER: &str = "wrapper.file.transfer";
+const ABILITY_WRAPPER_TERMINAL_START: &str = "wrapper.terminal.start";
+const ABILITY_WRAPPER_REMOTE_DESKTOP_START: &str = "wrapper.remote_desktop.start";
+const ABILITY_WRAPPER_BROWSER_START: &str = "wrapper.browser.start";
+const ABILITY_WRAPPER_MEDIA_START: &str = "wrapper.media.start";
+
+pub(crate) fn build_file_transfer_invocation(request: &Value) -> Result<Value, WrapperError> {
+    let obj = object(request, "WrapperFileTransferRequest")?;
+    validate_file_record_input(obj)?;
+    let operation = optional_string_field(obj, "operation")?.unwrap_or_else(|| "transfer".into());
+    if operation.trim() != operation {
+        return Err(WrapperError::InvalidField(
+            "operation",
+            "must not contain surrounding whitespace".to_string(),
+        ));
+    }
+    build_system_invocation(
+        obj,
+        WRAPPERS_PROFILE,
+        ABILITY_WRAPPER_FILE_TRANSFER,
+        json!({"wrapper_kind": "file", "operation": operation}),
+    )
+    .map_err(WrapperError::from)
+}
+
+pub(crate) fn build_terminal_session_invocation(request: &Value) -> Result<Value, WrapperError> {
+    let obj = object(request, "WrapperTerminalStartRequest")?;
+    let session = validate_session_input(obj)?;
+    build_system_invocation(
+        obj,
+        WRAPPERS_PROFILE,
+        ABILITY_WRAPPER_TERMINAL_START,
+        json!({"wrapper_kind": "terminal", "session_id": session.session_id}),
+    )
+    .map_err(WrapperError::from)
+}
+
+pub(crate) fn build_remote_desktop_session_invocation(
+    request: &Value,
+) -> Result<Value, WrapperError> {
+    let obj = object(request, "WrapperRemoteDesktopStartRequest")?;
+    let session = validate_session_input(obj)?;
+    build_system_invocation(
+        obj,
+        WRAPPERS_PROFILE,
+        ABILITY_WRAPPER_REMOTE_DESKTOP_START,
+        json!({"wrapper_kind": "remote_desktop", "session_id": session.session_id}),
+    )
+    .map_err(WrapperError::from)
+}
+
+pub(crate) fn build_browser_session_invocation(request: &Value) -> Result<Value, WrapperError> {
+    let obj = object(request, "WrapperBrowserStartRequest")?;
+    let session = validate_session_input(obj)?;
+    build_system_invocation(
+        obj,
+        WRAPPERS_PROFILE,
+        ABILITY_WRAPPER_BROWSER_START,
+        json!({"wrapper_kind": "browser", "session_id": session.session_id}),
+    )
+    .map_err(WrapperError::from)
+}
+
+pub(crate) fn build_media_session_invocation(request: &Value) -> Result<Value, WrapperError> {
+    let obj = object(request, "WrapperMediaStartRequest")?;
+    let session = validate_session_input(obj)?;
+    required_string(obj, "media_kind")?;
+    build_system_invocation(
+        obj,
+        WRAPPERS_PROFILE,
+        ABILITY_WRAPPER_MEDIA_START,
+        json!({"wrapper_kind": "media", "session_id": session.session_id}),
+    )
+    .map_err(WrapperError::from)
+}
 
 pub(crate) fn project_file_record(input: &Value) -> Result<Value, WrapperError> {
     let obj = object(input, "FileRecord")?;
-    let file_ref = required_string(obj, "file_ref")?;
-    let owner_ura = required_string(obj, "owner_ura")?;
-    validate_ura(owner_ura, "owner_ura")?;
-    let content_type = required_string(obj, "content_type")?;
+    let file = validate_file_record_input(obj)?;
     let size_bytes = optional_u64_field(obj, "size_bytes")?;
     let content_hash = optional_string_field(obj, "content_hash")?;
     let mut metadata = typed_metadata(obj)?;
@@ -55,9 +129,9 @@ pub(crate) fn project_file_record(input: &Value) -> Result<Value, WrapperError> 
     Ok(json!({
         "profile": WRAPPERS_PROFILE,
         "kind": "file_record",
-        "file_ref": file_ref,
-        "owner_ura": owner_ura,
-        "content_type": content_type,
+        "file_ref": file.file_ref,
+        "owner_ura": file.owner_ura,
+        "content_type": file.content_type,
         "size_bytes": size_bytes,
         "content_hash": content_hash,
         "metadata": metadata,
@@ -152,6 +226,38 @@ impl WrapperSessionProjection {
     }
 }
 
+#[derive(Debug, Clone)]
+struct WrapperFileInput {
+    file_ref: String,
+    owner_ura: String,
+    content_type: String,
+}
+
+fn validate_file_record_input(obj: &Map<String, Value>) -> Result<WrapperFileInput, WrapperError> {
+    let file_ref = required_string(obj, "file_ref")?.to_string();
+    let owner_ura = required_string(obj, "owner_ura")?.to_string();
+    validate_ura(&owner_ura, "owner_ura")?;
+    let content_type = required_string(obj, "content_type")?.to_string();
+    Ok(WrapperFileInput {
+        file_ref,
+        owner_ura,
+        content_type,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct WrapperSessionInput {
+    session_id: String,
+}
+
+fn validate_session_input(obj: &Map<String, Value>) -> Result<WrapperSessionInput, WrapperError> {
+    let session_id = required_string(obj, "session_id")?.to_string();
+    let owner_ura = required_string(obj, "owner_ura")?;
+    validate_ura(owner_ura, "owner_ura")?;
+    required_string(obj, "state")?;
+    Ok(WrapperSessionInput { session_id })
+}
+
 fn stamp_metadata(metadata: &mut Map<String, Value>, source: &'static str) {
     metadata.insert(
         "profile".to_string(),
@@ -235,6 +341,108 @@ mod tests {
         assert_eq!(file["kind"], "file_record");
         assert_eq!(file["size_bytes"], 42);
         assert_eq!(file["metadata"]["source"], "wrappers.file_record");
+    }
+
+    fn base_request(extra: Value) -> Value {
+        let mut request = json!({
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_version": "1.0.0",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "metadata": {"request_id": "wrapper-test"}
+        });
+        let Value::Object(extra) = extra else {
+            return request;
+        };
+        let obj = request.as_object_mut().unwrap();
+        for (key, value) in extra {
+            obj.insert(key, value);
+        }
+        request
+    }
+
+    #[test]
+    fn build_wrapper_carriers_preserve_minimal_args() {
+        let file = build_file_transfer_invocation(&base_request(json!({
+            "wrapper_kind": "file",
+            "operation": "transfer",
+            "file_ref": "easynet:///r/example/resource/alice.files/report.txt",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "content_type": "text/plain"
+        })))
+        .unwrap();
+        assert_eq!(
+            file["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.wrapper.file.transfer@1.0.0"
+        );
+        assert_eq!(file["metadata"]["system_ability"], "wrapper.file.transfer");
+        assert_eq!(
+            file["args"],
+            json!({"wrapper_kind": "file", "operation": "transfer"})
+        );
+
+        let terminal = build_terminal_session_invocation(&base_request(json!({
+            "wrapper_kind": "terminal",
+            "session_id": "term-1",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "state": "starting"
+        })))
+        .unwrap();
+        assert_eq!(
+            terminal["metadata"]["system_ability"],
+            "wrapper.terminal.start"
+        );
+        assert_eq!(
+            terminal["args"],
+            json!({"wrapper_kind": "terminal", "session_id": "term-1"})
+        );
+
+        let remote = build_remote_desktop_session_invocation(&base_request(json!({
+            "wrapper_kind": "remote_desktop",
+            "session_id": "rdp-1",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "state": "starting"
+        })))
+        .unwrap();
+        assert_eq!(
+            remote["metadata"]["system_ability"],
+            "wrapper.remote_desktop.start"
+        );
+
+        let browser = build_browser_session_invocation(&base_request(json!({
+            "wrapper_kind": "browser",
+            "session_id": "browser-1",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "state": "starting"
+        })))
+        .unwrap();
+        assert_eq!(
+            browser["metadata"]["system_ability"],
+            "wrapper.browser.start"
+        );
+
+        let media = build_media_session_invocation(&base_request(json!({
+            "wrapper_kind": "media",
+            "session_id": "media-1",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "state": "starting",
+            "media_kind": "voice"
+        })))
+        .unwrap();
+        assert_eq!(media["metadata"]["system_ability"], "wrapper.media.start");
+    }
+
+    #[test]
+    fn build_terminal_session_requires_explicit_state() {
+        let err = build_terminal_session_invocation(&base_request(json!({
+            "session_id": "term-1",
+            "owner_ura": "easynet:///r/example/agent/alice.sdk"
+        })))
+        .unwrap_err();
+
+        assert!(err.to_string().contains("state"));
     }
 
     #[test]

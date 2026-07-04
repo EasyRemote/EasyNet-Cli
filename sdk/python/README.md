@@ -16,7 +16,7 @@ lifecycle/open-runtime, identity projection, and runtime
 health/unary/stream/bidi/prepare-submit handle transports, profile
 carrier/projection transports for Receipt, Directory, Publication, Host
 Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
-Wrapper records, runtime connection
+Wrapper carrier/projection records, runtime connection
 state, runtime health readiness facts, DaemonHandle lifecycle
 status/endpoints/start/attach/discover/stop/detach/open-runtime/connect-local
 state seams, schema-backed SDK error projection, complete
@@ -53,7 +53,8 @@ Invocation carriers, including C ABI-backed concrete file carrier builders,
 plus model, chat, stream, file, and file-delete projection seams and close state
 seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
-builders, transport-backed helper close state seams, and record projections. Concrete daemon
+builders, including C ABI-backed concrete carrier builders,
+transport-backed helper close state seams, and record projections. Concrete daemon
 default UDS transport, directory live transport adapters, local signer implementations,
 Axon-backed receipt verification, live publication/host-binding/mission
 execution adapters, mission event streams, concrete Admin trust/session carriers,

@@ -1,21 +1,21 @@
-// EasyNet CLI — Convenience Wrapper C ABI projection
-// ==================================================
+// EasyNet CLI — Convenience Wrapper C ABI carrier/projection
+// ==========================================================
 //
 // File: src/ffi/wrappers/mod.rs
-// Description: C ABI Convenience Wrapper projection helpers for SDK wrapper
-//              records.
+// Description: C ABI Convenience Wrapper carrier and projection helpers for
+//              SDK wrapper records.
 //
 // Protocol Responsibility
 // -----------------------
-// Expose wrapper record DTO construction without letting language facades own
-// file/session/media record semantics. This module does not start sessions,
-// open product WebSockets, execute abilities, or own Runtime Core stream/bidi
-// terminal state.
+// Expose wrapper Invocation carrier construction and record DTO construction
+// without letting language facades own file/session/media semantics. This
+// module does not start sessions, open product WebSockets, execute abilities,
+// or own Runtime Core stream/bidi terminal state.
 //
 // Implementation Approach
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
-// boundary. Delegate wrapper record validation and normalization to
+// boundary. Delegate wrapper carrier validation and record normalization to
 // `daemon::wrapper_contract`.
 //
 // Usage Contract
@@ -26,17 +26,130 @@
 //
 // Architectural Position
 // ----------------------
-// EasyNet-Cli SDK Convenience Wrapper profile projection. Runtime Core remains
-// the only submit/observe path for future wrapper execution helpers.
+// EasyNet-Cli SDK Convenience Wrapper profile carrier/projection. Runtime Core
+// remains the only submit/observe path for wrapper execution helpers.
 
 use std::os::raw::c_char;
 
 use crate::daemon::wrapper_contract::{
-    project_browser_session, project_file_record, project_media_session,
-    project_remote_desktop_session, project_terminal_session, WrapperError,
+    build_browser_session_invocation, build_file_transfer_invocation,
+    build_media_session_invocation, build_remote_desktop_session_invocation,
+    build_terminal_session_invocation, project_browser_session, project_file_record,
+    project_media_session, project_remote_desktop_session, project_terminal_session, WrapperError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+
+/// Build a complete Invocation JSON carrier for daemon `wrapper.file.transfer`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_wrappers_build_file_transfer_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_wrappers_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_wrappers_build_file_transfer_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_file_transfer_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `wrapper.terminal.start`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_wrappers_build_terminal_session_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_wrappers_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_wrappers_build_terminal_session_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_terminal_session_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon
+/// `wrapper.remote_desktop.start`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_wrappers_build_remote_desktop_session_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_wrappers_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_wrappers_build_remote_desktop_session_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_remote_desktop_session_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `wrapper.browser.start`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_wrappers_build_browser_session_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_wrappers_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_wrappers_build_browser_session_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_browser_session_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `wrapper.media.start`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_wrappers_build_media_session_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_wrappers_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_wrappers_build_media_session_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_media_session_invocation,
+    )
+}
 
 /// Project daemon/resource file facts into a wrapper FileRecord DTO.
 ///
@@ -213,6 +326,82 @@ mod tests {
         assert_eq!(value["profile"], "wrappers");
         assert_eq!(value["kind"], "file_record");
         assert_eq!(value["size_bytes"], 42);
+        release(handle);
+    }
+
+    #[test]
+    fn wrappers_build_session_carriers_project_complete_invocations() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "descriptor_version": "1.0.0",
+                "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                "causal_context": {"form": "none"},
+                "metadata": {"request_id": "wrapper-test"},
+                "session_id": "term-1",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "state": "starting"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_wrappers_build_terminal_session_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "wrapper.terminal.start"
+        );
+        assert_eq!(value["args"]["wrapper_kind"], "terminal");
+        assert_eq!(value["args"]["session_id"], "term-1");
+        release(handle);
+    }
+
+    #[test]
+    fn wrappers_build_file_carrier_projects_complete_invocation() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "descriptor_version": "1.0.0",
+                "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                "causal_context": {"form": "none"},
+                "metadata": {"request_id": "wrapper-test"},
+                "operation": "transfer",
+                "file_ref": "easynet:///r/example/resource/alice.files/report.txt",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "content_type": "text/plain"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_wrappers_build_file_transfer_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "wrapper.file.transfer");
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.wrapper.file.transfer@1.0.0"
+        );
+        assert_eq!(
+            value["args"],
+            serde_json::json!({"wrapper_kind": "file", "operation": "transfer"})
+        );
         release(handle);
     }
 

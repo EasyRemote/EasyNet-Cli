@@ -28,6 +28,17 @@ from easynet_sdk import (
     SdkEnvironment,
     SurfaceCarrierBase,
     SurfaceListPagesRequest,
+    WrapperBrowserSessionRequest,
+    WrapperBrowserStartRequest,
+    WrapperCarrierBase,
+    WrapperFileRecordRequest,
+    WrapperFileTransferRequest,
+    WrapperMediaSessionRequest,
+    WrapperMediaStartRequest,
+    WrapperRemoteDesktopSessionRequest,
+    WrapperRemoteDesktopStartRequest,
+    WrapperTerminalSessionRequest,
+    WrapperTerminalStartRequest,
     default_environment,
     is_code,
 )
@@ -140,6 +151,7 @@ class SdkEnvironmentTests(unittest.TestCase):
             directory = env.directory_client()
             surface = env.surface_client()
             compatibility = env.compatibility_client()
+            wrapper = env.wrapper_client()
 
             self.assertTrue(receipt.verify(b'{"receipt_ura":"receipt-1"}').verified)
             resource_ref = publication.build_local_resource_ref(
@@ -211,6 +223,67 @@ class SdkEnvironmentTests(unittest.TestCase):
                     deleted=True,
                 )
             )
+            wrapper.build_file_transfer_invocation(
+                WrapperFileTransferRequest(
+                    base=_wrapper_base(),
+                    file=WrapperFileRecordRequest(
+                        file_ref=(
+                            "easynet:///r/example/resource/alice.files/report.txt"
+                        ),
+                        owner_ura=_CALLER,
+                        content_type="text/plain",
+                        size_bytes=42,
+                    ),
+                )
+            )
+            wrapper.build_terminal_session_invocation(
+                WrapperTerminalStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperTerminalSessionRequest(
+                        session_id="term-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                    ),
+                    command=("bash", "-lc"),
+                )
+            )
+            wrapper.build_remote_desktop_session_invocation(
+                WrapperRemoteDesktopStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperRemoteDesktopSessionRequest(
+                        session_id="rdp-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                        display_ref="display-main",
+                    ),
+                    display="main",
+                )
+            )
+            wrapper.build_browser_session_invocation(
+                WrapperBrowserStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperBrowserSessionRequest(
+                        session_id="browser-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                        browser_ref="browser-main",
+                    ),
+                    url="https://example.com",
+                )
+            )
+            wrapper.build_media_session_invocation(
+                WrapperMediaStartRequest(
+                    base=_wrapper_base(),
+                    session=WrapperMediaSessionRequest(
+                        session_id="media-1",
+                        owner_ura=_CALLER,
+                        state="starting",
+                        media_kind="voice",
+                        stream_ref="stream-voice-1",
+                    ),
+                    codec="opus",
+                )
+            )
             receipt.build_fetch_invocation(
                 ReceiptFetchRequest(
                     caller_ura=_CALLER,
@@ -244,6 +317,13 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("easynet_compatibility_build_file_upload_invocation", symbols)
         self.assertIn("easynet_compatibility_build_file_retrieve_invocation", symbols)
         self.assertIn("easynet_compatibility_build_file_delete_invocation", symbols)
+        self.assertIn("easynet_wrappers_build_file_transfer_invocation", symbols)
+        self.assertIn("easynet_wrappers_build_terminal_session_invocation", symbols)
+        self.assertIn(
+            "easynet_wrappers_build_remote_desktop_session_invocation", symbols
+        )
+        self.assertIn("easynet_wrappers_build_browser_session_invocation", symbols)
+        self.assertIn("easynet_wrappers_build_media_session_invocation", symbols)
 
     def test_missing_live_profile_operations_are_typed_not_implemented(self) -> None:
         raw = FakeRawCABI()
@@ -344,6 +424,17 @@ def _surface_base() -> SurfaceCarrierBase:
 
 def _compatibility_base() -> CompatibilityCarrierBase:
     return CompatibilityCarrierBase(
+        caller_ura=_CALLER,
+        callee_ura=_CALLEE,
+        subject_ura=_SUBJECT,
+        descriptor_version="1.0.0",
+        nonce_base64=_NONCE,
+        causal_context=_CAUSAL,
+    )
+
+
+def _wrapper_base() -> WrapperCarrierBase:
+    return WrapperCarrierBase(
         caller_ura=_CALLER,
         callee_ura=_CALLEE,
         subject_ura=_SUBJECT,

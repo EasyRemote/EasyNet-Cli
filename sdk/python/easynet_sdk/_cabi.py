@@ -91,6 +91,11 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_compatibility_project_file_upload",
     "easynet_compatibility_project_file",
     "easynet_compatibility_project_file_delete_result",
+    "easynet_wrappers_build_file_transfer_invocation",
+    "easynet_wrappers_build_terminal_session_invocation",
+    "easynet_wrappers_build_remote_desktop_session_invocation",
+    "easynet_wrappers_build_browser_session_invocation",
+    "easynet_wrappers_build_media_session_invocation",
     "easynet_wrappers_project_file_record",
     "easynet_wrappers_project_terminal_session",
     "easynet_wrappers_project_remote_desktop_session",
@@ -1194,22 +1199,28 @@ class CABICompatibilityTransport(_CABIProfileTransport):
 
 @dataclass
 class CABIWrapperTransport(_CABIProfileTransport):
-    """Convenience wrapper projection transport backed by C ABI v4."""
+    """Convenience wrapper carrier/projection transport backed by C ABI v4."""
 
     def build_file_transfer_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper file-transfer carrier")
+        return self._call("easynet_wrappers_build_file_transfer_invocation", request_json)
 
     def build_terminal_session_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper terminal-session carrier")
+        return self._call(
+            "easynet_wrappers_build_terminal_session_invocation", request_json
+        )
 
     def build_remote_desktop_session_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper remote-desktop-session carrier")
+        return self._call(
+            "easynet_wrappers_build_remote_desktop_session_invocation", request_json
+        )
 
     def build_browser_session_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper browser-session carrier")
+        return self._call(
+            "easynet_wrappers_build_browser_session_invocation", request_json
+        )
 
     def build_media_session_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("wrapper media-session carrier")
+        return self._call("easynet_wrappers_build_media_session_invocation", request_json)
 
     def transfer_file(self, request_json: bytes) -> bytes:
         return self._missing("wrapper file transfer")
