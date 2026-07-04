@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 from .errors import ErrorCode, RetryHint, SDKError
 from ._lifecycle import ClientLifecycle
 from .invocation import InvocationDraft
+from .stream import StreamHandle
 
 
 DEFAULT_DIRECTORY_PAGE_SIZE = 50
@@ -226,6 +227,9 @@ class DirectorySubscription:
     events: tuple[DirectorySubscriptionEvent, ...]
     drop_count: int
     metadata: Mapping[str, object]
+    _runtime_stream: Optional[StreamHandle] = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "DirectorySubscription":
@@ -251,6 +255,41 @@ class DirectorySubscription:
         )
         _validate_subscription(subscription)
         return subscription
+
+    @classmethod
+    def from_runtime_stream(
+        cls,
+        runtime_stream: StreamHandle,
+        *,
+        cursor: Optional[DirectorySubscriptionCursor] = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> "DirectorySubscription":
+        if runtime_stream is None:
+            raise _invalid_directory("runtime stream handle is required")
+        cursor = cursor or DirectorySubscriptionCursor(_DIRECTORY_STREAM, 0)
+        state = getattr(runtime_stream.state, "value", str(runtime_stream.state))
+        if state == "Open":
+            state = "Live"
+        subscription = cls(
+            profile=_PROFILE,
+            kind="directory_subscription",
+            stream=_DIRECTORY_STREAM,
+            state=state,
+            cursor=cursor,
+            resume_token=cursor.resume_token(),
+            events=(),
+            drop_count=0,
+            metadata=dict(metadata or {"profile": _PROFILE}),
+            _runtime_stream=runtime_stream,
+        )
+        _validate_subscription(subscription)
+        return subscription
+
+    def close(self) -> None:
+        if self._runtime_stream is None:
+            return
+        self._runtime_stream.close()
+        object.__setattr__(self, "state", "Closed")
 
 
 @runtime_checkable
@@ -296,7 +335,7 @@ class DirectoryTransport(Protocol):
     def list_abilities(self, request_json: bytes) -> bytes:
         ...
 
-    def subscribe_directory(self, request_json: bytes) -> bytes:
+    def subscribe_directory(self, request_json: bytes) -> bytes | DirectorySubscription:
         ...
 
 
@@ -490,6 +529,8 @@ class DirectoryClient:
             raise
         except Exception as exc:
             raise _transport_error("directory subscribe failed", exc) from exc
+        if isinstance(raw, DirectorySubscription):
+            return raw
         return DirectorySubscription.from_json(raw)
 
     def resolve(self, query: ResolveQuery) -> ResolvedRef:

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .directory import DirectorySubscription, DirectorySubscriptionCursor
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 from .events import EventStream
 from .stream import StreamHandle
@@ -958,6 +959,8 @@ class CABIReceiptTransport(_CABIProfileTransport):
 class CABIDirectoryTransport(_CABIProfileTransport):
     """Directory carrier/projection transport backed by C ABI v4."""
 
+    _subscriptions: list[DirectorySubscription] = field(default_factory=list)
+
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         return self._call(
             "easynet_events_build_directory_subscription_invocation", request_json
@@ -991,8 +994,23 @@ class CABIDirectoryTransport(_CABIProfileTransport):
             project_symbol="easynet_directory_project_ability_page",
         )
 
-    def subscribe_directory(self, request_json: bytes) -> bytes:
-        return self._missing("directory subscribe")
+    def subscribe_directory(self, request_json: bytes) -> DirectorySubscription:
+        runtime_stream = self._open_runtime_stream(
+            request_json,
+            build_symbol="easynet_events_build_directory_subscription_invocation",
+        )
+        subscription = DirectorySubscription.from_runtime_stream(
+            runtime_stream,
+            cursor=_directory_subscription_cursor_from_request(request_json),
+            metadata={
+                "profile": "directory_identity",
+                "source": "runtime_stream",
+                "stream_ability": "federation.subscribe_directory_v2",
+                "carrier_owner": "daemon_sdk",
+            },
+        )
+        self._subscriptions.append(subscription)
+        return subscription
 
     def build_list_devices_invocation(self, request_json: bytes) -> bytes:
         return self._call(
@@ -1023,6 +1041,14 @@ class CABIDirectoryTransport(_CABIProfileTransport):
 
     def project_resolved_ref(self, answer_json: bytes) -> bytes:
         return self._call("easynet_directory_project_resolved_ref", answer_json)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        for subscription in tuple(self._subscriptions):
+            subscription.close()
+        self._subscriptions.clear()
+        super().close()
 
 
 @dataclass
@@ -2557,6 +2583,25 @@ def _resume_token_from_event_subscription(request_json: bytes) -> str:
     if isinstance(stream, str) and isinstance(sequence, int) and not isinstance(sequence, bool):
         return f"{stream}:{sequence}"
     return ""
+
+
+def _directory_subscription_cursor_from_request(
+    request_json: bytes,
+) -> DirectorySubscriptionCursor:
+    request = _json_object(request_json, "directory subscription request")
+    cursor = request.get("resume_cursor")
+    if not isinstance(cursor, dict):
+        return DirectorySubscriptionCursor("directory", 0)
+    stream = cursor.get("stream")
+    sequence = cursor.get("sequence")
+    token = cursor.get("token")
+    if stream != "directory" or not isinstance(sequence, int) or isinstance(sequence, bool):
+        return DirectorySubscriptionCursor("directory", 0)
+    return DirectorySubscriptionCursor(
+        stream,
+        sequence,
+        token if isinstance(token, str) else "",
+    )
 
 
 def _admin_gateway_status_projection_input(

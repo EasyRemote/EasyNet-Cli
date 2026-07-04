@@ -188,7 +188,8 @@ method spelling.
   EasyRemote cutover.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, list/resolve Invocation carrier
-  builders, Directory projection helpers, directory subscription state seams,
+  builders, Directory projection helpers, C ABI-backed directory subscription
+  execution through Runtime Core open_stream, directory subscription state seams,
   and close state seams plus `AddressingClient` and `IdentityClient`
   Axon-delegated `parse_ura`, `owner_ability_ura`,
   `owner_ura_for_ability`, `ability_ura_from_descriptor_ref`,
@@ -202,8 +203,9 @@ method spelling.
   Runtime Core invoke, while
   signing-key lifecycle live adapters still require a daemon/ABI key lifecycle
   result contract rather than projecting `identity.register_pubkey` trust-anchor
-  acks into richer signing-key DTOs; local signer implementations, and
-  actual EasyRemote repository extraction remain incomplete.
+  acks into richer signing-key DTOs; directory buffered-event projection, local
+  signer implementations, and actual EasyRemote repository extraction remain
+  incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   receipt-derived child `causal_context` adapters, typed `ReceiptRef` and

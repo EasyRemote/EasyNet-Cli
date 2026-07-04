@@ -35,6 +35,8 @@ from easynet_sdk import (
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
+    DirectorySubscriptionCursor,
+    DirectorySubscriptionRequest,
     ErrorCode,
     EventClient,
     EventCursor,
@@ -2455,6 +2457,73 @@ class CABITransportTests(unittest.TestCase):
             "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
         )
         self.assertEqual(raw.buffers, {})
+
+    def test_directory_subscribe_opens_runtime_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = DirectoryClient(CABIDirectoryTransport(lib, handle=7))
+
+        subscription = client.subscribe_directory(
+            DirectorySubscriptionRequest(
+                DirectoryQueryBase(
+                    caller_ura="easynet:///r/example/agent/alice.sdk",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/device/dev-a",
+                    descriptor_version="1.0.0",
+                    nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                    causal_context={"form": "none"},
+                ),
+                resume_cursor=DirectorySubscriptionCursor("directory", 8),
+            )
+        )
+
+        self.assertEqual(subscription.state, "Live")
+        self.assertEqual(subscription.cursor.resume_token(), "directory:8")
+        self.assertEqual(subscription.resume_token, "directory:8")
+        self.assertEqual(subscription.events, ())
+        self.assertEqual(subscription.metadata["stream_ability"], "federation.subscribe_directory_v2")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_events_build_directory_subscription_invocation"],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "stream_open")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["descriptor_ref"],
+            "easynet:///r/example/ability/"
+            "device.dev-a.federation.subscribe_directory_v2@1.0.0",
+        )
+        self.assertEqual(raw.stream_closes, [])
+
+        subscription.close()
+
+        self.assertEqual(subscription.state, "Closed")
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
+        self.assertEqual(raw.buffers, {})
+
+    def test_directory_client_close_closes_subscription_runtime_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = DirectoryClient(CABIDirectoryTransport(lib, handle=7))
+
+        client.subscribe_directory(
+            DirectorySubscriptionRequest(
+                DirectoryQueryBase(
+                    caller_ura="easynet:///r/example/agent/alice.sdk",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/device/dev-a",
+                    descriptor_version="1.0.0",
+                    nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                    causal_context={"form": "none"},
+                ),
+            )
+        )
+        client.close()
+
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
 
     def test_publication_list_uses_carrier_invoke_and_projection(self) -> None:
         raw = FakeRawCABI()
