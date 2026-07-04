@@ -94,7 +94,7 @@ method spelling.
   terminal, remote desktop, browser, and media session DTOs; execution helpers,
   backend HTTP/WebSocket bridges, storage policy, and language facades remain
   incomplete.
-- Go package exposes Runtime Core feature/version discovery, runtime connection
+- Go package exposes Runtime Core feature/version discovery with root client close, runtime connection
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
   detach/open-runtime/connect-local state seams, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
@@ -161,7 +161,7 @@ method spelling.
   helper seams, and record projections; backend HTTP/WebSocket bridges, storage
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
-- Python package exposes Runtime Core feature/version discovery, runtime
+- Python package exposes Runtime Core feature/version discovery with root client close, runtime
   connection state, DaemonHandle lifecycle status/endpoints/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, schema-backed typed SDK error projection, complete Invocation draft

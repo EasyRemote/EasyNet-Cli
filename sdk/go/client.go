@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // DiscoveryTransport supplies Runtime Core feature discovery JSON.
@@ -13,6 +14,7 @@ import (
 // handles, or raw daemon sockets.
 type DiscoveryTransport interface {
 	FeatureDiscovery(ctx context.Context) ([]byte, error)
+	Close(ctx context.Context) error
 }
 
 // DiscoveryTransportFunc adapts a function into a DiscoveryTransport.
@@ -22,9 +24,15 @@ func (f DiscoveryTransportFunc) FeatureDiscovery(ctx context.Context) ([]byte, e
 	return f(ctx)
 }
 
+func (f DiscoveryTransportFunc) Close(ctx context.Context) error {
+	return nil
+}
+
 // Client is the Go Runtime Core facade root.
 type Client struct {
+	mu        sync.Mutex
 	transport DiscoveryTransport
+	closed    bool
 }
 
 // NewClient creates a Go SDK client over a daemon discovery transport.
@@ -39,6 +47,48 @@ func NewClient(transport DiscoveryTransport) (*Client, error) {
 		}
 	}
 	return &Client{transport: transport}, nil
+}
+
+func (c *Client) discoveryTransport(ctx context.Context) (DiscoveryTransport, error) {
+	if c == nil {
+		return nil, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "client is not initialized",
+		}
+	}
+	if ctx == nil {
+		return nil, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "context is required",
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "client is closed",
+		}
+	}
+	if c.transport == nil {
+		return nil, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "client is not initialized",
+		}
+	}
+	return c.transport, nil
 }
 
 // FeatureSet is the language-neutral SDK feature discovery DTO.
@@ -66,25 +116,11 @@ type Version struct {
 
 // FeatureDiscovery reads and decodes daemon SDK feature discovery.
 func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
-	if c == nil || c.transport == nil {
-		return FeatureSet{}, &SDKError{
-			Code:      ErrorInvalidArgument,
-			Stage:     "sdk",
-			Retry:     RetryNever,
-			Retryable: RetryableForHint(RetryNever),
-			Message:   "client is not initialized",
-		}
+	transport, err := c.discoveryTransport(ctx)
+	if err != nil {
+		return FeatureSet{}, err
 	}
-	if ctx == nil {
-		return FeatureSet{}, &SDKError{
-			Code:      ErrorInvalidArgument,
-			Stage:     "sdk",
-			Retry:     RetryNever,
-			Retryable: RetryableForHint(RetryNever),
-			Message:   "context is required",
-		}
-	}
-	raw, err := c.transport.FeatureDiscovery(ctx)
+	raw, err := transport.FeatureDiscovery(ctx)
 	if err != nil {
 		return FeatureSet{}, &SDKError{
 			Code:      ErrorTransport,
@@ -122,6 +158,58 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 		features.Symbols = map[string]bool{}
 	}
 	return features, nil
+}
+
+// Close releases the SDK discovery boundary without stopping the daemon.
+func (c *Client) Close(ctx context.Context) error {
+	if c == nil {
+		return &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "client is not initialized",
+		}
+	}
+	if ctx == nil {
+		return &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "context is required",
+		}
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	transport := c.transport
+	c.closed = true
+	c.transport = nil
+	c.mu.Unlock()
+
+	if transport == nil {
+		return &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "client is not initialized",
+		}
+	}
+	if err := transport.Close(ctx); err != nil {
+		return &SDKError{
+			Code:      ErrorTransport,
+			Stage:     "transport",
+			Retry:     RetrySafe,
+			Retryable: RetryableForHint(RetrySafe),
+			Message:   "client close transport failed",
+			Cause:     err,
+		}
+	}
+	return nil
 }
 
 // RequireABI reads feature discovery and fails with VersionIncompatible when

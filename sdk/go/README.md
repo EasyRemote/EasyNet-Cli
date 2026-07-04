@@ -11,7 +11,7 @@ Directory + Identity, Receipt, Publication, Host Binding, Mission,
 Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compatibility
 OpenAI adapter seam, and Convenience Wrapper execution seam
 partial. The package exposes typed
-feature/version discovery, runtime connection state, runtime health readiness
+feature/version discovery with root client close, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
 detach/open-runtime/connect-local state seams, schema-backed SDK error projection, complete
 Invocation draft construction, prepared/signed Invocation DTOs, unary

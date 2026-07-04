@@ -16,6 +16,9 @@ class DiscoveryTransport(Protocol):
     def feature_discovery(self) -> bytes:
         """Return raw feature discovery JSON bytes from a daemon SDK boundary."""
 
+    def close(self) -> None:
+        """Release discovery transport resources."""
+
 
 @dataclass(frozen=True)
 class Version:
@@ -49,14 +52,16 @@ class Client:
                 stage="sdk",
                 retry=RetryHint.NEVER,
                 message="discovery transport is required",
-            )
+        )
         self._transport = transport
+        self._closed = False
 
     def feature_discovery(self) -> FeatureSet:
         """Read and decode daemon SDK feature discovery."""
 
+        transport = self._require_open()
         try:
-            raw = self._transport.feature_discovery()
+            raw = transport.feature_discovery()
         except SDKError:
             raise
         except Exception as exc:
@@ -118,6 +123,37 @@ class Client:
             symbols=symbols,
             axon_pb=axon_pb,
         )
+
+    def close(self) -> None:
+        """Release the SDK discovery boundary without stopping the daemon."""
+
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._transport.close()
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise SDKError(
+                code=ErrorCode.TRANSPORT,
+                stage="transport",
+                retry=RetryHint.SAFE,
+                retryable=retryable_for_hint(RetryHint.SAFE),
+                message="client close transport failed",
+                cause=exc,
+            ) from exc
+
+    def _require_open(self) -> DiscoveryTransport:
+        if self._closed:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                retryable=retryable_for_hint(RetryHint.NEVER),
+                message="client is closed",
+            )
+        return self._transport
 
     def require_abi(self, expected: int) -> FeatureSet:
         """Return feature discovery or raise VersionIncompatible."""
