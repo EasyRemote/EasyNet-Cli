@@ -18,6 +18,7 @@ from easynet_sdk import (
     CompatibilityFileRequest,
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
+    CompatibilityStreamChatCompletionRequest,
     AbilityQuery,
     AbilityDeployRequest,
     AgentQuery,
@@ -795,6 +796,8 @@ class FakeRawCABI:
             return COMPAT_LIST_MODELS_INVOCATION
         if symbol == "easynet_compatibility_build_chat_completion_invocation":
             return COMPAT_CHAT_COMPLETION_INVOCATION
+        if symbol == "easynet_compatibility_build_stream_chat_completion_invocation":
+            return COMPAT_STREAM_CHAT_COMPLETION_INVOCATION
         if symbol == "easynet_compatibility_build_file_upload_invocation":
             return COMPAT_FILE_UPLOAD_INVOCATION
         if symbol == "easynet_compatibility_build_file_retrieve_invocation":
@@ -1448,6 +1451,22 @@ COMPAT_CHAT_COMPLETION_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+COMPAT_STREAM_CHAT_COMPLETION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"request":{"model":"easynet:///r/example/ability/alice.codex.chat",'
+    b'"messages":[{"role":"user","content":"reply with: ok"}],'
+    b'"stream":true}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"compatibility",'
+    b'"system_ability":"openai.chat_completions",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 COMPAT_FILE_UPLOAD_INVOCATION = (
     b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
     b'"callee_ura":"easynet:///r/example/device/dev-a",'
@@ -1515,7 +1534,17 @@ COMPAT_CHAT_PROJECTION = (
 
 COMPAT_STREAM_PROJECTION = (
     b'{"profile":"compatibility","kind":"chat_completion_stream",'
-    b'"chunks":[],"metadata":{}}'
+    b'"stream":true,"items":[{"profile":"compatibility",'
+    b'"kind":"chat_completion_chunk","id":"chatcmpl-stream-example",'
+    b'"object":"chat.completion.chunk","created":1,'
+    b'"model":"easynet:///r/example/ability/alice.codex.chat",'
+    b'"choices":[{"index":0,"delta":{"content":"ok"},'
+    b'"finish_reason":null}],"usage":null,'
+    b'"metadata":{"profile":"compatibility",'
+    b'"source":"openai.chat_completions"}}],'
+    b'"done_sentinel":"[DONE]",'
+    b'"metadata":{"profile":"compatibility",'
+    b'"source":"openai.chat_completions"}}'
 )
 
 COMPAT_FILE_PROJECTION = (
@@ -2333,6 +2362,101 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.profile_requests[5][2]["purpose"], "batch")
         self.assertEqual(raw.profile_requests[7][2]["id"], "file-easynet-docs-1")
         self.assertTrue(raw.profile_requests[9][2]["deleted"])
+        self.assertEqual(raw.buffers, {})
+
+    def test_compatibility_stream_chat_uses_runtime_stream_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = [
+            (
+                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
+                b'"payload_json":{"id":"chatcmpl-stream-example",'
+                b'"object":"chat.completion.chunk","created":1,'
+                b'"model":"easynet:///r/example/ability/alice.codex.chat",'
+                b'"choices":[{"index":0,"delta":{"content":"ok"},'
+                b'"finish_reason":null}]}}'
+            ),
+            b'{"sequence":2,"kind":"terminal","state":"Completed","terminal":true}',
+        ]
+        lib = CLILibrary(raw)
+        client = CompatibilityClient(CABICompatibilityTransport(lib, handle=7))
+        base = CompatibilityCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            auth_token="tok_example",
+        )
+
+        stream = client.stream_chat_completion(
+            CompatibilityStreamChatCompletionRequest(
+                base=base,
+                request={
+                    "model": "easynet:///r/example/ability/alice.codex.chat",
+                    "messages": [{"role": "user", "content": "reply with: ok"}],
+                },
+            )
+        )
+
+        self.assertTrue(stream.stream)
+        self.assertEqual(stream.done_sentinel, "[DONE]")
+        self.assertEqual(stream.items[0].choices[0]["delta"]["content"], "ok")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_compatibility_build_stream_chat_completion_invocation",
+                "easynet_compatibility_project_chat_stream",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "stream_open")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "openai.chat_completions",
+        )
+        self.assertTrue(raw.runtime_requests[0][1]["args"]["request"]["stream"])
+        self.assertEqual(
+            raw.profile_requests[1][2]["chunks"][0]["id"],
+            "chatcmpl-stream-example",
+        )
+        self.assertEqual(raw.profile_requests[1][2]["done_sentinel"], "[DONE]")
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
+        self.assertEqual(raw.buffers, {})
+
+    def test_compatibility_stream_chat_timeout_closes_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        transport = CABICompatibilityTransport(lib, handle=7)
+        transport.stream_recv_timeout = 0.001
+        base = CompatibilityCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            auth_token="tok_example",
+        )
+        request = CompatibilityStreamChatCompletionRequest(
+            base=base,
+            request={
+                "model": "easynet:///r/example/ability/alice.codex.chat",
+                "messages": [{"role": "user", "content": "reply with: ok"}],
+            },
+        )
+
+        with self.assertRaises(TimeoutError):
+            transport.stream_chat_completion(request.to_json_bytes())
+
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_compatibility_build_stream_chat_completion_invocation"],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "stream_open")
+        self.assertEqual(raw.stream_closes, [404])
+        self.assertEqual(raw.stream_cancels, [])
         self.assertEqual(raw.buffers, {})
 
     def test_wrapper_live_helpers_use_carrier_invoke_and_projection(self) -> None:

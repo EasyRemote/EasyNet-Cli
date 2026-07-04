@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
+from .stream import StreamHandle
 
 EXPECTED_ABI_VERSION = 4
 EASYNET_OK = 0
@@ -805,6 +806,18 @@ class _CABIProfileTransport:
             )
         return output
 
+    def _open_runtime_stream(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+    ) -> StreamHandle:
+        handle = self._require_open()
+        draft_json = self.lib.json_handle_output(build_symbol, handle, request_json)
+        runtime = CABIRuntimeTransport(self.lib, handle)
+        stream_transport, open_json = runtime.open_stream(draft_json)
+        return StreamHandle.from_json(stream_transport, open_json)
+
     def _missing(self, method: str) -> bytes:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,
@@ -1316,7 +1329,45 @@ class CABICompatibilityTransport(_CABIProfileTransport):
         )
 
     def stream_chat_completion(self, request_json: bytes) -> bytes:
-        return self._missing("compatibility stream chat completion")
+        stream = self._open_runtime_stream(
+            request_json,
+            build_symbol="easynet_compatibility_build_stream_chat_completion_invocation",
+        )
+        failed = False
+        try:
+            chunks: list[object] = []
+            while True:
+                event = stream.next(getattr(self, "stream_recv_timeout", None))
+                if event.error is not None:
+                    raise _profile_stream_protocol_error(
+                        "compatibility stream event carried an error", event.error
+                    )
+                if event.terminal:
+                    break
+                if event.payload_json is None:
+                    raise _profile_stream_protocol_error(
+                        "compatibility stream chunk is missing payload_json",
+                        {"sequence": event.sequence, "kind": event.kind},
+                    )
+                chunks.append(event.payload_json)
+            return self.project_chat_stream(
+                _json_bytes(
+                    {
+                        "stream": True,
+                        "chunks": chunks,
+                        "done_sentinel": "[DONE]",
+                    }
+                )
+            )
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                stream.close()
+            except SDKError:
+                if not failed:
+                    raise
 
     def upload_file(self, request_json: bytes) -> bytes:
         return self._invoke_output_projected(
@@ -2510,6 +2561,18 @@ def _prepared_key(decoded: dict[str, object]) -> str:
         stage="sdk",
         retry=RetryHint.NEVER,
         message="prepared_id or request_id is required",
+    )
+
+
+def _profile_stream_protocol_error(message: str, details: object) -> SDKError:
+    detail_value = details if isinstance(details, dict) else {"error": details}
+    return SDKError(
+        code=ErrorCode.PROTOCOL,
+        stage="cabi",
+        retry=RetryHint.NEVER,
+        retryable=False,
+        message=message,
+        details=detail_value,
     )
 
 
