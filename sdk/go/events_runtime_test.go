@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -255,6 +256,115 @@ func TestRuntimeEventsListsDeviceHistoryThroughRuntime(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventsDelegatesFrameProjectionsToProvider(t *testing.T) {
+	runtimeClient, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	identityClient, err := NewIdentityClient(&compatibilityRuntimeIdentityTransport{})
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	seen := map[string]map[string]any{}
+	provider := EventTransportFunc{
+		ProjectDirectoryEventFunc: func(ctx context.Context, eventJSON []byte) ([]byte, error) {
+			var request map[string]any
+			if err := json.Unmarshal(eventJSON, &request); err != nil {
+				return nil, err
+			}
+			seen["directory"] = request
+			return []byte(eventsRuntimeDirectoryFrameJSON), nil
+		},
+		ProjectDropReportFunc: func(ctx context.Context, dropJSON []byte) ([]byte, error) {
+			var request map[string]any
+			if err := json.Unmarshal(dropJSON, &request); err != nil {
+				return nil, err
+			}
+			seen["drop"] = request
+			return []byte(eventsRuntimeDropFrameJSON), nil
+		},
+		ProjectTerminalFunc: func(ctx context.Context, terminalJSON []byte) ([]byte, error) {
+			var request map[string]any
+			if err := json.Unmarshal(terminalJSON, &request); err != nil {
+				return nil, err
+			}
+			seen["terminal"] = request
+			return []byte(eventsRuntimeTerminalFrameJSON), nil
+		},
+	}
+	client, err := NewRuntimeEventClientWithProjectionProvider(runtimeClient, identityClient, provider)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClientWithProjectionProvider: %v", err)
+	}
+	cursor, err := NewEventCursor("directory", 1)
+	if err != nil {
+		t.Fatalf("NewEventCursor: %v", err)
+	}
+	reconnectAfterMS := 1000
+
+	directory, err := client.ProjectDirectoryEvent(context.Background(), EventProjectionInput{
+		Cursor: cursor,
+		Event:  map[string]any{"kind": "directory_delta"},
+	})
+	if err != nil {
+		t.Fatalf("ProjectDirectoryEvent: %v", err)
+	}
+	drop, err := client.ProjectDropReport(context.Background(), EventDropReportInput{
+		Cursor:           cursor,
+		OccurredUnixMS:   1001,
+		DroppedCount:     3,
+		ReconnectAfterMS: &reconnectAfterMS,
+	})
+	if err != nil {
+		t.Fatalf("ProjectDropReport: %v", err)
+	}
+	terminal, err := client.ProjectTerminal(context.Background(), EventTerminalInput{
+		Cursor:           cursor,
+		OccurredUnixMS:   1002,
+		ReconnectAfterMS: &reconnectAfterMS,
+		Reason:           "closed",
+	})
+	if err != nil {
+		t.Fatalf("ProjectTerminal: %v", err)
+	}
+
+	if directory.EventID != "evt-directory-runtime" || drop.DroppedCount != 3 || !terminal.Terminal {
+		t.Fatalf("unexpected frames: directory=%#v drop=%#v terminal=%#v", directory, drop, terminal)
+	}
+	if seen["directory"]["event"] == nil || seen["drop"]["dropped_count"].(float64) != 3 || seen["terminal"]["reason"] != "closed" {
+		t.Fatalf("provider requests = %#v", seen)
+	}
+}
+
+func TestRuntimeEventsProjectionMethodsFailClosedWithoutProvider(t *testing.T) {
+	runtimeClient, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	identityClient, err := NewIdentityClient(&compatibilityRuntimeIdentityTransport{})
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	client, err := NewRuntimeEventClient(runtimeClient, identityClient)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClient: %v", err)
+	}
+	cursor, err := NewEventCursor("directory", 1)
+	if err != nil {
+		t.Fatalf("NewEventCursor: %v", err)
+	}
+
+	if _, err := client.ProjectDirectoryEvent(context.Background(), EventProjectionInput{Cursor: cursor, Event: map[string]any{"kind": "directory_delta"}}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ProjectDirectoryEvent error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := client.ProjectDropReport(context.Background(), EventDropReportInput{Cursor: cursor, OccurredUnixMS: 1, DroppedCount: 1}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ProjectDropReport error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := client.ProjectTerminal(context.Background(), EventTerminalInput{Cursor: cursor, OccurredUnixMS: 1}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ProjectTerminal error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestRuntimeEventsRejectsDeviceHistoryForDifferentDevice(t *testing.T) {
 	identityTransport := &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
@@ -309,6 +419,60 @@ const eventsRuntimeDeviceHistoryRawJSON = `{
       "payload": {"state": "offline"}
     }
   ]
+}`
+
+const eventsRuntimeDirectoryFrameJSON = `{
+  "profile": "events",
+  "stream": "directory",
+  "kind": "directory_delta",
+  "event_id": "evt-directory-runtime",
+  "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+  "resume_token": "directory:1",
+  "occurred_unix_ms": 1000,
+  "occurred_at": "1970-01-01T00:00:01Z",
+  "subject_ref": {"kind": "directory"},
+  "tenant_ref": null,
+  "payload": {"op": "upsert"},
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": false,
+  "metadata": {"source": "runtime_projection_provider"}
+}`
+
+const eventsRuntimeDropFrameJSON = `{
+  "profile": "events",
+  "stream": "directory",
+  "kind": "directory_drop_report",
+  "event_id": "evt-directory-drop-runtime",
+  "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+  "resume_token": "directory:1",
+  "occurred_unix_ms": 1001,
+  "occurred_at": "1970-01-01T00:00:01.001Z",
+  "subject_ref": {"kind": "directory"},
+  "tenant_ref": null,
+  "payload": null,
+  "dropped_count": 3,
+  "reconnect_after_ms": 1000,
+  "terminal": false,
+  "metadata": {"source": "runtime_projection_provider"}
+}`
+
+const eventsRuntimeTerminalFrameJSON = `{
+  "profile": "events",
+  "stream": "directory",
+  "kind": "directory_terminal",
+  "event_id": "evt-directory-terminal-runtime",
+  "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+  "resume_token": "directory:1",
+  "occurred_unix_ms": 1002,
+  "occurred_at": "1970-01-01T00:00:01.002Z",
+  "subject_ref": {"kind": "directory"},
+  "tenant_ref": null,
+  "payload": {"reason": "closed"},
+  "dropped_count": 0,
+  "reconnect_after_ms": 1000,
+  "terminal": true,
+  "metadata": {"source": "runtime_projection_provider"}
 }`
 
 const eventsRuntimeDeviceHistoryDifferentDeviceJSON = `{

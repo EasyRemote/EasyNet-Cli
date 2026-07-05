@@ -31,13 +31,27 @@ var eventsCarrierArgKeys = map[string]struct{}{
 // EventsRuntimeTransport lowers Events profile requests into Runtime Core
 // Invocation drafts. Stream ownership stays with RuntimeClient.InvokeStream.
 type EventsRuntimeTransport struct {
-	runtime  *RuntimeClient
-	identity *IdentityClient
-	mu       sync.Mutex
-	streams  map[string]*StreamHandle
+	runtime            *RuntimeClient
+	identity           *IdentityClient
+	projectionProvider EventsProjectionProvider
+	mu                 sync.Mutex
+	streams            map[string]*StreamHandle
+}
+
+// EventsProjectionProvider supplies daemon-owned EventFrame projections to the
+// Runtime-backed Events facade. Runtime Core remains responsible for opening
+// and draining streams.
+type EventsProjectionProvider interface {
+	ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
+	ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error)
+	ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error)
 }
 
 func NewEventsRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*EventsRuntimeTransport, error) {
+	return NewEventsRuntimeTransportWithProjectionProvider(runtime, identity, nil)
+}
+
+func NewEventsRuntimeTransportWithProjectionProvider(runtime *RuntimeClient, identity *IdentityClient, projectionProvider EventsProjectionProvider) (*EventsRuntimeTransport, error) {
 	if runtime == nil {
 		return nil, invalidProfileClient(eventsProfile, "runtime client is required")
 	}
@@ -45,14 +59,19 @@ func NewEventsRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient)
 		return nil, invalidProfileClient(eventsProfile, "identity client is required")
 	}
 	return &EventsRuntimeTransport{
-		runtime:  runtime,
-		identity: identity,
-		streams:  map[string]*StreamHandle{},
+		runtime:            runtime,
+		identity:           identity,
+		projectionProvider: projectionProvider,
+		streams:            map[string]*StreamHandle{},
 	}, nil
 }
 
 func NewRuntimeEventClient(runtime *RuntimeClient, identity *IdentityClient) (*EventClient, error) {
-	transport, err := NewEventsRuntimeTransport(runtime, identity)
+	return NewRuntimeEventClientWithProjectionProvider(runtime, identity, nil)
+}
+
+func NewRuntimeEventClientWithProjectionProvider(runtime *RuntimeClient, identity *IdentityClient, projectionProvider EventsProjectionProvider) (*EventClient, error) {
+	transport, err := NewEventsRuntimeTransportWithProjectionProvider(runtime, identity, projectionProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -114,16 +133,49 @@ func (t *EventsRuntimeTransport) ListDeviceEvents(ctx context.Context, requestJS
 	return projectRuntimeDeviceEventPage(request, outputJSON)
 }
 
-func (t *EventsRuntimeTransport) ProjectDirectoryEvent(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events directory projection is daemon-owned and not implemented by the runtime transport")
+func (t *EventsRuntimeTransport) ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.ProjectDirectoryEvent(ctx, eventJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewEventFrameFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func (t *EventsRuntimeTransport) ProjectDropReport(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events drop-report projection is daemon-owned and not implemented by the runtime transport")
+func (t *EventsRuntimeTransport) ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.ProjectDropReport(ctx, dropJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewEventFrameFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func (t *EventsRuntimeTransport) ProjectTerminal(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events terminal projection is daemon-owned and not implemented by the runtime transport")
+func (t *EventsRuntimeTransport) ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.ProjectTerminal(ctx, terminalJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewEventFrameFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func (t *EventsRuntimeTransport) Close(ctx context.Context) error {
@@ -147,6 +199,16 @@ func (t *EventsRuntimeTransport) Close(ctx context.Context) error {
 		}
 	}
 	return first
+}
+
+func (t *EventsRuntimeTransport) requireProjectionProvider(ctx context.Context) (EventsProjectionProvider, error) {
+	if ctx == nil {
+		return nil, invalidProfileClient(eventsProfile, "context is required")
+	}
+	if t == nil || t.projectionProvider == nil {
+		return nil, invalidProfileClient(eventsProfile, "events runtime projection provider is required")
+	}
+	return t.projectionProvider, nil
 }
 
 func (t *EventsRuntimeTransport) buildSubscriptionInvocationJSON(ctx context.Context, requestJSON []byte, stream EventStreamKind) ([]byte, error) {
