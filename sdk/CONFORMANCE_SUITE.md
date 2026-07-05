@@ -14,6 +14,8 @@ sdk/conformance/
     *.json
   runner/
     README.md
+    go-action-adapter-report.json
+    python-action-adapter-report.json
 ```
 
 Cases are declarative. Fixtures are golden DTO payloads validated against
@@ -51,6 +53,9 @@ A language runner must:
   for that language.
 - Emit machine-readable results with `case_id`, `language`, `profile`,
   `status`, and `error_code`.
+- Provide an action-adapter report for provider-backed language parity claims.
+  The shared runner validates that every required case has a passed adapter
+  record and repository-local evidence.
 
 Go and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
@@ -65,6 +70,8 @@ replace the shared case-aware parity gate.
 ```text
 cargo run --bin sdk-conformance-runner -- --language rust --format jsonl
 cargo run --bin sdk-conformance-runner -- --language c_abi --format jsonl
+cargo run --bin sdk-conformance-runner -- --language go --adapter-report sdk/conformance/runner/go-action-adapter-report.json --format jsonl
+cargo run --bin sdk-conformance-runner -- --language python --adapter-report sdk/conformance/runner/python-action-adapter-report.json --format jsonl
 cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh

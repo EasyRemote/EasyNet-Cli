@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | provider-backed Runtime Core substrate; language parity tracked through FFI and future Rust SDK public matrix |
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers |
-| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for conformance runner |
-| Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for conformance runner |
+| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
+| Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
 | Swift | P1 | macOS/iOS-adjacent clients | unsupported |
@@ -44,7 +44,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
 | compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
 | wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete. |
-| conformance runner | SDK Parity | seam | seam | Daemon-backed behavior-executing action adapters over the full case manifest remain incomplete. |
+| conformance runner | SDK Parity | provider-backed | provider-backed | Non-P0 language action-adapter reports and external product cutover smokes remain incomplete outside the Go/Python SDK parity gate. |
 
 ## Known Gaps
 
@@ -421,14 +421,16 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   records current capability gaps and rejects product-specific capability rows
   so external product cutover work does not become language SDK structure.
 - Go and Python now consume shared SDK conformance cases and fixtures for
-  selected local facade/projection actions covering Runtime Core
+  local facade/projection actions covering Runtime Core
   Invocation/health, Directory + Identity read-model/projection behavior,
   Mission carrier/status behavior, Publication ResourceRef/package/carrier
   behavior, Admin + Gateway carrier/status behavior, Events directory-stream
   behavior, Surface page carrier/projection behavior, Compatibility OpenAI
   carrier/projection behavior, Host Binding codec/hash behavior, Receipt
-  projection, and Wrapper record projection. Daemon-backed behavior-executing
-  action adapters over the full case manifest remain incomplete.
+  projection, and Wrapper record projection. The shared conformance runner now
+  validates Go/Python action-adapter reports against every required shared case,
+  while non-P0 language adapter reports and external product cutover smokes
+  remain incomplete.
 
 ## Capability States
 

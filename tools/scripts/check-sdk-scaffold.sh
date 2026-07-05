@@ -95,6 +95,8 @@ for path in \
   tools/scripts/check-sdk-parity-matrix.sh \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/sdk-parity-matrix.json \
+  sdk/conformance/runner/go-action-adapter-report.json \
+  sdk/conformance/runner/python-action-adapter-report.json \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/_cabi.py \
@@ -152,6 +154,8 @@ require_dir sdk/conformance/fixtures
 require_dir sdk/conformance/runner
 validate_json_file sdk/conformance/backend-route-family-coverage.json
 validate_json_file sdk/conformance/sdk-parity-matrix.json
+validate_json_file sdk/conformance/runner/go-action-adapter-report.json
+validate_json_file sdk/conformance/runner/python-action-adapter-report.json
 
 schema_files=(
   invocation.schema.json
@@ -162,6 +166,9 @@ schema_files=(
   health.schema.json
   events.schema.json
   events-directory-subscription-request.schema.json
+  events-device-subscription-request.schema.json
+  events-invocation-subscription-request.schema.json
+  events-device-event-list-request.schema.json
   directory-list-devices-request.schema.json
   directory-list-agents-request.schema.json
   directory-list-abilities-request.schema.json
@@ -188,7 +195,9 @@ schema_files=(
   mission-run-file-request.schema.json
   mission-track-request.schema.json
   mission-cancel-request.schema.json
+  mission-events-request.schema.json
   mission-status.schema.json
+  mission-event-page.schema.json
   admin.schema.json
   gateway.schema.json
   agent-record.schema.json

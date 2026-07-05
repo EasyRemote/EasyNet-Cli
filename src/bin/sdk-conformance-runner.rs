@@ -29,13 +29,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Parser)]
@@ -55,6 +55,10 @@ struct Cli {
     /// Output format for result records.
     #[arg(long, value_enum, default_value_t = OutputFormat::Jsonl)]
     format: OutputFormat,
+
+    /// Optional language action-adapter report to validate against required cases.
+    #[arg(long)]
+    adapter_report: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -81,7 +85,7 @@ struct ConformanceResultRecord {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ConformanceStatus {
     Passed,
@@ -89,9 +93,32 @@ enum ConformanceStatus {
     Skipped,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct AdapterReport {
+    schema_version: u64,
+    language: String,
+    adapter_kind: String,
+    records: Vec<AdapterResultRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AdapterResultRecord {
+    case_id: String,
+    profile: String,
+    status: ConformanceStatus,
+    evidence: Vec<AdapterEvidence>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AdapterEvidence {
+    kind: String,
+    ref_path: String,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let records = run_manifest(&cli.root, &cli.language)?;
+    let records = run_manifest(&cli.root, &cli.language, cli.adapter_report.as_deref())?;
     emit_records(&records, cli.format)?;
 
     if records
@@ -103,8 +130,16 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_manifest(root: &Path, language: &str) -> Result<Vec<ConformanceResultRecord>> {
+fn run_manifest(
+    root: &Path,
+    language: &str,
+    adapter_report_path: Option<&Path>,
+) -> Result<Vec<ConformanceResultRecord>> {
     let cases = load_cases(root)?;
+    let adapter_report = adapter_report_path
+        .map(|path| load_adapter_report(root, language, path))
+        .transpose()?;
+    let adapter_report = adapter_report.as_ref().map(AdapterReportIndex::new);
     let duplicate_errors = duplicate_case_errors(&cases);
     let mut records = Vec::with_capacity(cases.len());
 
@@ -129,13 +164,16 @@ fn run_manifest(root: &Path, language: &str) -> Result<Vec<ConformanceResultReco
                 message: Some(format!("case is not declared for language `{language}`")),
             }
         } else if errors.is_empty() {
-            ConformanceResultRecord {
-                case_id: case.id,
-                language: language.to_string(),
-                profile: case.profile,
-                status: ConformanceStatus::Passed,
-                error_code: None,
-                message: None,
+            match adapter_report.as_ref() {
+                Some(report) => record_from_adapter(root, language, &case, report),
+                None => ConformanceResultRecord {
+                    case_id: case.id,
+                    language: language.to_string(),
+                    profile: case.profile,
+                    status: ConformanceStatus::Passed,
+                    error_code: None,
+                    message: None,
+                },
             }
         } else {
             ConformanceResultRecord {
@@ -151,6 +189,164 @@ fn run_manifest(root: &Path, language: &str) -> Result<Vec<ConformanceResultReco
     }
 
     Ok(records)
+}
+
+fn load_adapter_report(root: &Path, language: &str, path: &Path) -> Result<AdapterReport> {
+    let path = resolve_repo_path(root, path);
+    ensure_path_inside_root(root, &path).with_context(|| {
+        format!(
+            "adapter report {} must stay under repository root {}",
+            path.display(),
+            root.display()
+        )
+    })?;
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("read adapter report {}", path.display()))?;
+    let report: AdapterReport = serde_json::from_str(&raw)
+        .with_context(|| format!("decode adapter report {}", path.display()))?;
+    if report.schema_version != 1 {
+        anyhow::bail!("adapter report schema_version must be 1");
+    }
+    if report.language != language {
+        anyhow::bail!(
+            "adapter report language `{}` does not match requested language `{}`",
+            report.language,
+            language
+        );
+    }
+    if report.adapter_kind.trim().is_empty() {
+        anyhow::bail!("adapter report adapter_kind must not be empty");
+    }
+    let mut seen = BTreeSet::new();
+    for record in &report.records {
+        if record.case_id.trim().is_empty() {
+            anyhow::bail!("adapter record case_id must not be empty");
+        }
+        if record.profile.trim().is_empty() {
+            anyhow::bail!("adapter record profile must not be empty");
+        }
+        if !seen.insert(record.case_id.clone()) {
+            anyhow::bail!("duplicate adapter record case_id `{}`", record.case_id);
+        }
+        if record.evidence.is_empty() {
+            anyhow::bail!("adapter record `{}` must include evidence", record.case_id);
+        }
+        for evidence in &record.evidence {
+            validate_adapter_evidence(root, &record.case_id, evidence)?;
+        }
+    }
+    Ok(report)
+}
+
+#[derive(Debug)]
+struct AdapterReportIndex<'a> {
+    records: BTreeMap<&'a str, &'a AdapterResultRecord>,
+}
+
+impl<'a> AdapterReportIndex<'a> {
+    fn new(report: &'a AdapterReport) -> Self {
+        Self {
+            records: report
+                .records
+                .iter()
+                .map(|record| (record.case_id.as_str(), record))
+                .collect(),
+        }
+    }
+
+    fn find(&self, case_id: &str) -> Option<&'a AdapterResultRecord> {
+        self.records.get(case_id).copied()
+    }
+}
+
+fn validate_adapter_evidence(root: &Path, case_id: &str, evidence: &AdapterEvidence) -> Result<()> {
+    match evidence.kind.as_str() {
+        "go_test" | "python_test" | "rust_test" | "c_abi_test" | "runner_test" => {}
+        other => anyhow::bail!("adapter record `{case_id}` has unknown evidence kind `{other}`"),
+    }
+    let path = resolve_repo_path(root, Path::new(&evidence.ref_path));
+    ensure_path_inside_root(root, &path)
+        .with_context(|| format!("validate adapter evidence {}", path.display()))
+}
+
+fn resolve_repo_path(root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn ensure_path_inside_root(root: &Path, path: &Path) -> Result<()> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("canonicalize root {}", root.display()))?;
+    let canonical_path = path
+        .canonicalize()
+        .with_context(|| format!("missing {}", path.display()))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        anyhow::bail!("path escapes repository root");
+    }
+    Ok(())
+}
+
+fn record_from_adapter(
+    root: &Path,
+    language: &str,
+    case: &ConformanceCase,
+    report: &AdapterReportIndex<'_>,
+) -> ConformanceResultRecord {
+    let Some(adapter) = report.find(&case.id) else {
+        return ConformanceResultRecord {
+            case_id: case.id.clone(),
+            language: language.to_string(),
+            profile: case.profile.clone(),
+            status: ConformanceStatus::Failed,
+            error_code: Some("ACTION_ADAPTER_MISSING"),
+            message: Some(format!(
+                "adapter report missing required case `{}`",
+                case.id
+            )),
+        };
+    };
+    let mut errors = Vec::new();
+    if adapter.profile != case.profile {
+        errors.push(format!(
+            "adapter profile `{}` does not match case profile `{}`",
+            adapter.profile, case.profile
+        ));
+    }
+    if adapter.status != ConformanceStatus::Passed {
+        errors.push(format!(
+            "adapter status is {:?}: {}",
+            adapter.status,
+            adapter.message.clone().unwrap_or_default()
+        ));
+    }
+    for evidence in &adapter.evidence {
+        if let Err(err) = validate_adapter_evidence(root, &adapter.case_id, evidence) {
+            errors.push(err.to_string());
+        }
+    }
+    if errors.is_empty() {
+        ConformanceResultRecord {
+            case_id: case.id.clone(),
+            language: language.to_string(),
+            profile: case.profile.clone(),
+            status: ConformanceStatus::Passed,
+            error_code: None,
+            message: None,
+        }
+    } else {
+        ConformanceResultRecord {
+            case_id: case.id.clone(),
+            language: language.to_string(),
+            profile: case.profile.clone(),
+            status: ConformanceStatus::Failed,
+            error_code: Some("ACTION_ADAPTER_FAILED"),
+            message: Some(errors.join("; ")),
+        }
+    }
 }
 
 fn load_cases(root: &Path) -> Result<Vec<ConformanceCase>> {
@@ -350,12 +546,16 @@ mod tests {
     #[test]
     fn runner_accepts_repo_manifest_for_rust() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let records = run_manifest(root, "rust").expect("runner manifest");
+        let records = run_manifest(root, "rust", None).expect("runner manifest");
 
         assert!(!records.is_empty());
         assert!(records
             .iter()
-            .all(|record| record.status == ConformanceStatus::Passed));
+            .all(|record| record.status != ConformanceStatus::Failed));
+        assert!(records.iter().any(|record| {
+            record.status == ConformanceStatus::Skipped
+                && record.error_code == Some("PROFILE_UNDECLARED")
+        }));
     }
 
     #[test]
@@ -381,7 +581,7 @@ expect:
         )
         .unwrap();
 
-        let records = run_manifest(root.path(), "rust").expect("runner manifest");
+        let records = run_manifest(root.path(), "rust", None).expect("runner manifest");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, ConformanceStatus::Failed);
@@ -391,5 +591,105 @@ expect:
             .as_deref()
             .unwrap_or_default()
             .contains("missing.v4.json"));
+    }
+
+    #[test]
+    fn runner_validates_language_adapter_report() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let report = root.join("sdk/conformance/runner/go-action-adapter-report.json");
+        let records =
+            run_manifest(root, "go", Some(&report)).expect("runner validates adapter report");
+
+        let required: Vec<_> = records
+            .iter()
+            .filter(|record| record.language == "go" && record.status != ConformanceStatus::Skipped)
+            .collect();
+        assert!(!required.is_empty());
+        assert!(required
+            .iter()
+            .all(|record| record.status == ConformanceStatus::Passed));
+    }
+
+    #[test]
+    fn runner_reports_missing_required_adapter_record() {
+        let root = tempfile::tempdir().expect("tempdir");
+        create_minimal_case_root(root.path(), "go");
+        let report = root.path().join("adapter.json");
+        fs::write(
+            &report,
+            r#"{
+  "schema_version": 1,
+  "language": "go",
+  "adapter_kind": "unit_test",
+  "records": []
+}"#,
+        )
+        .unwrap();
+
+        let records = run_manifest(root.path(), "go", Some(&report)).expect("runner manifest");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, ConformanceStatus::Failed);
+        assert_eq!(records[0].error_code, Some("ACTION_ADAPTER_MISSING"));
+    }
+
+    #[test]
+    fn runner_reports_failed_adapter_record() {
+        let root = tempfile::tempdir().expect("tempdir");
+        create_minimal_case_root(root.path(), "python");
+        let report = root.path().join("adapter.json");
+        fs::write(
+            &report,
+            r#"{
+  "schema_version": 1,
+  "language": "python",
+  "adapter_kind": "unit_test",
+  "records": [
+    {
+      "case_id": "test/minimal",
+      "profile": "runtime_core",
+      "status": "failed",
+      "evidence": [{"kind": "runner_test", "ref_path": "sdk/conformance/runner/README.md"}],
+      "message": "forced failure"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let records = run_manifest(root.path(), "python", Some(&report)).expect("runner manifest");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, ConformanceStatus::Failed);
+        assert_eq!(records[0].error_code, Some("ACTION_ADAPTER_FAILED"));
+        assert!(records[0]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("forced failure"));
+    }
+
+    fn create_minimal_case_root(root: &Path, language: &str) {
+        fs::create_dir_all(root.join("sdk/conformance/cases")).unwrap();
+        fs::create_dir_all(root.join("sdk/conformance/fixtures")).unwrap();
+        fs::create_dir_all(root.join("sdk/conformance/runner")).unwrap();
+        fs::create_dir_all(root.join("sdk/schemas")).unwrap();
+        fs::write(root.join("sdk/conformance/runner/README.md"), "# runner\n").unwrap();
+        fs::write(
+            root.join("sdk/conformance/cases/minimal.yaml"),
+            format!(
+                r#"
+id: test/minimal
+profile: runtime_core
+required_for:
+  - {language}
+steps:
+  - action: noop
+expect:
+  result: ok
+"#
+            ),
+        )
+        .unwrap();
     }
 }
