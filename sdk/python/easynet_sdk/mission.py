@@ -14,8 +14,8 @@ from .invocation import InvocationDraft
 
 
 _PROFILE = "mission"
-_EASYREMOTE_FAILURE_POLICIES = frozenset({"abort", "skip", "retry", "continue"})
-_EASYREMOTE_IDENTIFIER = re.compile(r"[^A-Za-z0-9_]")
+_MISSION_FAILURE_POLICIES = frozenset({"abort", "skip", "retry", "continue"})
+_MISSION_IDENTIFIER = re.compile(r"[^A-Za-z0-9_]")
 
 
 @dataclass(frozen=True)
@@ -414,8 +414,8 @@ MissionCancelResult = MissionStatus
 
 
 @dataclass(frozen=True)
-class EasyRemoteMissionRunProjection:
-    """EasyRemote-facing projection of daemon `mission.run`."""
+class MissionRunProjection:
+    """Mission profile projection of daemon `mission.run`."""
 
     run_id: str
     run_dir: str
@@ -423,7 +423,7 @@ class EasyRemoteMissionRunProjection:
     raw: Mapping[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_run(cls, run: MissionRun) -> "EasyRemoteMissionRunProjection":
+    def from_run(cls, run: MissionRun) -> "MissionRunProjection":
         status = run.status
         return cls(
             run_id=status.mission_id,
@@ -433,8 +433,8 @@ class EasyRemoteMissionRunProjection:
         )
 
 
-class EasyRemoteMissionEventTailer:
-    """EasyRemote-facing iterator over SDK Mission tail events."""
+class MissionEventProjectionTailer:
+    """Mission profile iterator over SDK Mission tail events."""
 
     def __init__(self, tailer: MissionEventTailer) -> None:
         self._tailer = tailer
@@ -446,13 +446,13 @@ class EasyRemoteMissionEventTailer:
     def close(self) -> None:
         self._tailer.close()
 
-    def __iter__(self) -> "EasyRemoteMissionEventTailer":
+    def __iter__(self) -> "MissionEventProjectionTailer":
         return self
 
     def __next__(self) -> Mapping[str, object]:
         return _event_projection(next(self._tailer))
 
-    def __enter__(self) -> "EasyRemoteMissionEventTailer":
+    def __enter__(self) -> "MissionEventProjectionTailer":
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -460,8 +460,8 @@ class EasyRemoteMissionEventTailer:
 
 
 @dataclass(frozen=True)
-class EasyRemotePipelineStepOutput:
-    """A dataflow reference to one Pipeline step result."""
+class MissionPlanStepOutput:
+    """A dataflow reference to one Mission plan step result."""
 
     alias: str
 
@@ -470,8 +470,8 @@ class EasyRemotePipelineStepOutput:
 
 
 @dataclass(frozen=True)
-class EasyRemotePipelineStep:
-    """One SDK-owned EasyRemote Pipeline step plan."""
+class MissionPlanStep:
+    """One SDK-owned Mission/EAL plan step."""
 
     alias: str
     ref: str
@@ -483,16 +483,16 @@ class EasyRemotePipelineStep:
     optional: bool = False
 
     @property
-    def output(self) -> EasyRemotePipelineStepOutput:
-        return EasyRemotePipelineStepOutput(self.alias)
+    def output(self) -> MissionPlanStepOutput:
+        return MissionPlanStepOutput(self.alias)
 
     def render(self) -> str:
-        parts = [f"let {self.alias} = call {_easyremote_eal_string(self.ref)}"]
+        parts = [f"let {self.alias} = call {_mission_eal_string(self.ref)}"]
         if self.on:
-            parts.append(f"on {_easyremote_eal_string(self.on)}")
+            parts.append(f"on {_mission_eal_string(self.on)}")
         if self.args:
             fields = ", ".join(
-                f"{name} = {_easyremote_eal_field(value)}"
+                f"{name} = {_mission_eal_field(value)}"
                 for name, value in self.args.items()
             )
             parts.append(f"with {{ {fields} }}")
@@ -508,8 +508,8 @@ class EasyRemotePipelineStep:
 
 
 @dataclass(frozen=True)
-class EasyRemotePipelineChildInvocationIntent:
-    """SDK projection of the child Invocation a Pipeline step expects."""
+class MissionChildInvocationIntent:
+    """SDK projection of the child Invocation a Mission plan step expects."""
 
     step_id: str
     ability: str
@@ -519,8 +519,8 @@ class EasyRemotePipelineChildInvocationIntent:
 
 
 @dataclass(frozen=True)
-class EasyRemotePipelineChildInvocationConformance:
-    """Result of matching daemon MissionStatus child facts to a Pipeline plan."""
+class MissionChildInvocationConformance:
+    """Result of matching daemon MissionStatus child facts to a Mission plan."""
 
     mission_id: str
     expected_steps: tuple[str, ...]
@@ -546,9 +546,9 @@ class EasyRemotePipelineChildInvocationConformance:
             stage="mission",
             retry=RetryHint.NEVER,
             retryable=False,
-            message="Pipeline child Invocation facts do not match planned steps",
+            message="Mission plan child Invocation facts do not match planned steps",
             details={
-                "reason": "pipeline_child_invocation_mismatch",
+                "reason": "mission_child_invocation_mismatch",
                 "mission_id": self.mission_id,
                 "missing_steps": list(self.missing_steps),
                 "unexpected_steps": list(self.unexpected_steps),
@@ -557,8 +557,8 @@ class EasyRemotePipelineChildInvocationConformance:
         )
 
 
-class EasyRemotePipelinePlan:
-    """SDK-owned EasyRemote Pipeline planning and EAL rendering facade."""
+class MissionPlan:
+    """SDK-owned Mission/EAL plan rendering facade."""
 
     def __init__(
         self,
@@ -567,14 +567,14 @@ class EasyRemotePipelinePlan:
         created_by: str = "",
         version: str = "",
     ) -> None:
-        self.name = _required_clean_mission_string(name, "pipeline name")
+        self.name = _required_clean_mission_string(name, "mission plan name")
         self.created_by = created_by.strip()
         self.version = version.strip()
-        self._steps: list[EasyRemotePipelineStep] = []
+        self._steps: list[MissionPlanStep] = []
         self._aliases: set[str] = set()
 
     @property
-    def steps(self) -> tuple[EasyRemotePipelineStep, ...]:
+    def steps(self) -> tuple[MissionPlanStep, ...]:
         return tuple(self._steps)
 
     def step(
@@ -587,24 +587,24 @@ class EasyRemotePipelinePlan:
         on_failure: str | None = None,
         optional: bool = False,
         args: Mapping[str, object] | None = None,
-    ) -> EasyRemotePipelineStep:
-        target_ref = _required_clean_mission_string(ref, "pipeline step target")
-        if on_failure is not None and on_failure not in _EASYREMOTE_FAILURE_POLICIES:
-            raise _invalid_pipeline(
+    ) -> MissionPlanStep:
+        target_ref = _required_clean_mission_string(ref, "mission step target")
+        if on_failure is not None and on_failure not in _MISSION_FAILURE_POLICIES:
+            raise _invalid_mission_plan(
                 "on_failure must be one of "
-                f"{sorted(_EASYREMOTE_FAILURE_POLICIES)}, got {on_failure!r}",
+                f"{sorted(_MISSION_FAILURE_POLICIES)}, got {on_failure!r}",
                 "invalid_failure_policy",
             )
         step_args = dict(args or {})
         for name, value in step_args.items():
-            _easyremote_validate_pipeline_field(name, value, self._aliases)
-        step = EasyRemotePipelineStep(
+            _mission_validate_plan_field(name, value, self._aliases)
+        step = MissionPlanStep(
             alias=self._fresh_alias(target_ref),
             ref=target_ref,
             args=step_args,
             on=on.strip() if isinstance(on, str) and on.strip() else None,
-            timeout=_easyremote_timeout_seconds(timeout),
-            retries=_easyremote_retries_count(retries),
+            timeout=_mission_timeout_seconds(timeout),
+            retries=_mission_retries_count(retries),
             on_failure=on_failure,
             optional=optional,
         )
@@ -614,24 +614,27 @@ class EasyRemotePipelinePlan:
 
     def to_eal(self) -> str:
         if not self._steps:
-            raise _invalid_pipeline(f"pipeline '{self.name}' has no steps", "empty_pipeline")
+            raise _invalid_mission_plan(
+                f"mission plan '{self.name}' has no steps",
+                "empty_mission_plan",
+            )
         lines = []
         if self.version:
-            lines.append(f"// generated by easyremote {self.version}")
+            lines.append(f"// generated by easynet daemon sdk {self.version}")
         else:
-            lines.append("// generated by easyremote")
+            lines.append("// generated by easynet daemon sdk")
         if self.created_by:
             lines.append(f"// created_by: {self.created_by}")
-        lines.append(f"mission {_easyremote_eal_string(self.name)} {{")
+        lines.append(f"mission {_mission_eal_string(self.name)} {{")
         lines.extend(f"  {step.render()}" for step in self._steps)
         lines.append("}")
         return "\n".join(lines) + "\n"
 
     def child_invocation_intents(
         self,
-    ) -> tuple[EasyRemotePipelineChildInvocationIntent, ...]:
+    ) -> tuple[MissionChildInvocationIntent, ...]:
         return tuple(
-            EasyRemotePipelineChildInvocationIntent(
+            MissionChildInvocationIntent(
                 step_id=step.alias,
                 ability=step.ref,
                 on=step.on,
@@ -643,7 +646,7 @@ class EasyRemotePipelinePlan:
 
     def validate_child_invocations(
         self, status: MissionStatus
-    ) -> EasyRemotePipelineChildInvocationConformance:
+    ) -> MissionChildInvocationConformance:
         intents = self.child_invocation_intents()
         expected_by_step = {intent.step_id: intent for intent in intents}
         expected = set(expected_by_step)
@@ -669,7 +672,7 @@ class EasyRemotePipelinePlan:
             for child in status.child_invocations
             if child.step_id is not None and child.receipt is not None
         }
-        conformance = EasyRemotePipelineChildInvocationConformance(
+        conformance = MissionChildInvocationConformance(
             mission_id=status.mission_id,
             expected_steps=tuple(sorted(expected)),
             observed_steps=tuple(sorted(observed)),
@@ -682,7 +685,7 @@ class EasyRemotePipelinePlan:
         return conformance
 
     def _fresh_alias(self, ref: str) -> str:
-        base = _EASYREMOTE_IDENTIFIER.sub("_", ref.rsplit(".", 1)[-1]) or "step"
+        base = _MISSION_IDENTIFIER.sub("_", ref.rsplit(".", 1)[-1]) or "step"
         alias = base
         counter = 2
         while alias in self._aliases:
@@ -691,8 +694,8 @@ class EasyRemotePipelinePlan:
         return alias
 
 
-class EasyRemoteMissionAdapter:
-    """SDK-owned Mission cutover adapter for EasyRemote-like callers."""
+class MissionExecutionAdapter:
+    """SDK-owned Mission execution adapter for host callers."""
 
     def __init__(self, client: "MissionClient", base: MissionCarrierBase) -> None:
         self._client = client
@@ -700,9 +703,9 @@ class EasyRemoteMissionAdapter:
 
     def run_eal(
         self, source: str, *, label: str | None = None
-    ) -> EasyRemoteMissionRunProjection:
-        source_text = _validated_easyremote_source(source)
-        mission_label = _validated_easyremote_label(label)
+    ) -> MissionRunProjection:
+        source_text = _validated_mission_source(source)
+        mission_label = _validated_mission_label(label)
         run = self._client.run_eal(
             MissionRunRequest(
                 base=self._base,
@@ -710,12 +713,12 @@ class EasyRemoteMissionAdapter:
                 label=mission_label or "",
             )
         )
-        return EasyRemoteMissionRunProjection.from_run(run)
+        return MissionRunProjection.from_run(run)
 
     def run_file(
         self, path: str, *, label: str | None = None
-    ) -> EasyRemoteMissionRunProjection:
-        mission_label = _validated_easyremote_label(label)
+    ) -> MissionRunProjection:
+        mission_label = _validated_mission_label(label)
         run = self._client.run_file(
             path,
             MissionRunFileRequest(
@@ -724,13 +727,13 @@ class EasyRemoteMissionAdapter:
                 label=mission_label or "",
             ),
         )
-        return EasyRemoteMissionRunProjection.from_run(run)
+        return MissionRunProjection.from_run(run)
 
     def track(self, run_id: str) -> Mapping[str, object]:
         status = self._client.track(
             MissionTrackRequest(
                 base=self._base,
-                mission_id=_validated_easyremote_run_id(run_id),
+                mission_id=_validated_mission_run_id(run_id),
             )
         )
         return _status_projection(status)
@@ -739,7 +742,7 @@ class EasyRemoteMissionAdapter:
         status = self._client.cancel(
             MissionCancelRequest(
                 base=self._base,
-                mission_id=_validated_easyremote_run_id(run_id),
+                mission_id=_validated_mission_run_id(run_id),
             )
         )
         return _status_projection(status)
@@ -754,7 +757,7 @@ class EasyRemoteMissionAdapter:
         page = self._client.events(
             MissionEventListRequest(
                 base=self._base,
-                mission_id=_validated_easyremote_run_id(run_id),
+                mission_id=_validated_mission_run_id(run_id),
                 cursor_sequence=cursor_sequence,
                 limit=limit,
             )
@@ -769,15 +772,15 @@ class EasyRemoteMissionAdapter:
         limit: int = 0,
         max_empty_pages: int = 0,
         poll_interval_seconds: float = 0.0,
-    ) -> EasyRemoteMissionEventTailer:
-        mission_id = _validated_easyremote_run_id(run_id)
+    ) -> MissionEventProjectionTailer:
+        mission_id = _validated_mission_run_id(run_id)
         options = MissionEventTailOptions(
             cursor_sequence=cursor_sequence,
             limit=limit,
             max_empty_pages=max_empty_pages,
             poll_interval_seconds=poll_interval_seconds,
         ).validated()
-        return EasyRemoteMissionEventTailer(
+        return MissionEventProjectionTailer(
             MissionEventTailer(
                 self._client,
                 MissionEventListRequest(
@@ -1117,7 +1120,7 @@ def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, o
     return dict(value)
 
 
-def _validated_easyremote_source(source: str) -> str:
+def _validated_mission_source(source: str) -> str:
     if not isinstance(source, str):
         raise _invalid_mission(
             f"EAL source must be a string, got {type(source).__name__}"
@@ -1127,7 +1130,7 @@ def _validated_easyremote_source(source: str) -> str:
     return source
 
 
-def _validated_easyremote_label(label: str | None) -> str | None:
+def _validated_mission_label(label: str | None) -> str | None:
     if label is None:
         return None
     trimmed = label.strip()
@@ -1136,7 +1139,7 @@ def _validated_easyremote_label(label: str | None) -> str | None:
     return trimmed
 
 
-def _validated_easyremote_run_id(value: str) -> str:
+def _validated_mission_run_id(value: str) -> str:
     run_id = value.strip()
     if not run_id:
         raise _invalid_mission("mission run_id must not be empty")
@@ -1145,30 +1148,30 @@ def _validated_easyremote_run_id(value: str) -> str:
 
 def _required_clean_mission_string(value: str, field_name: str) -> str:
     if not isinstance(value, str):
-        raise _invalid_pipeline(
+        raise _invalid_mission_plan(
             f"{field_name} must be a string, got {type(value).__name__}",
             f"invalid_{field_name.replace(' ', '_')}",
         )
     trimmed = value.strip()
     if not trimmed:
-        raise _invalid_pipeline(
+        raise _invalid_mission_plan(
             f"{field_name} must not be empty",
-            "empty_name" if field_name == "pipeline name" else "invalid_step_target",
+            "empty_name" if field_name == "mission plan name" else "invalid_step_target",
         )
     return trimmed
 
 
-def _easyremote_validate_pipeline_field(
+def _mission_validate_plan_field(
     name: str,
     value: object,
     aliases: set[str],
 ) -> None:
-    _required_clean_mission_string(name, "pipeline field name")
-    if isinstance(value, EasyRemotePipelineStepOutput):
+    _required_clean_mission_string(name, "mission plan field name")
+    if isinstance(value, MissionPlanStepOutput):
         if value.alias not in aliases:
-            raise _invalid_pipeline(
+            raise _invalid_mission_plan(
                 f"argument '{name}' references step '{value.alias}', which is "
-                "not part of this pipeline",
+                "not part of this mission plan",
                 "foreign_step_output",
             )
         return
@@ -1177,11 +1180,11 @@ def _easyremote_validate_pipeline_field(
     if isinstance(value, float):
         if math.isfinite(value):
             return
-        raise _invalid_pipeline(
+        raise _invalid_mission_plan(
             f"argument '{name}' is non-finite ({value!r}); EAL numbers must be finite",
             "non_finite_field",
         )
-    raise _invalid_pipeline(
+    raise _invalid_mission_plan(
         f"argument '{name}' is {type(value).__name__}; EAL field values are "
         "scalars or step outputs; pass structured data through an ability that "
         "returns it, then reference its .output",
@@ -1189,34 +1192,34 @@ def _easyremote_validate_pipeline_field(
     )
 
 
-def _easyremote_timeout_seconds(timeout: float | None) -> int | None:
+def _mission_timeout_seconds(timeout: float | None) -> int | None:
     if timeout is None:
         return None
     if not math.isfinite(timeout) or timeout <= 0:
-        raise _invalid_pipeline(
+        raise _invalid_mission_plan(
             f"timeout must be a positive finite number of seconds, got {timeout!r}",
             "invalid_timeout",
         )
     return max(1, math.ceil(timeout))
 
 
-def _easyremote_retries_count(retries: int | None) -> int | None:
+def _mission_retries_count(retries: int | None) -> int | None:
     if retries is None:
         return None
     if not isinstance(retries, int) or isinstance(retries, bool) or retries < 0:
-        raise _invalid_pipeline(
+        raise _invalid_mission_plan(
             f"retries must be a non-negative integer, got {retries!r}",
             "invalid_retries",
         )
     return retries
 
 
-def _easyremote_eal_string(value: str) -> str:
+def _mission_eal_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _easyremote_eal_field(value: object) -> str:
-    if isinstance(value, EasyRemotePipelineStepOutput):
+def _mission_eal_field(value: object) -> str:
+    if isinstance(value, MissionPlanStepOutput):
         return value.render()
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -1224,13 +1227,13 @@ def _easyremote_eal_field(value: object) -> str:
         return repr(value)
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise _invalid_pipeline(
+            raise _invalid_mission_plan(
                 f"EAL number must be finite, got {value!r}", "non_finite_field"
             )
         return repr(value)
     if isinstance(value, str):
-        return _easyremote_eal_string(value)
-    raise _invalid_pipeline(
+        return _mission_eal_string(value)
+    raise _invalid_mission_plan(
         f"EAL field value must be scalar or step output, got {type(value).__name__}",
         "non_scalar_field",
     )
@@ -1356,7 +1359,7 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
     )
 
 
-def _invalid_pipeline(message: str, reason: str) -> SDKError:
+def _invalid_mission_plan(message: str, reason: str) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="mission",

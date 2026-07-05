@@ -15,7 +15,7 @@ from .admin import (
 )
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .mission import (
-    EasyRemoteMissionAdapter,
+    MissionExecutionAdapter,
     MissionCarrierBase,
     MissionClient,
 )
@@ -80,8 +80,8 @@ class DaemonProfileBridge:
             self.admin_base(),
         )
 
-    def mission_facade(self) -> EasyRemoteMissionAdapter:
-        return EasyRemoteMissionAdapter(
+    def mission_facade(self) -> MissionExecutionAdapter:
+        return MissionExecutionAdapter(
             MissionClient(_MissionBridgeTransport(self._dispatcher)),
             self.mission_base(),
         )

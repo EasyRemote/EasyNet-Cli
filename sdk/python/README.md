@@ -101,11 +101,11 @@ Axon/ABI dependencies in consumer manifests.
 MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
-seams, an EasyRemote Mission cutover adapter over typed Mission profile
+seams, an SDK-owned `MissionExecutionAdapter` over typed Mission profile
 requests, SDK-owned `DaemonProfileBridge` dispatch/projection glue,
-EasyRemote page-based Mission event access, SDK-owned bounded Mission event
-tailing for EasyRemote Pipeline live updates, SDK-owned EasyRemote Pipeline step
-planning/EAL rendering and child Invocation fact conformance projection, and
+page-based Mission event access, SDK-owned bounded Mission event
+projection tailing, SDK-owned `MissionPlan`
+EAL rendering and child Invocation fact conformance projection, and
 close state seams. AdminClient
 exposes agent list/start/stop/refresh, session-list, hub join/leave, pairing
 preflight/create/validate, credential verification, device-session
@@ -155,7 +155,7 @@ and cleanup execution adapters, mission event live streams,
 certificate policy, backend trust policy persistence, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-profile-specific stream execution adapters, daemon-backed EasyRemote Pipeline child
+profile-specific stream execution adapters, daemon-backed MissionPlan child
 Invocation execution behavior, and daemon/ABI-backed Server pairing/hub lifecycle
 product cutover remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

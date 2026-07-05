@@ -324,27 +324,26 @@ method spelling.
   unary wait/retire lifecycle, stream value projection, invocation,
   bidi session lifecycle, addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
-  extraction, SDK-owned Admin/Mission Daemon profile bridge, and page-based
-  Pipeline event access/live-tail plus publication catalogue extraction and
-  gateway lifecycle hub-config/fingerprint projection plus Pipeline step
-  planning/EAL rendering/child Invocation fact conformance projection, plus
+  extraction, SDK-owned Admin/Mission Daemon profile bridge, page-based
+  Mission event access/live-tail plus publication catalogue extraction,
+  gateway lifecycle hub-config/fingerprint projection, and MissionPlan
+  EAL rendering/child Invocation fact conformance projection, plus
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
   gates, and product Invocation direct daemon UDS unary/server-stream/bidi transport plus
   explicit direct-runtime prepare/submit/handle delegation is available through
   the SDK facade, while daemon-owned signer acquisition/keyring policy, daemon-backed
-  Pipeline child Invocation execution behavior, daemon/ABI-backed Server
+  MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover, and full receipt verification remain
   incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel/events
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, C ABI-backed mission events execution through
   Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
-  projection seams, an SDK-owned EasyRemote Mission cutover adapter with
+  projection seams, an SDK-owned `MissionExecutionAdapter` with
   event-page projection, SDK-owned Daemon profile bridge dispatch/projection
-  glue, EasyRemote `MissionControl`/`MissionRun` page-based
-  event access, SDK-owned bounded Mission event tailing for EasyRemote Pipeline
-  live updates, SDK-owned EasyRemote Pipeline step planning/EAL rendering and
+  glue, page-based Mission event access, SDK-owned bounded Mission event
+  projection tailing, SDK-owned `MissionPlan` EAL rendering and
   child Invocation fact conformance projection, raw mission carrier audit gate for
   `mission.run/track/cancel/events`, and close state seams;
   daemon stream-backed live adapters, daemon-backed child Invocation execution
