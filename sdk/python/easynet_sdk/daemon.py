@@ -226,7 +226,7 @@ class DaemonStartProjection:
         )
 
     def to_start_config(self) -> StartConfig:
-        """Project the EasyRemote lifecycle config into SDK Runtime Core."""
+        """Project the lifecycle payload into SDK Runtime Core."""
 
         return StartConfig(
             mode=self.mode,
