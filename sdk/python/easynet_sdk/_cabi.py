@@ -72,6 +72,10 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_publication_project_ability_record",
     "easynet_publication_build_unpublish_invocation",
     "easynet_publication_project_unpublish_result",
+    "easynet_publication_build_enable_ability_impl_invocation",
+    "easynet_publication_project_enable_ability_impl_result",
+    "easynet_publication_build_disable_ability_impl_invocation",
+    "easynet_publication_project_disable_ability_impl_result",
     "easynet_mission_build_run_eal_invocation",
     "easynet_mission_build_run_file_invocation",
     "easynet_mission_build_track_invocation",
@@ -1217,6 +1221,30 @@ class CABIPublicationTransport(_CABIProfileTransport):
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         return self._call("easynet_publication_project_unpublish_result", result_json)
 
+    def build_enable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_build_enable_ability_impl_invocation",
+            request_json,
+        )
+
+    def project_enable_ability_impl_result(self, result_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_project_enable_ability_impl_result",
+            result_json,
+        )
+
+    def build_disable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_build_disable_ability_impl_invocation",
+            request_json,
+        )
+
+    def project_disable_ability_impl_result(self, result_json: bytes) -> bytes:
+        return self._call(
+            "easynet_publication_project_disable_ability_impl_result",
+            result_json,
+        )
+
     def show_ability(self, request_json: bytes) -> bytes:
         return self._invoke_output_projected_with_request(
             request_json,
@@ -1226,10 +1254,20 @@ class CABIPublicationTransport(_CABIProfileTransport):
         )
 
     def enable_ability_impl(self, request_json: bytes) -> bytes:
-        return self._missing_ability_impl_lifecycle("publication enable ability impl")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_publication_build_enable_ability_impl_invocation",
+            project_symbol="easynet_publication_project_enable_ability_impl_result",
+            projection_keys=("impl_id", "ability_ura", "metadata"),
+        )
 
     def disable_ability_impl(self, request_json: bytes) -> bytes:
-        return self._missing_ability_impl_lifecycle("publication disable ability impl")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_publication_build_disable_ability_impl_invocation",
+            project_symbol="easynet_publication_project_disable_ability_impl_result",
+            projection_keys=("impl_id", "ability_ura", "metadata"),
+        )
 
     def build_unpublish_invocation(self, request_json: bytes) -> bytes:
         return self._call(
@@ -1243,20 +1281,6 @@ class CABIPublicationTransport(_CABIProfileTransport):
             project_symbol="easynet_publication_project_unpublish_result",
             projection_keys=("descriptor_version", "ability_ura"),
         )
-
-    def _missing_ability_impl_lifecycle(self, method: str) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message=(
-                f"{method} requires a daemon/ABI ability implementation lifecycle "
-                "contract; published ability read-model rows cannot be projected "
-                "into enable/disable mutation semantics"
-            ),
-        )
-
 
 @dataclass
 class CABIHostBindingTransport(_CABIProfileTransport):

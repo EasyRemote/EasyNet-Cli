@@ -226,6 +226,37 @@ class AbilityImplID:
 
 
 @dataclass(frozen=True)
+class AbilityImplLifecycleRequest:
+    """Complete carrier for daemon AbilityImpl lifecycle mutation."""
+
+    caller_ura: str
+    callee_ura: str
+    subject_ura: str
+    descriptor_version: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    impl_id: str
+    ability_ura: str
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_bytes(self) -> bytes:
+        _validate_impl_lifecycle_request(self)
+        value: dict[str, object] = {
+            "caller_ura": self.caller_ura,
+            "callee_ura": self.callee_ura,
+            "subject_ura": self.subject_ura,
+            "descriptor_version": self.descriptor_version,
+            "nonce_base64": self.nonce_base64,
+            "causal_context": dict(self.causal_context),
+            "impl_id": self.impl_id,
+            "ability_ura": self.ability_ura,
+        }
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return _json_bytes(value)
+
+
+@dataclass(frozen=True)
 class PublishedAbility:
     """SDK published-ability.schema.json projection."""
 
@@ -776,6 +807,18 @@ class PublicationTransport(Protocol):
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         ...
 
+    def build_enable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def project_enable_ability_impl_result(self, result_json: bytes) -> bytes:
+        ...
+
+    def build_disable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def project_disable_ability_impl_result(self, result_json: bytes) -> bytes:
+        ...
+
     def show_ability(self, request_json: bytes) -> bytes:
         ...
 
@@ -857,6 +900,18 @@ class RuntimePublicationTransport:
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         return self._delegate("project_unpublish_result", result_json)
 
+    def build_enable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_enable_ability_impl_invocation", request_json)
+
+    def project_enable_ability_impl_result(self, result_json: bytes) -> bytes:
+        return self._delegate("project_enable_ability_impl_result", result_json)
+
+    def build_disable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_disable_ability_impl_invocation", request_json)
+
+    def project_disable_ability_impl_result(self, result_json: bytes) -> bytes:
+        return self._delegate("project_disable_ability_impl_result", result_json)
+
     def show_ability(self, request_json: bytes) -> bytes:
         return self._invoke_projected(
             request_json,
@@ -868,10 +923,24 @@ class RuntimePublicationTransport:
         )
 
     def enable_ability_impl(self, request_json: bytes) -> bytes:
-        return self._delegate("enable_ability_impl", request_json)
+        return self._invoke_projected(
+            request_json,
+            build_method="build_enable_ability_impl_invocation",
+            project_method="project_enable_ability_impl_result",
+            projection_keys=("impl_id", "ability_ura", "metadata"),
+            failure_message="publication enable ability impl invocation failed",
+            output_message="publication enable ability impl output must be an object",
+        )
 
     def disable_ability_impl(self, request_json: bytes) -> bytes:
-        return self._delegate("disable_ability_impl", request_json)
+        return self._invoke_projected(
+            request_json,
+            build_method="build_disable_ability_impl_invocation",
+            project_method="project_disable_ability_impl_result",
+            projection_keys=("impl_id", "ability_ura", "metadata"),
+            failure_message="publication disable ability impl invocation failed",
+            output_message="publication disable ability impl output must be an object",
+        )
 
     def build_unpublish_invocation(self, request_json: bytes) -> bytes:
         return self._delegate("build_unpublish_invocation", request_json)
@@ -1069,7 +1138,9 @@ class PublicationClient:
             raise _transport_error("publication show invocation failed", exc) from exc
         return InvocationDraft.from_json(raw)
 
-    def enable_ability_impl(self, impl_id: AbilityImplID) -> None:
+    def enable_ability_impl(
+        self, impl_id: AbilityImplID | AbilityImplLifecycleRequest
+    ) -> None:
         self._require_open()
         self._expect_record(
             self.transport.enable_ability_impl,
@@ -1078,7 +1149,9 @@ class PublicationClient:
             "publication enable ability impl failed",
         )
 
-    def disable_ability_impl(self, impl_id: AbilityImplID) -> None:
+    def disable_ability_impl(
+        self, impl_id: AbilityImplID | AbilityImplLifecycleRequest
+    ) -> None:
         self._require_open()
         self._expect_record(
             self.transport.disable_ability_impl,
@@ -1176,6 +1249,22 @@ def _validate_show_request(request: PublishedAbilityShowRequest) -> None:
         or not request.descriptor_ref
     ):
         raise _invalid_publication("complete show invocation carrier is required")
+
+
+def _validate_impl_lifecycle_request(request: AbilityImplLifecycleRequest) -> None:
+    if (
+        not request.caller_ura
+        or not request.callee_ura
+        or not request.subject_ura
+        or not request.descriptor_version
+        or not request.nonce_base64
+        or request.causal_context is None
+        or not request.impl_id
+        or not request.ability_ura
+    ):
+        raise _invalid_publication(
+            "complete ability impl lifecycle invocation carrier is required"
+        )
 
 
 def _validate_publication_query(query: PublishedAbilityQuery) -> None:

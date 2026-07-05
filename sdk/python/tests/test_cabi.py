@@ -23,6 +23,7 @@ from easynet_sdk import (
     AbilityQuery,
     AbilityDeployRequest,
     AbilityImplID,
+    AbilityImplLifecycleRequest,
     AgentQuery,
     AdminAgentListRequest,
     AdminAgentRefreshRequest,
@@ -525,6 +526,18 @@ class FakeRawCABI:
                 "removed_path": "/tmp/easynet/abilities/weather.ability.json",
                 "content_hash": "sha256:abc",
             }
+        if system_ability in {"ability.impl.enable", "ability.impl.disable"}:
+            args = draft.get("args")
+            return {
+                "ok": True,
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "ability_ura": (
+                    args.get("ability_ura")
+                    if isinstance(args, dict)
+                    else "easynet:///r/example/ability/device.dev-a.er.weather"
+                ),
+                "impl_id": args.get("impl_id") if isinstance(args, dict) else "impl-1",
+            }
         if system_ability in {"mission.run", "mission.track", "mission.cancel"}:
             return {
                 "run_id": "mission-1",
@@ -881,6 +894,27 @@ class FakeRawCABI:
     def _profile_call(self, symbol: str, handle, raw, out_ptr) -> int:
         request = json.loads(raw.value.decode("utf-8"))
         self.profile_requests.append((symbol, int(handle.value), request))
+        if symbol in {
+            "easynet_publication_build_enable_ability_impl_invocation",
+            "easynet_publication_build_disable_ability_impl_invocation",
+        }:
+            required = {
+                "caller_ura",
+                "callee_ura",
+                "subject_ura",
+                "descriptor_version",
+                "nonce_base64",
+                "causal_context",
+                "impl_id",
+                "ability_ura",
+            }
+            if not required.issubset(request):
+                self.last_error_json = (
+                    b'{"code":"INVALID_ARGUMENT","stage":"cabi",'
+                    b'"message":"complete ability impl lifecycle invocation carrier is required",'
+                    b'"retry":"never","source":"cabi","details":{}}'
+                )
+                return 11
         return self._write(out_ptr, self._profile_payload(symbol, request))
 
     def _profile_payload(self, symbol: str, request: object | None = None) -> bytes:
@@ -936,6 +970,14 @@ class FakeRawCABI:
             return PUBLICATION_UNPUBLISH_INVOCATION
         if symbol == "easynet_publication_project_unpublish_result":
             return PUBLICATION_UNPUBLISH_RESULT_PROJECTION
+        if symbol == "easynet_publication_build_enable_ability_impl_invocation":
+            return PUBLICATION_ENABLE_IMPL_INVOCATION
+        if symbol == "easynet_publication_project_enable_ability_impl_result":
+            return PUBLICATION_ENABLE_IMPL_PROJECTION
+        if symbol == "easynet_publication_build_disable_ability_impl_invocation":
+            return PUBLICATION_DISABLE_IMPL_INVOCATION
+        if symbol == "easynet_publication_project_disable_ability_impl_result":
+            return PUBLICATION_DISABLE_IMPL_PROJECTION
         if symbol == "easynet_admin_build_agent_list_invocation":
             return ADMIN_AGENT_LIST_INVOCATION
         if symbol == "easynet_admin_build_agent_start_invocation":
@@ -1253,6 +1295,54 @@ PUBLICATION_UNPUBLISH_RESULT_PROJECTION = (
     b'"status":"unpublished","metadata":{"profile":"publication",'
     b'"source_ability":"ability.unpublish",'
     b'"content_hash":"sha256:abc"}}'
+)
+
+PUBLICATION_ENABLE_IMPL_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.ability.impl.enable@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"impl_id":"impl-1",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"publication","system_ability":"ability.impl.enable",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_DISABLE_IMPL_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.ability.impl.disable@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"impl_id":"impl-1",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"publication","system_ability":"ability.impl.disable",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+PUBLICATION_ENABLE_IMPL_PROJECTION = (
+    b'{"profile":"publication","kind":"ability_impl_enabled",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"status":"enabled","metadata":{"profile":"publication",'
+    b'"source_ability":"ability.impl.enable",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+    b'"impl_id":"impl-1"}}'
+)
+
+PUBLICATION_DISABLE_IMPL_PROJECTION = (
+    b'{"profile":"publication","kind":"ability_impl_disabled",'
+    b'"owner_ura":"easynet:///r/example/device/dev-a",'
+    b'"status":"disabled","metadata":{"profile":"publication",'
+    b'"source_ability":"ability.impl.disable",'
+    b'"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",'
+    b'"impl_id":"impl-1"}}'
 )
 
 RECEIPT_SUMMARY_PROJECTION = (
@@ -3026,7 +3116,46 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(raw.runtime_requests, [])
         self.assertEqual(raw.buffers, {})
 
-    def test_publication_reports_missing_ability_impl_lifecycle_cabi_contracts(self) -> None:
+    def test_publication_impl_lifecycle_uses_cabi_runtime_contracts(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = PublicationClient(CABIPublicationTransport(lib, handle=7))
+
+        request = AbilityImplLifecycleRequest(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
+            impl_id="impl-1",
+        )
+
+        client.enable_ability_impl(request)
+        client.disable_ability_impl(request)
+
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_publication_build_enable_ability_impl_invocation",
+                "easynet_publication_project_enable_ability_impl_result",
+                "easynet_publication_build_disable_ability_impl_invocation",
+                "easynet_publication_project_disable_ability_impl_result",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "ability.impl.enable",
+        )
+        self.assertEqual(
+            raw.runtime_requests[1][1]["metadata"]["system_ability"],
+            "ability.impl.disable",
+        )
+        self.assertEqual(raw.buffers, {})
+
+    def test_publication_impl_lifecycle_requires_complete_runtime_carrier(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
         client = PublicationClient(CABIPublicationTransport(lib, handle=7))
@@ -3038,22 +3167,9 @@ class CABITransportTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as caught:
             client.enable_ability_impl(impl)
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertIn(
-            "requires a daemon/ABI ability implementation lifecycle contract",
-            caught.exception.message,
-        )
 
-        with self.assertRaises(SDKError) as caught:
-            client.disable_ability_impl(impl)
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertIn(
-            "read-model rows cannot be projected into enable/disable mutation semantics",
-            caught.exception.message,
-        )
-        self.assertEqual(raw.profile_requests, [])
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(raw.runtime_requests, [])
-        self.assertEqual(raw.buffers, {})
 
     def test_events_subscribe_directory_opens_runtime_stream(self) -> None:
         raw = FakeRawCABI()

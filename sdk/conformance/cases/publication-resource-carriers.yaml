@@ -32,4 +32,4 @@ expect:
   rejects_incomplete_invocation_tuple: true
   plugin_install_lifecycle: c_abi_backed
   list_show_runtime: c_abi_backed
-  ability_impl_enable_disable_runtime: requires_daemon_lifecycle_contract
+  ability_impl_enable_disable_runtime: c_abi_backed_complete_carrier

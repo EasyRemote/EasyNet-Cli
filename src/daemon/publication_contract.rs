@@ -49,6 +49,8 @@ use crate::daemon::sdk_contract::{
 const SYSTEM_ABILITY_DEPLOY: &str = crate::daemon::ability::names::federation::ABILITY_DEPLOY;
 const SYSTEM_ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::federation::ABILITY_UNPUBLISH;
 const SYSTEM_ABILITY_LIST: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+const SYSTEM_ABILITY_IMPL_ENABLE: &str = "ability.impl.enable";
+const SYSTEM_ABILITY_IMPL_DISABLE: &str = "ability.impl.disable";
 const PUBLICATION_PROFILE: &str = "publication";
 const PUBLICATION_SOURCE: &str = "read_model";
 const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: usize = 50;
@@ -322,6 +324,97 @@ pub(crate) fn project_ability_unpublish_result(input: &Value) -> Result<Value, P
     }))
 }
 
+pub(crate) fn build_enable_ability_impl_invocation(
+    request: &Value,
+) -> Result<Value, PublicationError> {
+    build_ability_impl_lifecycle_invocation(
+        request,
+        "AbilityImplEnableRequest",
+        SYSTEM_ABILITY_IMPL_ENABLE,
+    )
+}
+
+pub(crate) fn build_disable_ability_impl_invocation(
+    request: &Value,
+) -> Result<Value, PublicationError> {
+    build_ability_impl_lifecycle_invocation(
+        request,
+        "AbilityImplDisableRequest",
+        SYSTEM_ABILITY_IMPL_DISABLE,
+    )
+}
+
+pub(crate) fn project_ability_impl_enable_result(input: &Value) -> Result<Value, PublicationError> {
+    project_ability_impl_lifecycle_result(input, SYSTEM_ABILITY_IMPL_ENABLE, "enabled")
+}
+
+pub(crate) fn project_ability_impl_disable_result(
+    input: &Value,
+) -> Result<Value, PublicationError> {
+    project_ability_impl_lifecycle_result(input, SYSTEM_ABILITY_IMPL_DISABLE, "disabled")
+}
+
+fn build_ability_impl_lifecycle_invocation(
+    request: &Value,
+    request_name: &'static str,
+    system_ability: &str,
+) -> Result<Value, PublicationError> {
+    let obj = object(request, request_name)?;
+    let impl_id = required_string(obj, "impl_id")?;
+    let ability_ura = required_ability_ura(obj, "ability_ura")?;
+    build_system_invocation(
+        obj,
+        PUBLICATION_PROFILE,
+        system_ability,
+        json!({
+            "impl_id": impl_id,
+            "ability_ura": ability_ura,
+        }),
+    )
+}
+
+fn project_ability_impl_lifecycle_result(
+    input: &Value,
+    system_ability: &str,
+    status: &'static str,
+) -> Result<Value, PublicationError> {
+    let payload = mutation_projection_payload(input);
+    let obj = object(payload, "AbilityImplLifecycleResult")?;
+    if matches!(obj.get("ok").and_then(Value::as_bool), Some(false)) {
+        return Err(PublicationError::InvalidField(
+            "ok",
+            format!("must be true for ability_impl_{status} projection"),
+        ));
+    }
+    let ability_ura = projection_string(input, obj, "ability_ura")?;
+    validate_ability_ura(&ability_ura)?;
+    let impl_id = projection_string(input, obj, "impl_id")?;
+    let owner_ura = optional_string_field(obj, "owner_ura")?;
+    if let Some(owner_ura) = owner_ura.as_deref() {
+        validate_ura(owner_ura, "owner_ura")?;
+    }
+    Ok(json!({
+        "profile": PUBLICATION_PROFILE,
+        "kind": format!("ability_impl_{status}"),
+        "owner_ura": owner_ura,
+        "resource_ref": optional_string_field(obj, "resource_ref")?,
+        "status": status,
+        "metadata": {
+            "profile": PUBLICATION_PROFILE,
+            "source_ability": system_ability,
+            "ability_ura": ability_ura,
+            "impl_id": impl_id,
+            "request_metadata": input
+                .as_object()
+                .and_then(|value| value.get("metadata"))
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            "raw_result": payload,
+        },
+    }))
+}
+
 fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, PublicationError> {
     let mut args = Map::new();
     if let Some(owner_ura) = optional_string_field(obj, "owner_ura")? {
@@ -340,6 +433,43 @@ fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, PublicationErr
         args.insert("subject_ura".to_string(), Value::String(ability_ura));
     }
     Ok(Value::Object(args))
+}
+
+fn required_ability_ura<'a>(
+    obj: &'a Map<String, Value>,
+    field: &'static str,
+) -> Result<&'a str, PublicationError> {
+    let value = required_string(obj, field)?;
+    validate_ability_ura(value)?;
+    Ok(value)
+}
+
+fn validate_ability_ura(value: &str) -> Result<(), PublicationError> {
+    let parsed = ura::parse_ura(value)
+        .map_err(|err| PublicationError::InvalidField("ability_ura", err.to_string()))?;
+    if parsed.kind != ura::URAKind::Ability {
+        return Err(PublicationError::InvalidField(
+            "ability_ura",
+            format!("must be an Ability URA, got {}", parsed.kind),
+        ));
+    }
+    Ok(())
+}
+
+fn projection_string(
+    input: &Value,
+    payload: &Map<String, Value>,
+    field: &'static str,
+) -> Result<String, PublicationError> {
+    optional_string_field(payload, field)?.map_or_else(
+        || {
+            input
+                .as_object()
+                .map_or(Ok(None), |obj| optional_string_field(obj, field))?
+                .ok_or(PublicationError::MissingField(field))
+        },
+        Ok,
+    )
 }
 
 #[derive(Debug, Clone, Copy)]

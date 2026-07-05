@@ -88,8 +88,9 @@ fabricate receipt URAs, or mark summary-only data `verified: true` before an
 Axon-backed verifier proves a full receipt.
 Publication carrier projection may build daemon-authored local ResourceRefs,
 validate ability package manifests, and build complete Invocation JSON for
-daemon publication system abilities. It must not claim list/show/enable/disable
-runtime results until daemon read models or equivalent governed abilities exist.
+daemon publication system abilities. It may claim list/show/enable/disable
+runtime results only when they execute through daemon read models or equivalent
+governed abilities. It must not derive mutation semantics from catalogue rows.
 Host Binding codec projection may build host-stream binding DTOs, decode
 daemon request envelopes, encode shared item/error/terminal frames, and fold
 output hashes. It must not execute product host code, inspect language

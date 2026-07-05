@@ -603,6 +603,30 @@ int32_t easynet_publication_project_unpublish_result(
     char **out_result_json
 );
 
+int32_t easynet_publication_build_enable_ability_impl_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_publication_project_enable_ability_impl_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
+int32_t easynet_publication_build_disable_ability_impl_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_publication_project_disable_ability_impl_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
 int32_t easynet_mission_build_run_eal_invocation(
     EasynetHandle handle,
     const char *request_json,

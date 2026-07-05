@@ -274,13 +274,13 @@ method spelling.
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   C ABI-backed plugin install through the daemon plugin installer,
   C ABI-backed deploy-result projection,
-  published-ability list/show execution through Runtime Core invoke, complete unpublish
-  execution through Runtime Core invoke, deploy/show/unpublish Invocation carrier,
-  deploy/show/unpublish result, published-ability read-model seams,
+  published-ability list/show execution through Runtime Core invoke,
+  ability-implementation enable/disable execution through complete C ABI
+  carriers and Runtime Core invoke, complete unpublish execution through Runtime Core invoke,
+  deploy/show/enable-impl/disable-impl/unpublish Invocation carrier,
+  deploy/show/enable-impl/disable-impl/unpublish result, published-ability read-model seams,
   SDK-owned EasyRemote publication catalogue install/list/list-device/list-user/
-  show projection, and close state seams; ability implementation enable/disable live adapters require
-  daemon/ABI lifecycle result contracts rather than projecting published-ability
-  read-model rows into mutation DTOs, and host binding bridge, EasyRemote
+  show projection, and close state seams; host binding bridge, EasyRemote
   decorator/package extraction, and broader plugin/skill lifecycle policy
   remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope

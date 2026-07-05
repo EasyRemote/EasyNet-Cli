@@ -6,6 +6,7 @@ from pathlib import Path
 from easynet_sdk import (
     AbilityDeployRequest,
     AbilityImplID,
+    AbilityImplLifecycleRequest,
     EasyRemotePublicationAdapter,
     EasyRemotePublicationCatalogFacade,
     ErrorCode,
@@ -134,6 +135,44 @@ UNPUBLISH_INVOCATION_JSON = b"""{
   }
 }"""
 
+ENABLE_IMPL_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.ability.impl.enable@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {
+    "impl_id": "impl-1",
+    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "profile": "publication",
+    "system_ability": "ability.impl.enable",
+    "carrier_owner": "daemon_sdk"
+  }
+}"""
+
+DISABLE_IMPL_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.ability.impl.disable@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {
+    "impl_id": "impl-1",
+    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "profile": "publication",
+    "system_ability": "ability.impl.disable",
+    "carrier_owner": "daemon_sdk"
+  }
+}"""
+
 
 class MemoryPublicationTransport:
     def __init__(self) -> None:
@@ -172,6 +211,8 @@ class MemoryPublicationTransport:
         self.show_invocation_json = SHOW_INVOCATION_JSON
         self.enable_json = b'{"profile":"publication","kind":"ability_impl_enabled","metadata":{}}'
         self.disable_json = b'{"profile":"publication","kind":"ability_impl_disabled","metadata":{}}'
+        self.enable_invocation_json = ENABLE_IMPL_INVOCATION_JSON
+        self.disable_invocation_json = DISABLE_IMPL_INVOCATION_JSON
         self.unpublish_invocation_json = UNPUBLISH_INVOCATION_JSON
         self.unpublish_json = (
             b'{"profile":"publication","kind":"ability_unpublished",'
@@ -232,6 +273,22 @@ class MemoryPublicationTransport:
     def project_unpublish_result(self, result_json: bytes) -> bytes:
         self.seen_projection = json.loads(result_json.decode("utf-8"))
         return self.unpublish_json
+
+    def build_enable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.enable_invocation_json
+
+    def project_enable_ability_impl_result(self, result_json: bytes) -> bytes:
+        self.seen_projection = json.loads(result_json.decode("utf-8"))
+        return self.enable_json
+
+    def build_disable_ability_impl_invocation(self, request_json: bytes) -> bytes:
+        self._remember(request_json)
+        return self.disable_invocation_json
+
+    def project_disable_ability_impl_result(self, result_json: bytes) -> bytes:
+        self.seen_projection = json.loads(result_json.decode("utf-8"))
+        return self.disable_json
 
     def show_ability(self, request_json: bytes) -> bytes:
         self._remember(request_json)
@@ -404,6 +461,19 @@ def unpublish_request() -> UnpublishAbilityRequest:
         descriptor_version="1.0.0",
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
+        ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
+    )
+
+
+def impl_lifecycle_request() -> AbilityImplLifecycleRequest:
+    return AbilityImplLifecycleRequest(
+        caller_ura="easynet:///r/example/agent/alice.sdk",
+        callee_ura="easynet:///r/example/device/dev-a",
+        subject_ura="easynet:///r/example/device/dev-a",
+        descriptor_version="1.0.0",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        impl_id="impl-1",
         ability_ura="easynet:///r/example/ability/device.dev-a.er.weather",
     )
 
@@ -725,6 +795,43 @@ class PublicationTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
         )
         self.assertIn("abilities", carrier.seen_projection["result"])
+
+    def test_runtime_publication_transport_executes_impl_lifecycle_via_runtime_core(
+        self,
+    ) -> None:
+        carrier = MemoryPublicationTransport()
+        runtime_transport = DeployRuntimeTransport(
+            output_json={
+                "ok": True,
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "impl_id": "impl-1",
+            }
+        )
+        client = PublicationClient(
+            RuntimePublicationTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        client.enable_ability_impl(impl_lifecycle_request())
+
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "ability.impl.enable",
+        )
+        self.assertEqual(
+            runtime_transport.seen_draft["args"]["ability_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather",
+        )
+        assert carrier.seen_projection is not None
+        self.assertEqual(carrier.seen_projection["impl_id"], "impl-1")
+        self.assertEqual(
+            carrier.seen_projection["ability_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather",
+        )
 
     def test_rejects_incomplete_deploy_carrier(self) -> None:
         client = PublicationClient(MemoryPublicationTransport())

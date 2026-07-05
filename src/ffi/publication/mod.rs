@@ -32,9 +32,11 @@
 use std::os::raw::c_char;
 
 use crate::daemon::publication_contract::{
-    build_deploy_invocation, build_list_abilities_invocation, build_local_resource_ref,
-    build_show_ability_invocation, build_unpublish_invocation, install_plugin,
-    project_ability_deploy_result, project_ability_unpublish_result,
+    build_deploy_invocation, build_disable_ability_impl_invocation,
+    build_enable_ability_impl_invocation, build_list_abilities_invocation,
+    build_local_resource_ref, build_show_ability_invocation, build_unpublish_invocation,
+    install_plugin, project_ability_deploy_result, project_ability_impl_disable_result,
+    project_ability_impl_enable_result, project_ability_unpublish_result,
     project_published_ability_page, project_published_ability_record, validate_package,
 };
 use crate::ffi::client::handle::EasynetHandle;
@@ -280,6 +282,94 @@ pub unsafe extern "C" fn easynet_publication_project_unpublish_result(
         "out_result_json",
         "result_json",
         project_ability_unpublish_result,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `ability.impl.enable`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_build_enable_ability_impl_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_publication_build_enable_ability_impl_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_enable_ability_impl_invocation,
+    )
+}
+
+/// Project daemon `ability.impl.enable` output into a mutation record.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_project_enable_ability_impl_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_publication_project_enable_ability_impl_result",
+        "out_result_json",
+        "result_json",
+        project_ability_impl_enable_result,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `ability.impl.disable`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_build_disable_ability_impl_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_publication_build_disable_ability_impl_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_disable_ability_impl_invocation,
+    )
+}
+
+/// Project daemon `ability.impl.disable` output into a mutation record.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_publication_project_disable_ability_impl_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_publication_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_publication_project_disable_ability_impl_result",
+        "out_result_json",
+        "result_json",
+        project_ability_impl_disable_result,
     )
 }
 
@@ -691,6 +781,114 @@ additionalProperties = false
         assert_eq!(
             value["descriptor"]["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.er.weather@2.0.0"
+        );
+        release(handle);
+    }
+
+    #[test]
+    fn publication_build_enable_impl_invocation_projects_complete_tuple() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "descriptor_version": "1.0.0",
+                "nonce_base64": nonce(),
+                "causal_context": {"form": "none"},
+                "impl_id": "impl-1",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_publication_build_enable_ability_impl_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "ability.impl.enable");
+        assert_eq!(value["args"]["impl_id"], "impl-1");
+        assert_eq!(
+            value["args"]["ability_ura"],
+            "easynet:///r/example/ability/device.dev-a.er.weather"
+        );
+        assert!(value["descriptor_ref"]
+            .as_str()
+            .unwrap()
+            .contains("ability.impl.enable@1.0.0"));
+        release(handle);
+    }
+
+    #[test]
+    fn publication_build_disable_impl_invocation_rejects_non_ability_ura() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/device/dev-a",
+                "descriptor_version": "1.0.0",
+                "nonce_base64": nonce(),
+                "causal_context": {"form": "none"},
+                "impl_id": "impl-1",
+                "ability_ura": "easynet:///r/example/device/dev-a"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::dangling_mut();
+
+        let code = unsafe {
+            easynet_publication_build_disable_ability_impl_invocation(
+                handle,
+                raw.as_ptr(),
+                &mut out,
+            )
+        };
+
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert!(out.is_null());
+        release(handle);
+    }
+
+    #[test]
+    fn publication_project_impl_lifecycle_results_project_daemon_output() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                "impl_id": "impl-1",
+                "metadata": {"request_id": "enable-1"},
+                "result": {
+                    "ok": true,
+                    "owner_ura": "easynet:///r/example/device/dev-a",
+                    "resource_ref": "easynet:///r/example/resource/device.dev-a/fs/pkg",
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+                    "impl_id": "impl-1"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_publication_project_enable_ability_impl_result(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "ability_impl_enabled");
+        assert_eq!(value["status"], "enabled");
+        assert_eq!(value["metadata"]["source_ability"], "ability.impl.enable");
+        assert_eq!(value["metadata"]["impl_id"], "impl-1");
+        assert_eq!(
+            value["metadata"]["request_metadata"]["request_id"],
+            "enable-1"
         );
         release(handle);
     }

@@ -81,7 +81,8 @@ C ABI-backed deploy-result projection,
 published-ability list execution through Runtime Core invoke,
 published-ability show execution through Runtime Core invoke,
 complete unpublish execution through Runtime Core invoke,
-deploy/show/unpublish Invocation carrier, deploy/show/unpublish result, plugin
+deploy/show/enable-impl/disable-impl/unpublish Invocation carrier,
+deploy/show/enable-impl/disable-impl/unpublish result, plugin
 install projection, published-ability read-model seams, SDK-owned
 `EasyRemotePublicationCatalogFacade` product catalogue install/list/list-device/
 list-user/show projection, and close state seams. HostBindingClient
