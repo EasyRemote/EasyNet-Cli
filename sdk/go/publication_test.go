@@ -135,6 +135,18 @@ func basePublishedAbilityQuery() PublishedAbilityQuery {
 	}
 }
 
+func baseShowAbilityRequest() ShowAbilityRequest {
+	return ShowAbilityRequest{
+		CallerURA:         "easynet:///r/example/agent/alice.sdk",
+		CalleeURA:         "easynet:///r/example/device/dev-a",
+		SubjectURA:        "easynet:///r/example/device/dev-a",
+		DescriptorVersion: "1.0.0",
+		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext:     map[string]any{"form": "none"},
+		DescriptorRef:     "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+	}
+}
+
 func baseUnpublishRequest() UnpublishAbilityRequest {
 	return UnpublishAbilityRequest{
 		CallerURA:         "easynet:///r/example/agent/alice.sdk",
@@ -250,8 +262,22 @@ func TestPublicationListShowEnableDisableAndUnpublish(t *testing.T) {
 	if err := client.DisableAbilityImpl(context.Background(), id); err != nil {
 		t.Fatalf("DisableAbilityImpl: %v", err)
 	}
+	ability, err = client.ShowAbilityWithRequest(context.Background(), baseShowAbilityRequest())
+	if err != nil {
+		t.Fatalf("ShowAbilityWithRequest: %v", err)
+	}
+	if descriptor := ability.Descriptor["descriptor_ref"]; descriptor != "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0" {
+		t.Fatalf("show with request descriptor = %#v", descriptor)
+	}
 	if err := client.UnpublishAbility(context.Background(), DescriptorRef("easynet:///r/example/ability/device.dev-a.er.weather@1.0.0")); err != nil {
 		t.Fatalf("UnpublishAbility: %v", err)
+	}
+	record, err := client.UnpublishAbilityWithRequest(context.Background(), baseUnpublishRequest())
+	if err != nil {
+		t.Fatalf("UnpublishAbilityWithRequest: %v", err)
+	}
+	if record.Kind != "ability_unpublished" {
+		t.Fatalf("unpublish record = %#v", record)
 	}
 }
 

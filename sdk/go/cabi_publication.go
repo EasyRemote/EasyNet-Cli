@@ -175,8 +175,8 @@ func (t *CABIPublicationTransport) BuildUnpublishInvocation(ctx context.Context,
 	return t.callJSONWithOpenHandle(ctx, t.symbols.buildUnpublishInvocation, requestJSON, "C ABI publication unpublish invocation build failed")
 }
 
-func (t *CABIPublicationTransport) UnpublishAbility(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "C ABI publication unpublish requires a complete UnpublishAbilityRequest carrier")
+func (t *CABIPublicationTransport) UnpublishAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildUnpublishInvocation, t.symbols.projectUnpublishResult, "C ABI publication unpublish ability failed")
 }
 
 func (t *CABIPublicationTransport) Close(ctx context.Context) error {

@@ -79,6 +79,29 @@ func TestPublicationRuntimeTransportDeploysAndListsThroughRuntime(t *testing.T) 
 	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0" {
 		t.Fatalf("list descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
 	}
+
+	ability, err := client.ShowAbilityWithRequest(context.Background(), baseShowAbilityRequest())
+	if err != nil {
+		t.Fatalf("ShowAbilityWithRequest: %v", err)
+	}
+	if ability.Descriptor["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0" {
+		t.Fatalf("shown ability = %#v", ability)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0" {
+		t.Fatalf("show descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+
+	runtimeTransport.outputJSON = publicationRuntimeUnpublishRawJSON
+	record, err := client.UnpublishAbilityWithRequest(context.Background(), baseUnpublishRequest())
+	if err != nil {
+		t.Fatalf("UnpublishAbilityWithRequest: %v", err)
+	}
+	if record.DescriptorRef != "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0" || record.Status == nil || *record.Status != "unpublished" {
+		t.Fatalf("unpublish record = %#v", record)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0" {
+		t.Fatalf("unpublish descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
 }
 
 func TestPublicationRuntimeTransportBuildsUnpublishInvocation(t *testing.T) {
@@ -128,8 +151,8 @@ func TestPublicationRuntimeTransportMarksUnsupportedExports(t *testing.T) {
 	if _, err := client.InstallPlugin(context.Background(), "file:///tmp/plugin", InstallOptions{}); !IsCode(err, ErrNotImplemented) {
 		t.Fatalf("InstallPlugin error = %v, want %s", err, ErrNotImplemented)
 	}
-	if _, err := client.ShowAbility(context.Background(), "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("ShowAbility error = %v, want %s", err, ErrNotImplemented)
+	if _, err := client.ShowAbility(context.Background(), "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"); err == nil {
+		t.Fatalf("descriptor-only ShowAbility unexpectedly succeeded")
 	}
 }
 
@@ -144,7 +167,18 @@ func newPublicationRuntimeIdentityTransport() *compatibilityRuntimeIdentityTrans
 			"easynet:///r/example/ability/device.dev-a.ability.deploy":      "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.meta.list_abilities": "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.ability.unpublish":   "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.er.weather":          "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
 		},
+		descriptorProjection: `{
+			"kind":"descriptor_ref",
+			"valid":true,
+			"descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+			"ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",
+			"descriptor_version":"1.0.0",
+			"profile":"easynet-strict-v2",
+			"components":{"owner_ura":"easynet:///r/example/device/dev-a"},
+			"metadata":{"grammar_owner":"axon"}
+		}`,
 	}
 }
 
@@ -178,8 +212,9 @@ const publicationRuntimeListRawJSON = `{
 }`
 
 const publicationRuntimeUnpublishRawJSON = `{
-  "profile": "publication",
-  "kind": "ability_unpublished",
-  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
-  "metadata": {}
+  "ok": true,
+  "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+  "owner_ura": "easynet:///r/example/device/dev-a",
+  "public_name": "weather",
+  "content_hash": "sha256:def"
 }`

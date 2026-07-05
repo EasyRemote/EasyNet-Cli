@@ -125,8 +125,36 @@ func (t *PublicationRuntimeTransport) ListAbilities(ctx context.Context, request
 	return json.Marshal(page)
 }
 
-func (t *PublicationRuntimeTransport) ShowAbility(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication show requires a complete carrier")
+func (t *PublicationRuntimeTransport) ShowAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationShowForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	abilityURA, err := t.identity.AbilityURAFromDescriptorRef(ctx, string(req.DescriptorRef))
+	if err != nil {
+		return nil, err
+	}
+	args := map[string]any{"subject_ura": abilityURA}
+	if req.OwnerURA != "" {
+		args["agent_ura"] = req.OwnerURA
+	}
+	output, err := t.invoke(ctx, args, publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityList)
+	if err != nil {
+		return nil, err
+	}
+	ability, err := projectPublishedAbilityForRuntime(req, output)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ability)
 }
 
 func (t *PublicationRuntimeTransport) EnableAbilityImpl(context.Context, []byte) ([]byte, error) {
@@ -153,8 +181,28 @@ func (t *PublicationRuntimeTransport) BuildUnpublishInvocation(ctx context.Conte
 	}, publicationAbilityUnpublish)
 }
 
-func (t *PublicationRuntimeTransport) UnpublishAbility(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication unpublish requires a complete UnpublishAbilityRequest carrier")
+func (t *PublicationRuntimeTransport) UnpublishAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationUnpublishForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, map[string]any{"ability_ura": req.AbilityURA}, publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityUnpublish)
+	if err != nil {
+		return nil, err
+	}
+	record, err := t.projectUnpublishResultForRuntime(ctx, req, output)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(record)
 }
 
 func (t *PublicationRuntimeTransport) Close(context.Context) error {
@@ -249,6 +297,17 @@ func decodePublicationListForRuntime(requestJSON []byte) (PublishedAbilityQuery,
 	return req, nil
 }
 
+func decodePublicationShowForRuntime(requestJSON []byte) (ShowAbilityRequest, error) {
+	var req ShowAbilityRequest
+	if err := json.Unmarshal(requestJSON, &req); err != nil {
+		return ShowAbilityRequest{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication show request: %v", err), err)
+	}
+	if _, err := marshalShowAbilityRequest(req); err != nil {
+		return ShowAbilityRequest{}, err
+	}
+	return req, nil
+}
+
 func decodePublicationUnpublishForRuntime(requestJSON []byte) (UnpublishAbilityRequest, error) {
 	var req UnpublishAbilityRequest
 	if err := json.Unmarshal(requestJSON, &req); err != nil {
@@ -258,6 +317,86 @@ func decodePublicationUnpublishForRuntime(requestJSON []byte) (UnpublishAbilityR
 		return UnpublishAbilityRequest{}, err
 	}
 	return req, nil
+}
+
+func projectPublishedAbilityForRuntime(req ShowAbilityRequest, output []byte) (PublishedAbility, error) {
+	if ability, err := NewPublishedAbilityFromJSON(output); err == nil {
+		if publishedAbilityDescriptorRef(ability) == string(req.DescriptorRef) {
+			return ability, nil
+		}
+		return PublishedAbility{}, invalidProfilePayload(publicationProfile, "publication show ability result does not match descriptor_ref", nil)
+	}
+	page, err := NewPublishedAbilityPageFromJSON(output)
+	if err != nil {
+		return PublishedAbility{}, err
+	}
+	for _, item := range page.Items {
+		if publishedAbilityDescriptorRef(item) == string(req.DescriptorRef) {
+			return item, nil
+		}
+	}
+	return PublishedAbility{}, invalidProfilePayload(publicationProfile, "published ability was not found", nil)
+}
+
+func publishedAbilityDescriptorRef(ability PublishedAbility) string {
+	if ability.Descriptor == nil {
+		return ""
+	}
+	return firstStringFromMap(ability.Descriptor, "descriptor_ref", "descriptorRef")
+}
+
+func (t *PublicationRuntimeTransport) projectUnpublishResultForRuntime(ctx context.Context, req UnpublishAbilityRequest, output []byte) (PublicationRecord, error) {
+	if record, err := newPublicationRecordFromJSON(output, "ability_unpublished"); err == nil {
+		return record, nil
+	}
+	payload, err := publicationRuntimeOutputObject(output, "publication unpublish output")
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	if ok, hasOK := payload["ok"].(bool); hasOK && !ok {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication unpublish output ok=false", nil)
+	}
+	abilityURA := firstNonEmpty(firstStringFromMap(payload, "ability_ura", "abilityUra"), req.AbilityURA)
+	if abilityURA == "" {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication unpublish output missing ability_ura", nil)
+	}
+	descriptorVersion := firstNonEmpty(firstStringFromMap(payload, "descriptor_version", "descriptorVersion"), req.DescriptorVersion)
+	descriptorRef, err := t.identity.CanonicalAbilityDescriptorRef(ctx, abilityURA, descriptorVersion)
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	status := "unpublished"
+	record := PublicationRecord{
+		Profile:       publicationProfile,
+		Kind:          "ability_unpublished",
+		DescriptorRef: descriptorRef,
+		OwnerURA:      firstStringFromMap(payload, "owner_ura", "ownerUra"),
+		Status:        &status,
+		Metadata: map[string]any{
+			"profile":            publicationProfile,
+			"source_ability":     publicationAbilityUnpublish,
+			"ability_ura":        abilityURA,
+			"descriptor_version": descriptorVersion,
+			"raw_result":         payload,
+		},
+	}
+	for _, key := range []string{"public_name", "removed_path", "content_hash"} {
+		if value := firstStringFromMap(payload, key); value != "" {
+			record.Metadata[key] = value
+		}
+	}
+	return record, nil
+}
+
+func publicationRuntimeOutputObject(raw []byte, label string) (map[string]any, error) {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode %s: %v", label, err), err)
+	}
+	if payload == nil {
+		return nil, invalidProfilePayload(publicationProfile, label+" must be a JSON object", nil)
+	}
+	return payload, nil
 }
 
 func publicationDeployArgs(req AbilityDeployRequest) map[string]any {

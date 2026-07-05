@@ -130,8 +130,15 @@ type DescriptorRef string
 
 // ShowAbilityRequest asks the daemon read model for one published ability.
 type ShowAbilityRequest struct {
-	DescriptorRef DescriptorRef  `json:"descriptor_ref"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	CallerURA         string         `json:"caller_ura,omitempty"`
+	CalleeURA         string         `json:"callee_ura,omitempty"`
+	SubjectURA        string         `json:"subject_ura,omitempty"`
+	DescriptorVersion string         `json:"descriptor_version,omitempty"`
+	NonceBase64       string         `json:"nonce_base64,omitempty"`
+	CausalContext     map[string]any `json:"causal_context,omitempty"`
+	DescriptorRef     DescriptorRef  `json:"descriptor_ref"`
+	OwnerURA          string         `json:"owner_ura,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
 // UnpublishAbilityRequest builds or executes an unpublish carrier.
@@ -423,6 +430,21 @@ func (c *PublicationClient) ShowAbility(ctx context.Context, ref DescriptorRef) 
 	return NewPublishedAbilityFromJSON(raw)
 }
 
+func (c *PublicationClient) ShowAbilityWithRequest(ctx context.Context, req ShowAbilityRequest) (PublishedAbility, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return PublishedAbility{}, err
+	}
+	requestJSON, err := marshalShowAbilityRequest(req)
+	if err != nil {
+		return PublishedAbility{}, err
+	}
+	raw, err := c.transport.ShowAbility(ctx, requestJSON)
+	if err != nil {
+		return PublishedAbility{}, wrapPublicationTransportError("publication show ability failed", err)
+	}
+	return NewPublishedAbilityFromJSON(raw)
+}
+
 func (c *PublicationClient) EnableAbilityImpl(ctx context.Context, id AbilityImplID) error {
 	if err := c.requireReady(ctx); err != nil {
 		return err
@@ -484,6 +506,21 @@ func (c *PublicationClient) UnpublishAbility(ctx context.Context, ref Descriptor
 		return wrapPublicationTransportError("publication unpublish ability failed", err)
 	}
 	return validatePublicationRecord(raw, "ability_unpublished")
+}
+
+func (c *PublicationClient) UnpublishAbilityWithRequest(ctx context.Context, req UnpublishAbilityRequest) (PublicationRecord, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return PublicationRecord{}, err
+	}
+	requestJSON, err := marshalUnpublishAbilityRequest(req)
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	raw, err := c.transport.UnpublishAbility(ctx, requestJSON)
+	if err != nil {
+		return PublicationRecord{}, wrapPublicationTransportError("publication unpublish ability failed", err)
+	}
+	return newPublicationRecordFromJSON(raw, "ability_unpublished")
 }
 
 func (c *PublicationClient) Close(ctx context.Context) error {
@@ -568,6 +605,28 @@ func NewPluginInstallResultFromJSON(raw []byte) (PluginInstallResult, error) {
 	return result, nil
 }
 
+func NewPublicationRecordFromJSON(raw []byte) (PublicationRecord, error) {
+	var record PublicationRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication record JSON: %v", err), err)
+	}
+	if record.Profile != publicationProfile || record.Kind == "" || record.Metadata == nil {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "invalid publication record projection", nil)
+	}
+	return record, nil
+}
+
+func newPublicationRecordFromJSON(raw []byte, expectedKind string) (PublicationRecord, error) {
+	record, err := NewPublicationRecordFromJSON(raw)
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	if record.Kind != expectedKind {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "invalid publication record projection", nil)
+	}
+	return record, nil
+}
+
 func marshalAbilityDeployRequest(req AbilityDeployRequest) ([]byte, error) {
 	if req.CallerURA == "" || req.CalleeURA == "" || req.SubjectURA == "" ||
 		req.DescriptorVersion == "" || req.NonceBase64 == "" || req.NodeID == "" ||
@@ -621,6 +680,19 @@ func marshalUnpublishAbilityRequest(req UnpublishAbilityRequest) ([]byte, error)
 	return requestJSON, nil
 }
 
+func marshalShowAbilityRequest(req ShowAbilityRequest) ([]byte, error) {
+	if req.CallerURA == "" || req.CalleeURA == "" || req.SubjectURA == "" ||
+		req.DescriptorVersion == "" || req.NonceBase64 == "" || req.CausalContext == nil ||
+		req.DescriptorRef == "" {
+		return nil, invalidProfilePayload(publicationProfile, "complete show invocation carrier is required", nil)
+	}
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode show request: %v", err), err)
+	}
+	return requestJSON, nil
+}
+
 func normalizePublishedAbilityQuery(query PublishedAbilityQuery) PublishedAbilityQuery {
 	if query.Limit == 0 {
 		query.Limit = DefaultPublishedAbilityPageSize
@@ -640,14 +712,8 @@ func validatePublishedAbilityQuery(query PublishedAbilityQuery) error {
 }
 
 func validatePublicationRecord(raw []byte, expectedKind string) error {
-	var record PublicationRecord
-	if err := json.Unmarshal(raw, &record); err != nil {
-		return invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication record JSON: %v", err), err)
-	}
-	if record.Profile != publicationProfile || record.Kind != expectedKind || record.Metadata == nil {
-		return invalidProfilePayload(publicationProfile, "invalid publication record projection", nil)
-	}
-	return nil
+	_, err := newPublicationRecordFromJSON(raw, expectedKind)
+	return err
 }
 
 func wrapPublicationTransportError(message string, cause error) error {
