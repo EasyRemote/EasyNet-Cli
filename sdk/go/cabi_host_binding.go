@@ -89,7 +89,7 @@ func OpenCABIHostBindingTransport(path string, controlPath string) (*CABIHostBin
 	if actual := C.easynet_host_binding_call_abi_version(symbols.abiVersion); uint32(actual) != expectedCABIABIVersion {
 		C.dlclose(library)
 		return nil, &SDKError{
-			Code:      ErrVersionIncompatible,
+			Code:      ErrVersionMismatch,
 			Stage:     "cabi",
 			Retry:     RetryNever,
 			Retryable: false,

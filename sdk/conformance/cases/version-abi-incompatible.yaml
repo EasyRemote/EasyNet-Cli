@@ -14,4 +14,4 @@ steps:
       abi_version: 0
 expect:
   result: error
-  error_code: VersionIncompatible
+  error_code: VersionMismatch

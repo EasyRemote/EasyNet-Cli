@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -174,7 +175,7 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	requireCaseID(t, incompatibleCase, "version/abi_incompatible")
 	requireCaseAction(t, incompatibleCase, "feature_discovery")
 	requireCaseExpectation(t, incompatibleCase, "result: error")
-	requireCaseExpectation(t, incompatibleCase, "error_code: VersionIncompatible")
+	requireCaseExpectation(t, incompatibleCase, "error_code: VersionMismatch")
 
 	incompatible, err := NewClient(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
 		return sharedFeatureDiscoveryJSON(t, 0), nil
@@ -182,8 +183,10 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	if err != nil {
 		t.Fatalf("NewClient(incompatible): %v", err)
 	}
-	if _, err := incompatible.RequireABI(context.Background(), 4); !IsCode(err, ErrorVersionIncompatible) {
-		t.Fatalf("shared incompatible ABI did not produce VersionIncompatible: %v", err)
+	_, err = incompatible.RequireABI(context.Background(), 4)
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrVersionMismatch {
+		t.Fatalf("shared incompatible ABI code = %v, want %s", err, ErrVersionMismatch)
 	}
 
 	controlOnlyCase := sharedCase(t, root, "daemon-control-only.yaml")

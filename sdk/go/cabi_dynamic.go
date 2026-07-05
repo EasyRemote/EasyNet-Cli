@@ -72,7 +72,7 @@ func OpenCABIDiscoveryTransport(path string) (*CABIDiscoveryTransport, error) {
 	if actual := C.easynet_call_abi_version(transport.abiVersion); uint32(actual) != expectedCABIABIVersion {
 		C.dlclose(library)
 		return nil, &SDKError{
-			Code:      ErrVersionIncompatible,
+			Code:      ErrVersionMismatch,
 			Stage:     "cabi",
 			Retry:     RetryNever,
 			Retryable: false,

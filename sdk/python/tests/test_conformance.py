@@ -1264,13 +1264,13 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_action(incompatible_case, "feature_discovery")
         self._require_case_expectation(incompatible_case, "result: error")
         self._require_case_expectation(
-            incompatible_case, "error_code: VersionIncompatible"
+            incompatible_case, "error_code: VersionMismatch"
         )
 
         incompatible = Client(SharedDiscoveryTransport(0))
         with self.assertRaises(SDKError) as caught:
             incompatible.require_abi(4)
-        self.assertEqual(caught.exception.code, ErrorCode.VERSION_INCOMPATIBLE)
+        self.assertEqual(caught.exception.code, ErrorCode.VERSION_MISMATCH)
 
         control_only_case = shared_case("daemon-control-only.yaml")
         self._require_case_id(control_only_case, "daemon/control_only")

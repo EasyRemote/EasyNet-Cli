@@ -66,7 +66,7 @@ class ControlIpcTests(unittest.TestCase):
             with self.assertRaises(SDKError) as caught:
                 ControlIpcClient.connect(path)
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_INCOMPATIBLE))
+        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
 
     def test_round_trip_uses_little_endian_length_prefixed_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -53,7 +53,7 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             client.require_abi(4)
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_INCOMPATIBLE))
+        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
 
     def test_feature_discovery_wraps_transport_failure(self) -> None:
         client = Client(FailingTransport())
@@ -78,7 +78,7 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             client.require_abi(4)
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_INCOMPATIBLE))
+        self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
 
     def test_close_delegates_once_and_fails_closed(self) -> None:
         transport = StaticTransport(b'{"abi_version": 4, "sdk_version": "0.91.30"}')

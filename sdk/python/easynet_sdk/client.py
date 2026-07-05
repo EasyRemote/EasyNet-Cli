@@ -160,7 +160,7 @@ class Client:
         return self._transport
 
     def require_abi(self, expected: int) -> FeatureSet:
-        """Return feature discovery or raise VersionIncompatible."""
+        """Return feature discovery or raise VersionMismatch."""
 
         if expected <= 0:
             raise SDKError(
@@ -172,7 +172,7 @@ class Client:
         features = self.feature_discovery()
         if features.abi_version != expected:
             raise SDKError(
-                code=ErrorCode.VERSION_INCOMPATIBLE,
+                code=ErrorCode.VERSION_MISMATCH,
                 stage="sdk",
                 retry=RetryHint.NEVER,
                 message=(

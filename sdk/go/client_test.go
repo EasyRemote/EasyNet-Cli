@@ -66,8 +66,12 @@ func TestRequireABIReturnsTypedVersionMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RequireABI succeeded, want version error")
 	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrVersionMismatch {
+		t.Fatalf("error code = %v, want %s", err, ErrVersionMismatch)
+	}
 	if !IsCode(err, ErrorVersionIncompatible) {
-		t.Fatalf("error code = %v, want %s", err, ErrorVersionIncompatible)
+		t.Fatalf("legacy version-incompatible request did not match canonical error")
 	}
 }
 
@@ -104,8 +108,12 @@ func TestRequireABIMapsZeroDaemonABIToVersionMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RequireABI succeeded, want version error")
 	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrVersionMismatch {
+		t.Fatalf("error code = %v, want %s", err, ErrVersionMismatch)
+	}
 	if !IsCode(err, ErrorVersionIncompatible) {
-		t.Fatalf("error code = %v, want %s", err, ErrorVersionIncompatible)
+		t.Fatalf("legacy version-incompatible request did not match canonical error")
 	}
 }
 

@@ -101,7 +101,7 @@ func OpenCABICompatibilityTransport(path string, controlPath string) (*CABICompa
 	if actual := C.easynet_compatibility_call_abi_version(symbols.abiVersion); uint32(actual) != expectedCABIABIVersion {
 		C.dlclose(library)
 		return nil, &SDKError{
-			Code:      ErrVersionIncompatible,
+			Code:      ErrVersionMismatch,
 			Stage:     "cabi",
 			Retry:     RetryNever,
 			Retryable: false,

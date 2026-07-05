@@ -329,7 +329,7 @@ def _negotiate_ipc_version(daemon_range: IpcVersionRange) -> int:
     overlap = supported.overlap(daemon_range)
     if overlap is None:
         raise SDKError(
-            code=ErrorCode.VERSION_INCOMPATIBLE,
+            code=ErrorCode.VERSION_MISMATCH,
             stage="control_ipc",
             retry=RetryHint.NEVER,
             retryable=False,

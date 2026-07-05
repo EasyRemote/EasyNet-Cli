@@ -203,7 +203,7 @@ func (c *Client) Close(ctx context.Context) error {
 	return nil
 }
 
-// RequireABI reads feature discovery and fails with VersionIncompatible when
+// RequireABI reads feature discovery and fails with VersionMismatch when
 // the daemon SDK ABI does not match the caller's expected ABI.
 func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, error) {
 	if expected == 0 {
@@ -221,7 +221,7 @@ func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, e
 	}
 	if features.ABIVersion != expected {
 		return FeatureSet{}, &SDKError{
-			Code:      ErrorVersionIncompatible,
+			Code:      ErrVersionMismatch,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),

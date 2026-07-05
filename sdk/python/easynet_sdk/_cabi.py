@@ -196,7 +196,7 @@ class CLILibrary:
         actual = int(self._raw.easynet_abi_version())
         if actual != expected:
             raise SDKError(
-                code=ErrorCode.VERSION_INCOMPATIBLE,
+                code=ErrorCode.VERSION_MISMATCH,
                 stage="cabi",
                 retry=RetryHint.NEVER,
                 message=f"libeasynet_cli ABI version {actual} does not match expected {expected}",
