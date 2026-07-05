@@ -94,7 +94,7 @@ HostStreamFrameWriter lifecycle helper that delegates frame/hash semantics
 through the client plus per-call HostStreamSession state seams. Python also
 ships `LocalHostBindingTransport` for product-host frame/hash facade execution
 against the shared Host Binding conformance fixtures. The package also exposes
-EasyRemote cutover audit helpers that reject raw FFI/Axon imports, raw
+Consumer boundary audit helpers that reject raw FFI/Axon imports, raw
 Invocation JSON codecs, raw URA/DescriptorRef helpers, raw host-stream
 frame/hash codecs, raw admin/mission carrier strings, and raw lower-layer
 Axon/ABI dependencies in consumer manifests.

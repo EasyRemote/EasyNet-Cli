@@ -1,4 +1,4 @@
-"""Static consumer cutover audit helpers."""
+"""Static consumer boundary audit helpers."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ _LEGACY_TRANSPORT_PACKAGE = "_transport"
 
 
 @dataclass(frozen=True)
-class CutoverViolation:
+class BoundaryViolation:
     """One consumer source boundary violation."""
 
     path: str
@@ -45,11 +45,11 @@ class CutoverViolation:
 
 
 @dataclass(frozen=True)
-class CutoverAuditResult:
-    """Cutover audit result for one consumer source tree."""
+class BoundaryAuditResult:
+    """Boundary audit result for one consumer source tree."""
 
     root: str
-    violations: tuple[CutoverViolation, ...] = field(default_factory=tuple)
+    violations: tuple[BoundaryViolation, ...] = field(default_factory=tuple)
 
     @property
     def ok(self) -> bool:
@@ -62,12 +62,12 @@ class CutoverAuditResult:
             f"{item.path}:{item.line or 1} {item.rule}: {item.detail}"
             for item in self.violations
         )
-        raise AssertionError(f"cutover audit failed: {details}")
+        raise AssertionError(f"consumer boundary audit failed: {details}")
 
 
 @dataclass(frozen=True)
-class EasyRemoteCutoverAuditor:
-    """Audit an EasyRemote-like consumer for SDK boundary regressions."""
+class ConsumerBoundaryAuditor:
+    """Audit an SDK consumer for SDK boundary regressions."""
 
     ignored_dirs: tuple[str, ...] = (
         ".git",
@@ -81,14 +81,14 @@ class EasyRemoteCutoverAuditor:
         "venv",
     )
 
-    def audit_path(self, root: str | Path) -> CutoverAuditResult:
+    def audit_path(self, root: str | Path) -> BoundaryAuditResult:
         root_path = Path(root)
-        violations: list[CutoverViolation] = []
+        violations: list[BoundaryViolation] = []
         for source in self._python_sources(root_path):
             violations.extend(self._audit_source(root_path, source))
         for manifest in self._python_manifests(root_path):
             violations.extend(self._audit_manifest(root_path, manifest))
-        return CutoverAuditResult(str(root_path), tuple(violations))
+        return BoundaryAuditResult(str(root_path), tuple(violations))
 
     def _python_sources(self, root: Path) -> Iterable[Path]:
         if root.is_file():
@@ -111,10 +111,10 @@ class EasyRemoteCutoverAuditor:
             if manifest.is_file() and _is_python_manifest(manifest):
                 yield manifest
 
-    def _audit_source(self, root: Path, source: Path) -> tuple[CutoverViolation, ...]:
+    def _audit_source(self, root: Path, source: Path) -> tuple[BoundaryViolation, ...]:
         text = source.read_text(encoding="utf-8")
         relative = str(source.relative_to(root) if source != root else source.name)
-        violations: list[CutoverViolation] = []
+        violations: list[BoundaryViolation] = []
         violations.extend(_audit_legacy_transport_path(relative))
         violations.extend(_audit_imports(relative, text))
         violations.extend(_audit_raw_ffi_markers(relative, text))
@@ -131,38 +131,38 @@ class EasyRemoteCutoverAuditor:
 
     def _audit_manifest(
         self, root: Path, manifest: Path
-    ) -> tuple[CutoverViolation, ...]:
+    ) -> tuple[BoundaryViolation, ...]:
         text = manifest.read_text(encoding="utf-8")
         relative = str(manifest.relative_to(root) if manifest != root else manifest.name)
         return _audit_manifest_dependencies(relative, manifest.name, text)
 
 
-def audit_easyremote_cutover(root: str | Path) -> CutoverAuditResult:
-    """Audit whether an EasyRemote-like source tree stays above the SDK boundary."""
+def audit_consumer_boundary(root: str | Path) -> BoundaryAuditResult:
+    """Audit whether an SDK consumer source tree stays above the SDK boundary."""
 
-    return EasyRemoteCutoverAuditor().audit_path(root)
+    return ConsumerBoundaryAuditor().audit_path(root)
 
 
-def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
+def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         return (
-            CutoverViolation(
+            BoundaryViolation(
                 path=path,
                 rule="python_parse",
                 detail=str(exc),
                 line=exc.lineno or 1,
             ),
         )
-    violations: list[CutoverViolation] = []
+    violations: list[BoundaryViolation] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".", 1)[0]
                 if root in {"ctypes", _RAW_AXON_MODULE} or _is_raw_axon_module(alias.name):
                     violations.append(
-                        CutoverViolation(
+                        BoundaryViolation(
                             path=path,
                             rule="raw_lower_layer_import",
                             detail=alias.name,
@@ -171,7 +171,7 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
                     )
                 if _is_legacy_transport_module(alias.name):
                     violations.append(
-                        CutoverViolation(
+                        BoundaryViolation(
                             path=path,
                             rule="raw_transport_module",
                             detail=alias.name,
@@ -183,7 +183,7 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
             root = module.split(".", 1)[0]
             if root in {"ctypes", _RAW_AXON_MODULE} or _is_raw_axon_module(module):
                 violations.append(
-                    CutoverViolation(
+                    BoundaryViolation(
                         path=path,
                         rule="raw_lower_layer_import",
                         detail=module,
@@ -192,7 +192,7 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
                 )
             if _is_legacy_transport_module(module, level=node.level):
                 violations.append(
-                    CutoverViolation(
+                    BoundaryViolation(
                         path=path,
                         rule="raw_transport_module",
                         detail=module or "." * node.level,
@@ -202,7 +202,7 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
             for alias in node.names:
                 if _is_legacy_transport_module(alias.name, level=node.level):
                     violations.append(
-                        CutoverViolation(
+                        BoundaryViolation(
                             path=path,
                             rule="raw_transport_module",
                             detail=alias.name,
@@ -212,12 +212,12 @@ def _audit_imports(path: str, text: str) -> tuple[CutoverViolation, ...]:
     return tuple(violations)
 
 
-def _audit_legacy_transport_path(path: str) -> tuple[CutoverViolation, ...]:
+def _audit_legacy_transport_path(path: str) -> tuple[BoundaryViolation, ...]:
     parts = Path(path).parts
     if _LEGACY_TRANSPORT_PACKAGE not in parts:
         return tuple()
     return (
-        CutoverViolation(
+        BoundaryViolation(
             path=path,
             rule="raw_transport_module",
             detail="/".join(parts),
@@ -226,8 +226,8 @@ def _audit_legacy_transport_path(path: str) -> tuple[CutoverViolation, ...]:
     )
 
 
-def _audit_raw_abi_symbols(path: str, text: str) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+def _audit_raw_abi_symbols(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -238,7 +238,7 @@ def _audit_raw_abi_symbols(path: str, text: str) -> tuple[CutoverViolation, ...]
             continue
         for symbol in sorted(_raw_abi_symbols_in_node(node)):
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule="raw_c_abi_symbol",
                     detail=symbol,
@@ -248,8 +248,8 @@ def _audit_raw_abi_symbols(path: str, text: str) -> tuple[CutoverViolation, ...]
     return tuple(violations)
 
 
-def _audit_raw_ffi_markers(path: str, text: str) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+def _audit_raw_ffi_markers(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -260,7 +260,7 @@ def _audit_raw_ffi_markers(path: str, text: str) -> tuple[CutoverViolation, ...]
             continue
         for marker in sorted(_raw_ffi_markers_in_node(node)):
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule="raw_ffi_loader",
                     detail=marker,
@@ -331,8 +331,8 @@ def _is_raw_abi_symbol(value: str) -> bool:
     )
 
 
-def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+def _audit_invocation_codec(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -347,7 +347,7 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...
                 continue
             if markers:
                 violations.append(
-                    CutoverViolation(
+                    BoundaryViolation(
                         path=path,
                         rule="raw_invocation_json_codec",
                         detail=", ".join(markers),
@@ -357,8 +357,8 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[CutoverViolation, ...
     return tuple(violations)
 
 
-def _audit_host_stream_codec(path: str, text: str) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+def _audit_host_stream_codec(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -371,7 +371,7 @@ def _audit_host_stream_codec(path: str, text: str) -> tuple[CutoverViolation, ..
         if not markers:
             continue
         violations.append(
-            CutoverViolation(
+            BoundaryViolation(
                 path=path,
                 rule="raw_host_stream_codec",
                 detail=", ".join(markers),
@@ -413,8 +413,8 @@ def _dict_contains_string(node: ast.Dict, value: str) -> bool:
     return False
 
 
-def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -425,7 +425,7 @@ def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[CutoverViolati
         names = _attribute_names(node)
         if {"prev_receipt_hash", "self_hash"}.issubset(names):
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule="raw_receipt_chain_semantics",
                     detail="prev_receipt_hash/self_hash continuity check",
@@ -437,8 +437,8 @@ def _audit_receipt_chain_semantics(path: str, text: str) -> tuple[CutoverViolati
 
 def _audit_context_causal_semantics(
     path: str, text: str
-) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -455,7 +455,7 @@ def _audit_context_causal_semantics(
         ):
             continue
         violations.append(
-            CutoverViolation(
+            BoundaryViolation(
                 path=path,
                 rule="raw_context_causal_ref",
                 detail="Context child causal refs must come from SDK Receipt projection",
@@ -486,7 +486,7 @@ def _is_causal_ref_constructor(node: ast.Call) -> bool:
 
 def _audit_publication_carrier_semantics(
     path: str, text: str
-) -> tuple[CutoverViolation, ...]:
+) -> tuple[BoundaryViolation, ...]:
     return _audit_string_literals(
         path,
         text,
@@ -497,7 +497,7 @@ def _audit_publication_carrier_semantics(
 
 def _audit_admin_carrier_semantics(
     path: str, text: str
-) -> tuple[CutoverViolation, ...]:
+) -> tuple[BoundaryViolation, ...]:
     return _audit_string_literals(
         path,
         text,
@@ -524,7 +524,7 @@ def _audit_admin_carrier_semantics(
 
 def _audit_mission_carrier_semantics(
     path: str, text: str
-) -> tuple[CutoverViolation, ...]:
+) -> tuple[BoundaryViolation, ...]:
     return _audit_string_literals(
         path,
         text,
@@ -542,8 +542,8 @@ _RAW_ADDRESSING_HELPER_NAMES = {
 }
 
 
-def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+def _audit_addressing_semantics(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -556,7 +556,7 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation,
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name in _RAW_ADDRESSING_HELPER_NAMES and not sdk_identity_facade:
                 violations.append(
-                    CutoverViolation(
+                    BoundaryViolation(
                         path=path,
                         rule="raw_addressing_helper",
                         detail=node.name,
@@ -565,7 +565,7 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation,
                 )
         if _is_descriptor_ref_assembly(node):
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule="raw_descriptor_ref_assembly",
                     detail="DescriptorRef must come from SDK/Axon helper",
@@ -574,7 +574,7 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[CutoverViolation,
             )
         if _is_descriptor_ref_split(node):
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule="raw_descriptor_ref_assembly",
                     detail="DescriptorRef parsing must come from SDK/Axon helper",
@@ -656,8 +656,8 @@ def _subtree_mentions_name(node: ast.AST, names: set[str]) -> bool:
 
 def _audit_string_literals(
     path: str, text: str, *, rule: str, values: set[str]
-) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -668,7 +668,7 @@ def _audit_string_literals(
             continue
         if isinstance(node, ast.Constant) and node.value in values:
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule=rule,
                     detail=str(node.value),
@@ -755,7 +755,7 @@ def _is_python_manifest(path: Path) -> bool:
 
 def _audit_manifest_dependencies(
     path: str, filename: str, text: str
-) -> tuple[CutoverViolation, ...]:
+) -> tuple[BoundaryViolation, ...]:
     if filename == "pyproject.toml":
         return _audit_pyproject_dependencies(path, text)
     if filename == "setup.py":
@@ -763,12 +763,12 @@ def _audit_manifest_dependencies(
     return _audit_dependency_lines(path, text)
 
 
-def _audit_pyproject_dependencies(path: str, text: str) -> tuple[CutoverViolation, ...]:
+def _audit_pyproject_dependencies(path: str, text: str) -> tuple[BoundaryViolation, ...]:
     try:
         document = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         return (
-            CutoverViolation(
+            BoundaryViolation(
                 path=path,
                 rule="python_manifest_parse",
                 detail=str(exc),
@@ -793,12 +793,12 @@ def _audit_pyproject_dependencies(path: str, text: str) -> tuple[CutoverViolatio
     return _violations_for_dependency_entries(path, dependencies)
 
 
-def _audit_setup_py_dependencies(path: str, text: str) -> tuple[CutoverViolation, ...]:
+def _audit_setup_py_dependencies(path: str, text: str) -> tuple[BoundaryViolation, ...]:
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         return (
-            CutoverViolation(
+            BoundaryViolation(
                 path=path,
                 rule="python_manifest_parse",
                 detail=str(exc),
@@ -815,7 +815,7 @@ def _audit_setup_py_dependencies(path: str, text: str) -> tuple[CutoverViolation
     return _violations_for_dependency_entries(path, dependencies)
 
 
-def _audit_dependency_lines(path: str, text: str) -> tuple[CutoverViolation, ...]:
+def _audit_dependency_lines(path: str, text: str) -> tuple[BoundaryViolation, ...]:
     dependencies: list[tuple[str, int]] = []
     for index, line in enumerate(text.splitlines(), start=1):
         stripped = line.split("#", 1)[0].strip()
@@ -827,8 +827,8 @@ def _audit_dependency_lines(path: str, text: str) -> tuple[CutoverViolation, ...
 
 def _violations_for_dependency_entries(
     path: str, entries: Iterable[str | tuple[str, int]]
-) -> tuple[CutoverViolation, ...]:
-    violations: list[CutoverViolation] = []
+) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
     for entry in entries:
         if isinstance(entry, tuple):
             raw, line = entry
@@ -837,7 +837,7 @@ def _violations_for_dependency_entries(
         name = _dependency_name(raw)
         if name in _FORBIDDEN_DEPENDENCY_NAMES:
             violations.append(
-                CutoverViolation(
+                BoundaryViolation(
                     path=path,
                     rule="raw_lower_layer_dependency",
                     detail=name,

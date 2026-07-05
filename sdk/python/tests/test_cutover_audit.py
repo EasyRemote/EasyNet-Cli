@@ -3,10 +3,10 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from easynet_sdk import EasyRemoteCutoverAuditor, audit_easyremote_cutover
+from easynet_sdk import ConsumerBoundaryAuditor, audit_consumer_boundary
 
 
-class EasyRemoteCutoverAuditTests(unittest.TestCase):
+class ConsumerBoundaryAuditTests(unittest.TestCase):
     def test_accepts_sdk_only_consumer_facade(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -26,7 +26,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -45,7 +45,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = EasyRemoteCutoverAuditor().audit_path(root)
+            result = ConsumerBoundaryAuditor().audit_path(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_lower_layer_import", _rules(result))
@@ -68,7 +68,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_transport_module", _rules(result))
@@ -87,7 +87,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         violations = [item for item in result.violations if item.rule == "raw_transport_module"]
@@ -110,7 +110,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -131,7 +131,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_lower_layer_dependency", _rules(result))
@@ -144,7 +144,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_lower_layer_dependency", _rules(result))
@@ -167,7 +167,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_lower_layer_dependency", _rules(result))
@@ -200,7 +200,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -221,7 +221,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -243,7 +243,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_c_abi_symbol", _rules(result))
@@ -263,7 +263,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_lower_layer_import", _rules(result))
@@ -293,7 +293,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -335,7 +335,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -352,7 +352,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_addressing_helper", _rules(result))
@@ -380,7 +380,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_addressing_helper", _rules(result))
@@ -403,7 +403,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_publication_carrier", _rules(result))
@@ -441,7 +441,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_admin_carrier", _rules(result))
@@ -466,7 +466,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_mission_carrier", _rules(result))
@@ -491,7 +491,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_context_causal_ref", _rules(result))
@@ -518,7 +518,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -542,7 +542,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertTrue(result.ok)
 
@@ -569,7 +569,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_invocation_json_codec", _rules(result))
@@ -594,7 +594,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_invocation_json_codec", _rules(result))
@@ -606,7 +606,7 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
                 "import ctypes\nsymbol = 'easynet_last_error'\n",
                 encoding="utf-8",
             )
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         with self.assertRaises(AssertionError) as caught:
             result.require_ok()

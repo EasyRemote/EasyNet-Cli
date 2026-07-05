@@ -123,7 +123,7 @@ from easynet_sdk import (
     CausalRef,
     UnpublishAbilityRequest,
     ValidatePackageOptions,
-    audit_easyremote_cutover,
+    audit_consumer_boundary,
     build_receipt_fetch_invocation,
 )
 
@@ -3859,7 +3859,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
         self.assertTrue(result.ok)
 
         identity = _EasyRemoteAdapterIdentityTransport()

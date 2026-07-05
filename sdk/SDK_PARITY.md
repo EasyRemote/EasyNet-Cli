@@ -313,7 +313,7 @@ method spelling.
   frame and output-hash semantics to SDK Host Binding. Product host readiness
   execution, cleanup execution, and behavior-executing host lifecycle
   conformance remain incomplete.
-- Python EasyRemote cutover audit helpers expose source-tree checks for raw
+- Python Consumer boundary audit helpers expose source-tree checks for raw
   FFI/Axon imports, raw C ABI symbols, raw Invocation JSON codecs, and raw
   URA/DescriptorRef helpers, raw host-stream frame/hash codecs, raw
   receipt-chain continuity checks, and raw admin/mission carrier strings, plus
@@ -365,7 +365,7 @@ method spelling.
   verification, device-session create/list/delete, and device revoke, SDK-owned
   `GatewayLifecycleFacade` hub-config materialization, lifecycle state, TLS file
   validation, endpoint projection, certificate fingerprint projection, and raw
-  admin carrier cutover audit gate for `agent.start/list/stop/refresh`;
+  admin carrier consumer-boundary audit gate for `agent.start/list/stop/refresh`;
   invocation-builder carrier methods remain fail-closed in the EasyRemote
   product bridge, while certificate policy, backend trust policy persistence,
   and daemon-backed Server pairing/hub lifecycle product cutover remain

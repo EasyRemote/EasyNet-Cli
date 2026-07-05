@@ -15,7 +15,7 @@ from easynet_sdk import (
     ReceiptClient,
     RuntimeClient,
     ability_address,
-    audit_easyremote_cutover,
+    audit_consumer_boundary,
 )
 
 from test_identity import MemoryIdentityTransport
@@ -231,7 +231,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
         )
 
-    def test_cutover_audit_rejects_raw_host_stream_codec(self) -> None:
+    def test_boundary_audit_rejects_raw_host_stream_codec(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "host.py").write_text(
@@ -246,12 +246,12 @@ class _RollingHash:
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn("raw_host_stream_codec", {item.rule for item in result.violations})
 
-    def test_cutover_audit_rejects_raw_receipt_chain_semantics(self) -> None:
+    def test_boundary_audit_rejects_raw_receipt_chain_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "receipts.py").write_text(
@@ -263,7 +263,7 @@ def verify_continuity(previous, current):
                 encoding="utf-8",
             )
 
-            result = audit_easyremote_cutover(root)
+            result = audit_consumer_boundary(root)
 
         self.assertFalse(result.ok)
         self.assertIn(

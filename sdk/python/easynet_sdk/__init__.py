@@ -107,11 +107,11 @@ from .control_ipc import (
     default_control_path,
     read_control_discovery,
 )
-from .cutover_audit import (
-    CutoverAuditResult,
-    CutoverViolation,
-    EasyRemoteCutoverAuditor,
-    audit_easyremote_cutover,
+from .consumer_boundary import (
+    BoundaryAuditResult,
+    BoundaryViolation,
+    ConsumerBoundaryAuditor,
+    audit_consumer_boundary,
 )
 from .profile_bridge import (
     DaemonProfileBridge,
@@ -448,8 +448,8 @@ __all__ = [
     "ControlDiscoveryRuntimeConnector",
     "ControlFrame",
     "ControlIpcClient",
-    "CutoverAuditResult",
-    "CutoverViolation",
+    "BoundaryAuditResult",
+    "BoundaryViolation",
     "AttachOptions",
     "AbilityQuery",
     "AbilityDeployRequest",
@@ -560,7 +560,7 @@ __all__ = [
     "EventsInvocationSubscriptionRequest",
     "EventsSessionSubscriptionRequest",
     "EventsSubscriptionRequest",
-    "EasyRemoteCutoverAuditor",
+    "ConsumerBoundaryAuditor",
     "FeatureSet",
     "FileRecord",
     "GatewayListener",
@@ -779,7 +779,7 @@ __all__ = [
     "WrapperTerminalStartRequest",
     "WrapperTransport",
     "attach_daemon",
-    "audit_easyremote_cutover",
+    "audit_consumer_boundary",
     "build_receipt_fetch_invocation",
     "agent_ura",
     "canonical_ability_descriptor_ref",
