@@ -330,17 +330,9 @@ func cabiEventsLastErrorOrCode(symbols cabiEventsSymbols, code int32, fallback s
 	errCode := int32(C.easynet_events_call_last_error_json(symbols.lastErrorJSON, &out))
 	if errCode == 0 && out != nil {
 		raw := cabiEventsTakeCString(symbols.stringFree, out)
-		if decoded, err := DecodeDaemonErrorJSON(raw); err == nil && decoded != nil {
-			return decoded
-		}
+		return cabiErrorFromLastErrorJSON(raw, true, code, fallback)
 	}
-	return &SDKError{
-		Code:      ErrGeneric,
-		Stage:     "cabi",
-		Retry:     RetryUnknown,
-		Retryable: false,
-		Message:   fmt.Sprintf("%s with code %d", fallback, code),
-	}
+	return cabiErrorFromLastErrorJSON(nil, false, code, fallback)
 }
 
 func cabiEventsTakeCString(stringFree unsafe.Pointer, value *C.char) []byte {

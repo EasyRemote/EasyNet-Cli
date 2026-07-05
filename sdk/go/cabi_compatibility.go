@@ -364,17 +364,9 @@ func cabiCompatibilityLastErrorOrCode(symbols cabiCompatibilitySymbols, code int
 	errCode := int32(C.easynet_compatibility_call_last_error_json(symbols.lastErrorJSON, &out))
 	if errCode == 0 && out != nil {
 		raw := cabiCompatibilityTakeCString(symbols.stringFree, out)
-		if decoded, err := DecodeDaemonErrorJSON(raw); err == nil && decoded != nil {
-			return decoded
-		}
+		return cabiErrorFromLastErrorJSON(raw, true, code, fallback)
 	}
-	return &SDKError{
-		Code:      ErrGeneric,
-		Stage:     "cabi",
-		Retry:     RetryUnknown,
-		Retryable: false,
-		Message:   fmt.Sprintf("%s with code %d", fallback, code),
-	}
+	return cabiErrorFromLastErrorJSON(nil, false, code, fallback)
 }
 
 func cabiCompatibilityTakeCString(stringFree unsafe.Pointer, value *C.char) []byte {

@@ -359,17 +359,9 @@ func cabiReceiptLastErrorOrCode(symbols cabiReceiptSymbols, code int32, fallback
 	errCode := int32(C.easynet_receipt_call_last_error_json(symbols.lastErrorJSON, &out))
 	if errCode == 0 && out != nil {
 		raw := cabiReceiptTakeCString(symbols.stringFree, out)
-		if decoded, err := DecodeDaemonErrorJSON(raw); err == nil && decoded != nil {
-			return decoded
-		}
+		return cabiErrorFromLastErrorJSON(raw, true, code, fallback)
 	}
-	return &SDKError{
-		Code:      ErrGeneric,
-		Stage:     "cabi",
-		Retry:     RetryUnknown,
-		Retryable: false,
-		Message:   fmt.Sprintf("%s with code %d", fallback, code),
-	}
+	return cabiErrorFromLastErrorJSON(nil, false, code, fallback)
 }
 
 func cabiReceiptTakeCString(stringFree unsafe.Pointer, value *C.char) []byte {

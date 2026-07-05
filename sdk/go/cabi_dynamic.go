@@ -175,17 +175,14 @@ func (t *CABIDiscoveryTransport) lastErrorOrCode(code int32) error {
 	errCode := int32(C.easynet_call_last_error_json(t.lastErrorJSON, &out))
 	if errCode == 0 && out != nil {
 		defer C.easynet_call_string_free(t.stringFree, out)
-		if decoded, err := DecodeDaemonErrorJSON([]byte(C.GoString(out))); err == nil && decoded != nil {
-			return decoded
-		}
+		return cabiErrorFromLastErrorJSON(
+			[]byte(C.GoString(out)),
+			true,
+			code,
+			"C ABI discovery call failed",
+		)
 	}
-	return &SDKError{
-		Code:      ErrGeneric,
-		Stage:     "cabi",
-		Retry:     RetryUnknown,
-		Retryable: false,
-		Message:   fmt.Sprintf("C ABI discovery call failed with code %d", code),
-	}
+	return cabiErrorFromLastErrorJSON(nil, false, code, "C ABI discovery call failed")
 }
 
 func openCABIDynamicLibrary(path string) (unsafe.Pointer, string, error) {
