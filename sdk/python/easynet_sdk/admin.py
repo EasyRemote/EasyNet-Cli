@@ -627,8 +627,8 @@ VerificationResult = DeviceCredentialVerification
 
 
 @dataclass(frozen=True)
-class EasyRemoteAgentRecord:
-    """EasyRemote-facing projection of one hosted daemon agent."""
+class AgentLifecycleRecord:
+    """Admin profile projection of one hosted daemon agent."""
 
     name: str
     runtime: str
@@ -639,7 +639,7 @@ class EasyRemoteAgentRecord:
     raw: Mapping[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_record(cls, record: AdminAgentRecord) -> "EasyRemoteAgentRecord":
+    def from_record(cls, record: AdminAgentRecord) -> "AgentLifecycleRecord":
         return cls(
             name=record.name,
             runtime=record.runtime,
@@ -667,8 +667,8 @@ class EasyRemoteAgentRecord:
 
 
 @dataclass(frozen=True)
-class EasyRemoteAgentStartProjection:
-    """EasyRemote-facing projection of daemon `agent.start`."""
+class AgentStartProjection:
+    """Admin profile projection of daemon `agent.start`."""
 
     name: str
     runtime: str
@@ -680,7 +680,7 @@ class EasyRemoteAgentStartProjection:
     @classmethod
     def from_result(
         cls, result: AdminGatewayResult, *, name: str, runtime: str
-    ) -> "EasyRemoteAgentStartProjection":
+    ) -> "AgentStartProjection":
         raw = _raw_result(result.metadata)
         return cls(
             name=name,
@@ -693,8 +693,8 @@ class EasyRemoteAgentStartProjection:
 
 
 @dataclass(frozen=True)
-class EasyRemoteAgentStopProjection:
-    """EasyRemote-facing projection of daemon `agent.stop`."""
+class AgentStopProjection:
+    """Admin profile projection of daemon `agent.stop`."""
 
     name: str
     agent_ura: Optional[str]
@@ -704,7 +704,7 @@ class EasyRemoteAgentStopProjection:
     @classmethod
     def from_result(
         cls, result: AdminGatewayResult, *, name: str
-    ) -> "EasyRemoteAgentStopProjection":
+    ) -> "AgentStopProjection":
         raw = _raw_result(result.metadata)
         agent_ura = _optional_string(raw.get("agent_ura"), "agent_ura")
         stopped = bool(raw.get("stopped", raw.get("ack", result.ack)))
@@ -716,8 +716,8 @@ class EasyRemoteAgentStopProjection:
         )
 
 
-class EasyRemoteAdminAdapter:
-    """SDK-owned Admin/Gateway cutover adapter for EasyRemote-like callers."""
+class AgentLifecycleAdapter:
+    """SDK-owned Admin/Gateway adapter for hosted-agent lifecycle calls."""
 
     def __init__(self, client: "AdminClient", base: AdminCarrierBase) -> None:
         self._client = client
@@ -732,7 +732,7 @@ class EasyRemoteAdminAdapter:
         label: str | None = None,
         command: str | None = None,
         args: Sequence[str] = (),
-    ) -> EasyRemoteAgentStartProjection:
+    ) -> AgentStartProjection:
         agent_name = _required_clean_string(name, "agent name")
         _validate_agent_name(agent_name, "name")
         runtime = _required_clean_string(kind, "agent type")
@@ -751,23 +751,23 @@ class EasyRemoteAdminAdapter:
                 project_workspace=True,
             )
         )
-        return EasyRemoteAgentStartProjection.from_result(
+        return AgentStartProjection.from_result(
             result,
             name=agent_name,
             runtime=runtime,
         )
 
-    def list_agents(self) -> tuple[EasyRemoteAgentRecord, ...]:
+    def list_agents(self) -> tuple[AgentLifecycleRecord, ...]:
         page = self._client.list_agents(AdminAgentListRequest(self._base))
-        return tuple(EasyRemoteAgentRecord.from_record(record) for record in page.items)
+        return tuple(AgentLifecycleRecord.from_record(record) for record in page.items)
 
-    def stop_agent(self, name: str) -> EasyRemoteAgentStopProjection:
+    def stop_agent(self, name: str) -> AgentStopProjection:
         agent_name = _required_clean_string(name, "agent name")
         _validate_agent_name(agent_name, "name")
         result = self._client.agent_stop(
             AdminAgentStopRequest(self._base, name=agent_name)
         )
-        return EasyRemoteAgentStopProjection.from_result(result, name=agent_name)
+        return AgentStopProjection.from_result(result, name=agent_name)
 
     def refresh_agents(self, name: str | None = None) -> Mapping[str, object]:
         agent_name = name.strip() if name is not None else None
@@ -781,23 +781,23 @@ class EasyRemoteAdminAdapter:
         return _raw_result(result.metadata)
 
 
-class EasyRemoteGatewayState(Enum):
-    """EasyRemote-facing gateway lifecycle state."""
+class GatewayLifecycleState(Enum):
+    """Gateway lifecycle state owned by the Admin + Gateway profile."""
 
     IDLE = "idle"
     RUNNING = "running"
 
 
 @runtime_checkable
-class EasyRemoteGatewayDaemonHandle(Protocol):
-    """Minimal daemon handle required by the EasyRemote gateway facade."""
+class GatewayDaemonHandle(Protocol):
+    """Minimal daemon handle required by the gateway lifecycle facade."""
 
     def stop(self) -> None:
         ...
 
 
 @dataclass(frozen=True)
-class EasyRemoteGatewayConfig:
+class GatewayConfig:
     """Hub listener configuration projected by the SDK gateway facade."""
 
     port: int
@@ -807,7 +807,7 @@ class EasyRemoteGatewayConfig:
     tls_key_path: str
     hostname: str = ""
 
-    def normalized(self) -> "EasyRemoteGatewayConfig":
+    def normalized(self) -> "GatewayConfig":
         realm = self.realm.strip() or "localhost"
         if self.port <= 0 or self.port > 65535:
             raise _invalid_admin("gateway port must be between 1 and 65535")
@@ -815,7 +815,7 @@ class EasyRemoteGatewayConfig:
             raise _invalid_admin("gateway home_dir must not be empty")
         cert = _existing_file(self.tls_cert_path, "TLS certificate")
         key = _existing_file(self.tls_key_path, "TLS private key")
-        return EasyRemoteGatewayConfig(
+        return GatewayConfig(
             port=self.port,
             realm=realm,
             home_dir=str(Path(self.home_dir)),
@@ -835,18 +835,18 @@ class EasyRemoteGatewayConfig:
 
 
 @dataclass(frozen=True)
-class EasyRemoteGatewayRuntime:
-    """One running EasyRemote gateway process projection."""
+class GatewayRuntime:
+    """One running gateway daemon process projection."""
 
-    state: EasyRemoteGatewayState
+    state: GatewayLifecycleState
     endpoint: str
     fingerprint: str
     config_path: str
-    daemon: EasyRemoteGatewayDaemonHandle
+    daemon: GatewayDaemonHandle
 
 
-class EasyRemoteGatewayFacade:
-    """SDK-owned Server/Gateway lifecycle and hub-config facade.
+class GatewayLifecycleFacade:
+    """SDK-owned gateway lifecycle and hub-config facade.
 
     Pairing, trust, session mutation, and public listener readiness remain daemon
     contracts. This class only owns the reusable mechanics needed before the
@@ -856,56 +856,56 @@ class EasyRemoteGatewayFacade:
 
     def __init__(
         self,
-        daemon_starter: Callable[[str], EasyRemoteGatewayDaemonHandle],
+        daemon_starter: Callable[[str], GatewayDaemonHandle],
     ) -> None:
         self._daemon_starter = daemon_starter
-        self._state = EasyRemoteGatewayState.IDLE
-        self._runtime: EasyRemoteGatewayRuntime | None = None
+        self._state = GatewayLifecycleState.IDLE
+        self._runtime: GatewayRuntime | None = None
         self._lock = threading.Lock()
 
     @property
-    def state(self) -> EasyRemoteGatewayState:
+    def state(self) -> GatewayLifecycleState:
         return self._state
 
     @property
-    def runtime(self) -> EasyRemoteGatewayRuntime | None:
+    def runtime(self) -> GatewayRuntime | None:
         return self._runtime
 
-    def start(self, config: EasyRemoteGatewayConfig) -> EasyRemoteGatewayRuntime:
+    def start(self, config: GatewayConfig) -> GatewayRuntime:
         normalized = config.normalized()
         with self._lock:
-            if self._state is EasyRemoteGatewayState.RUNNING:
+            if self._state is GatewayLifecycleState.RUNNING:
                 if self._runtime is None:
                     raise _invalid_admin("gateway runtime state is inconsistent")
                 return self._runtime
             self._ensure_hub_config(normalized)
             daemon = self._daemon_starter(normalized.realm)
-            runtime = EasyRemoteGatewayRuntime(
-                state=EasyRemoteGatewayState.RUNNING,
+            runtime = GatewayRuntime(
+                state=GatewayLifecycleState.RUNNING,
                 endpoint=normalized.endpoint,
                 fingerprint=certificate_fingerprint(normalized.tls_cert_path),
                 config_path=str(normalized.config_path),
                 daemon=daemon,
             )
             self._runtime = runtime
-            self._state = EasyRemoteGatewayState.RUNNING
+            self._state = GatewayLifecycleState.RUNNING
             return runtime
 
     def stop(self) -> None:
         with self._lock:
             runtime = self._runtime
             self._runtime = None
-            self._state = EasyRemoteGatewayState.IDLE
+            self._state = GatewayLifecycleState.IDLE
         if runtime is not None:
             runtime.daemon.stop()
 
-    def _ensure_hub_config(self, config: EasyRemoteGatewayConfig) -> None:
+    def _ensure_hub_config(self, config: GatewayConfig) -> None:
         path = config.config_path
         if path.exists():
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            "# Auto-generated by easyremote Server (hub). Edit by hand to add\n"
+            "# Auto-generated by EasyNet daemon SDK gateway facade. Edit by hand to add\n"
             "# [daemon.federated_peers] or override the UDS path.\n"
             "[daemon]\n"
             'mode = "hub"\n'

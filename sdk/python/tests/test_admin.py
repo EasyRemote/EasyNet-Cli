@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 
 from easynet_sdk import (
-    EasyRemoteAdminAdapter,
-    EasyRemoteGatewayConfig,
-    EasyRemoteGatewayFacade,
-    EasyRemoteGatewayState,
+    AgentLifecycleAdapter,
+    GatewayConfig,
+    GatewayLifecycleFacade,
+    GatewayLifecycleState,
     ErrorCode,
     SDKError,
     certificate_fingerprint,
@@ -503,7 +503,7 @@ def write_gateway_pem(root: Path) -> tuple[Path, Path]:
 
 
 class AdminClientTests(unittest.TestCase):
-    def test_easyremote_gateway_facade_materializes_hub_config_once(self) -> None:
+    def test_gateway_lifecycle_facade_materializes_hub_config_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cert, key = write_gateway_pem(root)
@@ -513,10 +513,10 @@ class AdminClientTests(unittest.TestCase):
                 started.append(realm)
                 return FakeGatewayDaemon()
 
-            facade = EasyRemoteGatewayFacade(starter)
+            facade = GatewayLifecycleFacade(starter)
 
             runtime = facade.start(
-                EasyRemoteGatewayConfig(
+                GatewayConfig(
                     port=8443,
                     realm='ac"me',
                     home_dir=str(root),
@@ -526,7 +526,7 @@ class AdminClientTests(unittest.TestCase):
                 )
             )
             second = facade.start(
-                EasyRemoteGatewayConfig(
+                GatewayConfig(
                     port=9443,
                     realm="ignored",
                     home_dir=str(root),
@@ -538,7 +538,7 @@ class AdminClientTests(unittest.TestCase):
             config = (root / "daemon-config.toml").read_text(encoding="utf-8")
             self.assertIs(runtime, second)
             self.assertEqual(started, ['ac"me'])
-            self.assertEqual(facade.state, EasyRemoteGatewayState.RUNNING)
+            self.assertEqual(facade.state, GatewayLifecycleState.RUNNING)
             self.assertIn('realm = "ac\\"me"', config)
             self.assertIn('listen_tcp = "0.0.0.0:8443"', config)
             self.assertIn(f'tls_cert_pem = "{cert}"', config)
@@ -546,16 +546,16 @@ class AdminClientTests(unittest.TestCase):
             expected = hashlib.sha256(bytes(range(8))).hexdigest().upper()
             self.assertEqual(runtime.fingerprint.replace(":", ""), expected)
 
-    def test_easyremote_gateway_facade_preserves_operator_config(self) -> None:
+    def test_gateway_lifecycle_facade_preserves_operator_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cert, key = write_gateway_pem(root)
             existing = root / "daemon-config.toml"
             existing.write_text("# operator-authored\n[daemon]\nmode = \"hub\"\n")
 
-            facade = EasyRemoteGatewayFacade(lambda _realm: FakeGatewayDaemon())
+            facade = GatewayLifecycleFacade(lambda _realm: FakeGatewayDaemon())
             facade.start(
-                EasyRemoteGatewayConfig(
+                GatewayConfig(
                     port=8443,
                     realm="acme",
                     home_dir=str(root),
@@ -566,14 +566,14 @@ class AdminClientTests(unittest.TestCase):
 
             self.assertTrue(existing.read_text(encoding="utf-8").startswith("# operator"))
 
-    def test_easyremote_gateway_facade_stops_daemon_and_validates_tls(self) -> None:
+    def test_gateway_lifecycle_facade_stops_daemon_and_validates_tls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cert, key = write_gateway_pem(root)
             daemon = FakeGatewayDaemon()
-            facade = EasyRemoteGatewayFacade(lambda _realm: daemon)
+            facade = GatewayLifecycleFacade(lambda _realm: daemon)
             facade.start(
-                EasyRemoteGatewayConfig(
+                GatewayConfig(
                     port=8443,
                     realm="acme",
                     home_dir=str(root),
@@ -585,10 +585,10 @@ class AdminClientTests(unittest.TestCase):
             facade.stop()
 
             self.assertTrue(daemon.stopped)
-            self.assertEqual(facade.state, EasyRemoteGatewayState.IDLE)
+            self.assertEqual(facade.state, GatewayLifecycleState.IDLE)
             with self.assertRaises(SDKError) as caught:
-                EasyRemoteGatewayFacade(lambda _realm: FakeGatewayDaemon()).start(
-                    EasyRemoteGatewayConfig(
+                GatewayLifecycleFacade(lambda _realm: FakeGatewayDaemon()).start(
+                    GatewayConfig(
                         port=8443,
                         realm="acme",
                         home_dir=str(root),
@@ -606,7 +606,7 @@ class AdminClientTests(unittest.TestCase):
                 certificate_fingerprint(str(cert))
             self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
-    def test_easyremote_adapter_controls_hosted_agents(self) -> None:
+    def test_agent_lifecycle_adapter_controls_hosted_agents(self) -> None:
         transport = MemoryAdminTransport()
         transport.start_result = ADMIN_START_RESULT
         transport.stop_result = (
@@ -620,7 +620,7 @@ class AdminClientTests(unittest.TestCase):
         )
         transport.refresh_result = ADMIN_REFRESH_RESULT
         client = AdminClient(transport)
-        adapter = EasyRemoteAdminAdapter(client, admin_base())
+        adapter = AgentLifecycleAdapter(client, admin_base())
 
         started = adapter.start_agent(
             "codex",

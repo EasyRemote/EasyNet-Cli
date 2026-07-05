@@ -11,7 +11,7 @@ from typing import Callable, Protocol
 from .admin import (
     AdminCarrierBase,
     AdminClient,
-    EasyRemoteAdminAdapter,
+    AgentLifecycleAdapter,
 )
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .mission import (
@@ -54,7 +54,7 @@ class ProfileBridgeDispatcher(Protocol):
     def invoke_system_ability(
         self, ability: str, **kwargs: object
     ) -> Mapping[str, object]:
-        """Invoke one daemon system ability and return its product result."""
+        """Invoke one daemon system ability and return its profile result."""
 
 
 NonceFactory = Callable[[], bytes]
@@ -74,8 +74,8 @@ class DaemonProfileBridge:
         self._nonce_factory = nonce_factory or (lambda: os.urandom(16))
         self._descriptor_version = descriptor_version
 
-    def admin_facade(self) -> EasyRemoteAdminAdapter:
-        return EasyRemoteAdminAdapter(
+    def admin_facade(self) -> AgentLifecycleAdapter:
+        return AgentLifecycleAdapter(
             AdminClient(_AdminBridgeTransport(self._dispatcher)),
             self.admin_base(),
         )

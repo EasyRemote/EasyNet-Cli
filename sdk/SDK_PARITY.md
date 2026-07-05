@@ -326,7 +326,7 @@ method spelling.
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission Daemon profile bridge, and page-based
   Pipeline event access/live-tail plus publication catalogue extraction and
-  Server/Gateway hub-config/lifecycle/fingerprint projection plus Pipeline step
+  gateway lifecycle hub-config/fingerprint projection plus Pipeline step
   planning/EAL rendering/child Invocation fact conformance projection, plus
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
@@ -360,11 +360,11 @@ method spelling.
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, C ABI-backed typed device-session page projection,
   device-admin result projection, and close state seams, with an SDK-owned
-  EasyRemote hosted-agent add/list/stop/refresh Admin adapter and
+  `AgentLifecycleAdapter` add/list/stop/refresh Admin adapter and
   SDK-owned Daemon profile bridge dispatch/projection glue for gateway
   status, hub join/leave, pairing preflight/create/validate, credential
   verification, device-session create/list/delete, and device revoke, SDK-owned
-  EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file
+  `GatewayLifecycleFacade` hub-config materialization, lifecycle state, TLS file
   validation, endpoint projection, certificate fingerprint projection, and raw
   admin carrier cutover audit gate for `agent.start/list/stop/refresh`;
   invocation-builder carrier methods remain fail-closed in the EasyRemote

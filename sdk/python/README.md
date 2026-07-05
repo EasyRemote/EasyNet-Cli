@@ -116,11 +116,11 @@ create/delete, and device-revoke execution through Runtime Core invoke,
 C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page/result projection plus close state seams,
-with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
+with an SDK-owned `AgentLifecycleAdapter` over typed Admin profile
 requests for add/list/stop/refresh, SDK-owned `DaemonProfileBridge`
 dispatch/projection glue for gateway status, hub join/leave, pairing
 preflight/create/validate, credential verification, device-session
-create/list/delete, and device revoke, and SDK-owned EasyRemote Server/Gateway
+create/list/delete, and device revoke, and SDK-owned `GatewayLifecycleFacade`
 hub-config materialization, lifecycle state, TLS file validation, endpoint
 projection, and certificate fingerprint projection.
 EventClient exposes directory/device/session/invocation subscription
