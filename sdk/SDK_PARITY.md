@@ -214,7 +214,8 @@ method spelling.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
   `SdkEnvironment` process-root factories with default daemon control-path
   resolution over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
-  connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
+  direct daemon Axon gRPC-over-UDS handle operations composed through an explicit
+  RuntimeTransport delegate, runtime connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, SDK-owned `EasyRemoteDaemonStartConfig` and
   `EasyRemoteDaemonLifecycleFacade` legacy start-wire/status/open-client
@@ -326,9 +327,9 @@ method spelling.
   planning/EAL rendering/child Invocation fact conformance projection, plus
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
-  gates, and product Invocation direct daemon UDS unary/server-stream/bidi transport is available through the SDK facade,
-  while direct daemon prepare/submit adapters,
-  daemon-owned signer acquisition/keyring policy, daemon-backed
+  gates, and product Invocation direct daemon UDS unary/server-stream/bidi transport plus
+  explicit direct-runtime prepare/submit/handle delegation is available through
+  the SDK facade, while daemon-owned signer acquisition/keyring policy, daemon-backed
   Pipeline child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover, and full receipt verification remain
   incomplete.

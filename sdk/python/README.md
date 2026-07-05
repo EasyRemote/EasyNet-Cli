@@ -142,9 +142,9 @@ record-project execution,
 transport-backed helper close state seams, and record projections. EasyRemote
 signed unary dispatch now flows through Runtime Core
 prepare/sign/submit/await/free when a daemon-authorized SDK signer is supplied.
-Product Invocation direct daemon UDS unary, server-stream, and bidi transport is
-available through the SDK facade. Direct prepare/submit adapters,
-daemon-owned signer acquisition/keyring policy, Axon-backed receipt verification, receipt URA
+Product Invocation direct daemon UDS unary, server-stream, bidi transport, and
+explicit direct-runtime prepare/submit/handle delegation are available through
+the SDK facade. Daemon-owned signer acquisition/keyring policy, Axon-backed receipt verification, receipt URA
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
 and cleanup execution adapters, mission event live streams,
