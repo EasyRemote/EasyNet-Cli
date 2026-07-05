@@ -57,6 +57,20 @@ REQUIRED_CAPABILITIES = (
 
 REQUIRED_PRODUCT_BOUNDARIES = ("easynet_product", "easyremote_product")
 FORBIDDEN_CAPABILITY_TOKENS = ("backend", "easyremote", "product", "hub")
+PROVIDER_BACKED_REQUIRED_EVIDENCE = {
+    "surface": {
+        "go": "sdk/go/surface_runtime_test.go",
+        "python": "sdk/python/tests/test_cabi.py",
+    },
+    "compatibility": {
+        "go": "sdk/go/compatibility_runtime_test.go",
+        "python": "sdk/python/tests/test_cabi.py",
+    },
+    "wrappers": {
+        "go": "sdk/go/wrappers_runtime_test.go",
+        "python": "sdk/python/tests/test_wrappers.py",
+    },
+}
 
 
 def fail(message: str) -> None:
@@ -108,6 +122,24 @@ def validate_evidence(owner: str, status: str, evidence: object) -> None:
             fail(f"unknown_evidence_kind:{owner}:{kind}")
         if kind != "doc" and not repo_ref_exists(ref):
             fail(f"missing_evidence_ref:{owner}:{ref}")
+
+
+def require_provider_backed_evidence(row_id: str, row: dict[str, object]) -> None:
+    required = PROVIDER_BACKED_REQUIRED_EVIDENCE.get(row_id)
+    if required is None:
+        return
+    for language, required_ref in required.items():
+        state = row[language]
+        if not isinstance(state, dict):
+            fail(f"missing_language_state:{row_id}:{language}")
+        if state.get("status") != "provider-backed":
+            continue
+        evidence = state.get("evidence")
+        if not isinstance(evidence, list):
+            fail(f"missing_evidence:{row_id}.{language}")
+        refs = {item.get("ref") for item in evidence if isinstance(item, dict)}
+        if required_ref not in refs:
+            fail(f"provider_backed_without_runtime_evidence:{row_id}:{language}:{required_ref}")
 
 
 def validate_language_status(row_id: str, row: dict[str, object]) -> tuple[str, str]:
@@ -203,6 +235,7 @@ for row in capabilities:
         if not repo_ref_exists(ref):
             fail(f"missing_shared_case:{row_id}:{ref}")
     validate_language_status(row_id, row)
+    require_provider_backed_evidence(row_id, row)
 
 missing = sorted(set(REQUIRED_CAPABILITIES) - seen)
 if missing:
@@ -247,7 +280,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   cp "$DEFAULT_MATRIX" "$tmp/good.json"
   run_validator "$tmp/good.json" >/dev/null
 
-  python3 - "$DEFAULT_MATRIX" "$tmp/missing.json" "$tmp/status.json" "$tmp/cutover.json" "$tmp/product.json" <<'PY'
+  python3 - "$DEFAULT_MATRIX" "$tmp/missing.json" "$tmp/status.json" "$tmp/cutover.json" "$tmp/product.json" "$tmp/provider.json" <<'PY'
 from __future__ import annotations
 
 import json
@@ -260,6 +293,7 @@ missing = Path(sys.argv[2])
 status = Path(sys.argv[3])
 cutover = Path(sys.argv[4])
 product = Path(sys.argv[5])
+provider = Path(sys.argv[6])
 
 matrix = json.loads(source.read_text(encoding="utf-8"))
 
@@ -280,6 +314,16 @@ cutover.write_text(json.dumps(with_false_cutover), encoding="utf-8")
 with_product_capability = json.loads(json.dumps(matrix))
 with_product_capability["capabilities"][0]["capability_id"] = "easyremote_runtime"
 product.write_text(json.dumps(with_product_capability), encoding="utf-8")
+
+with_missing_provider_evidence = json.loads(json.dumps(matrix))
+for row in with_missing_provider_evidence["capabilities"]:
+    if row["capability_id"] == "surface":
+        row["go"]["evidence"] = [
+            item for item in row["go"]["evidence"]
+            if item["ref"] != "sdk/go/surface_runtime_test.go"
+        ]
+        break
+provider.write_text(json.dumps(with_missing_provider_evidence), encoding="utf-8")
 PY
 
   if run_validator "$tmp/missing.json" >"$tmp/missing.out" 2>&1; then
@@ -305,6 +349,12 @@ PY
     exit 1
   fi
   grep -Eq "unknown_capability|product_specific_capability" "$tmp/product.out"
+
+  if run_validator "$tmp/provider.json" >"$tmp/provider.out" 2>&1; then
+    echo "self-test expected provider-backed runtime evidence fixture to fail" >&2
+    exit 1
+  fi
+  grep -Fq "provider_backed_without_runtime_evidence" "$tmp/provider.out"
 
   echo "check-sdk-parity-matrix self-test ok"
   exit 0

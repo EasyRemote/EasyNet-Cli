@@ -254,14 +254,13 @@
       "profile": "surface",
       "shared_cases": ["sdk/conformance/cases/surface-page-carriers.yaml"],
       "go": {
-        "status": "seam",
-        "evidence": [{"kind": "go_test", "ref": "sdk/go/surface_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
+        "status": "provider-backed",
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/surface_test.go"}, {"kind": "go_test", "ref": "sdk/go/surface_runtime_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
       },
       "python": {
         "status": "provider-backed",
-        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_surface.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
+        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_surface.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_cabi.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "parity_gap": "Python has Runtime Core-backed page/manifest/health execution paths; Go currently exposes carrier/projection seams.",
       "remaining": "Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete."
     },
     {
@@ -269,14 +268,13 @@
       "profile": "compatibility",
       "shared_cases": ["sdk/conformance/cases/compatibility-openai-carrier-projection.yaml"],
       "go": {
-        "status": "seam",
-        "evidence": [{"kind": "go_test", "ref": "sdk/go/compatibility_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
+        "status": "provider-backed",
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/compatibility_test.go"}, {"kind": "go_test", "ref": "sdk/go/compatibility_runtime_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
       },
       "python": {
         "status": "provider-backed",
-        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_compatibility.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
+        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_compatibility.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_cabi.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "parity_gap": "Python has concrete Runtime Core execution for non-stream chat and files; Go currently exposes carrier/projection seams.",
       "remaining": "Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete."
     },
     {
@@ -284,14 +282,13 @@
       "profile": "wrappers",
       "shared_cases": ["sdk/conformance/cases/wrapper-profile-records.yaml"],
       "go": {
-        "status": "seam",
-        "evidence": [{"kind": "go_test", "ref": "sdk/go/wrappers_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
+        "status": "provider-backed",
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/wrappers_test.go"}, {"kind": "go_test", "ref": "sdk/go/wrappers_runtime_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
       },
       "python": {
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_wrappers.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "parity_gap": "Python has Runtime Core-backed record-returning helper execution; Go remains at carriers and projections.",
       "remaining": "Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete."
     },
     {

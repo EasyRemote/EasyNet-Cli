@@ -9,7 +9,7 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | provider-backed Runtime Core substrate; language parity tracked through FFI and future Rust SDK public matrix |
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers |
-| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, and Events; seam for Surface, Compatibility, Wrappers, and conformance runner |
+| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
@@ -41,9 +41,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | mission | Mission | provider-backed | provider-backed | Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete. |
 | admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
 | events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
-| surface | Surface | seam | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
-| compatibility | Compatibility | seam | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
-| wrappers | Wrappers | seam | provider-backed | Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete. |
+| surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
+| compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
+| wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete. |
 | conformance runner | SDK Parity | seam | seam | Daemon-backed behavior-executing action adapters over the full case manifest remain incomplete. |
 
 ## Known Gaps
@@ -106,22 +106,25 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   also cover device-session create/list/delete projections. Certificate policy,
   backend trust policy persistence, and product cutovers remain incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
-  `pages.list/publish/get/unpublish/health`; Go/Python facade seams now expose page
+  `pages.list/publish/get/unpublish/health`; Go/Python facades now expose page
   carriers, typed page records, public page refs, manifests, mutation results,
-  and SurfaceHealth readiness projections. Backend route serving, browser auth,
-  CDN/cache policy, content-management UX, and product cutovers remain incomplete.
+  SurfaceHealth readiness projections, and Runtime-backed execution paths.
+  Backend route serving, browser auth, CDN/cache policy, content-management UX,
+  and product cutovers remain incomplete.
 - Compatibility carrier/projection guardrails exist for Rust/C ABI over daemon
   `openai.list_models`, `openai.chat_completions`, and file upload/retrieve/delete
-  carriers plus file adapter projections over SDK file/resource facts; product API-key policy,
+  carriers plus file adapter projections over SDK file/resource facts; Go/Python
+  facades now expose Runtime-backed execution paths. Product API-key policy,
   quota/rate limits, billing, backend HTTP route shaping, multipart
-  upload/storage policy, SSE/WebSocket fanout, and language facades remain
+  upload/storage policy, SSE/WebSocket fanout, and product cutovers remain
   incomplete.
 - Directory subscribe convenience methods, Axon-backed receipt verification,
   and full surface status remain schema/conformance declarations only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
-  file, terminal, remote desktop, browser, and media session DTOs; execution
-  helpers, backend HTTP/WebSocket bridges, storage policy, and product cutovers
-  remain incomplete.
+  file, terminal, remote desktop, browser, and media session DTOs; Go/Python
+  facades now expose Runtime-backed record-returning helper execution. Backend
+  HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and
+  product cutovers remain incomplete.
 - Go package exposes Runtime Core feature/version discovery with `SdkEnvironment`
   process root, default daemon discovery/connect policy, explicit
   `DaemonControl` access, local runtime connect, idempotent environment close,
@@ -201,22 +204,23 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 - Go Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
   `SurfaceManifest`, `SurfacePublicPageRef`, and `SurfaceMutationResult`
-  projection seams, plus `SurfaceHealth`/`SurfaceStatus` readiness seams and
-  close state seams;
-  backend route serving, browser auth, CDN/cache policy, content-management UX,
-  concrete surface health carriers, and backend page-route cutover remain
-  incomplete.
+  projections, plus `SurfaceHealth`/`SurfaceStatus` readiness projections,
+  `SurfaceRuntimeTransport` Runtime Core execution, and close state; backend
+  route serving, browser auth, CDN/cache policy, content-management UX, and
+  backend page-route cutover remain incomplete outside the daemon SDK.
 - Go Compatibility facade exposes `CompatibilityClient` list-models, chat,
   stream-chat, and file upload/get/delete Invocation carrier builders plus
-  model, chat, stream, file, file-delete projection seams, and close state seams; product API-key
-  policy, quota/rate limits, billing, backend HTTP route shaping, multipart
-  storage execution, SSE/WebSocket fanout, and backend compatibility-route
-  cutover remain incomplete.
+  model, chat, stream, file, file-delete projections, `CompatibilityRuntimeTransport`
+  Runtime Core execution, and close state; product API-key policy, quota/rate
+  limits, billing, backend HTTP route shaping, multipart storage execution,
+  SSE/WebSocket fanout, and backend compatibility-route cutover remain
+  incomplete outside the daemon SDK.
 - Go Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
-  browser, and media session Invocation carrier builders, transport-backed
-  helper close state seams, and record projections; backend HTTP/WebSocket bridges, storage
-  policy, concrete stream/bidi adapters, and product wrapper cutovers remain
-  incomplete.
+  browser, and media session Invocation carrier builders, `WrapperRuntimeTransport`
+  Runtime Core execution, transport-backed helper close state, and record
+  projections; backend HTTP/WebSocket bridges, storage policy, concrete
+  stream/bidi adapters, and product wrapper cutovers remain incomplete outside
+  the daemon SDK.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
   `SdkEnvironment` process-root factories with default daemon control-path
   resolution over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
