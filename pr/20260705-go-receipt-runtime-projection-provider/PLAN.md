@@ -22,9 +22,8 @@ Implement Go Receipt runtime Project, Verify, VerifyChain, and CausalRef through
 
 ## Verification
 
-- `go test -count=1 ./...` in `sdk/go`.
-- `go test -count=1 -tags easynet_cabi ./...` in `sdk/go`.
-- `cargo fmt --check`.
-- `bash tools/scripts/check-sdk-scaffold.sh`.
-- `git diff --check`.
-- Retired address terminology scan over touched files.
+- `go test -count=1 -run 'TestReceiptRuntimeTransport' ./...` from `sdk/go` - passed.
+- `go test -count=1 ./...` from `sdk/go` - passed.
+- `go test -count=1 -tags easynet_cabi ./...` from `sdk/go` - passed.
+- `bash tools/scripts/check-sdk-scaffold.sh` - passed.
+- `git diff --check` - passed.

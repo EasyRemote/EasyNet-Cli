@@ -149,9 +149,11 @@ method spelling.
   projection, `invocation.history.get` fetch Invocation carrier construction,
   invocation-history list/get/trace read-model methods, optional C ABI v4
   concrete transport for fetch/list/get/trace/project/verify/verify-chain/
-  causal-ref over Runtime Core invoke, and close state seams over opaque receipt
-  refs; Axon-backed cryptographic verification, receipt URA construction after
-  RFC-007, and backend history/metrics cutover remain incomplete.
+  causal-ref over Runtime Core invoke, explicit daemon/Axon projection provider
+  seams for Runtime-backed project/verify/verify-chain/causal-ref, and close
+  state seams over opaque receipt refs; concrete Axon verification provider
+  wiring, receipt URA construction after RFC-007, and backend history/metrics
+  cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
   install projection, published-ability read-model seams, complete
