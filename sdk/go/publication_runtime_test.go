@@ -104,6 +104,48 @@ func TestPublicationRuntimeTransportDeploysAndListsThroughRuntime(t *testing.T) 
 	}
 }
 
+func TestPublicationRuntimeTransportEnablesAndDisablesAbilityImpl(t *testing.T) {
+	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: publicationRuntimeImplLifecycleRawJSON}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimePublicationClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimePublicationClient: %v", err)
+	}
+
+	enabled, err := client.EnableAbilityImplWithRequest(context.Background(), baseAbilityImplLifecycleRequest())
+	if err != nil {
+		t.Fatalf("EnableAbilityImplWithRequest: %v", err)
+	}
+	if enabled.Kind != "ability_impl_enabled" || enabled.Status == nil || *enabled.Status != "enabled" {
+		t.Fatalf("enabled record = %#v", enabled)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.ability.impl.enable@1.0.0" {
+		t.Fatalf("enable descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+	enableArgs := runtimeTransport.seenDraft["args"].(map[string]any)
+	if enableArgs["impl_id"] != "impl-1" || enableArgs["ability_ura"] != "easynet:///r/example/ability/device.dev-a.er.weather" {
+		t.Fatalf("enable args = %#v", enableArgs)
+	}
+
+	disabled, err := client.DisableAbilityImplWithRequest(context.Background(), baseAbilityImplLifecycleRequest())
+	if err != nil {
+		t.Fatalf("DisableAbilityImplWithRequest: %v", err)
+	}
+	if disabled.Kind != "ability_impl_disabled" || disabled.Status == nil || *disabled.Status != "disabled" {
+		t.Fatalf("disabled record = %#v", disabled)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.ability.impl.disable@1.0.0" {
+		t.Fatalf("disable descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+}
+
 func TestPublicationRuntimeTransportBuildsUnpublishInvocation(t *testing.T) {
 	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
 	if err != nil {
@@ -159,15 +201,19 @@ func TestPublicationRuntimeTransportMarksUnsupportedExports(t *testing.T) {
 func newPublicationRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 	return &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
-			publicationAbilityDeploy:    "easynet:///r/example/ability/device.dev-a.ability.deploy",
-			publicationAbilityList:      "easynet:///r/example/ability/device.dev-a.meta.list_abilities",
-			publicationAbilityUnpublish: "easynet:///r/example/ability/device.dev-a.ability.unpublish",
+			publicationAbilityDeploy:      "easynet:///r/example/ability/device.dev-a.ability.deploy",
+			publicationAbilityList:        "easynet:///r/example/ability/device.dev-a.meta.list_abilities",
+			publicationAbilityImplEnable:  "easynet:///r/example/ability/device.dev-a.ability.impl.enable",
+			publicationAbilityImplDisable: "easynet:///r/example/ability/device.dev-a.ability.impl.disable",
+			publicationAbilityUnpublish:   "easynet:///r/example/ability/device.dev-a.ability.unpublish",
 		},
 		descriptorByAbility: map[string]string{
-			"easynet:///r/example/ability/device.dev-a.ability.deploy":      "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0",
-			"easynet:///r/example/ability/device.dev-a.meta.list_abilities": "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",
-			"easynet:///r/example/ability/device.dev-a.ability.unpublish":   "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0",
-			"easynet:///r/example/ability/device.dev-a.er.weather":          "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.ability.deploy":       "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.meta.list_abilities":  "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.ability.impl.enable":  "easynet:///r/example/ability/device.dev-a.ability.impl.enable@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.ability.impl.disable": "easynet:///r/example/ability/device.dev-a.ability.impl.disable@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.ability.unpublish":    "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.er.weather":           "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
 		},
 		descriptorProjection: `{
 			"kind":"descriptor_ref",
@@ -179,6 +225,20 @@ func newPublicationRuntimeIdentityTransport() *compatibilityRuntimeIdentityTrans
 			"components":{"owner_ura":"easynet:///r/example/device/dev-a"},
 			"metadata":{"grammar_owner":"axon"}
 		}`,
+	}
+}
+
+func baseAbilityImplLifecycleRequest() AbilityImplLifecycleRequest {
+	return AbilityImplLifecycleRequest{
+		CallerURA:         "easynet:///r/example/agent/alice.sdk",
+		CalleeURA:         "easynet:///r/example/device/dev-a",
+		SubjectURA:        "easynet:///r/example/device/dev-a",
+		DescriptorVersion: "1.0.0",
+		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext:     map[string]any{"form": "none"},
+		ImplID:            "impl-1",
+		AbilityURA:        "easynet:///r/example/ability/device.dev-a.er.weather",
+		Metadata:          map[string]any{"request_id": "impl-lifecycle-1"},
 	}
 }
 
@@ -217,4 +277,12 @@ const publicationRuntimeUnpublishRawJSON = `{
   "owner_ura": "easynet:///r/example/device/dev-a",
   "public_name": "weather",
   "content_hash": "sha256:def"
+}`
+
+const publicationRuntimeImplLifecycleRawJSON = `{
+  "ok": true,
+  "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
+  "impl_id": "impl-1",
+  "owner_ura": "easynet:///r/example/device/dev-a",
+  "resource_ref": "easynet:///r/example/resource/device.dev-a/fs/tmp/weather"
 }`

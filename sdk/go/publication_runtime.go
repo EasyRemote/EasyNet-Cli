@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	publicationAbilityDeploy    = "ability.deploy"
-	publicationAbilityList      = "meta.list_abilities"
-	publicationAbilityUnpublish = "ability.unpublish"
+	publicationAbilityDeploy      = "ability.deploy"
+	publicationAbilityList        = "meta.list_abilities"
+	publicationAbilityImplEnable  = "ability.impl.enable"
+	publicationAbilityImplDisable = "ability.impl.disable"
+	publicationAbilityUnpublish   = "ability.unpublish"
 )
 
 // PublicationRuntimeTransport lowers Publication profile carriers into Runtime
@@ -157,12 +159,52 @@ func (t *PublicationRuntimeTransport) ShowAbility(ctx context.Context, requestJS
 	return json.Marshal(ability)
 }
 
-func (t *PublicationRuntimeTransport) EnableAbilityImpl(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication enable ability impl is not exported yet")
+func (t *PublicationRuntimeTransport) EnableAbilityImpl(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationImplLifecycleForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, publicationImplLifecycleArgs(req), publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityImplEnable)
+	if err != nil {
+		return nil, err
+	}
+	record, err := projectAbilityImplLifecycleForRuntime(req, output, publicationAbilityImplEnable, "enabled")
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(record)
 }
 
-func (t *PublicationRuntimeTransport) DisableAbilityImpl(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication disable ability impl is not exported yet")
+func (t *PublicationRuntimeTransport) DisableAbilityImpl(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationImplLifecycleForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, publicationImplLifecycleArgs(req), publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityImplDisable)
+	if err != nil {
+		return nil, err
+	}
+	record, err := projectAbilityImplLifecycleForRuntime(req, output, publicationAbilityImplDisable, "disabled")
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(record)
 }
 
 func (t *PublicationRuntimeTransport) BuildUnpublishInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -319,6 +361,17 @@ func decodePublicationUnpublishForRuntime(requestJSON []byte) (UnpublishAbilityR
 	return req, nil
 }
 
+func decodePublicationImplLifecycleForRuntime(requestJSON []byte) (AbilityImplLifecycleRequest, error) {
+	var req AbilityImplLifecycleRequest
+	if err := json.Unmarshal(requestJSON, &req); err != nil {
+		return AbilityImplLifecycleRequest{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication ability impl lifecycle request: %v", err), err)
+	}
+	if _, err := marshalAbilityImplLifecycleRequest(req); err != nil {
+		return AbilityImplLifecycleRequest{}, err
+	}
+	return req, nil
+}
+
 func projectPublishedAbilityForRuntime(req ShowAbilityRequest, output []byte) (PublishedAbility, error) {
 	if ability, err := NewPublishedAbilityFromJSON(output); err == nil {
 		if publishedAbilityDescriptorRef(ability) == string(req.DescriptorRef) {
@@ -388,6 +441,40 @@ func (t *PublicationRuntimeTransport) projectUnpublishResultForRuntime(ctx conte
 	return record, nil
 }
 
+func projectAbilityImplLifecycleForRuntime(req AbilityImplLifecycleRequest, output []byte, sourceAbility string, status string) (PublicationRecord, error) {
+	expectedKind := "ability_impl_" + status
+	if record, err := newPublicationRecordFromJSON(output, expectedKind); err == nil {
+		return record, nil
+	}
+	payload, err := publicationRuntimeOutputObject(output, "publication ability impl lifecycle output")
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	if ok, hasOK := payload["ok"].(bool); hasOK && !ok {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication ability impl lifecycle output ok=false", nil)
+	}
+	abilityURA := firstNonEmpty(firstStringFromMap(payload, "ability_ura", "abilityUra"), req.AbilityURA)
+	implID := firstNonEmpty(firstStringFromMap(payload, "impl_id", "implId"), req.ImplID)
+	if abilityURA == "" || implID == "" {
+		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication ability impl lifecycle output missing ability_ura or impl_id", nil)
+	}
+	record := PublicationRecord{
+		Profile:     publicationProfile,
+		Kind:        expectedKind,
+		OwnerURA:    firstStringFromMap(payload, "owner_ura", "ownerUra"),
+		ResourceRef: optionalStringPointer(firstStringFromMap(payload, "resource_ref", "resourceRef")),
+		Status:      optionalStringPointer(status),
+		Metadata: map[string]any{
+			"profile":        publicationProfile,
+			"source_ability": sourceAbility,
+			"ability_ura":    abilityURA,
+			"impl_id":        implID,
+			"raw_result":     payload,
+		},
+	}
+	return record, nil
+}
+
 func publicationRuntimeOutputObject(raw []byte, label string) (map[string]any, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
@@ -420,6 +507,20 @@ func publicationListArgs(req PublishedAbilityQuery) map[string]any {
 		args["subject_ura"] = req.AbilityURA
 	}
 	return args
+}
+
+func publicationImplLifecycleArgs(req AbilityImplLifecycleRequest) map[string]any {
+	return map[string]any{
+		"impl_id":     req.ImplID,
+		"ability_ura": req.AbilityURA,
+	}
+}
+
+func optionalStringPointer(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func publicationRuntimeMetadata(metadata map[string]any, abilityName string) map[string]any {

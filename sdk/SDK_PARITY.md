@@ -31,7 +31,7 @@ method spelling.
 | bidi | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
 | receipt | fetch/projection/ref partial | fetch/projection/history partial | projection/ref seam partial | projection/history seam partial | gap | gap | gap |
-| publication | carrier partial | carrier/deploy partial | carrier/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
+| publication | carrier partial | carrier/deploy/lifecycle partial | carrier/lifecycle/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | admin + gateway | carrier/status/session partial | carrier/status partial | carrier/status/session seam partial | carrier/status seam partial | gap | gap | gap |
@@ -71,9 +71,10 @@ method spelling.
   builder/projection guardrails exist for Rust/C ABI; subscribe convenience
   wrappers, signer construction, and language facades remain incomplete.
 - Publication ResourceRef/package validation/plugin install/deploy-unpublish
-  carrier and lifecycle guardrails exist for Rust/C ABI; daemon
-  list/show/enable/disable read models, execution wrappers, and language
-  facades remain incomplete.
+  carrier and lifecycle guardrails exist for Rust/C ABI; Go now executes
+  list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
+  Plugin/skill lifecycle policy, host binding bridge, backend publication
+  cutover, and broader non-P0 language facades remain incomplete.
 - Host Binding codec/hash guardrails exist for Rust/C ABI, and Python exposes a
   conformance-pinned `LocalHostBindingTransport` facade plus EasyRemote audit
   checks against raw host-stream codecs; product host lifecycle, cleanup
@@ -148,8 +149,9 @@ method spelling.
   RFC-007, and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
-  install projection, published-ability read-model seams, and close state seams; concrete daemon
-  carriers, list/show/enable/disable runtime execution, host binding bridge,
+  install projection, published-ability read-model seams, complete
+  AbilityImpl lifecycle request execution through Runtime Core and optional C
+  ABI v4 carrier/projection, and close state seams; host binding bridge,
   plugin/skill lifecycle policy, and backend publication cutover remain
   incomplete.
 - Go Host Binding facade exposes `HostBindingClient` binding DTO, envelope

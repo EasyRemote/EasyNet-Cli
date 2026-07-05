@@ -70,6 +70,10 @@ type cabiPublicationSymbols struct {
 	projectAbilityPage           unsafe.Pointer
 	buildShowAbilityInvocation   unsafe.Pointer
 	projectAbilityRecord         unsafe.Pointer
+	buildEnableImplInvocation    unsafe.Pointer
+	projectEnableImplResult      unsafe.Pointer
+	buildDisableImplInvocation   unsafe.Pointer
+	projectDisableImplResult     unsafe.Pointer
 	buildUnpublishInvocation     unsafe.Pointer
 	projectUnpublishResult       unsafe.Pointer
 }
@@ -163,12 +167,12 @@ func (t *CABIPublicationTransport) ShowAbility(ctx context.Context, requestJSON 
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildShowAbilityInvocation, t.symbols.projectAbilityRecord, "C ABI publication show ability failed")
 }
 
-func (t *CABIPublicationTransport) EnableAbilityImpl(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "C ABI publication enable ability impl is not exported yet")
+func (t *CABIPublicationTransport) EnableAbilityImpl(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildEnableImplInvocation, t.symbols.projectEnableImplResult, "C ABI publication enable ability impl failed")
 }
 
-func (t *CABIPublicationTransport) DisableAbilityImpl(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "C ABI publication disable ability impl is not exported yet")
+func (t *CABIPublicationTransport) DisableAbilityImpl(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildDisableImplInvocation, t.symbols.projectDisableImplResult, "C ABI publication disable ability impl failed")
 }
 
 func (t *CABIPublicationTransport) BuildUnpublishInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -302,6 +306,10 @@ func bindCABIPublicationSymbols(library unsafe.Pointer) (cabiPublicationSymbols,
 		{"easynet_publication_project_ability_page", &symbols.projectAbilityPage},
 		{"easynet_publication_build_show_ability_invocation", &symbols.buildShowAbilityInvocation},
 		{"easynet_publication_project_ability_record", &symbols.projectAbilityRecord},
+		{"easynet_publication_build_enable_ability_impl_invocation", &symbols.buildEnableImplInvocation},
+		{"easynet_publication_project_enable_ability_impl_result", &symbols.projectEnableImplResult},
+		{"easynet_publication_build_disable_ability_impl_invocation", &symbols.buildDisableImplInvocation},
+		{"easynet_publication_project_disable_ability_impl_result", &symbols.projectDisableImplResult},
 		{"easynet_publication_build_unpublish_invocation", &symbols.buildUnpublishInvocation},
 		{"easynet_publication_project_unpublish_result", &symbols.projectUnpublishResult},
 	}

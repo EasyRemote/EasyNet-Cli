@@ -153,6 +153,20 @@ type UnpublishAbilityRequest struct {
 	Metadata          map[string]any `json:"metadata,omitempty"`
 }
 
+// AbilityImplLifecycleRequest builds or executes an AbilityImpl lifecycle
+// mutation with a complete Invocation carrier.
+type AbilityImplLifecycleRequest struct {
+	CallerURA         string         `json:"caller_ura"`
+	CalleeURA         string         `json:"callee_ura"`
+	SubjectURA        string         `json:"subject_ura"`
+	DescriptorVersion string         `json:"descriptor_version"`
+	NonceBase64       string         `json:"nonce_base64"`
+	CausalContext     map[string]any `json:"causal_context"`
+	ImplID            string         `json:"impl_id"`
+	AbilityURA        string         `json:"ability_ura"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
 // PublicationRecord is a generic daemon publication operation projection.
 type PublicationRecord struct {
 	Profile       string         `json:"profile"`
@@ -460,6 +474,21 @@ func (c *PublicationClient) EnableAbilityImpl(ctx context.Context, id AbilityImp
 	return validatePublicationRecord(raw, "ability_impl_enabled")
 }
 
+func (c *PublicationClient) EnableAbilityImplWithRequest(ctx context.Context, req AbilityImplLifecycleRequest) (PublicationRecord, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return PublicationRecord{}, err
+	}
+	requestJSON, err := marshalAbilityImplLifecycleRequest(req)
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	raw, err := c.transport.EnableAbilityImpl(ctx, requestJSON)
+	if err != nil {
+		return PublicationRecord{}, wrapPublicationTransportError("publication enable ability impl failed", err)
+	}
+	return newPublicationRecordFromJSON(raw, "ability_impl_enabled")
+}
+
 func (c *PublicationClient) DisableAbilityImpl(ctx context.Context, id AbilityImplID) error {
 	if err := c.requireReady(ctx); err != nil {
 		return err
@@ -473,6 +502,21 @@ func (c *PublicationClient) DisableAbilityImpl(ctx context.Context, id AbilityIm
 		return wrapPublicationTransportError("publication disable ability impl failed", err)
 	}
 	return validatePublicationRecord(raw, "ability_impl_disabled")
+}
+
+func (c *PublicationClient) DisableAbilityImplWithRequest(ctx context.Context, req AbilityImplLifecycleRequest) (PublicationRecord, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return PublicationRecord{}, err
+	}
+	requestJSON, err := marshalAbilityImplLifecycleRequest(req)
+	if err != nil {
+		return PublicationRecord{}, err
+	}
+	raw, err := c.transport.DisableAbilityImpl(ctx, requestJSON)
+	if err != nil {
+		return PublicationRecord{}, wrapPublicationTransportError("publication disable ability impl failed", err)
+	}
+	return newPublicationRecordFromJSON(raw, "ability_impl_disabled")
 }
 
 func (c *PublicationClient) BuildUnpublishInvocation(ctx context.Context, req UnpublishAbilityRequest) (InvocationDraft, error) {
@@ -663,6 +707,19 @@ func marshalAbilityImplID(id AbilityImplID) ([]byte, error) {
 	requestJSON, err := json.Marshal(id)
 	if err != nil {
 		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode ability impl id: %v", err), err)
+	}
+	return requestJSON, nil
+}
+
+func marshalAbilityImplLifecycleRequest(req AbilityImplLifecycleRequest) ([]byte, error) {
+	if req.CallerURA == "" || req.CalleeURA == "" || req.SubjectURA == "" ||
+		req.DescriptorVersion == "" || req.NonceBase64 == "" || req.CausalContext == nil ||
+		req.ImplID == "" || req.AbilityURA == "" {
+		return nil, invalidProfilePayload(publicationProfile, "complete ability impl lifecycle invocation carrier is required", nil)
+	}
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode ability impl lifecycle request: %v", err), err)
 	}
 	return requestJSON, nil
 }
