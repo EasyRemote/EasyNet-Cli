@@ -825,7 +825,7 @@ mod tests {
     fn admin_build_pairing_create_invocation_projects_carrier() {
         let handle = handle();
         let raw = base_request(serde_json::json!({
-            "hub_ura": "easynet:///r/example/hub/main",
+            "hub_ura": "easynet:///r/example/hub",
             "device_ura": "easynet:///r/example/device/dev-a",
             "expires_unix_ms": 1893456000000i64,
             "scopes": ["invoke"]
@@ -839,7 +839,7 @@ mod tests {
         assert_eq!(code, EASYNET_OK);
         let value = read_json(out);
         assert_eq!(value["metadata"]["system_ability"], "pairing.create");
-        assert_eq!(value["args"]["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(value["args"]["hub_ura"], "easynet:///r/example/hub");
         assert_eq!(value["args"]["scopes"][0], "invoke");
         release(handle);
     }
@@ -851,7 +851,7 @@ mod tests {
             serde_json::json!({
                 "credential_id": "cred-dev-a",
                 "device_ura": "easynet:///r/example/device/dev-a",
-                "hub_ura": "easynet:///r/example/hub/main",
+                "hub_ura": "easynet:///r/example/hub",
                 "result": {
                     "verified": true,
                     "method": "daemon_trust_store"

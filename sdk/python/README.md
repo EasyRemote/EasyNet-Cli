@@ -105,12 +105,15 @@ EasyRemote page-based Mission event access, SDK-owned bounded Mission event
 tailing for EasyRemote Pipeline live updates, SDK-owned EasyRemote Pipeline step
 planning/EAL rendering and child Invocation fact conformance projection, and
 close state seams. AdminClient
-exposes agent list/start/stop/refresh and session-list Invocation carrier
-builders, C ABI-backed agent list/start/stop/refresh execution through Runtime
-Core invoke, C ABI-backed session-list execution through Runtime Core invoke,
+exposes agent list/start/stop/refresh, session-list, hub join/leave, pairing
+preflight/create/validate, credential verification, device-session
+create/delete, and device-revoke Invocation carrier builders, C ABI-backed
+agent list/start/stop/refresh, session-list, hub join/leave, pairing
+preflight/create/validate, credential verification, device-session
+create/delete, and device-revoke execution through Runtime Core invoke,
 C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
-verification, and C ABI-backed typed device-session page projection plus close state seams,
+verification, and C ABI-backed typed device-session page/result projection plus close state seams,
 with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
 requests for add/list/stop/refresh, SDK-owned `EasyRemoteProfileBridge`
 dispatch/projection glue, and
@@ -144,10 +147,8 @@ available through the SDK facade. Direct prepare/submit adapters,
 daemon-owned signer acquisition/keyring policy, Axon-backed receipt verification, receipt URA
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
-and cleanup execution adapters, mission event live streams, Admin hub lifecycle,
-pairing/credential lifecycle, and device-session create/delete adapters that
-require daemon/ABI lifecycle result contracts,
-certificate policy, Events daemon filtering/live adapters,
+and cleanup execution adapters, mission event live streams,
+certificate policy, backend trust policy persistence, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream execution adapters, daemon-backed EasyRemote Pipeline child

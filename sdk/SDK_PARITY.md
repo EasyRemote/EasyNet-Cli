@@ -93,13 +93,13 @@ method spelling.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
   `agent.list/start/stop/refresh`, `session.list`, `session.create/delete`,
   `federation.revoke`, lifecycle status, agent-record projections,
-  device-session page/result projections, and device-admin result projections;
+  hub lifecycle, pairing lifecycle, credential verification, device-session
+  page/result projections, and device-admin result projections;
   Go/Python C ABI transports now execute device revoke and device-session
-  create/delete through Runtime Core invoke. Go/Python facade seams also cover
-  Hub join/leave, pairing preflight/create/validate, device credential
-  verification, and device-session create/list/delete projections. Certificate
-  policy, daemon/ABI hub lifecycle contracts, daemon/ABI pairing and
-  device-credential lifecycle contracts, and product cutovers remain incomplete.
+  create/delete, hub join/leave, pairing preflight/create/validate, and
+  credential verification through Runtime Core invoke. Go/Python facade seams
+  also cover device-session create/list/delete projections. Certificate policy,
+  backend trust policy persistence, and product cutovers remain incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
   `pages.list/publish/get/unpublish/health`; Go/Python facade seams now expose page
   carriers, typed page records, public page refs, manifests, mutation results,
@@ -177,8 +177,8 @@ method spelling.
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
   credential, credential verification, typed device-session projection seams,
   C ABI-backed device-admin/session result projection, and close state seams;
-  certificate policy, C ABI trust/pairing lifecycle exports, and backend route
-  cutover remain incomplete.
+  certificate policy, backend trust policy persistence, and backend route cutover
+  remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, with session subscriptions requiring
   explicit daemon `session_id` rather than product `session_ura`, Runtime
@@ -340,10 +340,13 @@ method spelling.
   daemon stream-backed live adapters, daemon-backed child Invocation execution
   behavior conformance, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
-  list/start/stop/refresh, session-list, and device-revoke Invocation carrier
-  builders, C ABI-backed agent list/start/stop/refresh, session-list, and
-  device-revoke execution through Runtime Core, C ABI-backed daemon lifecycle
-  `GatewayStatus` projection, plus
+  list/start/stop/refresh, session-list, hub join/leave, pairing
+  preflight/create/validate, credential verification, device-session
+  create/delete, and device-revoke Invocation carrier builders, C ABI-backed
+  agent list/start/stop/refresh, session-list, hub join/leave, pairing
+  preflight/create/validate, credential verification, device-session
+  create/delete, and device-revoke execution through Runtime Core, C ABI-backed
+  daemon lifecycle `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, C ABI-backed typed device-session page projection,
   device-admin result projection, and close state seams, with an SDK-owned
@@ -351,11 +354,9 @@ method spelling.
   SDK-owned EasyRemote profile bridge dispatch/projection glue, SDK-owned
   EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file
   validation, endpoint projection, certificate fingerprint projection, and raw
-  admin carrier cutover audit gate for `agent.start/list/stop/refresh`; C ABI
-  transport reports explicit semantic-boundary errors for hub
-  join/leave, pairing/credential trust lifecycle, and device-session
-  create/delete until daemon/ABI lifecycle contracts exist. Certificate policy
-  and daemon-backed Server pairing/hub lifecycle contracts remain incomplete.
+  admin carrier cutover audit gate for `agent.start/list/stop/refresh`;
+  certificate policy, backend trust policy persistence, and daemon-backed Server
+  pairing/hub lifecycle product cutover remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory/device/session/invocation
   subscription execution through Runtime Core open_stream, plus `EventFrame`

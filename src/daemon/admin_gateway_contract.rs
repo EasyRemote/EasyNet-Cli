@@ -1440,7 +1440,7 @@ mod tests {
     #[test]
     fn build_pairing_preflight_invocation_projects_trust_args() {
         let request = base_request(json!({
-            "hub_ura": "easynet:///r/example/hub/main",
+            "hub_ura": "easynet:///r/example/hub",
             "device_ura": "easynet:///r/example/device/dev-a",
             "requested_scopes": ["invoke"]
         }));
@@ -1452,7 +1452,7 @@ mod tests {
             "easynet:///r/example/ability/device.dev-a.pairing.preflight@1.0.0"
         );
         assert_eq!(carrier["metadata"]["system_ability"], "pairing.preflight");
-        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub");
         assert_eq!(
             carrier["args"]["device_ura"],
             "easynet:///r/example/device/dev-a"
@@ -1465,14 +1465,14 @@ mod tests {
         let request = base_request(json!({
             "credential_id": "cred-dev-a",
             "device_ura": "easynet:///r/example/device/dev-a",
-            "hub_ura": "easynet:///r/example/hub/main"
+            "hub_ura": "easynet:///r/example/hub"
         }));
 
         let carrier = build_credential_verify_invocation(&request).unwrap();
 
         assert_eq!(carrier["metadata"]["system_ability"], "credential.verify");
         assert_eq!(carrier["args"]["credential_id"], "cred-dev-a");
-        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub");
     }
 
     #[test]
@@ -1649,7 +1649,7 @@ mod tests {
     #[test]
     fn project_pairing_token_merges_request_context() {
         let projected = project_pairing_token(&json!({
-            "hub_ura": "easynet:///r/example/hub/main",
+            "hub_ura": "easynet:///r/example/hub",
             "device_ura": "easynet:///r/example/device/dev-a",
             "expires_unix_ms": 1893456000000i64,
             "result": {
@@ -1662,7 +1662,7 @@ mod tests {
 
         assert_eq!(projected["kind"], "pairing_token");
         assert_eq!(projected["token_id"], "pair-1");
-        assert_eq!(projected["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(projected["hub_ura"], "easynet:///r/example/hub");
         assert_eq!(projected["device_ura"], "easynet:///r/example/device/dev-a");
         assert_eq!(projected["scopes"][0], "invoke");
     }
@@ -1672,7 +1672,7 @@ mod tests {
         let projected = project_device_credential_verification(&json!({
             "credential_id": "cred-dev-a",
             "device_ura": "easynet:///r/example/device/dev-a",
-            "hub_ura": "easynet:///r/example/hub/main",
+            "hub_ura": "easynet:///r/example/hub",
             "result": {
                 "verified": true,
                 "method": "daemon_trust_store"
