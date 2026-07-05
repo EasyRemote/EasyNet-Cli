@@ -18,22 +18,43 @@ const (
 // Core invocations and projects daemon publication facts back into Publication
 // DTOs.
 type PublicationRuntimeTransport struct {
-	runtime  *RuntimeClient
-	identity *IdentityClient
+	runtime       *RuntimeClient
+	identity      *IdentityClient
+	localProvider PublicationLocalProvider
+}
+
+// PublicationLocalProvider supplies daemon-local implementation-resource
+// operations to the Runtime-backed Publication facade. Runtime Core remains the
+// execution path for ability publication carriers.
+type PublicationLocalProvider interface {
+	ValidatePackage(ctx context.Context, requestJSON []byte) ([]byte, error)
+	InstallPlugin(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
 func NewPublicationRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*PublicationRuntimeTransport, error) {
+	return NewPublicationRuntimeTransportWithLocalProvider(runtime, identity, nil)
+}
+
+func NewPublicationRuntimeTransportWithLocalProvider(runtime *RuntimeClient, identity *IdentityClient, localProvider PublicationLocalProvider) (*PublicationRuntimeTransport, error) {
 	if runtime == nil {
 		return nil, invalidProfileClient(publicationProfile, "runtime client is required")
 	}
 	if identity == nil {
 		return nil, invalidProfileClient(publicationProfile, "identity client is required")
 	}
-	return &PublicationRuntimeTransport{runtime: runtime, identity: identity}, nil
+	return &PublicationRuntimeTransport{
+		runtime:       runtime,
+		identity:      identity,
+		localProvider: localProvider,
+	}, nil
 }
 
 func NewRuntimePublicationClient(runtime *RuntimeClient, identity *IdentityClient) (*PublicationClient, error) {
-	transport, err := NewPublicationRuntimeTransport(runtime, identity)
+	return NewRuntimePublicationClientWithLocalProvider(runtime, identity, nil)
+}
+
+func NewRuntimePublicationClientWithLocalProvider(runtime *RuntimeClient, identity *IdentityClient, localProvider PublicationLocalProvider) (*PublicationClient, error) {
+	transport, err := NewPublicationRuntimeTransportWithLocalProvider(runtime, identity, localProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +76,19 @@ func (t *PublicationRuntimeTransport) BuildResourceRef(ctx context.Context, requ
 	return json.Marshal(ref)
 }
 
-func (t *PublicationRuntimeTransport) ValidatePackage(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication package validation requires a daemon-local package validator export")
+func (t *PublicationRuntimeTransport) ValidatePackage(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	provider, err := t.requireLocalProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.ValidatePackage(ctx, requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewPackageValidationFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func (t *PublicationRuntimeTransport) DeployAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -99,8 +131,19 @@ func (t *PublicationRuntimeTransport) BuildDeployInvocation(ctx context.Context,
 	}, publicationAbilityDeploy)
 }
 
-func (t *PublicationRuntimeTransport) InstallPlugin(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication plugin install requires a daemon-local plugin installer export")
+func (t *PublicationRuntimeTransport) InstallPlugin(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	provider, err := t.requireLocalProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.InstallPlugin(ctx, requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewPluginInstallResultFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func (t *PublicationRuntimeTransport) ListAbilities(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -249,6 +292,16 @@ func (t *PublicationRuntimeTransport) UnpublishAbility(ctx context.Context, requ
 
 func (t *PublicationRuntimeTransport) Close(context.Context) error {
 	return nil
+}
+
+func (t *PublicationRuntimeTransport) requireLocalProvider(ctx context.Context) (PublicationLocalProvider, error) {
+	if ctx == nil {
+		return nil, invalidProfileClient(publicationProfile, "context is required")
+	}
+	if t == nil || t.localProvider == nil {
+		return nil, invalidProfileClient(publicationProfile, "publication runtime local provider is required")
+	}
+	return t.localProvider, nil
 }
 
 type publicationCarrier struct {

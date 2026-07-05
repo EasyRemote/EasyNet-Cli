@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -173,7 +174,61 @@ func TestPublicationRuntimeTransportBuildsUnpublishInvocation(t *testing.T) {
 	}
 }
 
-func TestPublicationRuntimeTransportMarksUnsupportedExports(t *testing.T) {
+func TestPublicationRuntimeTransportDelegatesLocalPackageOperationsToProvider(t *testing.T) {
+	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	seen := map[string]map[string]any{}
+	provider := PublicationTransportFunc{
+		ValidatePackageFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			var request map[string]any
+			if err := json.Unmarshal(requestJSON, &request); err != nil {
+				return nil, err
+			}
+			seen["validate"] = request
+			return []byte(packageValidationFixtureJSON), nil
+		},
+		InstallPluginFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			var request map[string]any
+			if err := json.Unmarshal(requestJSON, &request); err != nil {
+				return nil, err
+			}
+			seen["install"] = request
+			return []byte(`{"profile":"publication","kind":"plugin_install","source":"file:///tmp/plugin","install_id":"install-1","status":"installed","metadata":{}}`), nil
+		},
+	}
+	client, err := NewRuntimePublicationClientWithLocalProvider(runtime, identity, provider)
+	if err != nil {
+		t.Fatalf("NewRuntimePublicationClientWithLocalProvider: %v", err)
+	}
+
+	validation, err := client.ValidatePackage(context.Background(), "/tmp/easynet-weather-package", ValidatePackageOptions{})
+	if err != nil {
+		t.Fatalf("ValidatePackage: %v", err)
+	}
+	install, err := client.InstallPlugin(context.Background(), "file:///tmp/plugin", InstallOptions{Metadata: map[string]any{"request_id": "install-1"}})
+	if err != nil {
+		t.Fatalf("InstallPlugin: %v", err)
+	}
+
+	if !validation.Valid || validation.Manifest.WireKey != "er.weather" {
+		t.Fatalf("validation = %#v", validation)
+	}
+	if install.Status != "installed" || install.InstallID != "install-1" {
+		t.Fatalf("install = %#v", install)
+	}
+	if seen["validate"]["package_path"] != "/tmp/easynet-weather-package" ||
+		seen["install"]["source"] != "file:///tmp/plugin" {
+		t.Fatalf("provider requests = %#v", seen)
+	}
+}
+
+func TestPublicationRuntimeTransportLocalProviderMethodsFailClosedWithoutProvider(t *testing.T) {
 	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
 	if err != nil {
 		t.Fatalf("NewIdentityClient: %v", err)
@@ -187,11 +242,11 @@ func TestPublicationRuntimeTransportMarksUnsupportedExports(t *testing.T) {
 		t.Fatalf("NewRuntimePublicationClient: %v", err)
 	}
 
-	if _, err := client.ValidatePackage(context.Background(), "/tmp/pkg", ValidatePackageOptions{}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("ValidatePackage error = %v, want %s", err, ErrNotImplemented)
+	if _, err := client.ValidatePackage(context.Background(), "/tmp/pkg", ValidatePackageOptions{}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ValidatePackage error = %v, want %s", err, ErrInvalidArgument)
 	}
-	if _, err := client.InstallPlugin(context.Background(), "file:///tmp/plugin", InstallOptions{}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("InstallPlugin error = %v, want %s", err, ErrNotImplemented)
+	if _, err := client.InstallPlugin(context.Background(), "file:///tmp/plugin", InstallOptions{}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("InstallPlugin error = %v, want %s", err, ErrInvalidArgument)
 	}
 	if _, err := client.ShowAbility(context.Background(), "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"); err == nil {
 		t.Fatalf("descriptor-only ShowAbility unexpectedly succeeded")
