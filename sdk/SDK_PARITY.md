@@ -138,12 +138,13 @@ method spelling.
   conformance action execution and backend source cutover violations remain
   incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
-  read-model pages with bounded pagination, directory subscription state seams,
-  and close state seams plus `IdentityClient` descriptor, identity, Axon-delegated
+  read-model pages with bounded pagination, Runtime Core-backed directory
+  subscription streams, directory subscription state seams, and close state
+  seams plus `IdentityClient` descriptor, identity, Axon-delegated
   URA/DescriptorRef helper seams, ResourceRef, signing-key lifecycle,
-  signer-handle projection, and close state seams; directory live transport
-  adapters, signing-key live execution adapters, concrete daemon carriers, and
-  backend route cutover remain incomplete.
+  signer-handle projection, and close state seams; signing-key live execution
+  adapters, concrete daemon carriers, and backend route cutover remain
+  incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   invocation-history list/get/trace read-model methods, optional C ABI v4

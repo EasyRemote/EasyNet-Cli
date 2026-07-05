@@ -24,7 +24,8 @@ ordering, half-close, cancel, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
-read-model pages, directory subscription state seams, and close state seams plus
+read-model pages, Runtime Core-backed directory subscription streams, directory
+subscription state seams, and close state seams plus
 IdentityClient descriptor/resource projection, Axon-delegated
 URA/DescriptorRef helper seams, signing-key lifecycle, and signer-handle seams.
 It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref projection,
@@ -53,7 +54,7 @@ Invocation carriers plus model, chat, stream, file, and file-delete projection
 seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, transport-backed helper close state seams, and record projections. Direct UDS transport,
-directory live transport adapters, Axon-backed receipt verification,
+Axon-backed receipt verification,
 concrete publication/host-binding/mission
 carriers, mission event streams, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
