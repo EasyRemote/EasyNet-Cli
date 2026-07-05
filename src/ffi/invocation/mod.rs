@@ -4670,11 +4670,11 @@ fn runtime_error_summary_for_daemon_error(
     let (code, stage, retryable) = match err {
         crate::daemon::DaemonError::InvocationEndpointDown { .. }
         | crate::daemon::DaemonError::InvocationEndpointMissing { .. }
-        | crate::daemon::DaemonError::Connect { .. } => ("DAEMON_DOWN", "transport", true),
+        | crate::daemon::DaemonError::Connect { .. } => ("DAEMON_OFFLINE", "transport", true),
         crate::daemon::DaemonError::InvokeStatus { code, .. }
         | crate::daemon::DaemonError::InvokeStreamStatus { code, .. }
         | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => (
-            tonic_code_name(*code),
+            tonic_code_to_runtime_error_code(*code),
             "runtime",
             tonic_code_retryable(*code),
         ),
@@ -4694,14 +4694,16 @@ fn runtime_error_summary_for_daemon_error(
 fn sync_submit_error_code_for_result(result: &crate::daemon::InvocationResult) -> Option<i32> {
     let error = result.error.as_ref()?;
     match error.code.as_str() {
-        "DAEMON_DOWN" => Some(ERR_DAEMON_DOWN),
+        "DAEMON_OFFLINE" | "DAEMON_DOWN" => Some(ERR_DAEMON_DOWN),
         "CANCELLED" => Some(ERR_CANCELLED),
         "DEADLINE_EXCEEDED" => Some(ERR_TIMEOUT),
+        "TIMEOUT" => Some(ERR_TIMEOUT),
         "INVALID_INVOCATION" => Some(ERR_INVALID_ARG),
+        "ADMISSION_DENIED" => Some(ERR_ABILITY_FAILED),
         "PERMISSION_DENIED" | "UNAUTHENTICATED" => Some(ERR_PERMISSION_DENIED),
-        "NOT_FOUND" => Some(ERR_NOT_FOUND),
+        "ABILITY_NOT_FOUND" | "NOT_FOUND" => Some(ERR_NOT_FOUND),
         "UNIMPLEMENTED" => Some(ERR_NOT_IMPLEMENTED),
-        "UNKNOWN" | "INTERNAL" | "DATA_LOSS" => Some(ERR_PROTOCOL),
+        "PROTOCOL_MISMATCH" | "UNKNOWN" | "INTERNAL" | "DATA_LOSS" => Some(ERR_PROTOCOL),
         _ if error.stage == "transport" => Some(ERR_DAEMON_DOWN),
         _ => None,
     }
@@ -4773,25 +4775,23 @@ fn axon_state_wire_string(state: easynet_axon::invocation::InvocationState) -> S
 }
 
 #[cfg(feature = "axon-pb")]
-fn tonic_code_name(code: tonic::Code) -> &'static str {
+fn tonic_code_to_runtime_error_code(code: tonic::Code) -> &'static str {
     match code {
         tonic::Code::Ok => "OK",
         tonic::Code::Cancelled => "CANCELLED",
-        tonic::Code::Unknown => "UNKNOWN",
-        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
-        tonic::Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
-        tonic::Code::NotFound => "NOT_FOUND",
-        tonic::Code::AlreadyExists => "ALREADY_EXISTS",
-        tonic::Code::PermissionDenied => "PERMISSION_DENIED",
-        tonic::Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
-        tonic::Code::FailedPrecondition => "FAILED_PRECONDITION",
-        tonic::Code::Aborted => "ABORTED",
-        tonic::Code::OutOfRange => "OUT_OF_RANGE",
-        tonic::Code::Unimplemented => "UNIMPLEMENTED",
-        tonic::Code::Internal => "INTERNAL",
-        tonic::Code::Unavailable => "UNAVAILABLE",
-        tonic::Code::DataLoss => "DATA_LOSS",
-        tonic::Code::Unauthenticated => "UNAUTHENTICATED",
+        tonic::Code::InvalidArgument | tonic::Code::OutOfRange => "INVALID_INVOCATION",
+        tonic::Code::DeadlineExceeded => "TIMEOUT",
+        tonic::Code::NotFound => "ABILITY_NOT_FOUND",
+        tonic::Code::AlreadyExists
+        | tonic::Code::FailedPrecondition
+        | tonic::Code::Aborted
+        | tonic::Code::ResourceExhausted => "ADMISSION_DENIED",
+        tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => "PERMISSION_DENIED",
+        tonic::Code::Unimplemented
+        | tonic::Code::Unknown
+        | tonic::Code::Internal
+        | tonic::Code::DataLoss => "PROTOCOL_MISMATCH",
+        tonic::Code::Unavailable => "DAEMON_OFFLINE",
     }
 }
 
@@ -5739,7 +5739,7 @@ mod tests {
             unsafe { serde_json::from_str(CStr::from_ptr(result_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::easynet_string_free(result_ptr) };
         assert_eq!(result_json["ok"], false);
-        assert_eq!(result_json["error"]["code"], "DAEMON_DOWN");
+        assert_eq!(result_json["error"]["code"], "DAEMON_OFFLINE");
 
         let mut events_ptr: *mut c_char = std::ptr::null_mut();
         let events_code = unsafe {
@@ -6463,7 +6463,7 @@ mod tests {
 
         assert_eq!(code, ERR_DAEMON_DOWN);
         let error = read_last_error_json();
-        assert_eq!(error["code"], "DAEMON_DOWN");
+        assert_eq!(error["code"], "DAEMON_OFFLINE");
         assert_eq!(error["stage"], "transport");
         assert_eq!(error["retry"], "after_backoff");
         assert_eq!(error["details"]["abi_code"], ERR_DAEMON_DOWN);

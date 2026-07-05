@@ -190,17 +190,17 @@ func NormalizeErrorCode(code string) ErrorCode {
 	case "VersionMismatch", "VERSION_MISMATCH":
 		return ErrVersionMismatch
 	case "VersionIncompatible", "VERSION_INCOMPATIBLE":
-		return ErrVersionIncompatible
+		return ErrVersionMismatch
 	case "ControlOnly", "CONTROL_ONLY":
 		return ErrControlOnly
 	case "Transport", "TRANSPORT":
-		return ErrTransport
+		return ErrRouteUnavailable
 	case "Protocol", "PROTOCOL":
-		return ErrProtocol
+		return ErrProtocolMismatch
 	case "NotFound", "NOT_FOUND":
-		return ErrNotFound
+		return ErrAbilityNotFound
 	case "AbilityFailed", "ABILITY_FAILED":
-		return ErrAbilityFailed
+		return ErrAdmissionDenied
 	case "NotImplemented", "NOT_IMPLEMENTED":
 		return ErrNotImplemented
 	case "Generic", "GENERIC":

@@ -334,19 +334,19 @@ fn error_metadata(code: i32) -> ErrorMetadata {
             retry: "never",
         },
         ERR_DAEMON_DOWN => ErrorMetadata {
-            code: "DAEMON_DOWN",
+            code: "DAEMON_OFFLINE",
             abi_symbol: "ERR_DAEMON_DOWN",
             stage: "transport",
             retry: "after_backoff",
         },
         ERR_VERSION_INCOMPATIBLE => ErrorMetadata {
-            code: "VERSION_INCOMPATIBLE",
+            code: "VERSION_MISMATCH",
             abi_symbol: "ERR_VERSION_INCOMPATIBLE",
             stage: "sdk",
             retry: "never",
         },
         ERR_ABILITY_FAILED => ErrorMetadata {
-            code: "ABILITY_FAILED",
+            code: "ADMISSION_DENIED",
             abi_symbol: "ERR_ABILITY_FAILED",
             stage: "runtime",
             retry: "unknown",
@@ -370,7 +370,7 @@ fn error_metadata(code: i32) -> ErrorMetadata {
             retry: "never",
         },
         ERR_NOT_FOUND => ErrorMetadata {
-            code: "NOT_FOUND",
+            code: "ABILITY_NOT_FOUND",
             abi_symbol: "ERR_NOT_FOUND",
             stage: "runtime",
             retry: "never",
@@ -382,7 +382,7 @@ fn error_metadata(code: i32) -> ErrorMetadata {
             retry: "never",
         },
         ERR_PROTOCOL => ErrorMetadata {
-            code: "PROTOCOL",
+            code: "PROTOCOL_MISMATCH",
             abi_symbol: "ERR_PROTOCOL",
             stage: "protocol",
             retry: "never",
@@ -514,6 +514,32 @@ mod tests {
         assert_eq!(value["retry"], "safe");
         assert_eq!(value["message"], "deadline elapsed");
         assert_eq!(value["details"]["abi_symbol"], "ERR_TIMEOUT");
+    }
+
+    #[test]
+    fn error_json_projects_abi_codes_to_canonical_runtime_codes() {
+        for (abi_code, expected_code, expected_symbol) in [
+            (ERR_DAEMON_DOWN, "DAEMON_OFFLINE", "ERR_DAEMON_DOWN"),
+            (
+                ERR_VERSION_INCOMPATIBLE,
+                "VERSION_MISMATCH",
+                "ERR_VERSION_INCOMPATIBLE",
+            ),
+            (ERR_ABILITY_FAILED, "ADMISSION_DENIED", "ERR_ABILITY_FAILED"),
+            (ERR_NOT_FOUND, "ABILITY_NOT_FOUND", "ERR_NOT_FOUND"),
+            (ERR_PROTOCOL, "PROTOCOL_MISMATCH", "ERR_PROTOCOL"),
+        ] {
+            let message = CString::new("typed projection").unwrap();
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { easynet_error_json(abi_code, message.as_ptr(), &mut out) };
+            assert_eq!(code, EASYNET_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            assert_eq!(value["code"], expected_code);
+            assert_eq!(value["details"]["abi_code"], abi_code);
+            assert_eq!(value["details"]["abi_symbol"], expected_symbol);
+        }
     }
 
     #[test]

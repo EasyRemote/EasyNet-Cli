@@ -112,8 +112,8 @@ func TestReceiptRuntimeTransportMapsTerminalFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("ListHistory succeeded, want failure")
 	}
-	if !IsCode(err, ErrAbilityFailed) {
-		t.Fatalf("error code = %v, want %s", err, ErrAbilityFailed)
+	if !IsCode(err, ErrAdmissionDenied) {
+		t.Fatalf("error code = %v, want %s", err, ErrAdmissionDenied)
 	}
 }
 

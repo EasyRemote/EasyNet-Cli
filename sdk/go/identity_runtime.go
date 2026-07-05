@@ -302,7 +302,7 @@ func identityRuntimeMetadata(input map[string]any, abilityName string) map[strin
 func identityInvocationFailureError(result InvocationResult) error {
 	failure := result.Failure()
 	message := "identity invocation failed"
-	code := ErrAbilityFailed
+	code := ErrAdmissionDenied
 	stage := "runtime"
 	retry := RetryNever
 	details := map[string]any{"terminal_state": result.TerminalState()}

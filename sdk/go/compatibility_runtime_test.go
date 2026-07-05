@@ -108,7 +108,7 @@ func (t *compatibilityRuntimeInvokeTransport) Invoke(ctx context.Context, draftJ
 			"elapsed_ms": 4,
 			"receipt": null,
 			"error": {
-				"code": "ABILITY_FAILED",
+				"code": "ADMISSION_DENIED",
 				"stage": "execute",
 				"message": "compatibility ability rejected request",
 				"retryable": false
@@ -276,8 +276,8 @@ func TestCompatibilityRuntimeTransportMapsTerminalFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ListModels succeeded, want failure")
 	}
-	if !IsCode(err, ErrAbilityFailed) {
-		t.Fatalf("error code = %v, want %s", err, ErrAbilityFailed)
+	if !IsCode(err, ErrAdmissionDenied) {
+		t.Fatalf("error code = %v, want %s", err, ErrAdmissionDenied)
 	}
 	var sdkErr *SDKError
 	if !asSDKErrorForTest(err, &sdkErr) || sdkErr.Stage != "execute" || sdkErr.Details["terminal_state"] != "Failed" {

@@ -248,7 +248,7 @@ func compatibilityRuntimeMetadata(payload map[string]any, abilityName string) ma
 func compatibilityInvocationFailureError(result InvocationResult) error {
 	failure := result.Failure()
 	message := "compatibility invocation failed"
-	code := ErrAbilityFailed
+	code := ErrAdmissionDenied
 	stage := "runtime"
 	retry := RetryNever
 	details := map[string]any{

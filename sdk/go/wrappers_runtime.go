@@ -309,7 +309,7 @@ func wrapperFileTransferAbility(request WrapperFileTransferRequest) string {
 func wrapperInvocationFailureError(result InvocationResult) error {
 	failure := result.Failure()
 	message := "wrapper invocation failed"
-	code := ErrAbilityFailed
+	code := ErrAdmissionDenied
 	stage := "runtime"
 	retry := RetryNever
 	details := map[string]any{"terminal_state": result.TerminalState()}

@@ -1,7 +1,7 @@
 import unittest
 
 from easynet_sdk import ErrorCode, SDKError, is_code
-from easynet_sdk.errors import profile_error_details
+from easynet_sdk.errors import normalize_error_code, profile_error_details
 
 
 class ErrorTests(unittest.TestCase):
@@ -46,6 +46,25 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.invocation_id, "inv-1")
         self.assertEqual(error.receipt_ura, "easynet:///r/example/receipt/opaque")
         self.assertEqual(error.details["abi_symbol"], "ERR_TIMEOUT")
+
+    def test_normalize_error_code_canonicalizes_legacy_wire_aliases(self) -> None:
+        cases = {
+            "DAEMON_DOWN": ErrorCode.DAEMON_OFFLINE,
+            "VERSION_INCOMPATIBLE": ErrorCode.VERSION_MISMATCH,
+            "ABILITY_FAILED": ErrorCode.ADMISSION_DENIED,
+            "NOT_FOUND": ErrorCode.ABILITY_NOT_FOUND,
+            "PROTOCOL": ErrorCode.PROTOCOL_MISMATCH,
+            "TRANSPORT": ErrorCode.ROUTE_UNAVAILABLE,
+            "DAEMON_OFFLINE": ErrorCode.DAEMON_OFFLINE,
+            "VERSION_MISMATCH": ErrorCode.VERSION_MISMATCH,
+            "ADMISSION_DENIED": ErrorCode.ADMISSION_DENIED,
+            "ABILITY_NOT_FOUND": ErrorCode.ABILITY_NOT_FOUND,
+            "PROTOCOL_MISMATCH": ErrorCode.PROTOCOL_MISMATCH,
+            "ROUTE_UNAVAILABLE": ErrorCode.ROUTE_UNAVAILABLE,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_error_code(raw), expected)
 
     def test_from_json_rejects_invalid_retry_hint(self) -> None:
         with self.assertRaises(SDKError) as caught:

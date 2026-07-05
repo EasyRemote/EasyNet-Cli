@@ -590,7 +590,7 @@ func publicationRuntimeMetadata(metadata map[string]any, abilityName string) map
 func publicationInvocationFailureError(result InvocationResult) error {
 	failure := result.Failure()
 	message := "publication invocation failed"
-	code := ErrAbilityFailed
+	code := ErrAdmissionDenied
 	stage := "runtime"
 	retry := RetryNever
 	details := map[string]any{
