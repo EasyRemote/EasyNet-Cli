@@ -44,6 +44,52 @@ func TestCABIReceiptTransportFetchUsesCarrierInvokeAndProjection(t *testing.T) {
 	}
 }
 
+func TestCABIReceiptTransportReadsHistoryAndTrace(t *testing.T) {
+	libraryPath := buildFakeCABIReceiptLibrary(t)
+	transport, err := OpenCABIReceiptTransport(libraryPath, "/tmp/easynet-control.json")
+	if err != nil {
+		t.Fatalf("OpenCABIReceiptTransport: %v", err)
+	}
+	defer func() {
+		if err := transport.Close(context.Background()); err != nil {
+			t.Fatalf("Close C ABI receipt transport: %v", err)
+		}
+	}()
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+	req := ReceiptHistoryReadRequest{
+		ReceiptCarrierBase: receiptHistoryBaseForTest(),
+		Arguments:          map[string]any{"key": map[string]any{"request_id": "inv-example-1"}},
+	}
+
+	draft, err := client.BuildListHistoryInvocation(context.Background(), req)
+	if err != nil {
+		t.Fatalf("BuildListHistoryInvocation: %v", err)
+	}
+	if draft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0" {
+		t.Fatalf("list descriptor ref = %q", draft.DescriptorRef())
+	}
+	history, err := client.GetHistory(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if history["record"] == nil {
+		t.Fatalf("history output = %#v, want record", history)
+	}
+	trace, err := client.GetTrace(context.Background(), ReceiptHistoryReadRequest{
+		ReceiptCarrierBase: receiptHistoryBaseForTest(),
+		Arguments:          map[string]any{"key": map[string]any{"trace_id": "trace-1"}},
+	})
+	if err != nil {
+		t.Fatalf("GetTrace: %v", err)
+	}
+	if trace["trace_id"] != "trace-1" {
+		t.Fatalf("trace output = %#v, want trace_id", trace)
+	}
+}
+
 func TestCABIReceiptTransportProjectsAndFailsClosed(t *testing.T) {
 	libraryPath := buildFakeCABIReceiptLibrary(t)
 	client, transport, err := NewCABIReceiptClient(libraryPath, "")
@@ -138,7 +184,15 @@ int32_t easynet_init(const char *control_path, uint64_t *out_handle) {
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle;
-	if (strstr(invocation_json, "invocation.history.get") == 0) return 10;
+	if (strstr(invocation_json, "invocation.trace.get") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"trace_id\":\"trace-1\",\"nodes\":[],\"edges\":[],\"edge_semantics\":\"Axon causal links\"},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "invocation.history.get") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"record\":{\"invocation_id\":\"inv-example-1\",\"state\":\"completed\"}},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "invocation.history.list") == 0) return 10;
 	*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"receipt_ura\":null,\"invocation_id\":\"inv-example-1\",\"state\":\"completed\",\"verified\":true,\"output\":{\"ok\":true},\"metadata\":{\"source\":\"daemon\"}},\"error\":null}");
 	return 0;
 }
@@ -146,6 +200,24 @@ int32_t easynet_receipt_build_fetch_invocation(uint64_t handle, const char *requ
 	(void)handle;
 	if (strstr(request_json, "inv-example-1") == 0) return 10;
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"key\":{\"request_id\":\"inv-example-1\"}},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"receipt\",\"system_ability\":\"invocation.history.get\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_receipt_build_list_history_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "history-1") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"receipt\",\"system_ability\":\"invocation.history.list\",\"carrier_owner\":\"daemon_sdk\",\"timeout_ms\":2500}}");
+	return 0;
+}
+int32_t easynet_receipt_build_get_history_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "inv-example-1") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"key\":{\"request_id\":\"inv-example-1\"}},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"receipt\",\"system_ability\":\"invocation.history.get\",\"carrier_owner\":\"daemon_sdk\",\"timeout_ms\":2500}}");
+	return 0;
+}
+int32_t easynet_receipt_build_trace_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "trace-1") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.invocation.trace.get@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"key\":{\"trace_id\":\"trace-1\"}},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"receipt\",\"system_ability\":\"invocation.trace.get\",\"carrier_owner\":\"daemon_sdk\",\"timeout_ms\":2500}}");
 	return 0;
 }
 int32_t easynet_receipt_project(uint64_t handle, const char *receipt_json, char **out_summary_json) {

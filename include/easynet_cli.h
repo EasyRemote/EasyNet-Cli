@@ -459,6 +459,24 @@ int32_t easynet_receipt_build_fetch_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_receipt_build_list_history_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_receipt_build_get_history_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_receipt_build_trace_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_receipt_project(
     EasynetHandle handle,
     const char *receipt_json,

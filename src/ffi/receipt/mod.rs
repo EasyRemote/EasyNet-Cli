@@ -32,7 +32,8 @@
 use std::os::raw::c_char;
 
 use crate::daemon::receipt_contract::{
-    build_fetch_invocation, project_causal_ref, project_receipt_chain_verification,
+    build_fetch_invocation, build_get_history_invocation, build_list_history_invocation,
+    build_trace_invocation, project_causal_ref, project_receipt_chain_verification,
     project_receipt_summary, project_receipt_verification, ReceiptError,
 };
 use crate::ffi::client::handle::EasynetHandle;
@@ -57,6 +58,72 @@ pub unsafe extern "C" fn easynet_receipt_build_fetch_invocation(
         "out_invocation_json",
         "request_json",
         build_fetch_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `invocation.history.list`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_receipt_build_list_history_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_receipt_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_receipt_build_list_history_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_list_history_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `invocation.history.get`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_receipt_build_get_history_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_receipt_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_receipt_build_get_history_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_get_history_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `invocation.trace.get`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_receipt_build_trace_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_receipt_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_receipt_build_trace_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_trace_invocation,
     )
 }
 
@@ -189,6 +256,14 @@ mod tests {
         value
     }
 
+    fn last_error_text() -> String {
+        let ptr = crate::ffi::errors::easynet_last_error();
+        if ptr.is_null() {
+            return String::new();
+        }
+        unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() }
+    }
+
     fn base_fetch_request(extra: serde_json::Value) -> CString {
         let mut request = serde_json::json!({
             "caller_ura": "easynet:///r/example/agent/alice.sdk",
@@ -210,6 +285,28 @@ mod tests {
         CString::new(request.to_string()).unwrap()
     }
 
+    fn base_history_request(extra: serde_json::Value) -> CString {
+        let mut request = serde_json::json!({
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_version": "1.0.0",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "timeout_ms": 2500,
+            "metadata": {"request_id": "history-1"},
+            "arguments": {"key": {"request_id": "req-123"}}
+        });
+        let serde_json::Value::Object(extra) = extra else {
+            return CString::new(request.to_string()).unwrap();
+        };
+        let obj = request.as_object_mut().unwrap();
+        for (key, value) in extra {
+            obj.insert(key, value);
+        }
+        CString::new(request.to_string()).unwrap()
+    }
+
     #[test]
     fn receipt_build_fetch_projects_invocation_history_carrier() {
         let handle = handle();
@@ -219,7 +316,7 @@ mod tests {
         let code =
             unsafe { easynet_receipt_build_fetch_invocation(handle, raw.as_ptr(), &mut out) };
 
-        assert_eq!(code, EASYNET_OK);
+        assert_eq!(code, EASYNET_OK, "{}", last_error_text());
         let value = read_json(out);
         assert_eq!(
             value["metadata"]["system_ability"],
@@ -233,6 +330,75 @@ mod tests {
             value["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0"
         );
+        release(handle);
+    }
+
+    #[test]
+    fn receipt_build_list_history_projects_complete_carrier() {
+        let handle = handle();
+        let raw = base_history_request(serde_json::json!({}));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_receipt_build_list_history_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK, "{}", last_error_text());
+        let value = read_json(out);
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0"
+        );
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "invocation.history.list"
+        );
+        assert_eq!(value["metadata"]["timeout_ms"], 2500);
+        assert_eq!(value["args"]["key"]["request_id"], "req-123");
+        release(handle);
+    }
+
+    #[test]
+    fn receipt_build_get_history_projects_complete_carrier() {
+        let handle = handle();
+        let raw = base_history_request(serde_json::json!({}));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_receipt_build_get_history_invocation(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK, "{}", last_error_text());
+        let value = read_json(out);
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0"
+        );
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "invocation.history.get"
+        );
+        release(handle);
+    }
+
+    #[test]
+    fn receipt_build_trace_projects_complete_carrier() {
+        let handle = handle();
+        let raw = base_history_request(serde_json::json!({
+            "arguments": {"key": {"trace_id": "trace-1"}}
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_receipt_build_trace_invocation(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.invocation.trace.get@1.0.0"
+        );
+        assert_eq!(value["metadata"]["system_ability"], "invocation.trace.get");
+        assert_eq!(value["args"]["key"]["trace_id"], "trace-1");
         release(handle);
     }
 

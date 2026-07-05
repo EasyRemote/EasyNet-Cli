@@ -40,6 +40,10 @@ use crate::daemon::sdk_contract::{
 const RECEIPT_PROFILE: &str = "receipt";
 const ABILITY_INVOCATION_HISTORY_GET: &str =
     crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET;
+const ABILITY_INVOCATION_HISTORY_LIST: &str =
+    crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
+const ABILITY_INVOCATION_TRACE_GET: &str =
+    crate::daemon::ability::names::governance::INVOCATION_TRACE_GET;
 
 pub(crate) type ReceiptError = SdkContractError;
 
@@ -49,6 +53,18 @@ pub(crate) fn build_fetch_invocation(request: &Value) -> Result<Value, ReceiptEr
     validate_fetch_descriptor_ref(obj)?;
     let args = fetch_args(obj)?;
     build_system_invocation(obj, RECEIPT_PROFILE, ABILITY_INVOCATION_HISTORY_GET, args)
+}
+
+pub(crate) fn build_list_history_invocation(request: &Value) -> Result<Value, ReceiptError> {
+    build_history_invocation(request, ABILITY_INVOCATION_HISTORY_LIST)
+}
+
+pub(crate) fn build_get_history_invocation(request: &Value) -> Result<Value, ReceiptError> {
+    build_history_invocation(request, ABILITY_INVOCATION_HISTORY_GET)
+}
+
+pub(crate) fn build_trace_invocation(request: &Value) -> Result<Value, ReceiptError> {
+    build_history_invocation(request, ABILITY_INVOCATION_TRACE_GET)
 }
 
 pub(crate) fn project_receipt_summary(input: &Value) -> Result<Value, ReceiptError> {
@@ -84,6 +100,26 @@ const RECEIPT_FETCH_REQUEST_FIELDS: &[&str] = &[
     "request_id",
     "trace_id",
 ];
+
+const RECEIPT_HISTORY_REQUEST_FIELDS: &[&str] = &[
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "timeout_ms",
+    "metadata",
+    "arguments",
+];
+
+fn build_history_invocation(request: &Value, ability_name: &str) -> Result<Value, ReceiptError> {
+    let obj = object(request, "ReceiptHistoryReadRequest")?;
+    reject_unsupported_fields(obj, RECEIPT_HISTORY_REQUEST_FIELDS)?;
+    let args = history_args(obj)?;
+    let prepared = with_history_metadata(obj)?;
+    build_system_invocation(&prepared, RECEIPT_PROFILE, ability_name, args)
+}
 
 fn reject_unsupported_fields(
     obj: &Map<String, Value>,
@@ -152,6 +188,49 @@ fn fetch_args(obj: &Map<String, Value>) -> Result<Value, ReceiptError> {
         _ => Err(ReceiptError::InvalidField(
             "request",
             "must include exactly one of invocation_ura, request_id, or trace_id".to_string(),
+        )),
+    }
+}
+
+fn history_args(obj: &Map<String, Value>) -> Result<Value, ReceiptError> {
+    match obj.get("arguments") {
+        None | Some(Value::Null) => Ok(json!({})),
+        Some(Value::Object(args)) => Ok(Value::Object(args.clone())),
+        Some(_) => Err(ReceiptError::InvalidField(
+            "arguments",
+            "must be an object".to_string(),
+        )),
+    }
+}
+
+fn with_history_metadata(obj: &Map<String, Value>) -> Result<Map<String, Value>, ReceiptError> {
+    let mut prepared = obj.clone();
+    if let Some(timeout_ms) = optional_timeout_ms(obj)? {
+        let mut metadata = match prepared.remove("metadata") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(metadata)) => metadata,
+            Some(_) => {
+                return Err(ReceiptError::InvalidField(
+                    "metadata",
+                    "must be an object or null".to_string(),
+                ))
+            }
+        };
+        metadata.insert("timeout_ms".to_string(), Value::Number(timeout_ms.into()));
+        prepared.insert("metadata".to_string(), Value::Object(metadata));
+    }
+    Ok(prepared)
+}
+
+fn optional_timeout_ms(obj: &Map<String, Value>) -> Result<Option<u64>, ReceiptError> {
+    match obj.get("timeout_ms") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => value.as_u64().map(Some).ok_or_else(|| {
+            ReceiptError::InvalidField("timeout_ms", "must be a non-negative integer".to_string())
+        }),
+        Some(_) => Err(ReceiptError::InvalidField(
+            "timeout_ms",
+            "must be a non-negative integer".to_string(),
         )),
     }
 }

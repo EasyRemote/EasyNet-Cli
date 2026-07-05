@@ -62,6 +62,9 @@ type cabiReceiptSymbols struct {
 	shutdown           unsafe.Pointer
 	invocationInvoke   unsafe.Pointer
 	receiptBuildFetch  unsafe.Pointer
+	receiptBuildList   unsafe.Pointer
+	receiptBuildGet    unsafe.Pointer
+	receiptBuildTrace  unsafe.Pointer
 	receiptProject     unsafe.Pointer
 	receiptVerify      unsafe.Pointer
 	receiptVerifyChain unsafe.Pointer
@@ -150,28 +153,52 @@ func (t *CABIReceiptTransport) Fetch(ctx context.Context, requestJSON []byte) ([
 	return t.callJSON(handle, t.symbols.receiptProject, outputJSON, "C ABI receipt project failed")
 }
 
-func (t *CABIReceiptTransport) BuildListHistoryInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt list-history invocation is not exported yet")
+func (t *CABIReceiptTransport) buildHistoryInvocation(ctx context.Context, requestJSON []byte, symbol unsafe.Pointer) ([]byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, symbol, requestJSON, "C ABI receipt history invocation build failed")
 }
 
-func (t *CABIReceiptTransport) BuildGetHistoryInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt get-history invocation is not exported yet")
+func (t *CABIReceiptTransport) BuildListHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.buildHistoryInvocation(ctx, requestJSON, t.symbols.receiptBuildList)
 }
 
-func (t *CABIReceiptTransport) BuildTraceInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt trace invocation is not exported yet")
+func (t *CABIReceiptTransport) BuildGetHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.buildHistoryInvocation(ctx, requestJSON, t.symbols.receiptBuildGet)
 }
 
-func (t *CABIReceiptTransport) ListHistory(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt list history is not exported yet")
+func (t *CABIReceiptTransport) BuildTraceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.buildHistoryInvocation(ctx, requestJSON, t.symbols.receiptBuildTrace)
 }
 
-func (t *CABIReceiptTransport) GetHistory(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt get history is not exported yet")
+func (t *CABIReceiptTransport) ListHistory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeHistory(ctx, requestJSON, t.symbols.receiptBuildList)
 }
 
-func (t *CABIReceiptTransport) GetTrace(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt get trace is not exported yet")
+func (t *CABIReceiptTransport) GetHistory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeHistory(ctx, requestJSON, t.symbols.receiptBuildGet)
+}
+
+func (t *CABIReceiptTransport) GetTrace(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeHistory(ctx, requestJSON, t.symbols.receiptBuildTrace)
+}
+
+func (t *CABIReceiptTransport) invokeHistory(ctx context.Context, requestJSON []byte, symbol unsafe.Pointer) ([]byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, symbol, requestJSON, "C ABI receipt history invocation build failed")
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := t.invoke(handle, draftJSON)
+	if err != nil {
+		return nil, err
+	}
+	return outputJSONFromInvocationResult(resultJSON)
 }
 
 func (t *CABIReceiptTransport) Project(ctx context.Context, receiptJSON []byte) ([]byte, error) {
@@ -289,6 +316,9 @@ func bindCABIReceiptSymbols(library unsafe.Pointer) (cabiReceiptSymbols, error) 
 		{"easynet_shutdown", &symbols.shutdown},
 		{"easynet_invocation_invoke", &symbols.invocationInvoke},
 		{"easynet_receipt_build_fetch_invocation", &symbols.receiptBuildFetch},
+		{"easynet_receipt_build_list_history_invocation", &symbols.receiptBuildList},
+		{"easynet_receipt_build_get_history_invocation", &symbols.receiptBuildGet},
+		{"easynet_receipt_build_trace_invocation", &symbols.receiptBuildTrace},
 		{"easynet_receipt_project", &symbols.receiptProject},
 		{"easynet_receipt_verify", &symbols.receiptVerify},
 		{"easynet_receipt_verify_chain", &symbols.receiptVerifyChain},

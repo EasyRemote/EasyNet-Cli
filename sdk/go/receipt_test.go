@@ -30,7 +30,7 @@ func (m *memoryReceiptTransport) Fetch(ctx context.Context, requestJSON []byte) 
 }
 
 func (m *memoryReceiptTransport) BuildListHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
-	return m.captureHistoryRead(requestJSON, `{"caller_ura":"easynet:///r/example/agent/backend","callee_ura":"easynet:///r/example/device/dev-a","descriptor_ref":"easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0","subject_ura":"easynet:///r/example/device/dev-a","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"args":{},"content_type":"application/json","metadata":{}}`)
+	return m.captureHistoryRead(requestJSON, `{"caller_ura":"easynet:///r/example/agent/alice.sdk","callee_ura":"easynet:///r/example/device/dev-a","descriptor_ref":"easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0","subject_ura":"easynet:///r/example/device/dev-a","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"args":{},"content_type":"application/json","metadata":{}}`)
 }
 
 func (m *memoryReceiptTransport) BuildGetHistoryInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -112,7 +112,7 @@ func baseReceiptFetchRequest() ReceiptFetchRequest {
 
 func receiptHistoryBaseForTest() ReceiptCarrierBase {
 	return ReceiptCarrierBase{
-		CallerURA:         "easynet:///r/example/agent/backend",
+		CallerURA:         "easynet:///r/example/agent/alice.sdk",
 		CalleeURA:         "easynet:///r/example/device/dev-a",
 		SubjectURA:        "easynet:///r/example/device/dev-a",
 		DescriptorVersion: "1.0.0",

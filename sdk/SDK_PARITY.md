@@ -59,10 +59,10 @@ method spelling.
   and an executable validator gate for all 14 Hub route families; real backend
   route source cutover and per-family smokes remain incomplete before cutover
   can be claimed.
-- Receipt fetch carrier, projection, and causal-ref guardrails exist for
-  Rust/C ABI over daemon `invocation.history.get`; Axon-backed full
-  verification, fetched-record execution convenience, and language facades
-  remain incomplete.
+- Receipt fetch carrier, projection, causal-ref guardrails, and
+  invocation-history list/get/trace carrier builders exist for Rust/C ABI over
+  daemon `invocation.history.*` and `invocation.trace.get`; Axon-backed full
+  verification and broader language-facade cutovers remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, Identity URA/DescriptorRef
   projection guardrails, and identity signing-key register/list/revoke
@@ -139,7 +139,8 @@ method spelling.
   backend route cutover remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
-  optional C ABI v4 concrete transport for fetch/project/verify/verify-chain/
+  invocation-history list/get/trace read-model methods, optional C ABI v4
+  concrete transport for fetch/list/get/trace/project/verify/verify-chain/
   causal-ref over Runtime Core invoke, and close state seams over opaque receipt
   refs; Axon-backed cryptographic verification, receipt URA construction after
   RFC-007, and backend history/metrics cutover remain incomplete.
