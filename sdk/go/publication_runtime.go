@@ -1,0 +1,330 @@
+package easynet
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+)
+
+const (
+	publicationAbilityDeploy    = "ability.deploy"
+	publicationAbilityList      = "meta.list_abilities"
+	publicationAbilityUnpublish = "ability.unpublish"
+)
+
+// PublicationRuntimeTransport lowers Publication profile carriers into Runtime
+// Core invocations and projects daemon publication facts back into Publication
+// DTOs.
+type PublicationRuntimeTransport struct {
+	runtime  *RuntimeClient
+	identity *IdentityClient
+}
+
+func NewPublicationRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*PublicationRuntimeTransport, error) {
+	if runtime == nil {
+		return nil, invalidProfileClient(publicationProfile, "runtime client is required")
+	}
+	if identity == nil {
+		return nil, invalidProfileClient(publicationProfile, "identity client is required")
+	}
+	return &PublicationRuntimeTransport{runtime: runtime, identity: identity}, nil
+}
+
+func NewRuntimePublicationClient(runtime *RuntimeClient, identity *IdentityClient) (*PublicationClient, error) {
+	transport, err := NewPublicationRuntimeTransport(runtime, identity)
+	if err != nil {
+		return nil, err
+	}
+	return NewPublicationClient(transport)
+}
+
+func (t *PublicationRuntimeTransport) BuildResourceRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if t == nil || t.identity == nil {
+		return nil, invalidProfileClient(publicationProfile, "publication runtime transport is not initialized")
+	}
+	var req LocalResourceRefRequest
+	if err := json.Unmarshal(requestJSON, &req); err != nil {
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication resource-ref request: %v", err), err)
+	}
+	ref, err := t.identity.BuildResourceRef(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ref)
+}
+
+func (t *PublicationRuntimeTransport) ValidatePackage(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication package validation requires a daemon-local package validator export")
+}
+
+func (t *PublicationRuntimeTransport) DeployAbility(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationDeployForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, publicationDeployArgs(req), publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityDeploy)
+	if err != nil {
+		return nil, err
+	}
+	result, err := NewAbilityDeployResultFromJSON(output)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+
+func (t *PublicationRuntimeTransport) BuildDeployInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationDeployForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.buildInvocationJSON(ctx, publicationDeployArgs(req), publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityDeploy)
+}
+
+func (t *PublicationRuntimeTransport) InstallPlugin(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication plugin install requires a daemon-local plugin installer export")
+}
+
+func (t *PublicationRuntimeTransport) ListAbilities(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationListForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, publicationListArgs(req), publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityList)
+	if err != nil {
+		return nil, err
+	}
+	page, err := NewPublishedAbilityPageFromJSON(output)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(page)
+}
+
+func (t *PublicationRuntimeTransport) ShowAbility(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication show requires a complete carrier")
+}
+
+func (t *PublicationRuntimeTransport) EnableAbilityImpl(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication enable ability impl is not exported yet")
+}
+
+func (t *PublicationRuntimeTransport) DisableAbilityImpl(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication disable ability impl is not exported yet")
+}
+
+func (t *PublicationRuntimeTransport) BuildUnpublishInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	req, err := decodePublicationUnpublishForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.buildInvocationJSON(ctx, map[string]any{"ability_ura": req.AbilityURA}, publicationCarrier{
+		CallerURA:         req.CallerURA,
+		CalleeURA:         req.CalleeURA,
+		SubjectURA:        req.SubjectURA,
+		DescriptorVersion: req.DescriptorVersion,
+		NonceBase64:       req.NonceBase64,
+		CausalContext:     req.CausalContext,
+		Metadata:          req.Metadata,
+	}, publicationAbilityUnpublish)
+}
+
+func (t *PublicationRuntimeTransport) UnpublishAbility(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(publicationProfile, "runtime publication unpublish requires a complete UnpublishAbilityRequest carrier")
+}
+
+func (t *PublicationRuntimeTransport) Close(context.Context) error {
+	return nil
+}
+
+type publicationCarrier struct {
+	CallerURA         string
+	CalleeURA         string
+	SubjectURA        string
+	DescriptorVersion string
+	NonceBase64       string
+	CausalContext     map[string]any
+	Metadata          map[string]any
+}
+
+func (t *PublicationRuntimeTransport) buildInvocationJSON(ctx context.Context, args map[string]any, carrier publicationCarrier, abilityName string) ([]byte, error) {
+	draft, err := t.buildInvocation(ctx, args, carrier, abilityName)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		return nil, invalidProfilePayload(publicationProfile, fmt.Sprintf("encode publication invocation: %v", err), err)
+	}
+	return raw, nil
+}
+
+func (t *PublicationRuntimeTransport) buildInvocation(ctx context.Context, args map[string]any, carrier publicationCarrier, abilityName string) (InvocationDraft, error) {
+	if t == nil || t.runtime == nil || t.identity == nil {
+		return InvocationDraft{}, invalidProfileClient(publicationProfile, "publication runtime transport is not initialized")
+	}
+	if ctx == nil {
+		return InvocationDraft{}, invalidProfileClient(publicationProfile, "context is required")
+	}
+	descriptorRef, err := t.identity.OwnerAbilityDescriptorRef(ctx, carrier.CalleeURA, abilityName, carrier.DescriptorVersion)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	return NewInvocationBuilder().
+		WithCallerURA(carrier.CallerURA).
+		WithCalleeURA(carrier.CalleeURA).
+		WithDescriptorRef(descriptorRef).
+		WithSubjectURA(carrier.SubjectURA).
+		WithNonceBase64(carrier.NonceBase64).
+		WithCausalContext(carrier.CausalContext).
+		WithJSONArgs(args).
+		WithContentType("application/json").
+		WithMetadata(publicationRuntimeMetadata(carrier.Metadata, abilityName)).
+		Build()
+}
+
+func (t *PublicationRuntimeTransport) invoke(ctx context.Context, args map[string]any, carrier publicationCarrier, abilityName string) ([]byte, error) {
+	draft, err := t.buildInvocation(ctx, args, carrier, abilityName)
+	if err != nil {
+		return nil, err
+	}
+	result, err := t.runtime.Invoke(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	if !result.OK() {
+		return nil, publicationInvocationFailureError(result)
+	}
+	outputJSON := result.OutputJSON()
+	if len(outputJSON) == 0 || string(outputJSON) == "null" {
+		return nil, invalidProfilePayload(publicationProfile, "publication invocation output_json is required", nil)
+	}
+	return outputJSON, nil
+}
+
+func decodePublicationDeployForRuntime(requestJSON []byte) (AbilityDeployRequest, error) {
+	var req AbilityDeployRequest
+	if err := json.Unmarshal(requestJSON, &req); err != nil {
+		return AbilityDeployRequest{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication deploy request: %v", err), err)
+	}
+	if _, err := marshalAbilityDeployRequest(req); err != nil {
+		return AbilityDeployRequest{}, err
+	}
+	return req, nil
+}
+
+func decodePublicationListForRuntime(requestJSON []byte) (PublishedAbilityQuery, error) {
+	var req PublishedAbilityQuery
+	if err := json.Unmarshal(requestJSON, &req); err != nil {
+		return PublishedAbilityQuery{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication list query: %v", err), err)
+	}
+	req = normalizePublishedAbilityQuery(req)
+	if err := validatePublishedAbilityQuery(req); err != nil {
+		return PublishedAbilityQuery{}, err
+	}
+	return req, nil
+}
+
+func decodePublicationUnpublishForRuntime(requestJSON []byte) (UnpublishAbilityRequest, error) {
+	var req UnpublishAbilityRequest
+	if err := json.Unmarshal(requestJSON, &req); err != nil {
+		return UnpublishAbilityRequest{}, invalidProfilePayload(publicationProfile, fmt.Sprintf("decode publication unpublish request: %v", err), err)
+	}
+	if _, err := marshalUnpublishAbilityRequest(req); err != nil {
+		return UnpublishAbilityRequest{}, err
+	}
+	return req, nil
+}
+
+func publicationDeployArgs(req AbilityDeployRequest) map[string]any {
+	return map[string]any{
+		"resource_ref": req.ResourceRef,
+		"node_id":      req.NodeID,
+	}
+}
+
+func publicationListArgs(req PublishedAbilityQuery) map[string]any {
+	args := map[string]any{
+		"limit": req.Limit,
+	}
+	if req.Cursor != "" {
+		args["cursor"] = req.Cursor
+	}
+	if req.OwnerURA != "" {
+		args["agent_ura"] = req.OwnerURA
+	}
+	if req.AbilityURA != "" {
+		args["subject_ura"] = req.AbilityURA
+	}
+	return args
+}
+
+func publicationRuntimeMetadata(metadata map[string]any, abilityName string) map[string]any {
+	out := make(map[string]any, len(metadata)+3)
+	for key, value := range metadata {
+		out[key] = value
+	}
+	out["profile"] = publicationProfile
+	out["system_ability"] = abilityName
+	out["carrier_owner"] = "daemon_sdk"
+	return out
+}
+
+func publicationInvocationFailureError(result InvocationResult) error {
+	failure := result.Failure()
+	message := "publication invocation failed"
+	code := ErrAbilityFailed
+	stage := "runtime"
+	retry := RetryNever
+	details := map[string]any{
+		"terminal_state": result.TerminalState(),
+	}
+	if failure != nil {
+		if failure.Message() != "" {
+			message = failure.Message()
+		}
+		if failure.Code() != "" {
+			code = NormalizeErrorCode(failure.Code())
+			details["runtime_code"] = failure.Code()
+		}
+		if failure.Stage() != "" {
+			stage = failure.Stage()
+		}
+		if failure.Retryable() {
+			retry = RetrySafe
+		}
+		details["runtime_retryable"] = failure.Retryable()
+	}
+	return withProfileErrorDetails(&SDKError{
+		Code:      code,
+		Stage:     stage,
+		Retry:     retry,
+		Retryable: RetryableForHint(retry),
+		Message:   message,
+		Details:   details,
+	}, publicationProfile)
+}
