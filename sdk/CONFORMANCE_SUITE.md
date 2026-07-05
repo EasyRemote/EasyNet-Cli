@@ -12,6 +12,7 @@ sdk/conformance/
     *.yaml
   fixtures/
     *.json
+  fixture-schema-bindings.json
   runner/
     README.md
     go-action-adapter-report.json
@@ -19,7 +20,9 @@ sdk/conformance/
 ```
 
 Cases are declarative. Fixtures are golden DTO payloads validated against
-`sdk/schemas`.
+`sdk/schemas` through `sdk/conformance/fixture-schema-bindings.json`. The
+binding manifest is exhaustive: every `*.v4.json` fixture is bound exactly once
+to the schema that defines its canonical DTO contract.
 
 ## Case Format
 
@@ -47,7 +50,8 @@ A language runner must:
 
 - Load case YAML from `sdk/conformance/cases`.
 - Load fixture JSON from `sdk/conformance/fixtures`.
-- Validate fixture files against `sdk/schemas` before executing behavior.
+- Validate fixture files against `sdk/schemas` via
+  `sdk/conformance/fixture-schema-bindings.json` before executing behavior.
 - Fail when a public API exposes raw Axon/proto/runtime types.
 - Treat skipped cases as instability evidence unless the profile is undeclared
   for that language.

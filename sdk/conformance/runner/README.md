@@ -4,8 +4,16 @@ This directory defines the runner contract for language SDK conformance.
 
 The repository ships a manifest runner as `cargo run --bin
 sdk-conformance-runner`. It loads the shared cases from `../cases`, validates
-fixture and schema references, and emits machine-readable result records. This
-is the common integrity gate for every language adapter.
+fixture and schema references, validates every referenced fixture through
+`../fixture-schema-bindings.json`, and emits machine-readable result records.
+This is the common integrity gate for every language adapter.
+
+`fixture-schema-bindings.json` is the closed fixture contract. Every
+`../fixtures/*.v4.json` file must appear exactly once and point at one
+`../../schemas/*.schema.json` file. The runner rejects missing bindings,
+duplicate bindings, missing fixtures, missing schemas, and fixture payloads that
+do not satisfy the bound schema before it considers a language action-adapter
+report.
 
 Each SDK facade may provide its own action adapter report, but it must consume
 the same cases from `../cases`, the same fixtures from `../fixtures`, and emit

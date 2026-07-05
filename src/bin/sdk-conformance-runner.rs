@@ -16,10 +16,11 @@
 //
 // Implementation Approach
 // -----------------------
-// Treat YAML cases as declarative manifests, parse JSON fixtures/schemas through
-// serde_json, and emit one stable result record per case/language pair. This
-// moves the conformance runner root from README-only scaffold to a CI-usable
-// integrity gate without introducing a second daemon or Axon semantic path.
+// Treat YAML cases as declarative manifests, bind every referenced fixture to a
+// repository schema, validate the fixture payload before adapter execution, and
+// emit one stable result record per case/language pair. This moves the
+// conformance runner root from README-only scaffold to a CI-usable integrity
+// gate without introducing a second daemon or Axon semantic path.
 //
 // Usage
 // -----
@@ -33,10 +34,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -118,6 +120,18 @@ struct AdapterEvidence {
     ref_path: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct FixtureSchemaBindingManifest {
+    schema_version: u64,
+    bindings: Vec<FixtureSchemaBindingRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FixtureSchemaBindingRecord {
+    fixture: String,
+    schema: String,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let records = run_manifest(&cli.root, &cli.language, cli.adapter_report.as_deref())?;
@@ -138,6 +152,7 @@ fn run_manifest(
     adapter_report_path: Option<&Path>,
 ) -> Result<Vec<ConformanceResultRecord>> {
     let cases = load_cases(root)?;
+    let fixture_schemas = FixtureSchemaBindings::load(root)?;
     let adapter_report = {
         let case_index = ManifestCaseIndex::new(&cases);
         adapter_report_path
@@ -157,7 +172,7 @@ fn run_manifest(
                 None
             }
         }));
-        errors.extend(validate_case_references(root, &case));
+        errors.extend(validate_case_references(root, &case, &fixture_schemas));
 
         let record = if !case.required_for.contains(language) {
             ConformanceResultRecord {
@@ -297,6 +312,64 @@ impl<'a> AdapterReportIndex<'a> {
     fn find(&self, case_id: &str) -> Option<&'a AdapterResultRecord> {
         self.records.get(case_id).copied()
     }
+}
+
+#[derive(Debug)]
+struct FixtureSchemaBindings {
+    bindings: BTreeMap<String, String>,
+}
+
+impl FixtureSchemaBindings {
+    fn load(root: &Path) -> Result<Self> {
+        let path = root.join("sdk/conformance/fixture-schema-bindings.json");
+        let manifest: FixtureSchemaBindingManifest = read_json_file(&path)
+            .with_context(|| format!("load fixture schema bindings {}", path.display()))?;
+        if manifest.schema_version != 1 {
+            anyhow::bail!("fixture schema bindings schema_version must be 1");
+        }
+        let mut bindings = BTreeMap::new();
+        for binding in manifest.bindings {
+            validate_manifest_file_name(&binding.fixture, ".v4.json")
+                .with_context(|| format!("invalid fixture binding `{}`", binding.fixture))?;
+            validate_manifest_file_name(&binding.schema, ".schema.json")
+                .with_context(|| format!("invalid schema binding `{}`", binding.schema))?;
+            if bindings
+                .insert(binding.fixture.clone(), binding.schema.clone())
+                .is_some()
+            {
+                anyhow::bail!("duplicate fixture schema binding `{}`", binding.fixture);
+            }
+            let schema_path = root.join("sdk/schemas").join(&binding.schema);
+            ensure_path_inside_root(root, &schema_path)
+                .with_context(|| format!("validate schema binding {}", schema_path.display()))?;
+        }
+        if bindings.is_empty() {
+            anyhow::bail!("fixture schema bindings must not be empty");
+        }
+        Ok(Self { bindings })
+    }
+
+    fn schema_for(&self, fixture: &str) -> Option<&str> {
+        self.bindings.get(fixture).map(String::as_str)
+    }
+}
+
+fn validate_manifest_file_name(raw: &str, suffix: &str) -> Result<()> {
+    if raw.trim().is_empty() || !raw.ends_with(suffix) {
+        anyhow::bail!("expected file name ending with `{suffix}`");
+    }
+    let path = Path::new(raw);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        anyhow::bail!("file name must stay relative to the conformance directory");
+    }
+    Ok(())
 }
 
 fn validate_adapter_evidence(root: &Path, case_id: &str, evidence: &AdapterEvidence) -> Result<()> {
@@ -494,14 +567,21 @@ fn duplicate_case_errors(cases: &[ConformanceCase]) -> Vec<(String, String)> {
     duplicates
 }
 
-fn validate_case_references(root: &Path, case: &ConformanceCase) -> Vec<String> {
+fn validate_case_references(
+    root: &Path,
+    case: &ConformanceCase,
+    fixture_schemas: &FixtureSchemaBindings,
+) -> Vec<String> {
     let mut refs = CaseReferences::default();
     refs.collect(&case.document);
 
     let mut errors = Vec::new();
     for fixture in refs.fixtures {
-        let path = root.join("sdk/conformance/fixtures").join(&fixture);
-        if let Err(err) = validate_json_file(&path) {
+        let Some(schema) = fixture_schemas.schema_for(&fixture) else {
+            errors.push(format!("fixture `{fixture}`: missing schema binding"));
+            continue;
+        };
+        if let Err(err) = validate_fixture_against_schema(root, &fixture, schema) {
             errors.push(format!("fixture `{fixture}`: {err}"));
         }
     }
@@ -544,17 +624,16 @@ impl CaseReferences {
     }
 }
 
-fn validate_json_file(path: &Path) -> Result<()> {
+fn read_json_file<T>(path: &Path) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
     let raw = fs::read_to_string(path).with_context(|| format!("missing {}", path.display()))?;
-    serde_json::from_str::<Value>(&raw)
-        .with_context(|| format!("invalid json {}", path.display()))?;
-    Ok(())
+    serde_json::from_str(&raw).with_context(|| format!("invalid json {}", path.display()))
 }
 
 fn validate_schema_file(path: &Path) -> Result<()> {
-    let raw = fs::read_to_string(path).with_context(|| format!("missing {}", path.display()))?;
-    let json: Value =
-        serde_json::from_str(&raw).with_context(|| format!("invalid json {}", path.display()))?;
+    let json: Value = read_json_file(path)?;
     let object = json
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("schema root must be an object"))?;
@@ -563,6 +642,407 @@ fn validate_schema_file(path: &Path) -> Result<()> {
     required_string(object.get("title"), "title")
         .with_context(|| format!("schema {} missing title", path.display()))?;
     Ok(())
+}
+
+fn validate_fixture_against_schema(root: &Path, fixture: &str, schema: &str) -> Result<()> {
+    let fixture_path = root.join("sdk/conformance/fixtures").join(fixture);
+    let fixture_json: Value = read_json_file(&fixture_path)?;
+    let schema_json = load_schema_with_local_refs(root, schema, &mut BTreeSet::new())?;
+    let errors = FixtureJsonSchemaValidator::default().validate(&fixture_json, &schema_json);
+    if !errors.is_empty() {
+        anyhow::bail!(
+            "schema validation against `{schema}` failed: {}",
+            errors.join("; ")
+        );
+    }
+    Ok(())
+}
+
+fn load_schema_with_local_refs(
+    root: &Path,
+    schema: &str,
+    stack: &mut BTreeSet<String>,
+) -> Result<Value> {
+    validate_manifest_file_name(schema, ".schema.json")?;
+    if !stack.insert(schema.to_string()) {
+        anyhow::bail!("recursive schema reference `{schema}`");
+    }
+    let schema_path = root.join("sdk/schemas").join(schema);
+    let mut value: Value = read_json_file(&schema_path)?;
+    inline_local_schema_refs(root, &mut value, stack)?;
+    stack.remove(schema);
+    Ok(value)
+}
+
+fn inline_local_schema_refs(
+    root: &Path,
+    value: &mut Value,
+    stack: &mut BTreeSet<String>,
+) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            if let Some(raw_ref) = object.get("$ref").and_then(Value::as_str) {
+                if raw_ref.ends_with(".schema.json") {
+                    let mut referenced = load_schema_with_local_refs(root, raw_ref, stack)?;
+                    if object.len() > 1 {
+                        let siblings = object
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != "$ref")
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<Vec<_>>();
+                        let Some(referenced_object) = referenced.as_object_mut() else {
+                            anyhow::bail!("referenced schema `{raw_ref}` is not an object");
+                        };
+                        for (key, value) in siblings {
+                            referenced_object.insert(key, value);
+                        }
+                    }
+                    *value = referenced;
+                    return Ok(());
+                }
+            }
+            for nested in object.values_mut() {
+                inline_local_schema_refs(root, nested, stack)?;
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                inline_local_schema_refs(root, nested, stack)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct FixtureJsonSchemaValidator;
+
+impl FixtureJsonSchemaValidator {
+    fn validate(&self, instance: &Value, schema: &Value) -> Vec<String> {
+        let mut errors = Vec::new();
+        self.validate_node(instance, schema, "$", &mut errors);
+        errors.into_iter().take(5).collect()
+    }
+
+    fn validate_node(
+        &self,
+        instance: &Value,
+        schema: &Value,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        if errors.len() >= 5 {
+            return;
+        }
+        match schema {
+            Value::Bool(true) => return,
+            Value::Bool(false) => {
+                errors.push(format!("{path}: boolean schema rejected value"));
+                return;
+            }
+            Value::Object(_) => {}
+            _ => {
+                errors.push(format!("{path}: schema node must be an object or boolean"));
+                return;
+            }
+        }
+        let Some(schema_object) = schema.as_object() else {
+            return;
+        };
+
+        if let Some(type_rule) = schema_object.get("type") {
+            let allowed = schema_type_names(type_rule);
+            if allowed.is_empty() {
+                errors.push(format!(
+                    "{path}: schema type rule must be a string or array"
+                ));
+            } else if !allowed
+                .iter()
+                .any(|expected| instance_matches_json_type(instance, expected))
+            {
+                errors.push(format!(
+                    "{path}: expected type {}, got {}",
+                    allowed.join("|"),
+                    json_type_name(instance)
+                ));
+            }
+        }
+
+        if let Some(expected) = schema_object.get("const") {
+            if instance != expected {
+                errors.push(format!("{path}: expected const {}", compact_json(expected)));
+            }
+        }
+
+        if let Some(values) = schema_object.get("enum") {
+            match values.as_array() {
+                Some(values) if values.iter().any(|candidate| candidate == instance) => {}
+                Some(_) => errors.push(format!("{path}: value is not in enum")),
+                None => errors.push(format!("{path}: schema enum must be an array")),
+            }
+        }
+
+        if let Some(one_of) = schema_object.get("oneOf") {
+            self.validate_one_of(instance, one_of, path, errors);
+        }
+        if let Some(any_of) = schema_object.get("anyOf") {
+            self.validate_any_of(instance, any_of, path, errors);
+        }
+
+        if let Some(not_schema) = schema_object.get("not") {
+            let mut nested_errors = Vec::new();
+            self.validate_node(instance, not_schema, path, &mut nested_errors);
+            if nested_errors.is_empty() {
+                errors.push(format!("{path}: value matched forbidden schema"));
+            }
+        }
+
+        self.validate_object_rules(instance, schema_object, path, errors);
+        self.validate_array_rules(instance, schema_object, path, errors);
+        self.validate_string_rules(instance, schema_object, path, errors);
+        self.validate_number_rules(instance, schema_object, path, errors);
+    }
+
+    fn validate_one_of(
+        &self,
+        instance: &Value,
+        one_of: &Value,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let Some(candidates) = one_of.as_array() else {
+            errors.push(format!("{path}: schema oneOf must be an array"));
+            return;
+        };
+        let mut matches = 0usize;
+        for candidate in candidates {
+            let mut nested_errors = Vec::new();
+            self.validate_node(instance, candidate, path, &mut nested_errors);
+            if nested_errors.is_empty() {
+                matches += 1;
+            }
+        }
+        if matches != 1 {
+            errors.push(format!("{path}: oneOf matched {matches} schemas"));
+        }
+    }
+
+    fn validate_any_of(
+        &self,
+        instance: &Value,
+        any_of: &Value,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let Some(candidates) = any_of.as_array() else {
+            errors.push(format!("{path}: schema anyOf must be an array"));
+            return;
+        };
+        for candidate in candidates {
+            let mut nested_errors = Vec::new();
+            self.validate_node(instance, candidate, path, &mut nested_errors);
+            if nested_errors.is_empty() {
+                return;
+            }
+        }
+        errors.push(format!("{path}: anyOf matched no schemas"));
+    }
+
+    fn validate_object_rules(
+        &self,
+        instance: &Value,
+        schema_object: &serde_json::Map<String, Value>,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let Some(instance_object) = instance.as_object() else {
+            return;
+        };
+
+        let properties = schema_object.get("properties").and_then(Value::as_object);
+        if let Some(required) = schema_object.get("required") {
+            match required.as_array() {
+                Some(required) => {
+                    for field in required {
+                        let Some(field) = field.as_str() else {
+                            errors.push(format!("{path}: required field names must be strings"));
+                            continue;
+                        };
+                        if !instance_object.contains_key(field) {
+                            errors.push(format!("{path}: missing required property `{field}`"));
+                        }
+                    }
+                }
+                None => errors.push(format!("{path}: schema required must be an array")),
+            }
+        }
+
+        if let Some(properties) = properties {
+            for (name, property_schema) in properties {
+                if let Some(value) = instance_object.get(name) {
+                    let property_path = format!("{path}.{}", escape_json_path_segment(name));
+                    self.validate_node(value, property_schema, &property_path, errors);
+                }
+            }
+        }
+
+        if let Some(additional) = schema_object.get("additionalProperties") {
+            match additional {
+                Value::Bool(false) => {
+                    if let Some(properties) = properties {
+                        for name in instance_object.keys() {
+                            if !properties.contains_key(name) {
+                                errors.push(format!("{path}: unexpected property `{name}`"));
+                            }
+                        }
+                    }
+                }
+                Value::Bool(true) | Value::Null => {}
+                Value::Object(_) => {
+                    for (name, value) in instance_object {
+                        if properties.is_some_and(|properties| properties.contains_key(name)) {
+                            continue;
+                        }
+                        let property_path = format!("{path}.{}", escape_json_path_segment(name));
+                        self.validate_node(value, additional, &property_path, errors);
+                    }
+                }
+                _ => errors.push(format!(
+                    "{path}: schema additionalProperties must be boolean or object"
+                )),
+            }
+        }
+    }
+
+    fn validate_array_rules(
+        &self,
+        instance: &Value,
+        schema_object: &serde_json::Map<String, Value>,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let Some(values) = instance.as_array() else {
+            return;
+        };
+        if let Some(items) = schema_object.get("items") {
+            for (index, value) in values.iter().enumerate() {
+                self.validate_node(value, items, &format!("{path}[{index}]"), errors);
+            }
+        }
+        if let Some(min_items) = schema_object.get("minItems").and_then(Value::as_u64) {
+            if values.len() < min_items as usize {
+                errors.push(format!("{path}: array length is below {min_items}"));
+            }
+        }
+    }
+
+    fn validate_string_rules(
+        &self,
+        instance: &Value,
+        schema_object: &serde_json::Map<String, Value>,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let Some(value) = instance.as_str() else {
+            return;
+        };
+        if let Some(min_length) = schema_object.get("minLength").and_then(Value::as_u64) {
+            if value.chars().count() < min_length as usize {
+                errors.push(format!("{path}: string length is below {min_length}"));
+            }
+        }
+        if let Some(max_length) = schema_object.get("maxLength").and_then(Value::as_u64) {
+            if value.chars().count() > max_length as usize {
+                errors.push(format!("{path}: string length is above {max_length}"));
+            }
+        }
+        if let Some(pattern) = schema_object.get("pattern").and_then(Value::as_str) {
+            match Regex::new(pattern) {
+                Ok(regex) if !regex.is_match(value) => {
+                    errors.push(format!("{path}: string does not match pattern `{pattern}`"));
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    errors.push(format!("{path}: invalid schema pattern `{pattern}`: {err}"))
+                }
+            }
+        }
+    }
+
+    fn validate_number_rules(
+        &self,
+        instance: &Value,
+        schema_object: &serde_json::Map<String, Value>,
+        path: &str,
+        errors: &mut Vec<String>,
+    ) {
+        let Some(value) = instance.as_f64() else {
+            return;
+        };
+        if let Some(minimum) = schema_object.get("minimum").and_then(Value::as_f64) {
+            if value < minimum {
+                errors.push(format!("{path}: number is below minimum {minimum}"));
+            }
+        }
+        if let Some(maximum) = schema_object.get("maximum").and_then(Value::as_f64) {
+            if value > maximum {
+                errors.push(format!("{path}: number is above maximum {maximum}"));
+            }
+        }
+    }
+}
+
+fn schema_type_names(type_rule: &Value) -> Vec<String> {
+    match type_rule {
+        Value::String(raw) => vec![raw.clone()],
+        Value::Array(values) => values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn instance_matches_json_type(instance: &Value, expected: &str) -> bool {
+    match expected {
+        "object" => instance.is_object(),
+        "array" => instance.is_array(),
+        "string" => instance.is_string(),
+        "integer" => instance.as_i64().is_some() || instance.as_u64().is_some(),
+        "number" => instance.is_number(),
+        "boolean" => instance.is_boolean(),
+        "null" => instance.is_null(),
+        _ => false,
+    }
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_i64() || number.is_u64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn compact_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_string())
+}
+
+fn escape_json_path_segment(segment: &str) -> String {
+    if segment
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        segment.to_string()
+    } else {
+        format!("[{}]", compact_json(&Value::String(segment.to_string())))
+    }
 }
 
 fn emit_records(records: &[ConformanceResultRecord], format: OutputFormat) -> Result<()> {
@@ -604,6 +1084,8 @@ mod tests {
         fs::create_dir_all(root.path().join("sdk/conformance/cases")).unwrap();
         fs::create_dir_all(root.path().join("sdk/conformance/fixtures")).unwrap();
         fs::create_dir_all(root.path().join("sdk/schemas")).unwrap();
+        write_minimal_schema(root.path(), "minimal.schema.json");
+        write_fixture_schema_bindings(root.path(), &[("missing.v4.json", "minimal.schema.json")]);
         fs::write(
             root.path()
                 .join("sdk/conformance/cases/missing-fixture.yaml"),
@@ -631,6 +1113,48 @@ expect:
             .as_deref()
             .unwrap_or_default()
             .contains("missing.v4.json"));
+    }
+
+    #[test]
+    fn runner_reports_fixture_schema_violation() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("sdk/conformance/cases")).unwrap();
+        fs::create_dir_all(root.path().join("sdk/conformance/fixtures")).unwrap();
+        fs::create_dir_all(root.path().join("sdk/schemas")).unwrap();
+        write_minimal_schema(root.path(), "minimal.schema.json");
+        write_fixture_schema_bindings(root.path(), &[("invalid.v4.json", "minimal.schema.json")]);
+        fs::write(
+            root.path().join("sdk/conformance/fixtures/invalid.v4.json"),
+            r#"{"state":"bad"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.path()
+                .join("sdk/conformance/cases/invalid-fixture.yaml"),
+            r#"
+id: broken/invalid_fixture
+profile: runtime_core
+required_for:
+  - rust
+steps:
+  - action: load_fixture
+    fixture: invalid.v4.json
+expect:
+  result: error
+"#,
+        )
+        .unwrap();
+
+        let records = run_manifest(root.path(), "rust", None).expect("runner manifest");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, ConformanceStatus::Failed);
+        assert_eq!(records[0].error_code, Some("CONFORMANCE_MANIFEST_INVALID"));
+        assert!(records[0]
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("schema validation against `minimal.schema.json` failed"));
     }
 
     #[test]
@@ -777,6 +1301,13 @@ expect:
         fs::create_dir_all(root.join("sdk/conformance/runner")).unwrap();
         fs::create_dir_all(root.join("sdk/schemas")).unwrap();
         fs::write(root.join("sdk/conformance/runner/README.md"), "# runner\n").unwrap();
+        write_minimal_schema(root, "minimal.schema.json");
+        fs::write(
+            root.join("sdk/conformance/fixtures/minimal.v4.json"),
+            r#"{"state":"ok"}"#,
+        )
+        .unwrap();
+        write_fixture_schema_bindings(root, &[("minimal.v4.json", "minimal.schema.json")]);
         fs::write(
             root.join("sdk/conformance/cases/minimal.yaml"),
             format!(
@@ -791,6 +1322,38 @@ expect:
   result: ok
 "#
             ),
+        )
+        .unwrap();
+    }
+
+    fn write_minimal_schema(root: &Path, name: &str) {
+        fs::write(
+            root.join("sdk/schemas").join(name),
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Minimal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state"],
+  "properties": {
+    "state": {"const": "ok"}
+  }
+}"#,
+        )
+        .unwrap();
+    }
+
+    fn write_fixture_schema_bindings(root: &Path, bindings: &[(&str, &str)]) {
+        let records = bindings
+            .iter()
+            .map(|(fixture, schema)| {
+                format!(r#"{{"fixture":"{}","schema":"{}"}}"#, fixture, schema)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            root.join("sdk/conformance/fixture-schema-bindings.json"),
+            format!(r#"{{"schema_version":1,"bindings":[{records}]}}"#),
         )
         .unwrap();
     }

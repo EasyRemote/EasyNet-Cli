@@ -34,6 +34,65 @@ validate_json_file() {
   fi
 }
 
+validate_fixture_schema_bindings() {
+  if ! python3 - "$ROOT" <<'PY'
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+root = Path(sys.argv[1])
+manifest_path = root / "sdk/conformance/fixture-schema-bindings.json"
+try:
+    manifest = json.loads(manifest_path.read_text())
+except Exception as exc:
+    print(f"invalid fixture schema bindings: {exc}")
+    raise SystemExit(1)
+
+if manifest.get("schema_version") != 1:
+    print("fixture schema bindings schema_version must be 1")
+    raise SystemExit(1)
+
+bindings = manifest.get("bindings")
+if not isinstance(bindings, list) or not bindings:
+    print("fixture schema bindings must contain a non-empty bindings array")
+    raise SystemExit(1)
+
+fixtures = sorted(path.name for path in (root / "sdk/conformance/fixtures").glob("*.v4.json"))
+bound = [entry.get("fixture") for entry in bindings]
+duplicates = sorted(name for name, count in Counter(bound).items() if count > 1)
+missing = sorted(set(fixtures) - set(bound))
+extra = sorted(set(bound) - set(fixtures))
+bad_schemas = []
+
+for entry in bindings:
+    fixture = entry.get("fixture")
+    schema = entry.get("schema")
+    if not isinstance(fixture, str) or not fixture.endswith(".v4.json"):
+        print(f"invalid fixture binding name: {fixture!r}")
+        raise SystemExit(1)
+    if not isinstance(schema, str) or not schema.endswith(".schema.json"):
+        print(f"invalid fixture schema binding target for {fixture!r}: {schema!r}")
+        raise SystemExit(1)
+    if not (root / "sdk/schemas" / schema).is_file():
+        bad_schemas.append(f"{fixture} -> {schema}")
+
+if duplicates or missing or extra or bad_schemas:
+    if duplicates:
+        print("duplicate fixture schema bindings: " + ", ".join(duplicates))
+    if missing:
+        print("fixtures missing schema bindings: " + ", ".join(missing))
+    if extra:
+        print("fixture schema bindings without fixture files: " + ", ".join(extra))
+    if bad_schemas:
+        print("fixture schema bindings with missing schemas: " + ", ".join(bad_schemas))
+    raise SystemExit(1)
+PY
+  then
+    fail "invalid fixture schema bindings"
+  fi
+}
+
 if ! command -v python3 >/dev/null 2>&1; then
   fail "python3 is required to validate SDK JSON scaffold"
 fi
@@ -94,6 +153,7 @@ for path in \
   tools/scripts/check-backend-route-family-coverage.sh \
   tools/scripts/check-sdk-parity-matrix.sh \
   sdk/conformance/backend-route-family-coverage.json \
+  sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
   sdk/conformance/runner/go-action-adapter-report.json \
   sdk/conformance/runner/python-action-adapter-report.json \
@@ -153,12 +213,15 @@ require_dir sdk/conformance/cases
 require_dir sdk/conformance/fixtures
 require_dir sdk/conformance/runner
 validate_json_file sdk/conformance/backend-route-family-coverage.json
+validate_json_file sdk/conformance/fixture-schema-bindings.json
+validate_fixture_schema_bindings
 validate_json_file sdk/conformance/sdk-parity-matrix.json
 validate_json_file sdk/conformance/runner/go-action-adapter-report.json
 validate_json_file sdk/conformance/runner/python-action-adapter-report.json
 
 schema_files=(
   invocation.schema.json
+  prepared-invocation.schema.json
   identity.schema.json
   receipt.schema.json
   receipt-fetch-request.schema.json
@@ -167,8 +230,10 @@ schema_files=(
   events.schema.json
   events-directory-subscription-request.schema.json
   events-device-subscription-request.schema.json
+  events-session-subscription-request.schema.json
   events-invocation-subscription-request.schema.json
   events-device-event-list-request.schema.json
+  events-device-event-page.schema.json
   directory-list-devices-request.schema.json
   directory-list-agents-request.schema.json
   directory-list-abilities-request.schema.json
@@ -209,6 +274,8 @@ schema_files=(
   surface-page.schema.json
   surface-list-pages-request.schema.json
   surface-create-page-request.schema.json
+  surface-delete-page-request.schema.json
+  surface-manifest-request.schema.json
   surface-page-project-request.schema.json
   surface-page-page.schema.json
   surface-public-page-ref.schema.json
@@ -250,10 +317,19 @@ fixture_files=(
   receipt.summary.v4.json
   runtime.error.v4.json
   event.directory.v4.json
+  event.device-page.v4.json
   event.directory-drop-report.v4.json
   event.directory-terminal.v4.json
   events-directory-subscription-request.v4.json
   events-directory-subscription-invocation.v4.json
+  events-device-subscription-request.v4.json
+  events-device-subscription-invocation.v4.json
+  events-device-event-list-request.v4.json
+  events-device-history-invocation.v4.json
+  events-session-subscription-request.v4.json
+  events-session-subscription-invocation.v4.json
+  events-invocation-subscription-request.v4.json
+  events-invocation-subscription-invocation.v4.json
   directory-list-devices-request.v4.json
   directory-list-agents-request.v4.json
   directory-list-abilities-request.v4.json
@@ -273,6 +349,8 @@ fixture_files=(
   host-stream-frame.v4.json
   host-stream-terminal.v4.json
   host-stream-hash-state.v4.json
+  host-stream-hash-state-corrupted-gap.v4.json
+  host-stream-hash-state-corrupted-zero.v4.json
   local-resource-ref-request.v4.json
   resource-ref.local-fs.v4.json
   ability-package-manifest.v4.json
@@ -284,10 +362,12 @@ fixture_files=(
   mission-run-file-request.v4.json
   mission-track-request.v4.json
   mission-cancel-request.v4.json
+  mission-events-request.v4.json
   mission-run-invocation.v4.json
   mission-track-invocation.v4.json
   mission-cancel-invocation.v4.json
   mission-status.v4.json
+  mission-event-page.v4.json
   admin-agent-list-request.v4.json
   admin-agent-start-request.v4.json
   admin-agent-stop-request.v4.json
@@ -401,7 +481,10 @@ require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
 require_literal src/bin/sdk-conformance-runner.rs "ManifestCaseIndex"
 require_literal src/bin/sdk-conformance-runner.rs "does not match any manifest case"
 require_literal src/bin/sdk-conformance-runner.rs "is not declared for language"
+require_literal src/bin/sdk-conformance-runner.rs "FixtureSchemaBindings"
+require_literal src/bin/sdk-conformance-runner.rs "schema validation against"
 require_literal sdk/conformance/runner/README.md "closed over the shared manifest"
+require_literal sdk/conformance/runner/README.md "fixture-schema-bindings.json"
 require_literal sdk/go/conformance_test.go "sdk/conformance/cases"
 require_literal sdk/go/conformance_test.go "sdk/conformance/fixtures"
 require_literal sdk/go/conformance_test.go "TestGoFacadeExecutesSharedRuntimeCoreConformanceCases"

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/events-device-event-page.schema.json",
+  "title": "EventsDeviceEventPage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profile",
+    "stream",
+    "item_kind",
+    "items",
+    "next_cursor",
+    "has_more",
+    "limit",
+    "metadata"
+  ],
+  "properties": {
+    "profile": {"const": "events"},
+    "stream": {"const": "device"},
+    "item_kind": {"const": "device_event"},
+    "items": {"type": "array", "items": {"$ref": "events.schema.json"}},
+    "next_cursor": {"type": ["object", "string", "null"]},
+    "has_more": {"type": "boolean"},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+    "metadata": {"type": "object"}
+  }
+}

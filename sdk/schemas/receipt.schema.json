@@ -11,7 +11,12 @@
     "state": {"type": "string", "minLength": 1},
     "verified": {"type": "boolean"},
     "output": true,
-    "error": {"$ref": "error.schema.json"},
+    "error": {
+      "oneOf": [
+        {"$ref": "error.schema.json"},
+        {"type": "null"}
+      ]
+    },
     "causal_ref": {"type": ["string", "null"]},
     "metadata": {"type": "object"}
   }

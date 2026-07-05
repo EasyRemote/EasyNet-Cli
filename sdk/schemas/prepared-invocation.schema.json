@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/prepared-invocation.schema.json",
+  "title": "PreparedInvocation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["prepared_id", "tuple", "signing_material", "submit_ready"],
+  "properties": {
+    "prepared_id": {"type": "string", "minLength": 1},
+    "tuple": {"$ref": "invocation.schema.json"},
+    "signing_material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "canonical_bytes_base64",
+        "args_digest_hex",
+        "descriptor_ref",
+        "expires_at_unix_ms"
+      ],
+      "properties": {
+        "algorithm": {"type": "string", "minLength": 1},
+        "canonical_bytes_base64": {"type": "string", "minLength": 1},
+        "args_digest_hex": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "descriptor_ref": {"type": "string", "minLength": 1},
+        "expires_at_unix_ms": {"type": "integer", "minimum": 0}
+      }
+    },
+    "submit_ready": {"const": false}
+  }
+}
