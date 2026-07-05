@@ -5,41 +5,46 @@ method spelling.
 
 ## Language Tiers
 
-| Language | Tier | Primary consumer | Current status |
+| Language | Tier | Primary consumer | Current capability-state summary |
 | --- | --- | --- | --- |
-| Rust | P0 | native SDK core and FFI implementation | partial Runtime Core |
-| C ABI | P0 | language binding projection | partial ABI v4 Runtime Core |
-| Go | P0 | EasyNet backend/Hub | Runtime Core discovery with `SdkEnvironment` process root, optional C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health, unary, stream/bidi callback, prepare/sign/submit-handle, and handle observation adapters, daemon-lifecycle/connect-local lifecycle composition/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, profile error source-ref, backend SDK-only import-ban, and Hub route-family coverage actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
-| Python | P0 | EasyRemote | Runtime Core discovery/daemon-lifecycle/connect-local lifecycle composition/direct control-plane UDS/direct daemon UDS unary/server-stream/bidi/connection/health/errors/invocation-draft/unary/stream/bidi/handle/prepare-submit plus case-aware conformance execution for selected local facade, projection, and profile error source-ref actions, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events multi-stream subscriptions/device history pages, Surface seams, Compatibility seams, and Wrapper execution seams partial |
-| Node/TypeScript | P1 | desktop tools and extensions | placeholder |
-| Java/JVM | P1 | enterprise and Android-adjacent integrations | placeholder |
-| Swift | P1 | macOS/iOS-adjacent clients | placeholder |
+| Rust | P0 | native SDK core and FFI implementation | provider-backed Runtime Core substrate; language parity tracked through FFI and future Rust SDK public matrix |
+| C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers |
+| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Mission, Admin + Gateway, and Events; seam for Host Binding, Surface, Compatibility, Wrappers, and conformance runner |
+| Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for Host Binding and conformance runner |
+| Node/TypeScript | P1 | desktop tools and extensions | unsupported |
+| Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | unsupported |
 
 ## Capability Matrix
 
-| Capability | Rust | C ABI | Go | Python | Node | Java | Swift |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| ABI/version discovery | partial | partial | partial + optional C ABI discovery/health/daemon adapter | partial | gap | gap | gap |
-| daemon start/attach/discover/stop/detach | partial | partial | seam partial + optional C ABI adapter | state/connect-local seam partial | gap | gap | gap |
-| runtime connection state | partial | partial | transport seam partial + C ABI open-runtime adapter | transport seam partial | gap | gap | gap |
-| runtime health | partial | partial | partial + optional C ABI adapter | partial | gap | gap | gap |
-| typed errors | partial | typed JSON partial | partial | partial | gap | gap | gap |
-| complete invocation draft | partial | builder handles partial | partial | partial | gap | gap | gap |
-| prepare/sign/submit | partial | handle observation partial | transport seam partial + optional C ABI adapter | transport seam partial | gap | gap | gap |
-| unary invoke | partial | partial | transport seam partial + optional C ABI adapter | transport seam partial | gap | gap | gap |
-| stream | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
-| bidi | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
-| directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
-| receipt | fetch/projection/ref partial | fetch/projection/history partial | projection/ref seam partial | projection/history seam partial | gap | gap | gap |
-| publication | carrier partial | carrier/deploy/lifecycle partial | carrier/lifecycle/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
-| host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
-| mission | carrier/status/events partial | carrier/status/events partial | carrier/status/events seam partial | carrier/status/events seam partial | gap | gap | gap |
-| admin + gateway | carrier/status/session partial | carrier/status/session partial | carrier/status/session seam partial | carrier/status/session seam partial | gap | gap | gap |
-| events | stream/history partial | stream/history partial | stream/history runtime seam partial | stream/history seam partial | gap | gap | gap |
-| surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
-| compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
-| wrappers | carrier/projection partial | carrier/projection partial | execution carrier seam partial | execution carrier seam partial | gap | gap | gap |
-| conformance runner | manifest partial | manifest partial | case-aware local facade/projection actions partial | case-aware local facade/projection actions partial | gap | gap | gap |
+The canonical Go/Python state model is machine-checked by
+`sdk/conformance/sdk-parity-matrix.json`. Markdown rows below are a summary of
+that artifact and must use the same four states only: `unsupported`, `seam`,
+`provider-backed`, and `cutover-ready`.
+
+| Capability | Profile | Go | Python | Remaining work |
+| --- | --- | --- | --- | --- |
+| ABI/version discovery | Runtime Core | provider-backed | provider-backed | Non-P0 bindings and package stability gates remain incomplete. |
+| daemon start/attach/discover/stop/detach | Runtime Core | provider-backed | provider-backed | External product repositories still need lower-layer deletion gates before their own cutover claims. |
+| runtime connection state | Runtime Core | provider-backed | provider-backed | Remote TCP/TLS daemon endpoint policy is still outside the stable SDK gate. |
+| runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
+| typed errors | Runtime Core | provider-backed | provider-backed | P1 language error classes and package-level source refs remain incomplete. |
+| complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
+| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | Daemon-owned signer acquisition and keyring policy cutover remain incomplete. |
+| unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
+| stream | Runtime Core | provider-backed | provider-backed | C ABI terminal projection adapters and bounded backpressure conformance remain incomplete. |
+| bidi | Runtime Core | provider-backed | provider-backed | Concrete product wrapper stream adapters remain incomplete. |
+| directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
+| receipt | Receipt | provider-backed | provider-backed | Axon-backed full cryptographic verification and RFC-007 receipt URA construction remain incomplete. |
+| publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
+| host binding | Host Binding | seam | seam | Behavior-executing host lifecycle, readiness, and cleanup providers remain incomplete. |
+| mission | Mission | provider-backed | provider-backed | Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete. |
+| admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
+| events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
+| surface | Surface | seam | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
+| compatibility | Compatibility | seam | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
+| wrappers | Wrappers | seam | provider-backed | Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete. |
+| conformance runner | SDK Parity | seam | seam | Daemon-backed behavior-executing action adapters over the full case manifest remain incomplete. |
 
 ## Known Gaps
 
@@ -112,7 +117,7 @@ method spelling.
   upload/storage policy, SSE/WebSocket fanout, and language facades remain
   incomplete.
 - Directory subscribe convenience methods, Axon-backed receipt verification,
-  and full surface status are schema/conformance scaffolds only.
+  and full surface status remain schema/conformance declarations only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
   file, terminal, remote desktop, browser, and media session DTOs; execution
   helpers, backend HTTP/WebSocket bridges, storage policy, and product cutovers
@@ -420,14 +425,15 @@ method spelling.
   projection, and Wrapper record projection. Daemon-backed behavior-executing
   action adapters over the full case manifest remain incomplete.
 
-## Stability Levels
+## Capability States
 
-| Level | Meaning |
+| State | Meaning |
 | --- | --- |
-| scaffold | files, schemas, and conformance case names exist |
-| partial | code exists for part of the object family and is covered by narrow tests |
-| profile-ready | all public methods for the profile pass conformance in one language |
-| language-stable | all declared profiles pass conformance for that language |
-| cutover-ready | product import bans and route/facade smokes pass |
+| unsupported | No public SDK object or declared shipped facade support exists for this language. |
+| seam | Public DTOs, clients, carriers, or state objects exist, but product workflows still need lower-layer or facade-local execution to cut over. |
+| provider-backed | The public facade has a daemon, C ABI, Runtime Core, or explicit provider delegate path covered by shared conformance evidence. |
+| cutover-ready | The first-class consumer can remove lower-layer product code and the required import, route, or facade gates pass. |
 
-No current language is `language-stable`.
+No current language is `cutover-ready` across every declared consumer-facing
+capability; consumer repository cutover evidence remains outside the SDK
+profile model.
