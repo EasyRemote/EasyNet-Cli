@@ -88,7 +88,7 @@ class RuntimeConnectionTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             connection.connect()
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertEqual(connection.state, ConnectionState.FAILED)
         with self.assertRaises(SDKError):
             connection.runtime_client()

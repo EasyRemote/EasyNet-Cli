@@ -123,7 +123,7 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	raw, err := transport.FeatureDiscovery(ctx)
 	if err != nil {
 		return FeatureSet{}, &SDKError{
-			Code:      ErrorTransport,
+			Code:      ErrRouteUnavailable,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),
@@ -192,7 +192,7 @@ func (c *Client) Close(ctx context.Context) error {
 	}
 	if err := transport.Close(ctx); err != nil {
 		return &SDKError{
-			Code:      ErrorTransport,
+			Code:      ErrRouteUnavailable,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),

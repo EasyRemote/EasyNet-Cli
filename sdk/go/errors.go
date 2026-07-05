@@ -94,7 +94,7 @@ func RetryableForHint(retry RetryHint) bool {
 // IsCode reports whether err is an SDKError with the requested code.
 func IsCode(err error, code ErrorCode) bool {
 	var sdkErr *SDKError
-	return errors.As(err, &sdkErr) && sdkErr.Code == code
+	return errors.As(err, &sdkErr) && NormalizeErrorCode(string(sdkErr.Code)) == NormalizeErrorCode(string(code))
 }
 
 // DecodeDaemonErrorJSON decodes the shared sdk/schemas/error.schema.json DTO.

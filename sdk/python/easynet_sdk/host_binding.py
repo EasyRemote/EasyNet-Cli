@@ -1292,7 +1292,7 @@ def _invalid_host_binding(
 
 def _transport_error(message: str, cause: BaseException) -> SDKError:
     return SDKError(
-        code=ErrorCode.TRANSPORT,
+        code=ErrorCode.ROUTE_UNAVAILABLE,
         stage="transport",
         retry=RetryHint.SAFE,
         retryable=True,
@@ -1304,7 +1304,7 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
 
 def _provider_error(message: str, cause: BaseException) -> SDKError:
     return SDKError(
-        code=ErrorCode.TRANSPORT,
+        code=ErrorCode.ROUTE_UNAVAILABLE,
         stage="provider",
         retry=RetryHint.SAFE,
         retryable=True,

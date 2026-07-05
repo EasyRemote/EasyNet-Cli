@@ -125,7 +125,9 @@ class SDKError(Exception):
 def is_code(error: BaseException, code: ErrorCode) -> bool:
     """Return whether *error* is an SDKError with the requested code."""
 
-    return isinstance(error, SDKError) and error.code == code
+    return isinstance(error, SDKError) and normalize_error_code(
+        error.code.value
+    ) == normalize_error_code(code.value)
 
 
 RuntimeError = SDKError

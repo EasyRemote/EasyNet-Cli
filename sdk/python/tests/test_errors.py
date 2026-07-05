@@ -1,6 +1,6 @@
 import unittest
 
-from easynet_sdk import ErrorCode, SDKError, is_code
+from easynet_sdk import ErrorCode, RetryHint, SDKError, is_code
 from easynet_sdk.errors import normalize_error_code, profile_error_details
 
 
@@ -65,6 +65,17 @@ class ErrorTests(unittest.TestCase):
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(normalize_error_code(raw), expected)
+
+    def test_is_code_matches_canonicalized_legacy_requests(self) -> None:
+        error = SDKError(
+            code=ErrorCode.ROUTE_UNAVAILABLE,
+            stage="transport",
+            retry=RetryHint.SAFE,
+            message="route down",
+        )
+
+        self.assertTrue(is_code(error, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(error, ErrorCode.ROUTE_UNAVAILABLE))
 
     def test_from_json_rejects_invalid_retry_hint(self) -> None:
         with self.assertRaises(SDKError) as caught:

@@ -1301,7 +1301,7 @@ def _invalid_identity(
 
 def _transport_error(message: str, cause: BaseException) -> SDKError:
     return SDKError(
-        code=ErrorCode.TRANSPORT,
+        code=ErrorCode.ROUTE_UNAVAILABLE,
         stage="transport",
         retry=RetryHint.SAFE,
         retryable=True,

@@ -424,7 +424,7 @@ class AbilityInvocationClient:
             except Exception as exc:
                 if first_error is None:
                     first_error = SDKError(
-                        code=ErrorCode.TRANSPORT,
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
                         stage="ability_invocation",
                         retry=RetryHint.SAFE,
                         retryable=True,

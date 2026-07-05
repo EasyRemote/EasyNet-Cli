@@ -193,7 +193,7 @@ class DirectDaemonRuntimeTransport:
             _close_channel(channel)
             raise _direct_error(
                 f"open daemon invocation endpoint failed: {exc}",
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.SAFE,
                 retryable=True,
                 details={"endpoint": endpoint},
@@ -223,7 +223,7 @@ class DirectDaemonRuntimeTransport:
         except Exception as exc:
             raise _direct_error(
                 f"invoke daemon endpoint failed: {exc}",
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
                 details={"endpoint": self._endpoint},
@@ -257,7 +257,7 @@ class DirectDaemonRuntimeTransport:
         except Exception as exc:
             raise _direct_error(
                 f"open daemon stream endpoint failed: {exc}",
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
                 details={"endpoint": self._endpoint},
@@ -290,7 +290,7 @@ class DirectDaemonRuntimeTransport:
         except Exception as exc:
             raise _direct_error(
                 f"open daemon bidi endpoint failed: {exc}",
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
                 details={"endpoint": self._endpoint},
@@ -422,7 +422,7 @@ class DirectDaemonStreamTransport:
                 self._put(
                     _direct_error(
                         f"daemon stream recv failed: {exc}",
-                        code=ErrorCode.TRANSPORT,
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
                         retry=RetryHint.UNKNOWN,
                         details={"endpoint": self._endpoint, "stream_id": self.stream_id},
                         cause=exc,
@@ -595,7 +595,7 @@ class DirectDaemonBidiTransport:
                 self._put_inbound(
                     _direct_error(
                         f"daemon bidi recv failed: {exc}",
-                        code=ErrorCode.TRANSPORT,
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
                         retry=RetryHint.UNKNOWN,
                         details={"endpoint": self._endpoint, "session_id": self.session_id},
                         cause=exc,
@@ -1200,7 +1200,11 @@ def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
             RetryHint.NEVER,
             False,
         ),
-        grpc.StatusCode.NOT_FOUND: (ErrorCode.NOT_FOUND, RetryHint.NEVER, False),
+        grpc.StatusCode.NOT_FOUND: (
+            ErrorCode.ABILITY_NOT_FOUND,
+            RetryHint.NEVER,
+            False,
+        ),
         grpc.StatusCode.UNIMPLEMENTED: (
             ErrorCode.PROTOCOL_MISMATCH,
             RetryHint.NEVER,
@@ -1209,7 +1213,7 @@ def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
     }
     sdk_code, retry, retryable = mapping.get(
         code,
-        (ErrorCode.TRANSPORT, RetryHint.UNKNOWN, False),
+        (ErrorCode.ROUTE_UNAVAILABLE, RetryHint.UNKNOWN, False),
     )
     return _direct_error(
         message,
@@ -1242,7 +1246,7 @@ def _invalid_causal_context(message: str) -> SDKError:
 def _direct_error(
     message: str,
     *,
-    code: ErrorCode = ErrorCode.TRANSPORT,
+    code: ErrorCode = ErrorCode.ROUTE_UNAVAILABLE,
     retry: RetryHint = RetryHint.NEVER,
     retryable: bool = False,
     details: Mapping[str, object] | None = None,

@@ -620,7 +620,7 @@ class HostBindingTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             lifecycle.check_readiness()
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertEqual(caught.exception.stage, "provider")
         self.assertEqual(lifecycle.state, HostStreamLifecycleState.FAILED)
 

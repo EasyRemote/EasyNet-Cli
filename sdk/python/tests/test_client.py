@@ -61,7 +61,7 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             client.feature_discovery()
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertIsInstance(caught.exception.cause, RuntimeError)
 
     def test_feature_discovery_rejects_malformed_payload(self) -> None:
@@ -100,7 +100,7 @@ class ClientTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as close_caught:
             client.close()
-        self.assertTrue(is_code(close_caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(close_caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertIsInstance(close_caught.exception.cause, RuntimeError)
 
         with self.assertRaises(SDKError) as require_caught:

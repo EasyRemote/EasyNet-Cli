@@ -114,7 +114,7 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 	raw, err := c.transport.RuntimeHealth(ctx)
 	if err != nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:      ErrorTransport,
+			Code:      ErrRouteUnavailable,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),
@@ -158,7 +158,7 @@ func (c *HealthClient) Diagnostics(ctx context.Context) (DiagnosticsReport, erro
 	raw, err := transport.RuntimeDiagnostics(ctx)
 	if err != nil {
 		return DiagnosticsReport{}, &SDKError{
-			Code:      ErrorTransport,
+			Code:      ErrRouteUnavailable,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),

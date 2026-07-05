@@ -66,7 +66,7 @@ class Client:
             raise
         except Exception as exc:
             raise SDKError(
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 stage="transport",
                 retry=RetryHint.SAFE,
                 retryable=retryable_for_hint(RetryHint.SAFE),
@@ -140,7 +140,7 @@ class Client:
             raise
         except Exception as exc:
             raise SDKError(
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 stage="transport",
                 retry=RetryHint.SAFE,
                 retryable=retryable_for_hint(RetryHint.SAFE),

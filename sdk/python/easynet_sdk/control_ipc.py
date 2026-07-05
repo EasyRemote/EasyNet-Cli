@@ -224,7 +224,7 @@ class ControlIpcClient:
             self._sock.sendall(packet)
         except Exception as exc:
             raise SDKError(
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 stage="control_ipc",
                 retry=RetryHint.SAFE,
                 retryable=True,
@@ -273,7 +273,7 @@ class ControlIpcClient:
             raise
         except Exception as exc:
             raise SDKError(
-                code=ErrorCode.TRANSPORT,
+                code=ErrorCode.ROUTE_UNAVAILABLE,
                 stage="control_ipc",
                 retry=RetryHint.SAFE,
                 retryable=True,
@@ -314,7 +314,7 @@ def read_control_discovery(control_path: str | Path = "") -> ControlDiscovery:
         ) from exc
     except Exception as exc:
         raise SDKError(
-            code=ErrorCode.TRANSPORT,
+            code=ErrorCode.ROUTE_UNAVAILABLE,
             stage="control_ipc",
             retry=RetryHint.SAFE,
             retryable=True,

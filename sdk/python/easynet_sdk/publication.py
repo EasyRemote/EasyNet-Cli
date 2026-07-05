@@ -969,7 +969,7 @@ class RuntimePublicationTransport:
             except Exception as exc:
                 if first_error is None:
                     first_error = SDKError(
-                        code=ErrorCode.TRANSPORT,
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
                         stage="publication",
                         retry=RetryHint.SAFE,
                         retryable=True,
@@ -1606,7 +1606,7 @@ def _invalid_publication(
 
 def _transport_error(message: str, cause: BaseException) -> SDKError:
     return SDKError(
-        code=ErrorCode.TRANSPORT,
+        code=ErrorCode.ROUTE_UNAVAILABLE,
         stage="transport",
         retry=RetryHint.SAFE,
         retryable=True,

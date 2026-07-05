@@ -182,7 +182,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             adapter.invoke(complete_draft())
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ADMISSION_DENIED))
         self.assertEqual(caught.exception.message, "ability failed")
 
     def test_connect_owns_runtime_connection_lifecycle(self) -> None:
@@ -634,7 +634,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 values.append(item.value)
 
         self.assertEqual(values, [0, 1])
-        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ADMISSION_DENIED))
         self.assertEqual(caught.exception.details["reason"], "function_raised")
 
     def test_stream_adapter_preserves_error_shaped_user_data(self) -> None:

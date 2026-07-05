@@ -107,7 +107,7 @@ class HealthClientTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             client.runtime_health()
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertIsInstance(caught.exception.cause, RuntimeError)
 
     def test_runtime_health_rejects_malformed_payload(self) -> None:

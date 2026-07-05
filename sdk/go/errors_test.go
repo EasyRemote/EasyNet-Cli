@@ -63,23 +63,33 @@ func TestDecodeDaemonErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.T) 
 
 func TestNormalizeErrorCodeCanonicalizesLegacyWireAliases(t *testing.T) {
 	cases := map[string]ErrorCode{
-		"DAEMON_DOWN":           ErrDaemonOffline,
-		"VERSION_INCOMPATIBLE":  ErrVersionMismatch,
-		"ABILITY_FAILED":        ErrAdmissionDenied,
-		"NOT_FOUND":             ErrAbilityNotFound,
-		"PROTOCOL":              ErrProtocolMismatch,
-		"TRANSPORT":             ErrRouteUnavailable,
-		"DAEMON_OFFLINE":        ErrDaemonOffline,
-		"VERSION_MISMATCH":      ErrVersionMismatch,
-		"ADMISSION_DENIED":      ErrAdmissionDenied,
-		"ABILITY_NOT_FOUND":     ErrAbilityNotFound,
-		"PROTOCOL_MISMATCH":     ErrProtocolMismatch,
-		"ROUTE_UNAVAILABLE":     ErrRouteUnavailable,
+		"DAEMON_DOWN":          ErrDaemonOffline,
+		"VERSION_INCOMPATIBLE": ErrVersionMismatch,
+		"ABILITY_FAILED":       ErrAdmissionDenied,
+		"NOT_FOUND":            ErrAbilityNotFound,
+		"PROTOCOL":             ErrProtocolMismatch,
+		"TRANSPORT":            ErrRouteUnavailable,
+		"DAEMON_OFFLINE":       ErrDaemonOffline,
+		"VERSION_MISMATCH":     ErrVersionMismatch,
+		"ADMISSION_DENIED":     ErrAdmissionDenied,
+		"ABILITY_NOT_FOUND":    ErrAbilityNotFound,
+		"PROTOCOL_MISMATCH":    ErrProtocolMismatch,
+		"ROUTE_UNAVAILABLE":    ErrRouteUnavailable,
 	}
 	for input, want := range cases {
 		if got := NormalizeErrorCode(input); got != want {
 			t.Fatalf("NormalizeErrorCode(%q) = %s, want %s", input, got, want)
 		}
+	}
+}
+
+func TestIsCodeMatchesCanonicalizedLegacyRequests(t *testing.T) {
+	err := &SDKError{Code: ErrRouteUnavailable}
+	if !IsCode(err, ErrTransport) {
+		t.Fatalf("IsCode did not match legacy transport request")
+	}
+	if !IsCode(err, ErrRouteUnavailable) {
+		t.Fatalf("IsCode did not match canonical route-unavailable request")
 	}
 }
 

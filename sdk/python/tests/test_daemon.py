@@ -490,7 +490,7 @@ class DaemonTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             connect_local(transport, ConnectOptions())
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertEqual(transport.open_calls, 1)
         self.assertEqual(transport.detach_calls, 1)
 

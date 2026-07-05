@@ -478,7 +478,7 @@ class RuntimeTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as caught:
             client.prepare_builder(builder)
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
 
         builder.inspect()
 
@@ -526,7 +526,7 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             client.prepare(complete_draft())
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertIsInstance(caught.exception.cause, RuntimeError)
 
     def test_submit_rejects_malformed_handle(self) -> None:
@@ -577,7 +577,7 @@ class RuntimeTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as close_caught:
             client.close()
-        self.assertTrue(is_code(close_caught.exception, ErrorCode.TRANSPORT))
+        self.assertTrue(is_code(close_caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
         self.assertIsInstance(close_caught.exception.cause, RuntimeError)
 
         with self.assertRaises(SDKError) as invoke_caught:

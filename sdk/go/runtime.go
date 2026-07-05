@@ -765,7 +765,7 @@ func invalidRuntimePayload(message string, cause error) error {
 
 func transportRuntimeError(message string, cause error) error {
 	return &SDKError{
-		Code:      ErrTransport,
+		Code:      ErrRouteUnavailable,
 		Stage:     "transport",
 		Retry:     RetrySafe,
 		Retryable: RetryableForHint(RetrySafe),
