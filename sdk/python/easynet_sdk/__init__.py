@@ -9,7 +9,7 @@ from .ability_invocation import (
     AbilityChildContext,
     AbilityInvocationClient,
     AbilityTargetRequest,
-    EasyRemoteInvocationAdapter,
+    InvocationObjectAdapter,
     ResolvedAbilityTarget,
 )
 from .client import Client, DiscoveryTransport, FeatureSet, Version
@@ -464,7 +464,7 @@ __all__ = [
     "AbilityChildContext",
     "AbilityInvocationClient",
     "AbilityPackageManifest",
-    "EasyRemoteInvocationAdapter",
+    "InvocationObjectAdapter",
     "AdminAgentListRequest",
     "AdminAgentPage",
     "AdminAgentRecord",

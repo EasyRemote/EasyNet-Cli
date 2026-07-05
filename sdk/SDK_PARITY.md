@@ -223,10 +223,10 @@ method spelling.
   projection, schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, `AbilityInvocationClient`
   descriptor-delegated complete tuple build/invoke/stream/bidi facade plus
-  EasyRemote-style target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and
+  generic ability target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and
   explicit submit/await/cancel/events/close-handle observation helpers,
-  `EasyRemoteInvocationAdapter` tuple-like object cutover facade for SDK
-  `InvocationDraft` and staged legacy wire dict construction, object-bound
+  `InvocationObjectAdapter` tuple-like object Runtime Core facade
+  `InvocationDraft` and daemon wire DTO construction, object-bound
   Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, prepared/signed Invocation DTOs, signer workflow
   objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
   receipt projection, StreamHandle state observation with schema-shaped
@@ -244,7 +244,7 @@ method spelling.
   close/cancel/timeout/wire-error lifecycle projection;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
-  EasyRemote-style descriptor-ref and target-dispatch cutover tests, stable
+  generic descriptor-ref and target-dispatch cutover tests, stable
   per-profile error source refs; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; direct daemon

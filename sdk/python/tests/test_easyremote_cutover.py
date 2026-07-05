@@ -10,7 +10,7 @@ from easynet_sdk import (
     AbilityInvocationClient,
     AbilityTargetRequest,
     AddressingClient,
-    EasyRemoteInvocationAdapter,
+    InvocationObjectAdapter,
     InvocationResult,
     ReceiptClient,
     RuntimeClient,
@@ -24,7 +24,7 @@ from test_runtime import MemoryRuntimeTransport
 
 
 class EasyRemoteCutoverTests(unittest.TestCase):
-    def test_easyremote_tuple_adapter_builds_sdk_draft_from_route_name(
+    def test_invocation_object_adapter_builds_sdk_draft_from_route_name(
         self,
     ) -> None:
         identity_transport = RejectBareDescriptorTransport()
@@ -33,7 +33,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             runtime=RuntimeClient(runtime_transport),
             addressing=AddressingClient(identity_transport),
         )
-        adapter = EasyRemoteInvocationAdapter(client)
+        adapter = InvocationObjectAdapter(client)
 
         draft = adapter.build_invocation(
             EasyRemoteTuple(
@@ -72,7 +72,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             ],
         )
 
-    def test_easyremote_tuple_adapter_returns_migration_wire_dict(
+    def test_invocation_object_adapter_returns_wire_dict(
         self,
     ) -> None:
         identity_transport = MemoryIdentityTransport()
@@ -88,7 +88,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             runtime=RuntimeClient(MemoryRuntimeTransport()),
             addressing=AddressingClient(identity_transport),
         )
-        adapter = EasyRemoteInvocationAdapter(client)
+        adapter = InvocationObjectAdapter(client)
 
         wire = adapter.to_wire_dict(
             EasyRemoteTuple(
@@ -201,7 +201,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             ],
         )
 
-    def test_easyremote_tuple_adapter_dispatches_through_runtime_client(
+    def test_invocation_object_adapter_dispatches_through_runtime_client(
         self,
     ) -> None:
         identity_transport = RejectBareDescriptorTransport()
@@ -210,7 +210,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             runtime=RuntimeClient(runtime_transport),
             addressing=AddressingClient(identity_transport),
         )
-        adapter = EasyRemoteInvocationAdapter(client)
+        adapter = InvocationObjectAdapter(client)
 
         result = adapter.invoke(
             EasyRemoteTuple(

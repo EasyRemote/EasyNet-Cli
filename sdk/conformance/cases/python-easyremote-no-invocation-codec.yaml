@@ -10,7 +10,7 @@ steps:
 expect:
   result: ok
   required_sdk_types:
-    - EasyRemoteInvocationAdapter
+    - InvocationObjectAdapter
     - InvocationDraft
     - PreparedInvocation
     - SignedInvocation

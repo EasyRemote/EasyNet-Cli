@@ -99,7 +99,7 @@ class AbilityChildContext:
         metadata: Mapping[str, object] | None = None,
         caller_signature: InvocationSignature | None = None,
     ) -> AbilityTargetRequest:
-        """Build an EasyRemote-style child target request."""
+        """Build a child ability target request."""
 
         return AbilityTargetRequest(
             caller_ura=_required_string(self.caller_ura, "caller_ura"),
@@ -208,7 +208,7 @@ class AbilityInvocationClient:
         return builder.build()
 
     def resolve_target(self, request: AbilityTargetRequest) -> ResolvedAbilityTarget:
-        """Resolve an EasyRemote-style target through daemon/Axon identity helpers."""
+        """Resolve a generic ability target through daemon/Axon identity helpers."""
 
         self._require_open()
         selector = self._target_selector(request)
@@ -511,12 +511,12 @@ class AbilityInvocationClient:
 
 
 @dataclass(frozen=True)
-class EasyRemoteInvocationAdapter:
-    """Adapt EasyRemote tuple-like objects into SDK Invocation DTOs.
+class InvocationObjectAdapter:
+    """Adapt invocation tuple-like objects into SDK Invocation DTOs.
 
-    The adapter reads EasyRemote's in-memory seven-tuple shape without importing
-    EasyRemote. DescriptorRef and owner Ability URA construction still go
-    through `AbilityInvocationClient` and its `AddressingClient`.
+    The adapter reads a host application's seven-tuple object shape. Descriptor
+    reference and owner Ability URA construction still go through
+    `AbilityInvocationClient` and its `AddressingClient`.
     """
 
     invoker: AbilityInvocationClient
@@ -530,7 +530,7 @@ class EasyRemoteInvocationAdapter:
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         descriptor_version: str = "",
     ) -> InvocationDraft:
-        """Build a complete SDK `InvocationDraft` from an EasyRemote tuple."""
+        """Build a complete SDK `InvocationDraft` from an invocation object."""
 
         version = descriptor_version or self.descriptor_version
         direct_request = self._request_from_tuple(
@@ -564,7 +564,7 @@ class EasyRemoteInvocationAdapter:
         bidi_streams: Sequence[Mapping[str, object] | BidiStreamDescriptor | object] | None = None,
         descriptor_version: str = "",
     ) -> dict[str, object]:
-        """Return the daemon Invocation JSON DTO for staged product cutover."""
+        """Return the daemon Invocation JSON DTO."""
 
         value = self.build_invocation(
             tuple_,
@@ -586,7 +586,7 @@ class EasyRemoteInvocationAdapter:
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         descriptor_version: str = "",
     ) -> InvocationResult:
-        """Build and submit one EasyRemote tuple-like Invocation."""
+        """Build and submit one invocation object."""
 
         return self.invoker.runtime.invoke(
             self.build_invocation(
@@ -605,7 +605,7 @@ class EasyRemoteInvocationAdapter:
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         descriptor_version: str = "",
     ) -> StreamHandle:
-        """Build and open one EasyRemote tuple-like server-stream Invocation."""
+        """Build and open one invocation object as a server stream."""
 
         return self.invoker.runtime.invoke_stream(
             self.build_invocation(
@@ -625,7 +625,7 @@ class EasyRemoteInvocationAdapter:
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         descriptor_version: str = "",
     ) -> BidiSession:
-        """Build and open one EasyRemote tuple-like bidirectional Invocation."""
+        """Build and open one invocation object as a bidirectional session."""
 
         return self.invoker.runtime.open_bidi(
             self.build_invocation(
@@ -655,7 +655,7 @@ class EasyRemoteInvocationAdapter:
         elif selector == "ability_name":
             selector_kwargs["ability_name"] = ability
         else:
-            raise _invalid_ability_invocation("unknown EasyRemote selector")
+            raise _invalid_ability_invocation("unknown invocation object selector")
         return AbilityCallRequest(
             caller_ura=_required_string(_tuple_value(tuple_, "caller"), "caller"),
             callee_ura=_required_string(_tuple_value(tuple_, "callee"), "callee"),

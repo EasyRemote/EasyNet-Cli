@@ -37,7 +37,7 @@ from easynet_sdk import (
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
-    EasyRemoteInvocationAdapter,
+    InvocationObjectAdapter,
     ErrorCode,
     EventClient,
     EventCursor,
@@ -3798,7 +3798,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_action(no_codec_case, "audit_consumer_source")
         self._require_case_action(no_codec_case, "inspect_sdk_invocation_dto_usage")
         for sdk_type in (
-            "EasyRemoteInvocationAdapter",
+            "InvocationObjectAdapter",
             "InvocationDraft",
             "PreparedInvocation",
             "SignedInvocation",
@@ -3863,7 +3863,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertTrue(result.ok)
 
         identity = _EasyRemoteAdapterIdentityTransport()
-        adapter = EasyRemoteInvocationAdapter(
+        adapter = InvocationObjectAdapter(
             AbilityInvocationClient(
                 runtime=RuntimeClient(_EasyRemoteAdapterRuntimeTransport()),
                 addressing=AddressingClient(identity),

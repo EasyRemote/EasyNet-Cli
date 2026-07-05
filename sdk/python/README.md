@@ -27,10 +27,10 @@ state seams, SDK-owned `DaemonStartProjection` and
 `DaemonLifecycleFacade` start-wire/status/open-client projection,
 schema-backed SDK error projection, complete
 Invocation draft construction, AbilityInvocationClient descriptor-delegated
-complete tuple build/invoke/stream/bidi convenience facade plus EasyRemote-style
+complete tuple build/invoke/stream/bidi convenience facade plus generic ability
 target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and explicit
-submit/await/cancel/events/close-handle observation helpers, EasyRemote tuple-like
-object adapter for building SDK `InvocationDraft` values and staged legacy wire
+submit/await/cancel/events/close-handle observation helpers, invocation object
+adapter for building SDK `InvocationDraft` values and daemon wire
 dicts without raw product codecs, prepared/signed Invocation DTOs, unary
 InvocationResult and non-verifying terminal receipt projection, StreamHandle state
 observation with schema-shaped terminal event projection, BidiSession frame
