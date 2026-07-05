@@ -14,8 +14,8 @@
 //
 // What this module is NOT
 // -----------------------
-// - It is not the retired ability+args ABI. That ABI is not exported
-//   from the clean Invocation-only FFI surface.
+// - It is not a secondary ability-call ABI. The clean FFI surface exports
+//   complete Invocation carriers only.
 // - It is not an Axon protocol implementation. Axon owns the proto
 //   types and canonical semantics; this module only maps C strings
 //   to the Rust daemon SDK.
@@ -41,7 +41,9 @@ use crate::ffi::errors::{
     ERR_INVALID_ARG, ERR_NOT_FOUND, ERR_NOT_IMPLEMENTED, ERR_PERMISSION_DENIED, ERR_PROTOCOL,
     ERR_TIMEOUT,
 };
-use crate::ffi::errors::{set_last_error, ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER};
+use crate::ffi::errors::{
+    set_last_error, set_last_error_code, ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
+};
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
 use crate::ffi::strings::{read_cstr, StringError};
@@ -101,6 +103,19 @@ const STREAM_CALLBACK_QUEUE_CAPACITY: usize = 64;
 #[cfg(feature = "axon-pb")]
 const BIDI_CALLBACK_QUEUE_CAPACITY: usize = 64;
 
+fn record_invocation_error(code: i32, message: impl Into<String>) -> i32 {
+    set_last_error_code(code, message);
+    code
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn record_invocation_feature_disabled(function: &str) -> i32 {
+    record_invocation_error(
+        ERR_NOT_IMPLEMENTED,
+        format!("{function}: axon-pb feature is not enabled in this build"),
+    )
+}
+
 /// Invoke a complete Axon Invocation through the local daemon.
 ///
 /// `invocation_json` must be a UTF-8 JSON object with these fields:
@@ -139,38 +154,46 @@ pub unsafe extern "C" fn easynet_invocation_invoke(
     out_receipt_json: *mut *mut c_char,
 ) -> i32 {
     if out_receipt_json.is_null() {
-        set_last_error("easynet_invocation_invoke: out_receipt_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_invoke: out_receipt_json pointer is null",
+        );
     }
     unsafe { *out_receipt_json = std::ptr::null_mut() };
 
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_invoke: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_invoke: handle {handle} is not registered"),
+            );
         }
     };
 
     let raw = match read_cstr(invocation_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
-            set_last_error("easynet_invocation_invoke: invocation_json pointer is null");
-            return ERR_NULL_POINTER;
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_invocation_invoke: invocation_json pointer is null",
+            );
         }
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_invoke: invocation_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_invoke: invocation_json is not valid UTF-8",
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (session, raw);
-        set_last_error("easynet_invocation_invoke: axon-pb feature is not enabled in this build");
-        ERR_NOT_IMPLEMENTED
+        record_invocation_error(
+            ERR_NOT_IMPLEMENTED,
+            "easynet_invocation_invoke: axon-pb feature is not enabled in this build",
+        )
     }
 
     #[cfg(feature = "axon-pb")]
@@ -190,25 +213,29 @@ pub unsafe extern "C" fn easynet_runtime_health(
     out_health_json: *mut *mut c_char,
 ) -> i32 {
     if out_health_json.is_null() {
-        set_last_error("easynet_runtime_health: out_health_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_runtime_health: out_health_json pointer is null",
+        );
     }
     unsafe { *out_health_json = std::ptr::null_mut() };
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_runtime_health: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_runtime_health: handle {handle} is not registered"),
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = session;
-        set_last_error("easynet_runtime_health: axon-pb feature is not enabled in this build");
-        ERR_NOT_IMPLEMENTED
+        record_invocation_error(
+            ERR_NOT_IMPLEMENTED,
+            "easynet_runtime_health: axon-pb feature is not enabled in this build",
+        )
     }
 
     #[cfg(feature = "axon-pb")]
@@ -216,8 +243,10 @@ pub unsafe extern "C" fn easynet_runtime_health(
         let json = runtime_health_json(session.as_ref()).to_string();
         let ptr = alloc_output_cstring(json);
         if ptr.is_null() {
-            set_last_error("easynet_runtime_health: out-of-memory allocating health string");
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                "easynet_runtime_health: out-of-memory allocating health string",
+            );
         }
         unsafe { *out_health_json = ptr };
         clear_last_error();
@@ -236,25 +265,29 @@ pub unsafe extern "C" fn easynet_runtime_diagnostics(
     out_diagnostics_json: *mut *mut c_char,
 ) -> i32 {
     if out_diagnostics_json.is_null() {
-        set_last_error("easynet_runtime_diagnostics: out_diagnostics_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_runtime_diagnostics: out_diagnostics_json pointer is null",
+        );
     }
     unsafe { *out_diagnostics_json = std::ptr::null_mut() };
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_runtime_diagnostics: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_runtime_diagnostics: handle {handle} is not registered"),
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = session;
-        set_last_error("easynet_runtime_diagnostics: axon-pb feature is not enabled in this build");
-        ERR_NOT_IMPLEMENTED
+        record_invocation_error(
+            ERR_NOT_IMPLEMENTED,
+            "easynet_runtime_diagnostics: axon-pb feature is not enabled in this build",
+        )
     }
 
     #[cfg(feature = "axon-pb")]
@@ -262,10 +295,10 @@ pub unsafe extern "C" fn easynet_runtime_diagnostics(
         let json = runtime_diagnostics_json(session.as_ref()).to_string();
         let ptr = alloc_output_cstring(json);
         if ptr.is_null() {
-            set_last_error(
+            return record_invocation_error(
+                ERR_GENERIC,
                 "easynet_runtime_diagnostics: out-of-memory allocating diagnostics string",
             );
-            return ERR_GENERIC;
         }
         unsafe { *out_diagnostics_json = ptr };
         clear_last_error();
@@ -285,17 +318,16 @@ pub unsafe extern "C" fn easynet_invocation_builder_new(
     out_builder_id: *mut InvocationBuilderId,
 ) -> i32 {
     if out_builder_id.is_null() {
-        set_last_error("easynet_invocation_builder_new: out_builder_id pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_builder_new: out_builder_id pointer is null",
+        );
     }
     unsafe { *out_builder_id = 0 };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        set_last_error(
-            "easynet_invocation_builder_new: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_builder_new")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -317,11 +349,7 @@ macro_rules! builder_string_setter {
             #[cfg(not(feature = "axon-pb"))]
             {
                 let _ = (builder_id, value);
-                set_last_error(format!(
-                    "{}: axon-pb feature is not enabled in this build",
-                    stringify!($fn_name)
-                ));
-                ERR_NOT_IMPLEMENTED
+                record_invocation_feature_disabled(stringify!($fn_name))
             }
 
             #[cfg(feature = "axon-pb")]
@@ -396,10 +424,7 @@ pub unsafe extern "C" fn easynet_invocation_builder_set_arguments_base64(
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (builder_id, arguments_base64, content_type);
-        set_last_error(
-            "easynet_invocation_builder_set_arguments_base64: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_builder_set_arguments_base64")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -437,10 +462,7 @@ pub extern "C" fn easynet_invocation_builder_set_timeout_seconds(
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (builder_id, timeout_seconds);
-        set_last_error(
-            "easynet_invocation_builder_set_timeout_seconds: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_builder_set_timeout_seconds")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -502,28 +524,34 @@ pub unsafe extern "C" fn easynet_invocation_builder_prepare(
     out_prepared_json: *mut *mut c_char,
 ) -> i32 {
     if out_prepared_id.is_null() {
-        set_last_error("easynet_invocation_builder_prepare: out_prepared_id pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_builder_prepare: out_prepared_id pointer is null",
+        );
     }
     if out_prepared_json.is_null() {
-        set_last_error("easynet_invocation_builder_prepare: out_prepared_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_builder_prepare: out_prepared_json pointer is null",
+        );
     }
     unsafe {
         *out_prepared_id = 0;
         *out_prepared_json = std::ptr::null_mut();
     }
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_builder_prepare: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_builder_prepare: handle {handle} is not registered"),
+        );
     }
     let options_raw = match read_optional_cstr(options_json) {
         Ok(value) => value,
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_builder_prepare: options_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_builder_prepare: options_json is not valid UTF-8",
+            );
         }
         Err(StringError::Null) => None,
     };
@@ -531,10 +559,7 @@ pub unsafe extern "C" fn easynet_invocation_builder_prepare(
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (builder_id, options_raw);
-        set_last_error(
-            "easynet_invocation_builder_prepare: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_builder_prepare")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -549,10 +574,7 @@ pub extern "C" fn easynet_invocation_builder_free(builder_id: InvocationBuilderI
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = builder_id;
-        set_last_error(
-            "easynet_invocation_builder_free: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_builder_free")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -579,39 +601,49 @@ pub unsafe extern "C" fn easynet_invocation_prepare(
     out_prepared_json: *mut *mut c_char,
 ) -> i32 {
     if out_prepared_id.is_null() {
-        set_last_error("easynet_invocation_prepare: out_prepared_id pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_prepare: out_prepared_id pointer is null",
+        );
     }
     if out_prepared_json.is_null() {
-        set_last_error("easynet_invocation_prepare: out_prepared_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_prepare: out_prepared_json pointer is null",
+        );
     }
     unsafe {
         *out_prepared_id = 0;
         *out_prepared_json = std::ptr::null_mut();
     }
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_prepare: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_prepare: handle {handle} is not registered"),
+        );
     }
     let raw = match read_cstr(invocation_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
-            set_last_error("easynet_invocation_prepare: invocation_json pointer is null");
-            return ERR_NULL_POINTER;
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_invocation_prepare: invocation_json pointer is null",
+            );
         }
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_prepare: invocation_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_prepare: invocation_json is not valid UTF-8",
+            );
         }
     };
     let options_raw = match read_optional_cstr(options_json) {
         Ok(value) => value,
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_prepare: options_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_prepare: options_json is not valid UTF-8",
+            );
         }
         Err(StringError::Null) => None,
     };
@@ -619,8 +651,7 @@ pub unsafe extern "C" fn easynet_invocation_prepare(
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (raw, options_raw);
-        set_last_error("easynet_invocation_prepare: axon-pb feature is not enabled in this build");
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_prepare")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -642,12 +673,16 @@ pub unsafe extern "C" fn easynet_invocation_sign_prepared(
     out_signed_json: *mut *mut c_char,
 ) -> i32 {
     if out_signed_id.is_null() {
-        set_last_error("easynet_invocation_sign_prepared: out_signed_id pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_sign_prepared: out_signed_id pointer is null",
+        );
     }
     if out_signed_json.is_null() {
-        set_last_error("easynet_invocation_sign_prepared: out_signed_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_sign_prepared: out_signed_json pointer is null",
+        );
     }
     unsafe {
         *out_signed_id = 0;
@@ -656,22 +691,23 @@ pub unsafe extern "C" fn easynet_invocation_sign_prepared(
     let raw = match read_cstr(signature_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
-            set_last_error("easynet_invocation_sign_prepared: signature_json pointer is null");
-            return ERR_NULL_POINTER;
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_invocation_sign_prepared: signature_json pointer is null",
+            );
         }
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_sign_prepared: signature_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_sign_prepared: signature_json is not valid UTF-8",
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (prepared_id, raw);
-        set_last_error(
-            "easynet_invocation_sign_prepared: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_sign_prepared")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -691,27 +727,26 @@ pub unsafe extern "C" fn easynet_invocation_submit_signed(
     out_result_json: *mut *mut c_char,
 ) -> i32 {
     if out_result_json.is_null() {
-        set_last_error("easynet_invocation_submit_signed: out_result_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_submit_signed: out_result_json pointer is null",
+        );
     }
     unsafe { *out_result_json = std::ptr::null_mut() };
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_submit_signed: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_submit_signed: handle {handle} is not registered"),
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (session, signed_id);
-        set_last_error(
-            "easynet_invocation_submit_signed: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_submit_signed")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -732,16 +767,16 @@ pub unsafe extern "C" fn easynet_invocation_submit_signed_handle(
     out_submitted_json: *mut *mut c_char,
 ) -> i32 {
     if out_invocation_handle_id.is_null() {
-        set_last_error(
+        return record_invocation_error(
+            ERR_NULL_POINTER,
             "easynet_invocation_submit_signed_handle: out_invocation_handle_id pointer is null",
         );
-        return ERR_NULL_POINTER;
     }
     if out_submitted_json.is_null() {
-        set_last_error(
+        return record_invocation_error(
+            ERR_NULL_POINTER,
             "easynet_invocation_submit_signed_handle: out_submitted_json pointer is null",
         );
-        return ERR_NULL_POINTER;
     }
     unsafe {
         *out_invocation_handle_id = 0;
@@ -750,20 +785,19 @@ pub unsafe extern "C" fn easynet_invocation_submit_signed_handle(
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_submit_signed_handle: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_submit_signed_handle: handle {handle} is not registered"
+                ),
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (session, signed_id);
-        set_last_error(
-            "easynet_invocation_submit_signed_handle: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_submit_signed_handle")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -789,24 +823,23 @@ pub unsafe extern "C" fn easynet_invocation_handle_await(
     out_result_json: *mut *mut c_char,
 ) -> i32 {
     if out_result_json.is_null() {
-        set_last_error("easynet_invocation_handle_await: out_result_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_handle_await: out_result_json pointer is null",
+        );
     }
     unsafe { *out_result_json = std::ptr::null_mut() };
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_handle_await: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_handle_await: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = invocation_handle_id;
-        set_last_error(
-            "easynet_invocation_handle_await: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_handle_await")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -828,21 +861,25 @@ pub unsafe extern "C" fn easynet_invocation_handle_cancel(
     out_cancel_json: *mut *mut c_char,
 ) -> i32 {
     if out_cancel_json.is_null() {
-        set_last_error("easynet_invocation_handle_cancel: out_cancel_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_handle_cancel: out_cancel_json pointer is null",
+        );
     }
     unsafe { *out_cancel_json = std::ptr::null_mut() };
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_handle_cancel: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_handle_cancel: handle {handle} is not registered"),
+        );
     }
     let reason_raw = match read_optional_cstr(reason_json) {
         Ok(value) => value,
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_handle_cancel: reason_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_handle_cancel: reason_json is not valid UTF-8",
+            );
         }
         Err(StringError::Null) => None,
     };
@@ -850,10 +887,7 @@ pub unsafe extern "C" fn easynet_invocation_handle_cancel(
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (invocation_handle_id, reason_raw);
-        set_last_error(
-            "easynet_invocation_handle_cancel: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_handle_cancel")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -878,24 +912,23 @@ pub unsafe extern "C" fn easynet_invocation_handle_events(
     out_events_json: *mut *mut c_char,
 ) -> i32 {
     if out_events_json.is_null() {
-        set_last_error("easynet_invocation_handle_events: out_events_json pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_handle_events: out_events_json pointer is null",
+        );
     }
     unsafe { *out_events_json = std::ptr::null_mut() };
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_handle_events: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_handle_events: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = invocation_handle_id;
-        set_last_error(
-            "easynet_invocation_handle_events: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_handle_events")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -911,19 +944,16 @@ pub extern "C" fn easynet_invocation_handle_free(
     invocation_handle_id: InvocationHandleId,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_handle_free: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_handle_free: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = invocation_handle_id;
-        set_last_error(
-            "easynet_invocation_handle_free: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_handle_free")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -934,10 +964,12 @@ pub extern "C" fn easynet_invocation_handle_free(
                 EASYNET_OK
             }
             Err(RegistryOwnerMismatch) => {
-                set_last_error(format!(
-                    "easynet_invocation_handle_free: invocation handle {invocation_handle_id} does not belong to handle {handle}"
-                ));
-                ERR_INVALID_HANDLE
+                record_invocation_error(
+                    ERR_INVALID_HANDLE,
+                    format!(
+                        "easynet_invocation_handle_free: invocation handle {invocation_handle_id} does not belong to handle {handle}"
+                    ),
+                )
             }
         }
     }
@@ -949,10 +981,7 @@ pub extern "C" fn easynet_prepared_invocation_free(prepared_id: PreparedInvocati
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = prepared_id;
-        set_last_error(
-            "easynet_prepared_invocation_free: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_prepared_invocation_free")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -969,10 +998,7 @@ pub extern "C" fn easynet_signed_invocation_free(signed_id: SignedInvocationId) 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = signed_id;
-        set_last_error(
-            "easynet_signed_invocation_free: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_signed_invocation_free")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1008,45 +1034,50 @@ pub unsafe extern "C" fn easynet_invocation_stream_open(
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
     if out_stream_id.is_null() {
-        set_last_error("easynet_invocation_stream_open: out_stream_id pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_stream_open: out_stream_id pointer is null",
+        );
     }
     unsafe { *out_stream_id = 0 };
 
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_stream_open: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_stream_open: handle {handle} is not registered"),
+            );
         }
     };
 
     let Some(on_chunk) = on_chunk else {
-        set_last_error("easynet_invocation_stream_open: on_chunk callback is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_stream_open: on_chunk callback is null",
+        );
     };
 
     let raw = match read_cstr(invocation_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
-            set_last_error("easynet_invocation_stream_open: invocation_json pointer is null");
-            return ERR_NULL_POINTER;
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_invocation_stream_open: invocation_json pointer is null",
+            );
         }
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_stream_open: invocation_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_stream_open: invocation_json is not valid UTF-8",
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (session, raw, on_chunk, user_data);
-        set_last_error(
-            "easynet_invocation_stream_open: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_stream_open")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1070,19 +1101,16 @@ pub unsafe extern "C" fn easynet_invocation_stream_cancel(
     stream_id: InvocationStreamId,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_stream_cancel: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_stream_cancel: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = stream_id;
-        set_last_error(
-            "easynet_invocation_stream_cancel: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_stream_cancel")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1102,19 +1130,16 @@ pub unsafe extern "C" fn easynet_invocation_stream_close(
     stream_id: InvocationStreamId,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_stream_close: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_stream_close: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = stream_id;
-        set_last_error(
-            "easynet_invocation_stream_close: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_stream_close")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1154,45 +1179,50 @@ pub unsafe extern "C" fn easynet_invocation_bidi_open(
     out_bidi_id: *mut InvocationBidiId,
 ) -> i32 {
     if out_bidi_id.is_null() {
-        set_last_error("easynet_invocation_bidi_open: out_bidi_id pointer is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_bidi_open: out_bidi_id pointer is null",
+        );
     }
     unsafe { *out_bidi_id = 0 };
 
     let session = match get(handle) {
         Some(session) => session,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_open: handle {handle} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_bidi_open: handle {handle} is not registered"),
+            );
         }
     };
 
     let Some(on_frame) = on_frame else {
-        set_last_error("easynet_invocation_bidi_open: on_frame callback is null");
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_bidi_open: on_frame callback is null",
+        );
     };
 
     let raw = match read_cstr(invocation_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
-            set_last_error("easynet_invocation_bidi_open: invocation_json pointer is null");
-            return ERR_NULL_POINTER;
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_invocation_bidi_open: invocation_json pointer is null",
+            );
         }
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_bidi_open: invocation_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_bidi_open: invocation_json is not valid UTF-8",
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (session, raw, on_frame, user_data);
-        set_last_error(
-            "easynet_invocation_bidi_open: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_bidi_open")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1223,31 +1253,32 @@ pub unsafe extern "C" fn easynet_invocation_bidi_send(
     frame_json: *const c_char,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_bidi_send: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_send: handle {handle} is not registered"),
+        );
     }
 
     let raw = match read_cstr(frame_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
-            set_last_error("easynet_invocation_bidi_send: frame_json pointer is null");
-            return ERR_NULL_POINTER;
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_invocation_bidi_send: frame_json pointer is null",
+            );
         }
         Err(StringError::NotUtf8) => {
-            set_last_error("easynet_invocation_bidi_send: frame_json is not valid UTF-8");
-            return ERR_INVALID_UTF8;
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_invocation_bidi_send: frame_json is not valid UTF-8",
+            );
         }
     };
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = (bidi_id, raw);
-        set_last_error(
-            "easynet_invocation_bidi_send: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_bidi_send")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1267,19 +1298,16 @@ pub unsafe extern "C" fn easynet_invocation_bidi_close_send(
     bidi_id: InvocationBidiId,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_bidi_close_send: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_close_send: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = bidi_id;
-        set_last_error(
-            "easynet_invocation_bidi_close_send: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_bidi_close_send")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1302,19 +1330,16 @@ pub unsafe extern "C" fn easynet_invocation_bidi_close(
     bidi_id: InvocationBidiId,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_bidi_close: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_close: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = bidi_id;
-        set_last_error(
-            "easynet_invocation_bidi_close: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_bidi_close")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1338,19 +1363,16 @@ pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
     bidi_id: InvocationBidiId,
 ) -> i32 {
     if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_invocation_bidi_cancel: handle {handle} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_cancel: handle {handle} is not registered"),
+        );
     }
 
     #[cfg(not(feature = "axon-pb"))]
     {
         let _ = bidi_id;
-        set_last_error(
-            "easynet_invocation_bidi_cancel: axon-pb feature is not enabled in this build",
-        );
-        ERR_NOT_IMPLEMENTED
+        record_invocation_feature_disabled("easynet_invocation_bidi_cancel")
     }
 
     #[cfg(feature = "axon-pb")]
@@ -1366,10 +1388,12 @@ pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
                 EASYNET_OK
             }
             Err(RegistryOwnerMismatch) => {
-                set_last_error(format!(
-                    "easynet_invocation_bidi_cancel: bidi session {bidi_id} does not belong to handle {handle}"
-                ));
-                ERR_INVALID_HANDLE
+                record_invocation_error(
+                    ERR_INVALID_HANDLE,
+                    format!(
+                        "easynet_invocation_bidi_cancel: bidi session {bidi_id} does not belong to handle {handle}"
+                    ),
+                )
             }
         }
     }
@@ -1504,14 +1528,14 @@ fn read_builder_arg<'a>(
 ) -> Result<&'a str, i32> {
     match read_cstr(ptr) {
         Ok(value) => Ok(value),
-        Err(StringError::Null) => {
-            set_last_error(format!("{function}: {argument} pointer is null"));
-            Err(ERR_NULL_POINTER)
-        }
-        Err(StringError::NotUtf8) => {
-            set_last_error(format!("{function}: {argument} is not valid UTF-8"));
-            Err(ERR_INVALID_UTF8)
-        }
+        Err(StringError::Null) => Err(record_invocation_error(
+            ERR_NULL_POINTER,
+            format!("{function}: {argument} pointer is null"),
+        )),
+        Err(StringError::NotUtf8) => Err(record_invocation_error(
+            ERR_INVALID_UTF8,
+            format!("{function}: {argument} is not valid UTF-8"),
+        )),
     }
 }
 
@@ -1524,14 +1548,13 @@ fn mutate_builder(
     let registry = builder_registry();
     let mut entries = lock_builder_entries(registry);
     let Some(builder) = entries.get_mut(&builder_id) else {
-        set_last_error(format!(
-            "{function}: builder handle {builder_id} is not registered"
-        ));
-        return ERR_INVALID_HANDLE;
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("{function}: builder handle {builder_id} is not registered"),
+        );
     };
     if let Err(err) = mutate(builder) {
-        set_last_error(format!("{function}: {err}"));
-        return ERR_INVALID_ARG;
+        return record_invocation_error(ERR_INVALID_ARG, format!("{function}: {err}"));
     }
     clear_last_error();
     EASYNET_OK
@@ -1562,8 +1585,10 @@ fn builder_output_invocation_json(
     function: &str,
 ) -> i32 {
     if out_invocation_json.is_null() {
-        set_last_error(format!("{function}: out_invocation_json pointer is null"));
-        return ERR_NULL_POINTER;
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            format!("{function}: out_invocation_json pointer is null"),
+        );
     }
     unsafe { *out_invocation_json = std::ptr::null_mut() };
 
@@ -1571,20 +1596,20 @@ fn builder_output_invocation_json(
         match take_builder(builder_id) {
             Some(builder) => builder,
             None => {
-                set_last_error(format!(
-                    "{function}: builder handle {builder_id} is not registered"
-                ));
-                return ERR_INVALID_HANDLE;
+                return record_invocation_error(
+                    ERR_INVALID_HANDLE,
+                    format!("{function}: builder handle {builder_id} is not registered"),
+                );
             }
         }
     } else {
         match get_builder(builder_id) {
             Some(builder) => builder,
             None => {
-                set_last_error(format!(
-                    "{function}: builder handle {builder_id} is not registered"
-                ));
-                return ERR_INVALID_HANDLE;
+                return record_invocation_error(
+                    ERR_INVALID_HANDLE,
+                    format!("{function}: builder handle {builder_id} is not registered"),
+                );
             }
         }
     };
@@ -1594,8 +1619,7 @@ fn builder_output_invocation_json(
             if consume_on_success {
                 restore_builder(builder_id, builder);
             }
-            set_last_error(format!("{function}: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(ERR_INVALID_ARG, format!("{function}: {err}"));
         }
     };
     let ptr = alloc_output_cstring(invocation_json(&invocation).to_string());
@@ -1603,10 +1627,10 @@ fn builder_output_invocation_json(
         if consume_on_success {
             restore_builder(builder_id, builder);
         }
-        set_last_error(format!(
-            "{function}: out-of-memory allocating invocation JSON"
-        ));
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            format!("{function}: out-of-memory allocating invocation JSON"),
+        );
     }
     unsafe { *out_invocation_json = ptr };
     clear_last_error();
@@ -1623,26 +1647,32 @@ fn prepare_builder_with_axon_pb(
     let builder = match take_builder(builder_id) {
         Some(builder) => builder,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_builder_prepare: builder handle {builder_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_builder_prepare: builder handle {builder_id} is not registered"
+                ),
+            );
         }
     };
     let options = match PrepareOptionsJson::parse(options_raw.as_deref()) {
         Ok(options) => options,
         Err(err) => {
             restore_builder(builder_id, builder);
-            set_last_error(format!("easynet_invocation_builder_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_builder_prepare: {err}"),
+            );
         }
     };
     let invocation = match builder.build_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
             restore_builder(builder_id, builder);
-            set_last_error(format!("easynet_invocation_builder_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_builder_prepare: {err}"),
+            );
         }
     };
     let prepared = match invocation
@@ -1652,17 +1682,19 @@ fn prepare_builder_with_axon_pb(
         Ok(prepared) => prepared,
         Err(err) => {
             restore_builder(builder_id, builder);
-            set_last_error(format!("easynet_invocation_builder_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_builder_prepare: {err}"),
+            );
         }
     };
     let ptr = alloc_output_cstring(prepared_invocation_json(&prepared).to_string());
     if ptr.is_null() {
         restore_builder(builder_id, builder);
-        set_last_error(
+        return record_invocation_error(
+            ERR_GENERIC,
             "easynet_invocation_builder_prepare: out-of-memory allocating prepared JSON",
         );
-        return ERR_GENERIC;
     }
     let id = insert_prepared(prepared);
     unsafe {
@@ -1682,24 +1714,30 @@ fn invoke_with_axon_pb(
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_invoke: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_invoke: {err}"),
+            );
         }
     };
 
     let invocation = match spec.clone().into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_invoke: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_invoke: {err}"),
+            );
         }
     };
 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_invoke: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_invoke: {err}"),
+            );
         }
     };
 
@@ -1725,16 +1763,18 @@ fn invoke_with_axon_pb(
     let json = match serde_json::to_string(&output) {
         Ok(json) => json,
         Err(err) => {
-            set_last_error(format!(
-                "easynet_invocation_invoke: encode response JSON failed: {err}"
-            ));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_invoke: encode response JSON failed: {err}"),
+            );
         }
     };
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_invoke: out-of-memory allocating response string");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_invoke: out-of-memory allocating response string",
+        );
     }
     unsafe { *out_receipt_json = ptr };
     clear_last_error();
@@ -1751,22 +1791,28 @@ fn prepare_with_axon_pb(
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_prepare: {err}"),
+            );
         }
     };
     let options = match PrepareOptionsJson::parse(options_raw.as_deref()) {
         Ok(options) => options,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_prepare: {err}"),
+            );
         }
     };
     let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_prepare: {err}"),
+            );
         }
     };
     let prepared = match invocation
@@ -1775,15 +1821,19 @@ fn prepare_with_axon_pb(
     {
         Ok(prepared) => prepared,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_prepare: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_prepare: {err}"),
+            );
         }
     };
     let json = prepared_invocation_json(&prepared).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_prepare: out-of-memory allocating prepared JSON");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_prepare: out-of-memory allocating prepared JSON",
+        );
     }
     let id = insert_prepared(prepared);
     unsafe {
@@ -1804,31 +1854,39 @@ fn sign_prepared_with_axon_pb(
     let signature = match SignatureMaterialJson::parse(raw) {
         Ok(signature) => signature.into_signature_material(),
         Err(err) => {
-            set_last_error(format!("easynet_invocation_sign_prepared: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_sign_prepared: {err}"),
+            );
         }
     };
     let prepared = match remove_prepared(prepared_id) {
         Some(prepared) => prepared,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_sign_prepared: prepared handle {prepared_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_sign_prepared: prepared handle {prepared_id} is not registered"
+                ),
+            );
         }
     };
     let signed = match prepared.sign_with_caller_signature(signature) {
         Ok(signed) => signed,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_sign_prepared: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_sign_prepared: {err}"),
+            );
         }
     };
     let json = signed_invocation_json(&signed).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_sign_prepared: out-of-memory allocating signed JSON");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_sign_prepared: out-of-memory allocating signed JSON",
+        );
     }
     let id = insert_signed(signed);
     unsafe {
@@ -1863,10 +1921,10 @@ fn submit_signed_sync_with_axon_pb(
     let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
         Ok(Some(handle)) => handle,
         Ok(None) | Err(_) => {
-            set_last_error(
+            return record_invocation_error(
+                ERR_GENERIC,
                 "easynet_invocation_submit_signed: submitted invocation handle disappeared",
             );
-            return ERR_GENERIC;
         }
     };
     let result = handle.await_result();
@@ -1883,8 +1941,10 @@ fn submit_signed_sync_with_axon_pb(
     let json = invocation_result_json(result).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_submit_signed: out-of-memory allocating result JSON");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_submit_signed: out-of-memory allocating result JSON",
+        );
     }
     unsafe { *out_result_json = ptr };
     clear_last_error();
@@ -1902,10 +1962,12 @@ fn submit_signed_handle_with_axon_pb(
     let signed = match remove_signed(signed_id) {
         Some(signed) => signed,
         None => {
-            set_last_error(format!(
-                "easynet_invocation_submit_signed_handle: signed handle {signed_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_submit_signed_handle: signed handle {signed_id} is not registered"
+                ),
+            );
         }
     };
     let endpoint = match invocation_endpoint_for_session(session.as_ref()) {
@@ -1915,8 +1977,10 @@ fn submit_signed_handle_with_axon_pb(
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_submit_signed_handle: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_submit_signed_handle: {err}"),
+            );
         }
     };
 
@@ -1928,19 +1992,19 @@ fn submit_signed_handle_with_axon_pb(
     let submitted = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
         Ok(Some(handle)) => handle.submitted_json(invocation_handle_id).to_string(),
         Ok(None) | Err(_) => {
-            set_last_error(
+            return record_invocation_error(
+                ERR_GENERIC,
                 "easynet_invocation_submit_signed_handle: inserted invocation handle disappeared",
             );
-            return ERR_GENERIC;
         }
     };
     let ptr = alloc_output_cstring(submitted);
     if ptr.is_null() {
         let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
-        set_last_error(
+        return record_invocation_error(
+            ERR_GENERIC,
             "easynet_invocation_submit_signed_handle: out-of-memory allocating submitted JSON",
         );
-        return ERR_GENERIC;
     }
 
     rt.spawn(run_invocation_handle_task(
@@ -1963,23 +2027,29 @@ fn invocation_handle_await_with_axon_pb(
     let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
         Ok(Some(handle)) => handle,
         Ok(None) => {
-            set_last_error(format!(
-                "easynet_invocation_handle_await: invocation handle {invocation_handle_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_await: invocation handle {invocation_handle_id} is not registered"
+                ),
+            );
         }
         Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "easynet_invocation_handle_await: invocation handle {invocation_handle_id} does not belong to handle {owner}"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_await: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+                ),
+            );
         }
     };
     let json = invocation_result_json(handle.await_result()).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_handle_await: out-of-memory allocating result JSON");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_handle_await: out-of-memory allocating result JSON",
+        );
     }
     unsafe { *out_result_json = ptr };
     clear_last_error();
@@ -1996,16 +2066,20 @@ fn invocation_handle_cancel_with_axon_pb(
     let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
         Ok(Some(handle)) => handle,
         Ok(None) => {
-            set_last_error(format!(
-                "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} is not registered"
+                ),
+            );
         }
         Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} does not belong to handle {owner}"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+                ),
+            );
         }
     };
     let outcome = handle.cancel(reason_raw);
@@ -2018,8 +2092,10 @@ fn invocation_handle_cancel_with_axon_pb(
     .to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_handle_cancel: out-of-memory allocating cancel JSON");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_handle_cancel: out-of-memory allocating cancel JSON",
+        );
     }
     unsafe { *out_cancel_json = ptr };
     clear_last_error();
@@ -2035,23 +2111,29 @@ fn invocation_handle_events_with_axon_pb(
     let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
         Ok(Some(handle)) => handle,
         Ok(None) => {
-            set_last_error(format!(
-                "easynet_invocation_handle_events: invocation handle {invocation_handle_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_events: invocation handle {invocation_handle_id} is not registered"
+                ),
+            );
         }
         Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "easynet_invocation_handle_events: invocation handle {invocation_handle_id} does not belong to handle {owner}"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_events: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+                ),
+            );
         }
     };
     let json = handle.events_json(invocation_handle_id).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
-        set_last_error("easynet_invocation_handle_events: out-of-memory allocating events JSON");
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_handle_events: out-of-memory allocating events JSON",
+        );
     }
     unsafe { *out_events_json = ptr };
     clear_last_error();
@@ -2091,24 +2173,30 @@ fn stream_open_with_axon_pb(
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_stream_open: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_stream_open: {err}"),
+            );
         }
     };
 
     let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_stream_open: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_stream_open: {err}"),
+            );
         }
     };
 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_stream_open: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_stream_open: {err}"),
+            );
         }
     };
 
@@ -2128,10 +2216,10 @@ fn stream_open_with_axon_pb(
         .name("easynet-inv-stream-callback".to_string())
         .spawn(move || dispatch_stream_callbacks(rx, on_chunk, callback_user_data));
     if let Err(err) = dispatcher {
-        set_last_error(format!(
-            "easynet_invocation_stream_open: spawn callback dispatcher failed: {err}"
-        ));
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            format!("easynet_invocation_stream_open: spawn callback dispatcher failed: {err}"),
+        );
     }
 
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -2158,29 +2246,37 @@ fn bidi_open_with_axon_pb(
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_open: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_bidi_open: {err}"),
+            );
         }
     };
     if spec.bidi_streams.is_empty() {
-        set_last_error("easynet_invocation_bidi_open: bidi_streams must not be empty");
-        return ERR_INVALID_ARG;
+        return record_invocation_error(
+            ERR_INVALID_ARG,
+            "easynet_invocation_bidi_open: bidi_streams must not be empty",
+        );
     }
 
     let streams = spec.bidi_streams.clone();
     let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_open: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_bidi_open: {err}"),
+            );
         }
     };
 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_open: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_bidi_open: {err}"),
+            );
         }
     };
 
@@ -2201,10 +2297,10 @@ fn bidi_open_with_axon_pb(
         .name("easynet-inv-bidi-callback".to_string())
         .spawn(move || dispatch_bidi_callbacks(callback_rx, on_frame, callback_user_data));
     if let Err(err) = dispatcher {
-        set_last_error(format!(
-            "easynet_invocation_bidi_open: spawn callback dispatcher failed: {err}"
-        ));
-        return ERR_GENERIC;
+        return record_invocation_error(
+            ERR_GENERIC,
+            format!("easynet_invocation_bidi_open: spawn callback dispatcher failed: {err}"),
+        );
     }
 
     let (ability, up_tx, down) = session.into_parts();
@@ -2227,41 +2323,49 @@ fn bidi_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId, raw:
     let frame = match parse_bidi_up_frame_json(raw) {
         Ok(frame) => frame,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_send: {err}"));
-            return ERR_INVALID_ARG;
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_bidi_send: {err}"),
+            );
         }
     };
     let session = match get_bidi_for_handle(handle, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_send: bidi session {bidi_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_bidi_send: bidi session {bidi_id} is not registered"),
+            );
         }
         Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_send: bidi session {bidi_id} does not belong to handle {handle}"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_bidi_send: bidi session {bidi_id} does not belong to handle {handle}"
+                ),
+            );
         }
     };
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_send: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_bidi_send: {err}"),
+            );
         }
     };
 
     let up_frame = match session.reserve_up_frame(frame) {
         Ok(up_frame) => up_frame,
         Err(BidiLocalSendClosed) => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_send: bidi session {} for {} is locally half-closed",
-                bidi_id, session.ability
-            ));
-            return ERR_CANCELLED;
+            return record_invocation_error(
+                ERR_CANCELLED,
+                format!(
+                    "easynet_invocation_bidi_send: bidi session {} for {} is locally half-closed",
+                    bidi_id, session.ability
+                ),
+            );
         }
     };
 
@@ -2301,12 +2405,10 @@ fn release_stream_with_reader_cancel(
             clear_last_error();
             EASYNET_OK
         }
-        Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "{function}: stream {stream_id} does not belong to handle {handle}"
-            ));
-            ERR_INVALID_HANDLE
-        }
+        Err(RegistryOwnerMismatch) => record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("{function}: stream {stream_id} does not belong to handle {handle}"),
+        ),
     }
 }
 
@@ -2315,23 +2417,29 @@ fn bidi_close_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId
     let session = match get_bidi_for_handle(handle, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_close_send: bidi session {bidi_id} is not registered"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_bidi_close_send: bidi session {bidi_id} is not registered"
+                ),
+            );
         }
         Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_close_send: bidi session {bidi_id} does not belong to handle {handle}"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_bidi_close_send: bidi session {bidi_id} does not belong to handle {handle}"
+                ),
+            );
         }
     };
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_close_send: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_bidi_close_send: {err}"),
+            );
         }
     };
 
@@ -2363,17 +2471,21 @@ fn bidi_close_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> 
             return EASYNET_OK;
         }
         Err(RegistryOwnerMismatch) => {
-            set_last_error(format!(
-                "easynet_invocation_bidi_close: bidi session {bidi_id} does not belong to handle {handle}"
-            ));
-            return ERR_INVALID_HANDLE;
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_bidi_close: bidi session {bidi_id} does not belong to handle {handle}"
+                ),
+            );
         }
     };
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
-            set_last_error(format!("easynet_invocation_bidi_close: {err}"));
-            return ERR_GENERIC;
+            return record_invocation_error(
+                ERR_GENERIC,
+                format!("easynet_invocation_bidi_close: {err}"),
+            );
         }
     };
 
@@ -2405,11 +2517,13 @@ fn send_bidi_up_frame(
 ) -> i32 {
     let send_result = rt.block_on(async { session.up_tx.send(up_frame).await });
     if send_result.is_err() {
-        set_last_error(format!(
-            "{function}: bidi session {} for {} is closed",
-            bidi_id, session.ability
-        ));
-        return ERR_CANCELLED;
+        return record_invocation_error(
+            ERR_CANCELLED,
+            format!(
+                "{function}: bidi session {} for {} is closed",
+                bidi_id, session.ability
+            ),
+        );
     }
     EASYNET_OK
 }
@@ -4902,12 +5016,14 @@ mod tests {
     }
 
     fn valid_invocation_json() -> CString {
+        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let descriptor_ref = descriptor_ref(callee_ura, "observe.health", "2.4.0");
         CString::new(
             serde_json::json!({
-                "caller_ura": "ura://device/test/caller",
-                "callee_ura": "ura://device/test/callee",
-                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
-                "subject_ura": "ura://device/test/callee",
+                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "callee_ura": callee_ura,
+                "descriptor_ref": descriptor_ref,
+                "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
                 "args": {"ping": true}
@@ -4951,10 +5067,10 @@ mod tests {
     fn parse_invocation_json_requires_complete_axiom_fields() {
         let err = InvocationJson::parse(
             r#"{
-                "caller_ura": "ura://device/test/caller",
-                "callee_ura": "ura://device/test/callee",
-                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
-                "subject_ura": "ura://device/test/callee",
+                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "callee_ura": "easynet:///r/acme/device/dev-a",
+                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "args": {}
             }"#,
@@ -4966,9 +5082,8 @@ mod tests {
         );
     }
 
-    /// Canonical-URA invocation JSON for tests that go past parse into
-    /// `into_daemon_invocation` (the builder's `checked_ura` rejects
-    /// the legacy `ura://` fixture shapes that parse-only tests use).
+    /// Canonical URA invocation JSON for tests that go past parse into
+    /// `into_daemon_invocation`.
     fn canonical_invocation_json(extra: serde_json::Value) -> String {
         let callee_ura = "easynet:///r/acme/device/dev-a";
         let mut obj = serde_json::json!({
@@ -5099,6 +5214,29 @@ mod tests {
         }
     }
 
+    fn read_last_error_json() -> serde_json::Value {
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { crate::ffi::errors::easynet_last_error_json(&mut out) };
+        assert_eq!(code, EASYNET_OK);
+        assert!(!out.is_null());
+        let value = unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(out) };
+        value
+    }
+
+    fn assert_typed_last_error(code_name: &str, abi_code: i32, message_fragment: &str) {
+        let error = read_last_error_json();
+        assert_eq!(error["code"], code_name);
+        assert_eq!(error["details"]["abi_code"], abi_code);
+        assert_eq!(error["details"]["legacy_untyped"], false);
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(message_fragment)),
+            "last-error message should contain {message_fragment:?}: {error}"
+        );
+    }
+
     fn new_builder_handle() -> InvocationBuilderId {
         let mut builder_id: InvocationBuilderId = 0;
         let code = unsafe { easynet_invocation_builder_new(&mut builder_id) };
@@ -5215,6 +5353,7 @@ mod tests {
             unsafe { easynet_invocation_builder_inspect(builder_id, &mut second_ptr) };
         assert_eq!(second_code, ERR_INVALID_HANDLE);
         assert!(second_ptr.is_null());
+        assert_typed_last_error("INVALID_HANDLE", ERR_INVALID_HANDLE, "builder handle");
     }
 
     #[test]
@@ -5342,10 +5481,10 @@ mod tests {
         for bad in ["0", "-3", "\"45\"", "1.5"] {
             let raw = format!(
                 r#"{{
-                    "caller_ura": "ura://device/test/caller",
-                    "callee_ura": "ura://device/test/callee",
-                    "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
-                    "subject_ura": "ura://device/test/callee",
+                    "caller_ura": "easynet:///r/acme/device/dev-a",
+                    "callee_ura": "easynet:///r/acme/device/dev-a",
+                    "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                    "subject_ura": "easynet:///r/acme/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "causal_context": {{"form": "none"}},
                     "args": {{}},
@@ -5764,10 +5903,10 @@ mod tests {
     fn parse_invocation_json_rejects_zero_nonce() {
         let err = InvocationJson::parse(
             r#"{
-                "caller_ura": "ura://device/test/caller",
-                "callee_ura": "ura://device/test/callee",
-                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
-                "subject_ura": "ura://device/test/callee",
+                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "callee_ura": "easynet:///r/acme/device/dev-a",
+                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AAAAAAAAAAAAAAAAAAAAAA==",
                 "causal_context": {"form": "none"},
                 "args": {}
@@ -5784,10 +5923,10 @@ mod tests {
     fn parse_invocation_json_supports_raw_payloads() {
         let spec = InvocationJson::parse(
             r#"{
-                "caller_ura": "ura://device/test/caller",
-                "callee_ura": "ura://device/test/callee",
-                "descriptor_ref": "ura://device/test/callee/ability/observe.health@2.4.0",
-                "subject_ura": "ura://device/test/callee",
+                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "callee_ura": "easynet:///r/acme/device/dev-a",
+                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
                 "arguments_base64": "aGVsbG8=",
@@ -5922,6 +6061,11 @@ mod tests {
         let code = unsafe { easynet_invocation_invoke(9_999_999, raw.as_ptr(), &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert!(out.is_null());
+        assert_typed_last_error(
+            "INVALID_HANDLE",
+            ERR_INVALID_HANDLE,
+            "handle 9999999 is not registered",
+        );
     }
 
     #[test]
@@ -5984,6 +6128,11 @@ mod tests {
         };
         assert_eq!(code, ERR_NULL_POINTER);
         assert_eq!(bidi_id, 0);
+        assert_typed_last_error(
+            "NULL_POINTER",
+            ERR_NULL_POINTER,
+            "on_frame callback is null",
+        );
     }
 
     #[test]
@@ -6002,6 +6151,11 @@ mod tests {
         };
         assert_eq!(code, ERR_NULL_POINTER);
         assert_eq!(stream_id, 0);
+        assert_typed_last_error(
+            "NULL_POINTER",
+            ERR_NULL_POINTER,
+            "on_chunk callback is null",
+        );
     }
 
     #[test]
