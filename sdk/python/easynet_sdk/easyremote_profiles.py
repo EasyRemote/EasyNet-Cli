@@ -272,7 +272,16 @@ class _EasyRemoteMissionProfileTransport:
         return _mission_status_json(_MISSION_RUN, response)
 
     def run_file(self, request_json: bytes) -> bytes:
-        return _unsupported_mission_profile("run_file")
+        request = _json_object(
+            request_json, "EasyRemote mission run-file request", _invalid_mission
+        )
+        payload: dict[str, object] = {
+            "path": _required_mission_string(request, "path")
+        }
+        if request.get("label"):
+            payload["label"] = _required_mission_string(request, "label")
+        response = self._invoke(_MISSION_RUN, **payload)
+        return _mission_status_json(_MISSION_RUN, response)
 
     def track(self, request_json: bytes) -> bytes:
         request = _json_object(

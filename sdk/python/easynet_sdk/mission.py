@@ -712,6 +712,20 @@ class EasyRemoteMissionAdapter:
         )
         return EasyRemoteMissionRunProjection.from_run(run)
 
+    def run_file(
+        self, path: str, *, label: str | None = None
+    ) -> EasyRemoteMissionRunProjection:
+        mission_label = _validated_easyremote_label(label)
+        run = self._client.run_file(
+            path,
+            MissionRunFileRequest(
+                base=self._base,
+                path=path,
+                label=mission_label or "",
+            ),
+        )
+        return EasyRemoteMissionRunProjection.from_run(run)
+
     def track(self, run_id: str) -> Mapping[str, object]:
         status = self._client.track(
             MissionTrackRequest(

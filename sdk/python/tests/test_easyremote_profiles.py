@@ -53,12 +53,15 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         mission = bridge.mission_facade()
 
         run = mission.run_eal('mission "weather" {}\n', label="weather")
+        file_run = mission.run_file("/tmp/demo.eal", label="demo")
         tracked = mission.track("run-1")
         cancelled = mission.cancel("run-1")
         events = mission.events("run-1", cursor_sequence=4, limit=25)
 
         self.assertEqual(run.run_id, "run-1")
+        self.assertEqual(file_run.run_id, "run-file-1")
         self.assertEqual(run.run_dir, "/tmp/run-1")
+        self.assertEqual(file_run.run_dir, "/tmp/run-file-1")
         self.assertEqual(run.outputs, {"report": "ok"})
         self.assertEqual(tracked["state"], "completed")
         self.assertTrue(cancelled["cancelled"])
@@ -70,6 +73,10 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
                 (
                     "mission.run",
                     {"source": 'mission "weather" {}\n', "label": "weather"},
+                ),
+                (
+                    "mission.run",
+                    {"path": "/tmp/demo.eal", "label": "demo"},
                 ),
                 ("mission.track", {"run_id": "run-1"}),
                 ("mission.cancel", {"run_id": "run-1"}),
@@ -183,6 +190,13 @@ class MemoryProfileDispatcher:
                 "agent_ura": "easynet:///r/example/agent/assistant",
             }
         if ability == "mission.run":
+            if "path" in kwargs:
+                return {
+                    "run_id": "run-file-1",
+                    "run_dir": "/tmp/run-file-1",
+                    "outputs": {"file": kwargs["path"]},
+                    "state": "running",
+                }
             return {
                 "run_id": "run-1",
                 "run_dir": "/tmp/run-1",
