@@ -135,6 +135,8 @@ type EventStream struct {
 	State       string         `json:"state"`
 	ResumeToken string         `json:"resume_token,omitempty"`
 	Metadata    map[string]any `json:"metadata"`
+	handle      *StreamHandle  `json:"-"`
+	release     func(string)   `json:"-"`
 }
 
 type EventFrame struct {
@@ -377,7 +379,14 @@ func (c *EventClient) subscribe(ctx context.Context, req EventsSubscriptionReque
 	if err != nil {
 		return EventStream{}, wrapEventsTransportError(label, err)
 	}
-	return NewEventStreamFromJSON(raw)
+	eventStream, err := NewEventStreamFromJSON(raw)
+	if err != nil {
+		return EventStream{}, err
+	}
+	if binder, ok := c.transport.(eventStreamHandleBinder); ok {
+		eventStream = binder.bindEventStreamHandle(eventStream)
+	}
+	return eventStream, nil
 }
 
 func (c *EventClient) subscriptionInvocationTransport(stream EventStreamKind) (func(context.Context, []byte) ([]byte, error), string) {
@@ -463,6 +472,47 @@ func NewEventStreamFromJSON(raw []byte) (EventStream, error) {
 		return EventStream{}, invalidProfilePayload(eventsProfile, "invalid event stream projection", nil)
 	}
 	return stream, nil
+}
+
+type eventStreamHandleBinder interface {
+	bindEventStreamHandle(EventStream) EventStream
+}
+
+func (s EventStream) Next(ctx context.Context) (EventFrame, error) {
+	if s.handle == nil {
+		return EventFrame{}, invalidProfileClient(eventsProfile, "event stream is not backed by a runtime stream handle")
+	}
+	event, err := s.handle.Next(ctx)
+	if err != nil {
+		return EventFrame{}, err
+	}
+	payload := event.PayloadJSON()
+	if len(payload) == 0 || string(payload) == "null" {
+		return EventFrame{}, invalidProfilePayload(eventsProfile, "event stream frame payload_json is required", nil)
+	}
+	return NewEventFrameFromJSON(payload)
+}
+
+func (s EventStream) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
+	if s.handle == nil {
+		return StreamCancel{}, invalidProfileClient(eventsProfile, "event stream is not backed by a runtime stream handle")
+	}
+	cancel, err := s.handle.Cancel(ctx, reason)
+	if err == nil && s.release != nil {
+		s.release(s.StreamID)
+	}
+	return cancel, err
+}
+
+func (s EventStream) Close(ctx context.Context) error {
+	if s.handle == nil {
+		return invalidProfileClient(eventsProfile, "event stream is not backed by a runtime stream handle")
+	}
+	err := s.handle.Close(ctx)
+	if err == nil && s.release != nil {
+		s.release(s.StreamID)
+	}
+	return err
 }
 
 func NewEventFrameFromJSON(raw []byte) (EventFrame, error) {

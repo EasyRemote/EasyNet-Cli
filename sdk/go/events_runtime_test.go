@@ -68,21 +68,59 @@ func TestRuntimeEventsBuildsDirectorySubscriptionInvocation(t *testing.T) {
 	}
 }
 
-func TestRuntimeEventsMapsStreamAbilitiesAndRejectsSubscribeShortcut(t *testing.T) {
-	runtimeClient, err := NewRuntimeClient(RuntimeTransportFunc{})
+func TestRuntimeEventsMapsStreamAbilitiesAndOpensRuntimeStream(t *testing.T) {
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{
+		streamTransport: StreamTransportFunc{
+			RecvFunc: func(ctx context.Context) ([]byte, error) {
+				return []byte(`{
+					"sequence": 1,
+					"kind": "data",
+					"state": "Open",
+					"terminal": false,
+					"payload_content_type": "application/json",
+					"payload_json": {
+						"profile": "events",
+						"stream": "directory",
+						"kind": "directory_delta",
+						"event_id": "evt-directory-1",
+						"cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+						"resume_token": "directory:1",
+						"occurred_unix_ms": 1000,
+						"occurred_at": "1970-01-01T00:00:01Z",
+						"subject_ref": {"kind": "directory"},
+						"tenant_ref": null,
+						"payload": {"op": "upsert"},
+						"dropped_count": 0,
+						"reconnect_after_ms": null,
+						"terminal": false,
+						"metadata": {"source": "runtime"}
+					}
+				}`), nil
+			},
+			CancelFunc: func(ctx context.Context, reason string) ([]byte, error) {
+				if reason != "done" {
+					t.Fatalf("cancel reason = %q, want done", reason)
+				}
+				return []byte(`{"stream_id":"runtime-stream-1","cancelled":true,"state":"Cancelled","terminal":true}`), nil
+			},
+		},
+	}
+	runtimeClient, err := NewRuntimeClient(runtimeTransport)
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
 	identityTransport := &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
+			eventsAbilitySubscribeDirectory:   "easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2",
 			eventsAbilitySubscribeDevices:     "easynet:///r/example/ability/device.dev-a.events.device.subscribe",
 			eventsAbilitySubscribeSessions:    "easynet:///r/example/ability/device.dev-a.session.attach",
 			eventsAbilitySubscribeInvocations: "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe",
 		},
 		descriptorByAbility: map[string]string{
-			"easynet:///r/example/ability/device.dev-a.events.device.subscribe":     "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0",
-			"easynet:///r/example/ability/device.dev-a.session.attach":              "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0",
-			"easynet:///r/example/ability/device.dev-a.events.invocation.subscribe": "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2": "easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.events.device.subscribe":           "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.session.attach":                    "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.events.invocation.subscribe":       "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0",
 		},
 	}
 	identityClient, err := NewIdentityClient(identityTransport)
@@ -139,8 +177,30 @@ func TestRuntimeEventsMapsStreamAbilitiesAndRejectsSubscribeShortcut(t *testing.
 		invocationArgs["invocation_id"] != "inv-1" {
 		t.Fatalf("unexpected invocation event args: draft=%#v args=%#v", invocationDraft, invocationArgs)
 	}
-	if _, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("SubscribeDirectory error = %v, want %s", err, ErrNotImplemented)
+
+	stream, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	if err != nil {
+		t.Fatalf("SubscribeDirectory: %v", err)
+	}
+	if stream.Stream != string(EventStreamDirectory) || stream.StreamID != "runtime-stream-1" || stream.State != string(StreamOpen) {
+		t.Fatalf("unexpected event stream: %#v", stream)
+	}
+	if !runtimeTransport.openStreamCalled || runtimeTransport.seenStreamDraft["descriptor_ref"] == "" {
+		t.Fatalf("runtime stream was not opened with a complete draft: %#v", runtimeTransport.seenStreamDraft)
+	}
+	frame, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("EventStream.Next: %v", err)
+	}
+	if frame.Stream != string(EventStreamDirectory) || frame.EventID != "evt-directory-1" {
+		t.Fatalf("unexpected event frame: %#v", frame)
+	}
+	cancel, err := stream.Cancel(context.Background(), "done")
+	if err != nil {
+		t.Fatalf("EventStream.Cancel: %v", err)
+	}
+	if !cancel.Cancelled() || cancel.State() != StreamCancelled {
+		t.Fatalf("unexpected cancel result: %#v", cancel)
 	}
 }
 

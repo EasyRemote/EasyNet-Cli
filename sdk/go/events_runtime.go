@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,8 @@ var eventsCarrierArgKeys = map[string]struct{}{
 type EventsRuntimeTransport struct {
 	runtime  *RuntimeClient
 	identity *IdentityClient
+	mu       sync.Mutex
+	streams  map[string]*StreamHandle
 }
 
 func NewEventsRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*EventsRuntimeTransport, error) {
@@ -41,7 +44,11 @@ func NewEventsRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient)
 	if identity == nil {
 		return nil, invalidProfileClient(eventsProfile, "identity client is required")
 	}
-	return &EventsRuntimeTransport{runtime: runtime, identity: identity}, nil
+	return &EventsRuntimeTransport{
+		runtime:  runtime,
+		identity: identity,
+		streams:  map[string]*StreamHandle{},
+	}, nil
 }
 
 func NewRuntimeEventClient(runtime *RuntimeClient, identity *IdentityClient) (*EventClient, error) {
@@ -68,20 +75,20 @@ func (t *EventsRuntimeTransport) BuildInvocationSubscriptionInvocation(ctx conte
 	return t.buildSubscriptionInvocationJSON(ctx, requestJSON, EventStreamInvocation)
 }
 
-func (t *EventsRuntimeTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events directory subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *EventsRuntimeTransport) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscriptionStream(ctx, requestJSON, EventStreamDirectory)
 }
 
-func (t *EventsRuntimeTransport) SubscribeDevices(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events device subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *EventsRuntimeTransport) SubscribeDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscriptionStream(ctx, requestJSON, EventStreamDevice)
 }
 
-func (t *EventsRuntimeTransport) SubscribeSessions(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events session subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *EventsRuntimeTransport) SubscribeSessions(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscriptionStream(ctx, requestJSON, EventStreamSession)
 }
 
-func (t *EventsRuntimeTransport) SubscribeInvocations(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events invocation subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *EventsRuntimeTransport) SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscriptionStream(ctx, requestJSON, EventStreamInvocation)
 }
 
 func (t *EventsRuntimeTransport) ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -120,7 +127,26 @@ func (t *EventsRuntimeTransport) ProjectTerminal(context.Context, []byte) ([]byt
 }
 
 func (t *EventsRuntimeTransport) Close(ctx context.Context) error {
-	return nil
+	if ctx == nil {
+		return invalidProfileClient(eventsProfile, "context is required")
+	}
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*StreamHandle, 0, len(t.streams))
+	for id, stream := range t.streams {
+		streams = append(streams, stream)
+		delete(t.streams, id)
+	}
+	t.mu.Unlock()
+	var first error
+	for _, stream := range streams {
+		if err := stream.Close(ctx); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func (t *EventsRuntimeTransport) buildSubscriptionInvocationJSON(ctx context.Context, requestJSON []byte, stream EventStreamKind) ([]byte, error) {
@@ -165,6 +191,48 @@ func (t *EventsRuntimeTransport) buildSubscriptionInvocation(ctx context.Context
 		WithContentType("application/json").
 		WithMetadata(eventsRuntimeMetadata(request.Metadata, abilityName)).
 		Build()
+}
+
+func (t *EventsRuntimeTransport) openSubscriptionStream(ctx context.Context, requestJSON []byte, stream EventStreamKind) ([]byte, error) {
+	request, _, err := decodeEventsSubscriptionForRuntime(requestJSON, stream)
+	if err != nil {
+		return nil, err
+	}
+	draft, err := t.buildSubscriptionInvocation(ctx, requestJSON, stream)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := t.runtime.InvokeStream(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = map[string]*StreamHandle{}
+	}
+	t.streams[handle.StreamID()] = handle
+	t.mu.Unlock()
+	return eventsRuntimeStreamOpenJSON(stream, request, handle)
+}
+
+func (t *EventsRuntimeTransport) bindEventStreamHandle(stream EventStream) EventStream {
+	if t == nil || stream.StreamID == "" {
+		return stream
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	stream.handle = t.streams[stream.StreamID]
+	stream.release = t.releaseEventStreamHandle
+	return stream
+}
+
+func (t *EventsRuntimeTransport) releaseEventStreamHandle(streamID string) {
+	if t == nil || streamID == "" {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, streamID)
+	t.mu.Unlock()
 }
 
 func (t *EventsRuntimeTransport) buildDeviceHistoryInvocation(ctx context.Context, request EventsDeviceEventListRequest) (InvocationDraft, error) {
@@ -283,6 +351,39 @@ func eventsDeviceHistoryRuntimeArgs(request EventsDeviceEventListRequest) map[st
 		args["cursor"] = strings.TrimSpace(request.Cursor)
 	}
 	return args
+}
+
+func eventsRuntimeStreamOpenJSON(stream EventStreamKind, request EventsSubscriptionRequest, handle *StreamHandle) ([]byte, error) {
+	if handle == nil {
+		return nil, invalidProfileClient(eventsProfile, "runtime stream handle is required")
+	}
+	abilityName, err := eventsSubscriptionAbility(stream)
+	if err != nil {
+		return nil, err
+	}
+	metadata := map[string]any{
+		"profile":             eventsProfile,
+		"source":              "runtime_stream",
+		"system_ability":      abilityName,
+		"runtime_stream_id":   handle.StreamID(),
+		"max_buffered_events": handle.MaxBufferedEvents(),
+	}
+	for key, value := range request.Metadata {
+		if value != nil {
+			metadata[key] = value
+		}
+	}
+	resumeToken := ""
+	if request.ResumeCursor != nil {
+		resumeToken = request.ResumeCursor.ResumeToken()
+	}
+	return json.Marshal(map[string]any{
+		"stream":       string(stream),
+		"stream_id":    handle.StreamID(),
+		"state":        string(handle.State()),
+		"resume_token": resumeToken,
+		"metadata":     metadata,
+	})
 }
 
 func projectRuntimeDeviceEventPage(request EventsDeviceEventListRequest, outputJSON []byte) ([]byte, error) {

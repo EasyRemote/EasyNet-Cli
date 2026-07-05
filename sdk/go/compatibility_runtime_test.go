@@ -87,9 +87,13 @@ func (t *compatibilityRuntimeIdentityTransport) Signer(ctx context.Context, requ
 }
 
 type compatibilityRuntimeInvokeTransport struct {
-	outputJSON string
-	fail       bool
-	seenDraft  map[string]any
+	outputJSON       string
+	fail             bool
+	streamTransport  StreamTransport
+	streamOpenJSON   []byte
+	seenDraft        map[string]any
+	seenStreamDraft  map[string]any
+	openStreamCalled bool
 }
 
 func (t *compatibilityRuntimeInvokeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -126,7 +130,16 @@ func (t *compatibilityRuntimeInvokeTransport) Invoke(ctx context.Context, draftJ
 }
 
 func (t *compatibilityRuntimeInvokeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
-	return nil, nil, fmt.Errorf("OpenStream should not be called")
+	t.openStreamCalled = true
+	t.seenStreamDraft = requestMapForTest(draftJSON)
+	if t.streamTransport == nil {
+		return nil, nil, fmt.Errorf("OpenStream should not be called")
+	}
+	openJSON := t.streamOpenJSON
+	if len(openJSON) == 0 {
+		openJSON = []byte(`{"stream_id":"runtime-stream-1","state":"Open","max_buffered_events":16}`)
+	}
+	return t.streamTransport, openJSON, nil
 }
 
 func (t *compatibilityRuntimeInvokeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
