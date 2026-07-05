@@ -48,6 +48,7 @@ class DirectDaemonRuntimeConnector:
 
     control_path: str = ""
     discovery_reader: Any = read_control_discovery
+    handle_transport: RuntimeTransport | None = None
     _transports: list["DirectDaemonRuntimeTransport"] = field(default_factory=list)
     _closed: bool = False
 
@@ -110,8 +111,10 @@ class DirectDaemonRuntimeConnector:
             dial_timeout_seconds=dial_timeout,
             invoke_timeout_seconds=invoke_timeout,
             max_message_bytes=max_message_bytes,
+            handle_transport=self.handle_transport,
         )
         self._transports.append(transport)
+        handle_supported = self.handle_transport is not None
         facts = {
             "transport": "direct-axon-grpc-uds",
             "endpoint": endpoint_value,
@@ -119,8 +122,8 @@ class DirectDaemonRuntimeConnector:
             "unary": True,
             "stream": True,
             "bidi": True,
-            "prepare": False,
-            "submit_signed": False,
+            "prepare": handle_supported,
+            "submit_signed": handle_supported,
         }
         return transport, _json_bytes(facts)
 
@@ -145,11 +148,13 @@ class DirectDaemonRuntimeTransport:
         *,
         endpoint: str,
         invoke_timeout_seconds: float,
+        handle_transport: RuntimeTransport | None = None,
     ) -> None:
         self._channel = channel
         self._stub = invoke_pb2_grpc.InvocationStub(channel)
         self._endpoint = endpoint
         self._invoke_timeout_seconds = invoke_timeout_seconds
+        self._handle_transport = handle_transport
         self._closed = False
 
     @classmethod
@@ -160,6 +165,7 @@ class DirectDaemonRuntimeTransport:
         dial_timeout_seconds: float = DEFAULT_DIAL_TIMEOUT_SECONDS,
         invoke_timeout_seconds: float = DEFAULT_INVOKE_TIMEOUT_SECONDS,
         max_message_bytes: int = 0,
+        handle_transport: RuntimeTransport | None = None,
     ) -> "DirectDaemonRuntimeTransport":
         target = _grpc_uds_target(endpoint)
         options: list[tuple[str, int]] = []
@@ -197,6 +203,7 @@ class DirectDaemonRuntimeTransport:
             channel,
             endpoint=endpoint,
             invoke_timeout_seconds=invoke_timeout_seconds,
+            handle_transport=handle_transport,
         )
 
     def invoke(self, draft_json: bytes) -> bytes:
@@ -291,22 +298,22 @@ class DirectDaemonRuntimeTransport:
             ) from exc
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
-        raise _unsupported("direct daemon prepare transport is not implemented")
+        return self._require_handle_transport().prepare(draft_json, options_json)
 
     def submit_signed(self, signed_json: bytes) -> bytes:
-        raise _unsupported("direct daemon signed submit transport is not implemented")
+        return self._require_handle_transport().submit_signed(signed_json)
 
     def await_handle(self, handle_id: int) -> bytes:
-        raise _unsupported("direct daemon handle await transport is not implemented")
+        return self._require_handle_transport().await_handle(handle_id)
 
     def cancel_handle(self, handle_id: int, reason: str) -> bytes:
-        raise _unsupported("direct daemon handle cancel transport is not implemented")
+        return self._require_handle_transport().cancel_handle(handle_id, reason)
 
     def handle_events(self, handle_id: int) -> bytes:
-        raise _unsupported("direct daemon handle events transport is not implemented")
+        return self._require_handle_transport().handle_events(handle_id)
 
     def free_handle(self, handle_id: int) -> None:
-        raise _unsupported("direct daemon handle free transport is not implemented")
+        self._require_handle_transport().free_handle(handle_id)
 
     def close(self) -> None:
         if self._closed:
@@ -317,6 +324,12 @@ class DirectDaemonRuntimeTransport:
     def _require_open(self) -> None:
         if self._closed:
             raise _direct_error("runtime transport is closed", code=ErrorCode.INVALID_HANDLE)
+
+    def _require_handle_transport(self) -> RuntimeTransport:
+        self._require_open()
+        if self._handle_transport is None:
+            raise _unsupported("direct daemon handle transport is not configured")
+        return self._handle_transport
 
 
 class DirectDaemonStreamTransport:

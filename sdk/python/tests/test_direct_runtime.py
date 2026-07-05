@@ -211,6 +211,53 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(facts["prepare"], False)
         self.assertEqual(facts["submit_signed"], False)
 
+    def test_direct_connector_delegates_handle_transport_when_configured(self) -> None:
+        servicer = RecordingInvocationServicer()
+        handle_transport = _RecordingHandleTransport()
+        with _fake_daemon(servicer) as endpoint:
+            connector = DirectDaemonRuntimeConnector(handle_transport=handle_transport)
+            transport, facts_json = connector.handshake(
+                json.dumps(
+                    {
+                        "endpoint": endpoint,
+                        "dial_timeout_ms": 1000,
+                        "invoke_timeout_ms": 1000,
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            try:
+                facts = json.loads(facts_json.decode("utf-8"))
+                prepared = transport.prepare(b'{"draft":true}', b'{"resolve":true}')
+                submitted = transport.submit_signed(b'{"signed":true}')
+                awaited = transport.await_handle(7)
+                cancelled = transport.cancel_handle(7, "stop")
+                events = transport.handle_events(7)
+                transport.free_handle(7)
+            finally:
+                transport.close()
+                connector.close()
+
+        self.assertEqual(facts["prepare"], True)
+        self.assertEqual(facts["submit_signed"], True)
+        self.assertEqual(prepared, b'{"prepared":true}')
+        self.assertEqual(submitted, b'{"handle_id":7,"state":"Submitted"}')
+        self.assertEqual(awaited, b'{"ok":true,"terminal_state":"Completed"}')
+        self.assertEqual(cancelled, b'{"handle_id":7,"cancelled":true}')
+        self.assertEqual(events, b'{"handle_id":7,"events":[]}')
+        self.assertEqual(
+            handle_transport.calls,
+            [
+                ("prepare", b'{"draft":true}', b'{"resolve":true}'),
+                ("submit_signed", b'{"signed":true}'),
+                ("await_handle", 7),
+                ("cancel_handle", 7, "stop"),
+                ("handle_events", 7),
+                ("free_handle", 7),
+            ],
+        )
+        self.assertEqual(handle_transport.close_count, 0)
+
     def test_direct_transport_invokes_daemon_over_axon_grpc_uds(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
@@ -531,3 +578,44 @@ class _fake_daemon:
     def __exit__(self, *exc_info: object) -> None:
         self._server.stop(0).wait()
         self._tmp.cleanup()
+
+
+class _RecordingHandleTransport:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+        self.close_count = 0
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        raise AssertionError("handle delegate must not receive unary invoke")
+
+    def open_stream(self, draft_json: bytes):
+        raise AssertionError("handle delegate must not receive open_stream")
+
+    def open_bidi(self, draft_json: bytes, streams_json: bytes):
+        raise AssertionError("handle delegate must not receive open_bidi")
+
+    def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
+        self.calls.append(("prepare", draft_json, options_json))
+        return b'{"prepared":true}'
+
+    def submit_signed(self, signed_json: bytes) -> bytes:
+        self.calls.append(("submit_signed", signed_json))
+        return b'{"handle_id":7,"state":"Submitted"}'
+
+    def await_handle(self, handle_id: int) -> bytes:
+        self.calls.append(("await_handle", handle_id))
+        return b'{"ok":true,"terminal_state":"Completed"}'
+
+    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+        self.calls.append(("cancel_handle", handle_id, reason))
+        return b'{"handle_id":7,"cancelled":true}'
+
+    def handle_events(self, handle_id: int) -> bytes:
+        self.calls.append(("handle_events", handle_id))
+        return b'{"handle_id":7,"events":[]}'
+
+    def free_handle(self, handle_id: int) -> None:
+        self.calls.append(("free_handle", handle_id))
+
+    def close(self) -> None:
+        self.close_count += 1
