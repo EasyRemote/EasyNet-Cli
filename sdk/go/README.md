@@ -47,8 +47,9 @@ builders, explicit daemon-owned GatewayStatus provider seams, GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and typed device-session projection seams plus close state seams.
 EventClient exposes directory/device/session/invocation subscription
-Invocation carriers, device event history pages, and EventFrame
-cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
+Invocation carriers, device event history pages, explicit daemon-owned
+projection provider seams for Runtime-backed directory/drop/terminal frames,
+and EventFrame cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
 SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
