@@ -96,10 +96,12 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_admin_build_agent_stop_invocation",
     "easynet_admin_build_agent_refresh_invocation",
     "easynet_admin_build_session_list_invocation",
+    "easynet_admin_build_revoke_device_invocation",
     "easynet_admin_project_gateway_status",
     "easynet_admin_project_agent_records",
     "easynet_admin_project_agent_lifecycle_result",
     "easynet_admin_project_device_session_page",
+    "easynet_admin_project_device_admin_result",
     "easynet_surface_build_list_pages_invocation",
     "easynet_surface_build_create_page_invocation",
     "easynet_surface_build_delete_page_invocation",
@@ -1393,6 +1395,9 @@ class CABIAdminTransport(_CABIProfileTransport):
     def build_session_list_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_admin_build_session_list_invocation", request_json)
 
+    def build_revoke_device_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_revoke_device_invocation", request_json)
+
     def gateway_status(self, request_json: bytes) -> bytes:
         if self.daemon_handle <= 0:
             raise SDKError(
@@ -1465,7 +1470,22 @@ class CABIAdminTransport(_CABIProfileTransport):
         return self._missing_pairing_lifecycle("admin create pairing")
 
     def revoke_device(self, request_json: bytes) -> bytes:
-        return self._missing_pairing_lifecycle("admin revoke device")
+        request = _json_object(request_json, "admin revoke-device request")
+        output = self._invoke_output_json(
+            self._require_open(),
+            "easynet_admin_build_revoke_device_invocation",
+            request_json,
+        )
+        return self._call(
+            "easynet_admin_project_device_admin_result",
+            _json_bytes(
+                {
+                    "operation": "federation.revoke",
+                    "device_ura": request.get("device_ura"),
+                    "result": output,
+                }
+            ),
+        )
 
     def create_device_session(self, request_json: bytes) -> bytes:
         return self._missing_device_session_lifecycle("admin create device session")
@@ -1486,6 +1506,9 @@ class CABIAdminTransport(_CABIProfileTransport):
 
     def project_device_session_page(self, sessions_json: bytes) -> bytes:
         return self._call("easynet_admin_project_device_session_page", sessions_json)
+
+    def project_device_admin_result(self, result_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_device_admin_result", result_json)
 
     def _missing_hub_lifecycle(self, method: str) -> bytes:
         raise SDKError(

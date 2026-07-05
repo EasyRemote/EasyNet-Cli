@@ -266,6 +266,7 @@ type AdminTransport interface {
 	BuildAgentStopInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildAgentRefreshInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildSessionListInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildRevokeDeviceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error)
 	AgentStart(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -290,6 +291,7 @@ type AdminTransportFunc struct {
 	BuildAgentStopInvocationFunc    func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildAgentRefreshInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildSessionListInvocationFunc  func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	BuildRevokeDeviceInvocationFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	GatewayStatusFunc               func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListAgentsFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	AgentStartFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -340,6 +342,13 @@ func (f AdminTransportFunc) BuildSessionListInvocation(ctx context.Context, requ
 		return nil, invalidProfileClient(adminGatewayProfile, "admin session-list invocation transport function is required")
 	}
 	return f.BuildSessionListInvocationFunc(ctx, requestJSON)
+}
+
+func (f AdminTransportFunc) BuildRevokeDeviceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.BuildRevokeDeviceInvocationFunc == nil {
+		return nil, invalidProfileClient(adminGatewayProfile, "admin revoke-device invocation transport function is required")
+	}
+	return f.BuildRevokeDeviceInvocationFunc(ctx, requestJSON)
 }
 
 func (f AdminTransportFunc) GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -478,6 +487,10 @@ func (c *AdminClient) BuildAgentRefreshInvocation(ctx context.Context, req Admin
 
 func (c *AdminClient) BuildSessionListInvocation(ctx context.Context, req AdminSessionListRequest) (InvocationDraft, error) {
 	return c.buildInvocation(ctx, req, validateAdminSessionListRequest, c.transport.BuildSessionListInvocation, "admin session-list invocation failed")
+}
+
+func (c *AdminClient) BuildRevokeDeviceInvocation(ctx context.Context, req RevokeDeviceRequest) (InvocationDraft, error) {
+	return c.buildInvocation(ctx, req, validateRevokeDeviceRequest, c.transport.BuildRevokeDeviceInvocation, "admin revoke-device invocation failed")
 }
 
 func (c *AdminClient) GatewayStatus(ctx context.Context, req AdminGatewayStatusRequest) (GatewayStatus, error) {

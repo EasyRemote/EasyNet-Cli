@@ -89,6 +89,18 @@ func (t *AdminRuntimeTransport) BuildSessionListInvocation(ctx context.Context, 
 	return t.buildInvocationJSON(ctx, request.AdminCarrierBase, adminAbilitySessionList, args)
 }
 
+func (t *AdminRuntimeTransport) BuildRevokeDeviceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[RevokeDeviceRequest](requestJSON, validateRevokeDeviceRequest)
+	if err != nil {
+		return nil, err
+	}
+	args := map[string]any{
+		"agent_ura": request.DeviceURA,
+		"reason":    request.Reason,
+	}
+	return t.buildInvocationJSON(ctx, request.AdminCarrierBase, adminAbilityRevokeDevice, args)
+}
+
 func (t *AdminRuntimeTransport) GatewayStatus(context.Context, []byte) ([]byte, error) {
 	return nil, sdkProfileNotImplemented(adminGatewayProfile, "gateway status runtime projection is daemon-status owned")
 }

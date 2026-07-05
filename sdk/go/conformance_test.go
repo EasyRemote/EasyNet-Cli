@@ -2105,6 +2105,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"BuildAgentRefreshInvocation": "admin_gateway.agent.build_refresh_invocation",
 				"BuildAgentStartInvocation":   "admin_gateway.agent.build_start_invocation",
 				"BuildAgentStopInvocation":    "admin_gateway.agent.build_stop_invocation",
+				"BuildRevokeDeviceInvocation": "admin_gateway.device.build_revoke_invocation",
 				"BuildSessionListInvocation":  "admin_gateway.session.build_list_invocation",
 				"Close":                       "admin_gateway.close",
 				"CreateDeviceSession":         "admin_gateway.session.create",
@@ -2781,6 +2782,10 @@ func (t *sharedAdminGatewayTransport) BuildAgentRefreshInvocation(_ context.Cont
 func (t *sharedAdminGatewayTransport) BuildSessionListInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
 	assertJSONEquivalent(t.t, requestJSON, t.expectedSessionListRequest)
 	return t.sessionListInvocationJSON, nil
+}
+
+func (t *sharedAdminGatewayTransport) BuildRevokeDeviceInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
 func (t *sharedAdminGatewayTransport) GatewayStatus(_ context.Context, requestJSON []byte) ([]byte, error) {

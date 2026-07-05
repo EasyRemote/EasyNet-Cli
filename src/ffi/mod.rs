@@ -75,8 +75,9 @@
 // - `easynet_admin_build_*_invocation`,
 //   `easynet_admin_project_gateway_status`,
 //   `easynet_admin_project_agent_records`, and
-//   `easynet_admin_project_agent_lifecycle_result`: Admin + Gateway carrier
-//   and daemon lifecycle projection helpers.
+//   `easynet_admin_project_agent_lifecycle_result`, and
+//   `easynet_admin_project_device_admin_result`: Admin + Gateway carrier and
+//   daemon lifecycle projection helpers.
 // - `easynet_compatibility_build_*_invocation` and
 //   `easynet_compatibility_project_*`: Compatibility carrier and OpenAI-shape
 //   model/chat/file projection helpers.
@@ -196,6 +197,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
             "admin_gateway_carriers": true,
             "admin_gateway_status_projection": true,
             "admin_device_session_projection": true,
+            "admin_device_admin_projection": true,
             "surface_carriers": true,
             "surface_projection": true,
             "surface_health": true,
@@ -389,6 +391,7 @@ mod tests {
         assert_eq!(json["symbols"]["admin_gateway_carriers"], true);
         assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
         assert_eq!(json["symbols"]["admin_device_session_projection"], true);
+        assert_eq!(json["symbols"]["admin_device_admin_projection"], true);
         assert_eq!(json["symbols"]["surface_carriers"], true);
         assert_eq!(json["symbols"]["surface_projection"], true);
         assert_eq!(json["symbols"]["surface_health"], true);

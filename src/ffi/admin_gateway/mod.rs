@@ -31,8 +31,9 @@ use std::os::raw::c_char;
 
 use crate::daemon::admin_gateway_contract::{
     build_agent_list_invocation, build_agent_refresh_invocation, build_agent_start_invocation,
-    build_agent_stop_invocation, build_session_list_invocation, project_agent_lifecycle_result,
-    project_agent_records, project_device_session_page, project_gateway_status, AdminGatewayError,
+    build_agent_stop_invocation, build_revoke_device_invocation, build_session_list_invocation,
+    project_agent_lifecycle_result, project_agent_records, project_device_admin_result,
+    project_device_session_page, project_gateway_status, AdminGatewayError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -147,6 +148,28 @@ pub unsafe extern "C" fn easynet_admin_build_session_list_invocation(
     )
 }
 
+/// Build a complete Invocation JSON carrier for daemon `federation.revoke`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_revoke_device_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_revoke_device_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_revoke_device_invocation,
+    )
+}
+
 /// Project daemon lifecycle/status JSON into the SDK GatewayStatus DTO.
 ///
 /// # Safety
@@ -232,6 +255,28 @@ pub unsafe extern "C" fn easynet_admin_project_device_session_page(
         "out_sessions_json",
         "sessions_json",
         project_device_session_page,
+    )
+}
+
+/// Project daemon device-admin mutation results into SDK Admin result DTOs.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be
+/// a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_device_admin_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_admin_project_device_admin_result",
+        "out_result_json",
+        "result_json",
+        project_device_admin_result,
     )
 }
 
@@ -406,6 +451,55 @@ mod tests {
             value["items"][0]["device_ura"],
             "easynet:///r/example/device/dev-a"
         );
+        release(handle);
+    }
+
+    #[test]
+    fn admin_build_revoke_device_invocation_projects_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "reason": "operator-initiated device removal"
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_admin_build_revoke_device_invocation(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "federation.revoke");
+        assert_eq!(
+            value["args"]["agent_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(value["args"]["reason"], "operator-initiated device removal");
+        release(handle);
+    }
+
+    #[test]
+    fn admin_project_device_admin_result_preserves_device_context() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "operation": "federation.revoke",
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "result": {"ack": true, "was_active": true}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_admin_project_device_admin_result(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "device_admin_result");
+        assert_eq!(value["operation"], "federation.revoke");
+        assert_eq!(value["device_ura"], "easynet:///r/example/device/dev-a");
+        assert_eq!(value["ack"], true);
         release(handle);
     }
 

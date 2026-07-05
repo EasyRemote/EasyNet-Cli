@@ -936,6 +936,9 @@ class AdminTransport(Protocol):
     def build_session_list_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def build_revoke_device_invocation(self, request_json: bytes) -> bytes:
+        ...
+
     def gateway_status(self, request_json: bytes) -> bytes:
         ...
 
@@ -1036,6 +1039,16 @@ class AdminClient:
             request.to_json_bytes(),
             self.transport.build_session_list_invocation,
             "admin session-list invocation failed",
+        )
+
+    def build_revoke_device_invocation(
+        self, request: RevokeDeviceRequest
+    ) -> InvocationDraft:
+        self._require_open()
+        return self._invocation(
+            request.to_json_bytes(),
+            self.transport.build_revoke_device_invocation,
+            "admin revoke-device invocation failed",
         )
 
     def gateway_status(self, request: AdminGatewayStatusRequest) -> GatewayStatus:

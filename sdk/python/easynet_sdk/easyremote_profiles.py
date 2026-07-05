@@ -133,6 +133,9 @@ class _EasyRemoteAdminProfileTransport:
     def build_session_list_invocation(self, request_json: bytes) -> bytes:
         return _unsupported_admin_profile("build_session_list_invocation")
 
+    def build_revoke_device_invocation(self, request_json: bytes) -> bytes:
+        return _unsupported_admin_profile("build_revoke_device_invocation")
+
     def gateway_status(self, request_json: bytes) -> bytes:
         return _unsupported_admin_profile("gateway_status")
 

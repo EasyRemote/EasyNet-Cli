@@ -48,6 +48,7 @@ const ABILITY_AGENT_START: &str = crate::daemon::ability::names::agents::AGENT_S
 const ABILITY_AGENT_STOP: &str = crate::daemon::ability::names::agents::AGENT_STOP;
 const ABILITY_AGENT_REFRESH: &str = crate::daemon::ability::names::agents::AGENT_REFRESH;
 const ABILITY_SESSION_LIST: &str = crate::daemon::ability::names::device_control::SESSION_LIST;
+const ABILITY_FEDERATION_REVOKE: &str = crate::daemon::ability::names::federation::REVOKE;
 
 pub(crate) type AdminGatewayError = SdkContractError;
 
@@ -97,6 +98,28 @@ pub(crate) fn build_session_list_invocation(request: &Value) -> Result<Value, Ad
         ADMIN_PROFILE,
         ABILITY_SESSION_LIST,
         Value::Object(args),
+    )
+}
+
+pub(crate) fn build_revoke_device_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "RevokeDeviceRequest")?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    let reason = required_string(obj, "reason")?;
+    if reason.trim().is_empty() {
+        return Err(AdminGatewayError::InvalidField(
+            "reason",
+            "must not be empty".to_string(),
+        ));
+    }
+    build_system_invocation(
+        obj,
+        ADMIN_PROFILE,
+        ABILITY_FEDERATION_REVOKE,
+        json!({
+            "agent_ura": device_ura,
+            "reason": reason,
+        }),
     )
 }
 
@@ -291,6 +314,55 @@ pub(crate) fn project_agent_lifecycle_result(input: &Value) -> Result<Value, Adm
             "runtime_registered": optional_u64(result_obj, "runtime_registered").unwrap_or(0),
             "runtime_failed": optional_u64(result_obj, "runtime_failed").unwrap_or(0),
             "runtime_removed": optional_u64(result_obj, "runtime_removed").unwrap_or(0),
+            "raw_result": result,
+        },
+    }))
+}
+
+pub(crate) fn project_device_admin_result(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "DeviceAdminResultInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "DeviceAdminResult")?;
+    let operation = optional_string_field(obj, "operation")?
+        .unwrap_or_else(|| ABILITY_FEDERATION_REVOKE.to_string());
+    let device_ura = optional_string_field(obj, "device_ura")?
+        .or_else(|| {
+            optional_string_field(result_obj, "device_ura")
+                .ok()
+                .flatten()
+        })
+        .ok_or(AdminGatewayError::MissingField("device_ura"))?;
+    validate_device_ura(&device_ura)?;
+    let ack = result_obj
+        .get("ack")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let state = if optional_bool_value(result_obj, "runtime_not_ready").unwrap_or(false)
+        || optional_bool_value(result_obj, "runtime_catalog_not_ready").unwrap_or(false)
+    {
+        "not_ready"
+    } else if ack {
+        "ok"
+    } else {
+        "not_found"
+    };
+
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "device_admin_result",
+        "operation": operation,
+        "state": state,
+        "agent_ura": Value::Null,
+        "device_ura": device_ura,
+        "ack": ack,
+        "runtime_not_ready": optional_bool_value(result_obj, "runtime_not_ready").unwrap_or(false),
+        "runtime_catalog_not_ready": optional_bool_value(result_obj, "runtime_catalog_not_ready").unwrap_or(false),
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": operation,
             "raw_result": result,
         },
     }))
@@ -649,6 +721,18 @@ fn validate_agent_ura(raw: &str) -> Result<(), AdminGatewayError> {
         return Err(AdminGatewayError::InvalidField(
             "agent_ura",
             "device-sponsored System Agents are not managed by hosted agent lifecycle".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_device_ura(raw: &str) -> Result<(), AdminGatewayError> {
+    let parsed = ura::parse_ura(raw)
+        .map_err(|err| AdminGatewayError::InvalidField("device_ura", err.to_string()))?;
+    if parsed.kind != ura::URAKind::Device {
+        return Err(AdminGatewayError::InvalidField(
+            "device_ura",
+            "must be a Device URA".to_string(),
         ));
     }
     Ok(())

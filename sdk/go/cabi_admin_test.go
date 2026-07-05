@@ -68,6 +68,31 @@ func TestCABIAdminTransportBuildsInvokesAndProjects(t *testing.T) {
 	if len(sessions.Items) != 1 || sessions.Items[0].SessionID != "dev-session-1" {
 		t.Fatalf("session page = %#v", sessions)
 	}
+
+	revokeDraft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		Reason:           "operator-initiated device removal",
+	})
+	if err != nil {
+		t.Fatalf("BuildRevokeDeviceInvocation: %v", err)
+	}
+	if revokeDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0" {
+		t.Fatalf("revoke descriptor_ref = %q", revokeDraft.DescriptorRef())
+	}
+
+	revoked, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		Reason:           "operator-initiated device removal",
+	})
+	if err != nil {
+		t.Fatalf("RevokeDevice: %v", err)
+	}
+	if revoked.Operation != adminAbilityRevokeDevice || revoked.DeviceURA == nil ||
+		*revoked.DeviceURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("revoke result = %#v", revoked)
+	}
 }
 
 func TestCABIAdminTransportProjectsGatewayAndReportsUnsupported(t *testing.T) {
@@ -189,6 +214,10 @@ int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, 
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"sessions\":[{\"id\":\"dev-session-1\",\"tenant\":\"example\",\"node\":\"dev-a\",\"started_unix_ms\":1767225600000,\"kind\":\"remote_desktop\",\"state\":\"active\"}]},\"error\":null}");
 		return 0;
 	}
+	if (strstr(invocation_json, "federation.revoke") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"was_active\":true},\"error\":null}");
+		return 0;
+	}
 	if (strstr(invocation_json, "agent.stop") != 0 || strstr(invocation_json, "agent.refresh") != 0) {
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"agent_ura\":\"easynet:///r/example/agent/alice.codex\",\"runtime_removed\":1,\"runtime_registered\":0,\"runtime_failed\":0},\"error\":null}");
 		return 0;
@@ -222,6 +251,12 @@ int32_t easynet_admin_build_session_list_invocation(uint64_t handle, const char 
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.session.list@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"include_terminated\":false},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"session.list\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
+int32_t easynet_admin_build_revoke_device_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "operator-initiated device removal") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"agent_ura\":\"easynet:///r/example/device/dev-a\",\"reason\":\"operator-initiated device removal\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"federation.revoke\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
 int32_t easynet_admin_project_gateway_status(uint64_t handle, const char *status_json, char **out_status_json) {
 	(void)handle; (void)status_json;
 	*out_status_json = dup_json("{\"profile\":\"admin_gateway\",\"gateway_id\":\"device:example:dev-a\",\"ready\":true,\"state\":\"ready\",\"process_live\":true,\"control_ready\":true,\"runtime_ready\":true,\"directory_ready\":true,\"trust_ready\":true,\"public_listener_ready\":false,\"listeners\":[{\"kind\":\"control\",\"endpoint\":\"/tmp/easynet-control.sock\",\"ready\":true,\"public\":false},{\"kind\":\"invocation\",\"endpoint\":\"/tmp/easynet-daemon.sock\",\"ready\":true,\"public\":false}],\"identity\":{\"mode\":\"device\",\"realm\":\"example\",\"node_id\":\"dev-a\"},\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"daemon_lifecycle_status\",\"lifecycle_state\":\"running\",\"requires_public_listener\":false}}");
@@ -240,6 +275,12 @@ int32_t easynet_admin_project_agent_lifecycle_result(uint64_t handle, const char
 int32_t easynet_admin_project_device_session_page(uint64_t handle, const char *sessions_json, char **out_sessions_json) {
 	(void)handle; (void)sessions_json;
 	*out_sessions_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_sessions\",\"state\":\"ok\",\"items\":[{\"profile\":\"admin_gateway\",\"kind\":\"device_session\",\"session_id\":\"dev-session-1\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"state\":\"active\",\"session_kind\":\"remote_desktop\",\"created_unix_ms\":1767225600000,\"expires_unix_ms\":1893456000000,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"session.list\"}}],\"next_cursor\":null,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"session.list\"}}");
+	return 0;
+}
+int32_t easynet_admin_project_device_admin_result(uint64_t handle, const char *result_json, char **out_result_json) {
+	(void)handle;
+	if (strstr(result_json, "federation.revoke") == 0) return 10;
+	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_admin_result\",\"operation\":\"federation.revoke\",\"state\":\"ok\",\"agent_ura\":null,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"ack\":true,\"runtime_not_ready\":false,\"runtime_catalog_not_ready\":false,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"federation.revoke\"}}");
 	return 0;
 }
 `

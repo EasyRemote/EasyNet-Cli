@@ -469,6 +469,8 @@ class FakeRawCABI:
                     }
                 ]
             }
+        if system_ability == "federation.revoke":
+            return {"ack": True, "was_active": True}
         if system_ability == "identity.register_pubkey":
             return {"ok": True}
         if system_ability == "identity.list_user_pubkeys":
@@ -1011,6 +1013,8 @@ class FakeRawCABI:
             return ADMIN_AGENT_REFRESH_INVOCATION
         if symbol == "easynet_admin_build_session_list_invocation":
             return ADMIN_SESSION_LIST_INVOCATION
+        if symbol == "easynet_admin_build_revoke_device_invocation":
+            return ADMIN_REVOKE_DEVICE_INVOCATION
         if symbol in {
             "easynet_mission_build_run_eal_invocation",
             "easynet_mission_build_run_file_invocation",
@@ -1112,6 +1116,8 @@ class FakeRawCABI:
             return ADMIN_STOP_RESULT_PROJECTION
         if symbol == "easynet_admin_project_device_session_page":
             return ADMIN_DEVICE_SESSION_PAGE_PROJECTION
+        if symbol == "easynet_admin_project_device_admin_result":
+            return ADMIN_DEVICE_ADMIN_RESULT_PROJECTION
         if symbol == "easynet_surface_project_page_record":
             return SURFACE_PAGE_RECORD_PROJECTION
         if symbol == "easynet_surface_project_page_page":
@@ -1852,6 +1858,20 @@ ADMIN_SESSION_LIST_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+ADMIN_REVOKE_DEVICE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"agent_ura":"easynet:///r/example/device/dev-a",'
+    b'"reason":"operator-initiated device removal"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"federation.revoke",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 MISSION_EVENT_PAGE_PROJECTION = (
     b'{"profile":"mission","kind":"mission_event_page",'
     b'"mission_id":"mission-1","cursor_sequence":0,"next_cursor_sequence":1,'
@@ -1893,6 +1913,14 @@ ADMIN_DEVICE_SESSION_PAGE_PROJECTION = (
     b'"source":"session.list","agent":"codex"}}],'
     b'"next_cursor":null,"metadata":{"profile":"admin_gateway",'
     b'"source":"session.list","count":1}}'
+)
+
+ADMIN_DEVICE_ADMIN_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"device_admin_result",'
+    b'"operation":"federation.revoke","state":"ok","agent_ura":null,'
+    b'"device_ura":"easynet:///r/example/device/dev-a","ack":true,'
+    b'"runtime_not_ready":false,"runtime_catalog_not_ready":false,'
+    b'"metadata":{"profile":"admin_gateway","source":"federation.revoke"}}'
 )
 
 ADMIN_START_RESULT_PROJECTION = (
@@ -3563,6 +3591,61 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertEqual(raw.buffers, {})
 
+    def test_admin_revoke_device_uses_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = AdminClient(CABIAdminTransport(lib, handle=7))
+        base = AdminCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        draft = client.build_revoke_device_invocation(
+            RevokeDeviceRequest(
+                base=base,
+                device_ura="easynet:///r/example/device/dev-a",
+                reason="operator-initiated device removal",
+            )
+        )
+        result = client.revoke_device(
+            RevokeDeviceRequest(
+                base=base,
+                device_ura="easynet:///r/example/device/dev-a",
+                reason="operator-initiated device removal",
+            )
+        )
+
+        self.assertEqual(
+            draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0",
+        )
+        self.assertEqual(result.profile, "admin_gateway")
+        self.assertEqual(result.operation, "federation.revoke")
+        self.assertEqual(result.device_ura, "easynet:///r/example/device/dev-a")
+        self.assertTrue(result.ack)
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_admin_build_revoke_device_invocation",
+                "easynet_admin_build_revoke_device_invocation",
+                "easynet_admin_project_device_admin_result",
+            ],
+        )
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "federation.revoke",
+        )
+        self.assertEqual(raw.profile_requests[2][2]["operation"], "federation.revoke")
+        self.assertEqual(
+            raw.profile_requests[2][2]["device_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(raw.buffers, {})
+
     def test_admin_trust_and_session_mutations_report_daemon_contract_boundary(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
@@ -3619,14 +3702,6 @@ class CABITransportTests(unittest.TestCase):
                 "credential verify",
                 lambda: client.verify_device_credential(
                     VerifyDeviceCredentialRequest(base, "cred-dev-a", device, hub)
-                ),
-                "requires a daemon/ABI pairing and device-credential lifecycle contract",
-                "cannot be projected into trust mutation semantics",
-            ),
-            (
-                "device revoke",
-                lambda: client.revoke_device(
-                    RevokeDeviceRequest(base, device, "rotation")
                 ),
                 "requires a daemon/ABI pairing and device-credential lifecycle contract",
                 "cannot be projected into trust mutation semantics",

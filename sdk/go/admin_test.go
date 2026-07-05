@@ -12,6 +12,7 @@ type memoryAdminTransport struct {
 	agentStopInvocation    string
 	agentRefreshInvocation string
 	sessionListInvocation  string
+	revokeDeviceInvocation string
 	gatewayStatus          string
 	agentRecords           string
 	lifecycleResult        string
@@ -57,6 +58,11 @@ func (m *memoryAdminTransport) BuildAgentRefreshInvocation(_ context.Context, re
 func (m *memoryAdminTransport) BuildSessionListInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("build_session_list", requestJSON)
 	return []byte(m.sessionListInvocation), nil
+}
+
+func (m *memoryAdminTransport) BuildRevokeDeviceInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	m.remember("build_revoke_device", requestJSON)
+	return []byte(m.revokeDeviceInvocation), nil
 }
 
 func (m *memoryAdminTransport) GatewayStatus(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -161,6 +167,7 @@ func TestAdminBuildsAgentAndSessionInvocations(t *testing.T) {
 		agentStopInvocation:    adminAgentStopInvocationJSON,
 		agentRefreshInvocation: adminAgentRefreshInvocationJSON,
 		sessionListInvocation:  adminSessionListInvocationJSON,
+		revokeDeviceInvocation: adminRevokeDeviceInvocationJSON,
 	}
 	client, err := NewAdminClient(transport)
 	if err != nil {
@@ -222,6 +229,21 @@ func TestAdminBuildsAgentAndSessionInvocations(t *testing.T) {
 	}
 	if got := transport.seen["build_session_list"]["include_terminated"]; got != false {
 		t.Fatalf("include_terminated = %#v", got)
+	}
+
+	revokeDraft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		Reason:           "operator-initiated device removal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revokeDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0" {
+		t.Fatalf("federation.revoke descriptor = %q", revokeDraft.DescriptorRef())
+	}
+	if got := transport.seen["build_revoke_device"]["device_ura"]; got != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("revoke device_ura = %#v", got)
 	}
 }
 
@@ -529,6 +551,26 @@ const adminSessionListInvocationJSON = `{
     "request_id": "admin-session-list-1",
     "profile": "admin_gateway",
     "system_ability": "session.list",
+    "carrier_owner": "daemon_sdk"
+  }
+}`
+
+const adminRevokeDeviceInvocationJSON = `{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {
+    "agent_ura": "easynet:///r/example/device/dev-a",
+    "reason": "operator-initiated device removal"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "request_id": "admin-revoke-device-1",
+    "profile": "admin_gateway",
+    "system_ability": "federation.revoke",
     "carrier_owner": "daemon_sdk"
   }
 }`

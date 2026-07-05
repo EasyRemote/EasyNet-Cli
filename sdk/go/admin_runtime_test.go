@@ -64,6 +64,18 @@ func TestAdminRuntimeTransportRevokesDeviceThroughRuntime(t *testing.T) {
 		t.Fatalf("NewRuntimeAdminClient: %v", err)
 	}
 
+	draft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		Reason:           "operator-initiated device removal",
+	})
+	if err != nil {
+		t.Fatalf("BuildRevokeDeviceInvocation: %v", err)
+	}
+	if draft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0" {
+		t.Fatalf("descriptor_ref = %#v", draft.DescriptorRef())
+	}
+
 	result, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",

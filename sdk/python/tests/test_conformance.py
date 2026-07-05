@@ -647,6 +647,14 @@ class SharedAdminGatewayTransport:
         assert_json_equivalent(request_json, self.expected_session_list_request)
         return self.session_list_invocation_json
 
+    def build_revoke_device_invocation(self, request_json: bytes) -> bytes:
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="shared admin revoke-device fixture is not part of this conformance case",
+        )
+
     def gateway_status(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, b"{}")
         return self.gateway_status_json
@@ -3381,6 +3389,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "build_agent_refresh_invocation": "admin_gateway.agent.build_refresh_invocation",
                     "build_agent_start_invocation": "admin_gateway.agent.build_start_invocation",
                     "build_agent_stop_invocation": "admin_gateway.agent.build_stop_invocation",
+                    "build_revoke_device_invocation": "admin_gateway.device.build_revoke_invocation",
                     "build_session_list_invocation": "admin_gateway.session.build_list_invocation",
                     "close": "admin_gateway.close",
                     "create_device_session": "admin_gateway.session.create",

@@ -89,10 +89,12 @@ method spelling.
   daemon-owned abilities; daemon-side live filtering, backend SSE/WebSocket
   fanout, and product cutovers remain incomplete.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
-  `agent.list/start/stop/refresh`, `session.list`, lifecycle status, and
-  agent-record projections; Go/Python facade seams also cover Hub join/leave,
-  pairing preflight/create/validate, device credential verification, device
-  revocation, and device-session create/list/delete projections. Certificate
+  `agent.list/start/stop/refresh`, `session.list`, `federation.revoke`,
+  lifecycle status, agent-record projections, device-session page projections,
+  and device-admin result projections; Go/Python C ABI transports now execute
+  device revoke through Runtime Core invoke. Go/Python facade seams also cover
+  Hub join/leave, pairing preflight/create/validate, device credential
+  verification, and device-session create/list/delete projections. Certificate
   policy, daemon/ABI hub lifecycle contracts, daemon/ABI pairing and
   device-credential lifecycle contracts, daemon/ABI device-session mutation
   contracts, and product cutovers remain incomplete.
@@ -166,11 +168,11 @@ method spelling.
   `MissionEventPage` projection seams and close state seams; daemon mission execution carriers,
   concrete live-tail adapters, child Invocation behavior conformance,
   scheduler/retry policy, and backend automation cutover remain incomplete.
-- Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh
-  and session-list Invocation carrier builders plus `GatewayStatus`,
-  `AdminAgentPage`, lifecycle-result, pairing token, device credential,
-  credential verification, typed device-session projection seams, and close
-  state seams;
+- Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
+  session-list, and device-revoke Invocation carrier builders plus
+  `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
+  credential, credential verification, typed device-session projection seams,
+  C ABI-backed device-admin result projection, and close state seams;
   certificate policy, concrete daemon trust/session carriers, and backend route
   cutover remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
@@ -333,13 +335,14 @@ method spelling.
   daemon stream-backed live adapters, daemon-backed child Invocation execution
   behavior conformance, and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
-  list/start/stop/refresh and session-list Invocation carrier builders,
-  C ABI-backed agent list/start/stop/refresh and session-list execution through Runtime Core,
-  C ABI-backed daemon lifecycle `GatewayStatus` projection, plus
+  list/start/stop/refresh, session-list, and device-revoke Invocation carrier
+  builders, C ABI-backed agent list/start/stop/refresh, session-list, and
+  device-revoke execution through Runtime Core, C ABI-backed daemon lifecycle
+  `GatewayStatus` projection, plus
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
-  credential verification, and C ABI-backed typed device-session page projection plus close
-  state seams, with an SDK-owned EasyRemote hosted-agent add/list/stop/refresh
-  Admin adapter,
+  credential verification, C ABI-backed typed device-session page projection,
+  device-admin result projection, and close state seams, with an SDK-owned
+  EasyRemote hosted-agent add/list/stop/refresh Admin adapter,
   SDK-owned EasyRemote profile bridge dispatch/projection glue, SDK-owned
   EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file
   validation, endpoint projection, certificate fingerprint projection, and raw

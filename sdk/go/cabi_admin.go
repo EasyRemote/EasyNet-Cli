@@ -84,10 +84,12 @@ type cabiAdminSymbols struct {
 	buildAgentStopInvocation    unsafe.Pointer
 	buildAgentRefreshInvocation unsafe.Pointer
 	buildSessionListInvocation  unsafe.Pointer
+	buildRevokeDeviceInvocation unsafe.Pointer
 	projectGatewayStatus        unsafe.Pointer
 	projectAgentRecords         unsafe.Pointer
 	projectAgentLifecycleResult unsafe.Pointer
 	projectDeviceSessionPage    unsafe.Pointer
+	projectDeviceAdminResult    unsafe.Pointer
 }
 
 // CABIAdminTransport is an optional Admin + Gateway profile transport over
@@ -179,6 +181,10 @@ func (t *CABIAdminTransport) BuildSessionListInvocation(ctx context.Context, req
 	return t.callJSONWithOpenHandle(ctx, t.symbols.buildSessionListInvocation, requestJSON, "C ABI admin session-list invocation build failed")
 }
 
+func (t *CABIAdminTransport) BuildRevokeDeviceInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.callJSONWithOpenHandle(ctx, t.symbols.buildRevokeDeviceInvocation, requestJSON, "C ABI admin revoke-device invocation build failed")
+}
+
 func (t *CABIAdminTransport) GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	handle, daemon, err := t.requireOpenHandles(ctx)
 	if err != nil {
@@ -239,8 +245,12 @@ func (t *CABIAdminTransport) CreatePairing(context.Context, []byte) ([]byte, err
 	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin create pairing carrier is not exported yet")
 }
 
-func (t *CABIAdminTransport) RevokeDevice(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin revoke device carrier is not exported yet")
+func (t *CABIAdminTransport) RevokeDevice(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[RevokeDeviceRequest](requestJSON, validateRevokeDeviceRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectDeviceAdmin(ctx, requestJSON, t.symbols.buildRevokeDeviceInvocation, t.symbols.projectDeviceAdminResult, adminAbilityRevokeDevice, request.DeviceURA, "C ABI admin revoke device failed")
 }
 
 func (t *CABIAdminTransport) CreateDeviceSession(context.Context, []byte) ([]byte, error) {
@@ -265,6 +275,10 @@ func (t *CABIAdminTransport) ProjectAgentLifecycleResult(ctx context.Context, re
 
 func (t *CABIAdminTransport) ProjectDeviceSessionPage(ctx context.Context, sessionsJSON []byte) ([]byte, error) {
 	return t.callJSONWithOpenHandle(ctx, t.symbols.projectDeviceSessionPage, sessionsJSON, "C ABI admin device session projection failed")
+}
+
+func (t *CABIAdminTransport) ProjectDeviceAdminResult(ctx context.Context, resultJSON []byte) ([]byte, error) {
+	return t.callJSONWithOpenHandle(ctx, t.symbols.projectDeviceAdminResult, resultJSON, "C ABI admin device-admin projection failed")
 }
 
 func (t *CABIAdminTransport) Close(ctx context.Context) error {
@@ -322,6 +336,45 @@ func (t *CABIAdminTransport) invokeAndProject(ctx context.Context, requestJSON [
 		return nil, err
 	}
 	return t.callJSON(handle, projectSymbol, outputJSON, fallback)
+}
+
+func (t *CABIAdminTransport) invokeAndProjectDeviceAdmin(ctx context.Context, requestJSON []byte, buildSymbol unsafe.Pointer, projectSymbol unsafe.Pointer, operation string, deviceURA string, fallback string) ([]byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, buildSymbol, requestJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := t.invoke(handle, draftJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	outputJSON, err := outputJSONFromProfileInvocationResult(resultJSON, adminGatewayProfile)
+	if err != nil {
+		return nil, err
+	}
+	projectionInput, err := adminDeviceAdminProjectionInput(outputJSON, operation, deviceURA)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, projectSymbol, projectionInput, fallback)
+}
+
+func adminDeviceAdminProjectionInput(outputJSON []byte, operation string, deviceURA string) ([]byte, error) {
+	var result map[string]any
+	if err := json.Unmarshal(outputJSON, &result); err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode admin device-admin output JSON: %v", err), err)
+	}
+	if result == nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, "admin device-admin output must be an object", nil)
+	}
+	return json.Marshal(map[string]any{
+		"operation":  operation,
+		"device_ura": deviceURA,
+		"result":     result,
+	})
 }
 
 func (t *CABIAdminTransport) callJSONWithOpenHandle(ctx context.Context, symbol unsafe.Pointer, payload []byte, fallback string) ([]byte, error) {
@@ -409,10 +462,12 @@ func bindCABIAdminSymbols(library unsafe.Pointer) (cabiAdminSymbols, error) {
 		{"easynet_admin_build_agent_stop_invocation", &symbols.buildAgentStopInvocation},
 		{"easynet_admin_build_agent_refresh_invocation", &symbols.buildAgentRefreshInvocation},
 		{"easynet_admin_build_session_list_invocation", &symbols.buildSessionListInvocation},
+		{"easynet_admin_build_revoke_device_invocation", &symbols.buildRevokeDeviceInvocation},
 		{"easynet_admin_project_gateway_status", &symbols.projectGatewayStatus},
 		{"easynet_admin_project_agent_records", &symbols.projectAgentRecords},
 		{"easynet_admin_project_agent_lifecycle_result", &symbols.projectAgentLifecycleResult},
 		{"easynet_admin_project_device_session_page", &symbols.projectDeviceSessionPage},
+		{"easynet_admin_project_device_admin_result", &symbols.projectDeviceAdminResult},
 	}
 	for _, binding := range bindings {
 		ptr, err := requireCABISymbol(library, binding.name)
