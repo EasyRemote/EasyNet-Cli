@@ -198,7 +198,8 @@ method spelling.
   policy, concrete stream/bidi adapters, and product wrapper cutovers remain
   incomplete.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
-  `SdkEnvironment` process-root factories over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
+  `SdkEnvironment` process-root factories with default daemon control-path
+  resolution over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
   connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
   facts, SDK-owned `EasyRemoteDaemonStartConfig` and

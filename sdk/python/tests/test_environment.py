@@ -132,6 +132,55 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(raw.daemon_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
 
+    def test_runtime_connection_resolves_default_control_path(self) -> None:
+        raw = FakeRawCABI()
+        with tempfile.TemporaryDirectory() as tmp:
+            control_path = _write_control_discovery(tmp)
+            with (
+                _load_patch(raw),
+                patch(
+                    "easynet_sdk.environment.default_control_path",
+                    return_value=control_path,
+                ),
+            ):
+                env = SdkEnvironment()
+                self.assertEqual(env.resolved_control_path(), str(control_path))
+                connection = env.runtime_connection()
+                assert connection.endpoint is not None
+                self.assertEqual(connection.endpoint.control_path, str(control_path))
+                env.close()
+
+        self.assertEqual(raw.daemon_open_clients, [707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808])
+
+    def test_connect_options_control_path_overrides_environment_default(self) -> None:
+        raw = FakeRawCABI()
+        with tempfile.TemporaryDirectory() as tmp:
+            default_control = Path(tmp) / "default.json"
+            override_control = _write_control_discovery(tmp)
+            with (
+                _load_patch(raw),
+                patch(
+                    "easynet_sdk.environment.default_control_path",
+                    return_value=default_control,
+                ),
+            ):
+                env = SdkEnvironment()
+                connection = env.runtime_connection(
+                    ConnectOptions(control_path=str(override_control))
+                )
+                assert connection.endpoint is not None
+                self.assertEqual(
+                    connection.endpoint.control_path,
+                    str(override_control),
+                )
+                env.close()
+
+        self.assertEqual(raw.daemon_open_clients, [707])
+        self.assertEqual(raw.daemon_detaches, [707])
+        self.assertEqual(raw.shutdown_handles, [808])
+
     def test_identity_helpers_remain_transport_delegated(self) -> None:
         raw = FakeRawCABI()
         with _load_patch(raw):
@@ -272,6 +321,28 @@ class SdkEnvironmentTests(unittest.TestCase):
             env.close()
 
         self.assertEqual(raw.runtime_requests, [("health", 42)])
+        self.assertEqual(raw.shutdown_handles, [42, 42])
+
+    def test_clients_resolve_default_control_path_before_cabi_open(self) -> None:
+        raw = FakeRawCABI()
+        with (
+            _load_patch(raw),
+            patch(
+                "easynet_sdk.environment.default_control_path",
+                return_value=Path("/tmp/default-control.json"),
+            ),
+        ):
+            env = SdkEnvironment()
+            runtime = env.runtime_client()
+            identity = env.identity_client()
+            self.assertIsInstance(runtime, RuntimeClient)
+            self.assertIsInstance(identity, IdentityClient)
+            env.close()
+
+        self.assertEqual(
+            raw.init_paths,
+            ["/tmp/default-control.json", "/tmp/default-control.json"],
+        )
         self.assertEqual(raw.shutdown_handles, [42, 42])
 
     def test_invocation_transport_is_environment_owned(self) -> None:

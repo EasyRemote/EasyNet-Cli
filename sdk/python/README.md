@@ -11,7 +11,7 @@ Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compat
 OpenAI adapter seam, and Convenience Wrapper execution seam
 partial. The package exposes typed
 feature/version discovery with root client close, public `SdkEnvironment`
-process-root factories, direct control-plane UDS boot/status IPC over
+process-root factories with default daemon control-path resolution, direct control-plane UDS boot/status IPC over
 `control.json`/`control.sock`, private C ABI v4 discovery, daemon
 lifecycle/open-runtime, identity projection, runtime
 health/unary/stream/bidi/prepare-submit handle transports, and direct daemon

@@ -14,7 +14,7 @@ from .connection import (
     ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
-from .control_ipc import ControlIpcClient
+from .control_ipc import ControlIpcClient, default_control_path
 from .daemon import DaemonControl
 from .directory import DirectoryClient
 from .errors import ErrorCode, RetryHint, SDKError
@@ -86,7 +86,7 @@ class SdkEnvironment:
         self._require_open()
         return self._track(
             ControlIpcClient.connect(
-                self.control_path,
+                self.resolved_control_path(),
                 timeout=timeout,
             )
         )
@@ -96,7 +96,7 @@ class SdkEnvironment:
     ) -> RuntimeClient:
         """Discover, attach, open, and detach a local daemon runtime client."""
 
-        client = self.daemon_control().connect_local(options)
+        client = self.daemon_control().connect_local(self._connect_options(options))
         return self._track(client)
 
     def runtime_connection(
@@ -107,22 +107,13 @@ class SdkEnvironment:
         self._require_open()
         from . import _cabi
 
+        options = self._connect_options(options)
         connector = ControlDiscoveryRuntimeConnector(
             _cabi.open_cabi_runtime_connector(library_path=self.library_path),
-            control_path=self.control_path,
+            control_path=options.control_path,
         )
         connection = RuntimeConnection(connector)
-        control_path = options.control_path or self.control_path
-        connection.connect(
-            ConnectOptions(
-                endpoint=options.endpoint,
-                control_path=control_path,
-                dial_timeout_ms=options.dial_timeout_ms,
-                invoke_timeout_ms=options.invoke_timeout_ms,
-                max_message_bytes=options.max_message_bytes,
-                reconnect=options.reconnect,
-            )
-        )
+        connection.connect(options)
         return self._track(connection)
 
     def runtime_connection_direct(
@@ -133,20 +124,11 @@ class SdkEnvironment:
         self._require_open()
         from .direct_runtime import DirectDaemonRuntimeConnector
 
-        control_path = options.control_path or self.control_path
+        options = self._connect_options(options)
         connection = RuntimeConnection(
-            DirectDaemonRuntimeConnector(control_path=control_path)
+            DirectDaemonRuntimeConnector(control_path=options.control_path)
         )
-        connection.connect(
-            ConnectOptions(
-                endpoint=options.endpoint,
-                control_path=control_path,
-                dial_timeout_ms=options.dial_timeout_ms,
-                invoke_timeout_ms=options.invoke_timeout_ms,
-                max_message_bytes=options.max_message_bytes,
-                reconnect=options.reconnect,
-            )
-        )
+        connection.connect(options)
         return self._track(connection)
 
     def runtime_client(self) -> RuntimeClient:
@@ -156,7 +138,7 @@ class SdkEnvironment:
         from . import _cabi
 
         transport = _cabi.open_cabi_runtime_transport(
-            control_path=self.control_path,
+            control_path=self.resolved_control_path(),
             library_path=self.library_path,
         )
         return self._track(RuntimeClient(transport))
@@ -174,7 +156,7 @@ class SdkEnvironment:
         self._require_open()
         return self._track(
             DaemonInvocationTransport.connect(
-                control_path=self.control_path,
+                control_path=self.resolved_control_path(),
                 library_path=self.library_path,
             )
         )
@@ -187,8 +169,8 @@ class SdkEnvironment:
         self._require_open()
         return self._track(
             DaemonInvocationTransport.connect_direct(
-                control_path=self.control_path,
-                options=options,
+                control_path=self.resolved_control_path(),
+                options=self._connect_options(options),
             )
         )
 
@@ -198,12 +180,13 @@ class SdkEnvironment:
         self._require_open()
         from . import _cabi
 
+        control_path = self.resolved_control_path()
         runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=self.control_path,
+            control_path=control_path,
             library_path=self.library_path,
         )
         identity_transport = _cabi.open_cabi_identity_transport(
-            control_path=self.control_path,
+            control_path=control_path,
             library_path=self.library_path,
         )
         return self._track(
@@ -220,7 +203,7 @@ class SdkEnvironment:
         from . import _cabi
 
         transport = _cabi.open_cabi_runtime_transport(
-            control_path=self.control_path,
+            control_path=self.resolved_control_path(),
             library_path=self.library_path,
         )
         self._track(transport)
@@ -233,7 +216,7 @@ class SdkEnvironment:
         from . import _cabi
 
         transport = _cabi.open_cabi_identity_transport(
-            control_path=self.control_path,
+            control_path=self.resolved_control_path(),
             library_path=self.library_path,
         )
         return self._track(IdentityClient(transport))
@@ -245,7 +228,7 @@ class SdkEnvironment:
         from . import _cabi
 
         transport = _cabi.open_cabi_identity_transport(
-            control_path=self.control_path,
+            control_path=self.resolved_control_path(),
             library_path=self.library_path,
         )
         return self._track(AddressingClient(transport))
@@ -275,9 +258,10 @@ class SdkEnvironment:
 
         from . import _cabi
 
+        control_path = self.resolved_control_path()
         carrier = self._profile_transport(_cabi.open_cabi_publication_transport)
         runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=self.control_path,
+            control_path=control_path,
             library_path=self.library_path,
         )
         return self._track(
@@ -387,9 +371,29 @@ class SdkEnvironment:
         self._owned.append(owned)
         return owned
 
+    def resolved_control_path(self) -> str:
+        """Return the configured daemon control discovery path or SDK default."""
+
+        self._require_open()
+        return self.control_path or str(default_control_path())
+
+    def _connect_options(self, options: ConnectOptions) -> ConnectOptions:
+        control_path = options.control_path or self.resolved_control_path()
+        return ConnectOptions(
+            endpoint=options.endpoint,
+            control_path=control_path,
+            dial_timeout_ms=options.dial_timeout_ms,
+            invoke_timeout_ms=options.invoke_timeout_ms,
+            max_message_bytes=options.max_message_bytes,
+            reconnect=options.reconnect,
+        )
+
     def _profile_transport(self, opener: object) -> _Closable:
         self._require_open()
-        return opener(control_path=self.control_path, library_path=self.library_path)
+        return opener(
+            control_path=self.resolved_control_path(),
+            library_path=self.library_path,
+        )
 
     def _require_open(self) -> None:
         if self._closed:
