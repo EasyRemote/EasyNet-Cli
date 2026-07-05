@@ -92,7 +92,9 @@ for path in \
   sdk/go/import_boundary_test.go \
   tools/scripts/check-backend-sdk-only-boundary.sh \
   tools/scripts/check-backend-route-family-coverage.sh \
+  tools/scripts/check-sdk-parity-matrix.sh \
   sdk/conformance/backend-route-family-coverage.json \
+  sdk/conformance/sdk-parity-matrix.json \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/_cabi.py \
@@ -149,6 +151,7 @@ require_dir sdk/conformance/cases
 require_dir sdk/conformance/fixtures
 require_dir sdk/conformance/runner
 validate_json_file sdk/conformance/backend-route-family-coverage.json
+validate_json_file sdk/conformance/sdk-parity-matrix.json
 
 schema_files=(
   invocation.schema.json
@@ -347,6 +350,7 @@ case_files=(
   error-profile-source-refs.yaml
   backend-sdk-only-import-ban.yaml
   backend-route-family-coverage.yaml
+  sdk-go-python-parity-matrix.yaml
   identity-ura-descriptor-projection.yaml
   receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml
@@ -380,6 +384,7 @@ done
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
@@ -405,6 +410,8 @@ require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedNoCoreBloatC
 require_literal sdk/go/conformance_test.go "memc/no_core_bloat"
 require_literal sdk/go/conformance_test.go "TestGoBackendCutoverExecutesSharedRouteFamilyCoverageConformanceCase"
 require_literal sdk/go/conformance_test.go "backend/hub_route_family_coverage"
+require_literal sdk/go/conformance_test.go "TestGoSDKExecutesSharedParityMatrixConformanceCase"
+require_literal sdk/go/conformance_test.go "sdk/go_python_parity_matrix"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/cases"
 require_literal sdk/python/tests/test_conformance.py "sdk/conformance/fixtures"
 require_literal sdk/python/tests/test_conformance.py "SharedConformanceFixtureTests"
@@ -422,6 +429,8 @@ require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_
 require_literal sdk/python/tests/test_conformance.py "memc/consumer_coverage"
 require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_no_core_bloat_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "memc/no_core_bloat"
+require_literal sdk/python/tests/test_conformance.py "test_python_sdk_executes_shared_parity_matrix_conformance_case"
+require_literal sdk/python/tests/test_conformance.py "sdk/go_python_parity_matrix"
 require_literal sdk/go/client.go "DiscoveryTransport"
 require_literal sdk/go/environment.go "SdkEnvironment"
 require_literal sdk/go/environment.go "NewSdkEnvironment"

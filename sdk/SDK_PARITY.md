@@ -404,7 +404,12 @@ method spelling.
 - Go and Python stream/bidi facades now expose schema-shaped Runtime Core
   terminal projections backed by shared conformance expectations; C ABI terminal
   projection adapters, bounded backpressure conformance, P1 language facades,
-  and strict Go/Python parity matrix gates remain incomplete.
+  and strict Go/Python parity remain incomplete.
+- Go/Python SDK parity now has a shared machine-checked matrix gate at
+  `sdk/conformance/sdk-parity-matrix.json` with status values limited to
+  `unsupported`, `seam`, `provider-backed`, and `cutover-ready`; the gate
+  records current capability gaps and rejects product-specific capability rows
+  so external product cutover work does not become language SDK structure.
 - Go and Python now consume shared SDK conformance cases and fixtures for
   selected local facade/projection actions covering Runtime Core
   Invocation/health, Directory + Identity read-model/projection behavior,

@@ -314,6 +314,38 @@ func TestGoBackendCutoverExecutesSharedRouteFamilyCoverageConformanceCase(t *tes
 	}
 }
 
+func TestGoSDKExecutesSharedParityMatrixConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	parityCase := sharedCase(t, root, "sdk-go-python-parity-matrix.yaml")
+	requireCaseID(t, parityCase, "sdk/go_python_parity_matrix")
+	for _, action := range []string{
+		"load_sdk_parity_matrix",
+		"require_go_python_languages",
+		"require_status_taxonomy",
+		"require_all_p0_daemon_sdk_capabilities",
+		"require_evidence_refs",
+		"require_gap_reason_for_status_mismatch",
+		"reject_false_cutover_ready",
+	} {
+		requireCaseAction(t, parityCase, action)
+	}
+	requireCaseExpectation(t, parityCase, "capability_count: 21")
+	requireCaseExpectation(t, parityCase, "product_boundary_count: 2")
+	requireCaseExpectation(t, parityCase, "missing_capability: false")
+	requireCaseExpectation(t, parityCase, "invalid_status: false")
+	requireCaseExpectation(t, parityCase, "product_specific_capability: false")
+	requireCaseExpectation(t, parityCase, "false_cutover_ready: false")
+
+	cmd := exec.Command(filepath.Join(root, "tools/scripts/check-sdk-parity-matrix.sh"), "--self-test")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("SDK parity matrix self-test failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "self-test ok") {
+		t.Fatalf("SDK parity matrix self-test output = %q", output)
+	}
+}
+
 func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing.T) {
 	root := repositoryRoot(t)
 

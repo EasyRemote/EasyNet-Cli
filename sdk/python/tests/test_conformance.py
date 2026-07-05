@@ -1,6 +1,7 @@
 import inspect
 import json
 import pathlib
+import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -3982,6 +3983,38 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             forbidden_tokens,
         )
         self.assertEqual([], violations)
+
+    def test_python_sdk_executes_shared_parity_matrix_conformance_case(self) -> None:
+        parity_case = shared_case("sdk-go-python-parity-matrix.yaml")
+        self._require_case_id(parity_case, "sdk/go_python_parity_matrix")
+        for action in (
+            "load_sdk_parity_matrix",
+            "require_go_python_languages",
+            "require_status_taxonomy",
+            "require_all_p0_daemon_sdk_capabilities",
+            "require_evidence_refs",
+            "require_gap_reason_for_status_mismatch",
+            "reject_false_cutover_ready",
+        ):
+            self._require_case_action(parity_case, action)
+        for expectation in (
+            "capability_count: 21",
+            "product_boundary_count: 2",
+            "missing_capability: false",
+            "invalid_status: false",
+            "product_specific_capability: false",
+            "false_cutover_ready: false",
+        ):
+            self._require_case_expectation(parity_case, expectation)
+
+        completed = subprocess.run(
+            [str(ROOT / "tools/scripts/check-sdk-parity-matrix.sh"), "--self-test"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("self-test ok", completed.stdout)
 
     def _require_case_id(self, raw: str, case_id: str) -> None:
         self._require_case_literal(raw, f"id: {case_id}")

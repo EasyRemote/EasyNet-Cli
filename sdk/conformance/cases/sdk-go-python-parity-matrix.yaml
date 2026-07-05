@@ -1,0 +1,25 @@
+id: sdk/go_python_parity_matrix
+profile: sdk_parity
+required_for:
+  - go
+  - python
+description: Go and Python must report one shared daemon SDK capability model with explicit status, evidence, and gap reasons before strict parity or cutover claims are allowed.
+steps:
+  - action: load_sdk_parity_matrix
+    manifest: sdk/conformance/sdk-parity-matrix.json
+  - action: require_go_python_languages
+  - action: require_status_taxonomy
+  - action: require_all_p0_daemon_sdk_capabilities
+  - action: require_evidence_refs
+  - action: require_gap_reason_for_status_mismatch
+  - action: reject_false_cutover_ready
+expect:
+  result: sdk_parity_matrix_enforced
+  case_id: sdk/go_python_parity_matrix
+  language_count: 2
+  capability_count: 21
+  product_boundary_count: 2
+  missing_capability: false
+  invalid_status: false
+  product_specific_capability: false
+  false_cutover_ready: false
