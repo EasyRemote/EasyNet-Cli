@@ -234,7 +234,7 @@ func TestAdminBuildsAgentAndSessionInvocations(t *testing.T) {
 	revokeDraft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",
-		Reason:           "operator-initiated device removal",
+		Reason:           "operator/key rotation",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -398,7 +398,7 @@ func TestAdminTrustAndDeviceSessionLifecycle(t *testing.T) {
 		t.Fatalf("unexpected leave result: %#v", leave)
 	}
 
-	revoke, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{AdminCarrierBase: adminBaseForTest(), DeviceURA: "easynet:///r/example/device/dev-a", Reason: "compromised"})
+	revoke, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{AdminCarrierBase: adminBaseForTest(), DeviceURA: "easynet:///r/example/device/dev-a", Reason: "credential/key rotation"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,6 +437,12 @@ func TestAdminRejectsIncompleteCarrierAndSystemLifecycle(t *testing.T) {
 	}
 	if _, err := client.ValidatePairing(context.Background(), ValidatePairingRequest{AdminCarrierBase: adminBaseForTest(), Token: "../pairing", DeviceURA: "easynet:///r/example/device/dev-a"}); err == nil {
 		t.Fatal("expected path-like pairing token rejection")
+	}
+	if _, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{AdminCarrierBase: adminBaseForTest(), DeviceURA: "easynet:///r/example/device/dev-a", Reason: "operator/key rotation"}); err != nil {
+		t.Fatalf("reason text with slash rejected: %v", err)
+	}
+	if _, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{AdminCarrierBase: adminBaseForTest(), DeviceURA: "easynet:///r/example/device/dev-a", Reason: "operator\nrotation"}); err == nil {
+		t.Fatal("expected control-character reason rejection")
 	}
 	if _, err := client.DeleteDeviceSession(context.Background(), DeleteDeviceSessionRequest{AdminCarrierBase: adminBaseForTest(), SessionID: "browser-session-1"}); err == nil {
 		t.Fatal("expected browser session id rejection")
@@ -564,7 +570,7 @@ const adminRevokeDeviceInvocationJSON = `{
   "causal_context": {"form": "none"},
   "args": {
     "agent_ura": "easynet:///r/example/device/dev-a",
-    "reason": "operator-initiated device removal"
+    "reason": "operator/key rotation"
   },
   "content_type": "application/json",
   "metadata": {

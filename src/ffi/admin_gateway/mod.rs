@@ -459,7 +459,7 @@ mod tests {
         let handle = handle();
         let raw = base_request(serde_json::json!({
             "device_ura": "easynet:///r/example/device/dev-a",
-            "reason": "operator-initiated device removal"
+            "reason": "operator/key rotation"
         }));
         let mut out: *mut c_char = std::ptr::null_mut();
 
@@ -473,7 +473,7 @@ mod tests {
             value["args"]["agent_ura"],
             "easynet:///r/example/device/dev-a"
         );
-        assert_eq!(value["args"]["reason"], "operator-initiated device removal");
+        assert_eq!(value["args"]["reason"], "operator/key rotation");
         release(handle);
     }
 

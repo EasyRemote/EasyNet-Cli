@@ -9,3 +9,6 @@
 - C ABI outputs are caller-owned strings released through `easynet_string_free`.
 - Go and Python C ABI transports must go through Runtime Core invoke before
   projecting revoke results.
+- Mutation `reason` fields are human-readable reason text, not daemon opaque
+  identifiers. SDK facades may reject empty/control-character reasons, but must
+  not reject normal text such as `operator/key rotation`.

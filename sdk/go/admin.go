@@ -906,7 +906,7 @@ func validateAdminLeaveHubRequest(req any) error {
 		return err
 	}
 	if value.Reason != "" {
-		return validateAdminIdentifier(value.Reason, "reason")
+		return validateAdminReason(value.Reason)
 	}
 	return nil
 }
@@ -975,7 +975,7 @@ func validateRevokeDeviceRequest(req any) error {
 	if err := validateDeviceURA(value.DeviceURA); err != nil {
 		return err
 	}
-	return validateAdminIdentifier(value.Reason, "reason")
+	return validateAdminReason(value.Reason)
 }
 
 func validateCreateDeviceSessionRequest(req any) error {
@@ -1004,7 +1004,7 @@ func validateDeleteDeviceSessionRequest(req any) error {
 		return invalidProfilePayload(adminGatewayProfile, "session_id must be a daemon device-session id", nil)
 	}
 	if value.Reason != "" {
-		return validateAdminIdentifier(value.Reason, "reason")
+		return validateAdminReason(value.Reason)
 	}
 	return nil
 }
@@ -1023,6 +1023,16 @@ func validateAdminIdentifier(value string, field string) error {
 	}
 	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "/\\\t\r\n") {
 		return invalidProfilePayload(adminGatewayProfile, field+" must be an opaque daemon identifier", nil)
+	}
+	return nil
+}
+
+func validateAdminReason(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return invalidProfilePayload(adminGatewayProfile, "reason is required", nil)
+	}
+	if strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return invalidProfilePayload(adminGatewayProfile, "reason must not contain control characters", nil)
 	}
 	return nil
 }

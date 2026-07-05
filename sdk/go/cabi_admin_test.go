@@ -72,7 +72,7 @@ func TestCABIAdminTransportBuildsInvokesAndProjects(t *testing.T) {
 	revokeDraft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",
-		Reason:           "operator-initiated device removal",
+		Reason:           "operator/key rotation",
 	})
 	if err != nil {
 		t.Fatalf("BuildRevokeDeviceInvocation: %v", err)
@@ -84,7 +84,7 @@ func TestCABIAdminTransportBuildsInvokesAndProjects(t *testing.T) {
 	revoked, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",
-		Reason:           "operator-initiated device removal",
+		Reason:           "operator/key rotation",
 	})
 	if err != nil {
 		t.Fatalf("RevokeDevice: %v", err)
@@ -253,8 +253,8 @@ int32_t easynet_admin_build_session_list_invocation(uint64_t handle, const char 
 }
 int32_t easynet_admin_build_revoke_device_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
 	(void)handle;
-	if (strstr(request_json, "operator-initiated device removal") == 0) return 10;
-	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"agent_ura\":\"easynet:///r/example/device/dev-a\",\"reason\":\"operator-initiated device removal\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"federation.revoke\",\"carrier_owner\":\"daemon_sdk\"}}");
+	if (strstr(request_json, "operator/key rotation") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"agent_ura\":\"easynet:///r/example/device/dev-a\",\"reason\":\"operator/key rotation\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"federation.revoke\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
 int32_t easynet_admin_project_gateway_status(uint64_t handle, const char *status_json, char **out_status_json) {

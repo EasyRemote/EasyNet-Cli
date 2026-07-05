@@ -190,7 +190,7 @@ class AdminLeaveHubRequest:
         value = self.base.to_json_dict()
         value["hub_ura"] = _validate_hub_ura(self.hub_ura)
         if self.reason:
-            value["reason"] = _validate_admin_identifier(self.reason, "reason")
+            value["reason"] = _validate_admin_reason(self.reason)
         return _json_bytes(value)
 
 
@@ -269,7 +269,7 @@ class RevokeDeviceRequest:
     def to_json_bytes(self) -> bytes:
         value = self.base.to_json_dict()
         value["device_ura"] = _validate_device_ura(self.device_ura)
-        value["reason"] = _validate_admin_identifier(self.reason, "reason")
+        value["reason"] = _validate_admin_reason(self.reason)
         return _json_bytes(value)
 
 
@@ -306,7 +306,7 @@ class DeleteDeviceSessionRequest:
         value = self.base.to_json_dict()
         value["session_id"] = session_id
         if self.reason:
-            value["reason"] = _validate_admin_identifier(self.reason, "reason")
+            value["reason"] = _validate_admin_reason(self.reason)
         return _json_bytes(value)
 
 
@@ -1239,6 +1239,14 @@ def _validate_admin_identifier(value: str, field_name: str) -> str:
         raise _invalid_admin(f"{field_name} is required")
     if value.strip() != value or any(ch in value for ch in ("/", "\\", "\t", "\r", "\n")):
         raise _invalid_admin(f"{field_name} must be an opaque daemon identifier")
+    return value
+
+
+def _validate_admin_reason(value: str) -> str:
+    if not value or not value.strip():
+        raise _invalid_admin("reason is required")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise _invalid_admin("reason must not contain control characters")
     return value
 
 

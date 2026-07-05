@@ -1866,7 +1866,7 @@ ADMIN_REVOKE_DEVICE_INVOCATION = (
     b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
     b'"causal_context":{"form":"none"},'
     b'"args":{"agent_ura":"easynet:///r/example/device/dev-a",'
-    b'"reason":"operator-initiated device removal"},'
+    b'"reason":"operator/key rotation"},'
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"admin_gateway","system_ability":"federation.revoke",'
     b'"carrier_owner":"daemon_sdk"}}'
@@ -3608,14 +3608,14 @@ class CABITransportTests(unittest.TestCase):
             RevokeDeviceRequest(
                 base=base,
                 device_ura="easynet:///r/example/device/dev-a",
-                reason="operator-initiated device removal",
+                reason="operator/key rotation",
             )
         )
         result = client.revoke_device(
             RevokeDeviceRequest(
                 base=base,
                 device_ura="easynet:///r/example/device/dev-a",
-                reason="operator-initiated device removal",
+                reason="operator/key rotation",
             )
         )
 
@@ -3645,6 +3645,30 @@ class CABITransportTests(unittest.TestCase):
             "easynet:///r/example/device/dev-a",
         )
         self.assertEqual(raw.buffers, {})
+
+    def test_admin_revoke_device_reason_is_text_not_identifier(self) -> None:
+        base = AdminCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        encoded = RevokeDeviceRequest(
+            base=base,
+            device_ura="easynet:///r/example/device/dev-a",
+            reason="operator/key rotation",
+        ).to_json_bytes()
+
+        self.assertEqual(json.loads(encoded.decode("utf-8"))["reason"], "operator/key rotation")
+        with self.assertRaises(SDKError):
+            RevokeDeviceRequest(
+                base=base,
+                device_ura="easynet:///r/example/device/dev-a",
+                reason="operator\nrotation",
+            ).to_json_bytes()
 
     def test_admin_trust_and_session_mutations_report_daemon_contract_boundary(self) -> None:
         raw = FakeRawCABI()

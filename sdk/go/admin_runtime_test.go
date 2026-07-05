@@ -67,7 +67,7 @@ func TestAdminRuntimeTransportRevokesDeviceThroughRuntime(t *testing.T) {
 	draft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",
-		Reason:           "operator-initiated device removal",
+		Reason:           "operator/key rotation",
 	})
 	if err != nil {
 		t.Fatalf("BuildRevokeDeviceInvocation: %v", err)
@@ -79,7 +79,7 @@ func TestAdminRuntimeTransportRevokesDeviceThroughRuntime(t *testing.T) {
 	result, err := client.RevokeDevice(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",
-		Reason:           "operator-initiated device removal",
+		Reason:           "operator/key rotation",
 	})
 	if err != nil {
 		t.Fatalf("RevokeDevice: %v", err)
@@ -90,7 +90,7 @@ func TestAdminRuntimeTransportRevokesDeviceThroughRuntime(t *testing.T) {
 	}
 	args := runtimeTransport.seenDraft["args"].(map[string]any)
 	if args["agent_ura"] != "easynet:///r/example/device/dev-a" ||
-		args["reason"] != "operator-initiated device removal" {
+		args["reason"] != "operator/key rotation" {
 		t.Fatalf("revoke args = %#v", args)
 	}
 	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0" {

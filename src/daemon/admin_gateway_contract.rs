@@ -106,12 +106,7 @@ pub(crate) fn build_revoke_device_invocation(request: &Value) -> Result<Value, A
     let device_ura = required_string(obj, "device_ura")?;
     validate_device_ura(device_ura)?;
     let reason = required_string(obj, "reason")?;
-    if reason.trim().is_empty() {
-        return Err(AdminGatewayError::InvalidField(
-            "reason",
-            "must not be empty".to_string(),
-        ));
-    }
+    validate_reason(reason)?;
     build_system_invocation(
         obj,
         ADMIN_PROFILE,
@@ -121,6 +116,22 @@ pub(crate) fn build_revoke_device_invocation(request: &Value) -> Result<Value, A
             "reason": reason,
         }),
     )
+}
+
+fn validate_reason(reason: &str) -> Result<(), AdminGatewayError> {
+    if reason.trim().is_empty() {
+        return Err(AdminGatewayError::InvalidField(
+            "reason",
+            "must not be empty".to_string(),
+        ));
+    }
+    if reason.chars().any(char::is_control) {
+        return Err(AdminGatewayError::InvalidField(
+            "reason",
+            "must not contain control characters".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn project_gateway_status(input: &Value) -> Result<Value, AdminGatewayError> {
@@ -852,6 +863,35 @@ mod tests {
 
         assert_eq!(carrier["metadata"]["system_ability"], "session.list");
         assert_eq!(carrier["args"]["include_terminated"], false);
+    }
+
+    #[test]
+    fn build_revoke_device_invocation_allows_reason_text() {
+        let request = base_request(json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "reason": "operator/key rotation"
+        }));
+
+        let carrier = build_revoke_device_invocation(&request).unwrap();
+
+        assert_eq!(carrier["metadata"]["system_ability"], "federation.revoke");
+        assert_eq!(
+            carrier["args"]["agent_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(carrier["args"]["reason"], "operator/key rotation");
+    }
+
+    #[test]
+    fn build_revoke_device_invocation_rejects_control_character_reason() {
+        let request = base_request(json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "reason": "operator\nrotation"
+        }));
+
+        let err = build_revoke_device_invocation(&request).unwrap_err();
+
+        assert!(err.to_string().contains("control characters"));
     }
 
     #[test]
