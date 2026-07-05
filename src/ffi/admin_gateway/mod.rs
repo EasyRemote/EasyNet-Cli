@@ -31,9 +31,10 @@ use std::os::raw::c_char;
 
 use crate::daemon::admin_gateway_contract::{
     build_agent_list_invocation, build_agent_refresh_invocation, build_agent_start_invocation,
-    build_agent_stop_invocation, build_revoke_device_invocation, build_session_list_invocation,
-    project_agent_lifecycle_result, project_agent_records, project_device_admin_result,
-    project_device_session_page, project_gateway_status, AdminGatewayError,
+    build_agent_stop_invocation, build_revoke_device_invocation, build_session_create_invocation,
+    build_session_delete_invocation, build_session_list_invocation, project_agent_lifecycle_result,
+    project_agent_records, project_device_admin_result, project_device_session_page,
+    project_device_session_result, project_gateway_status, AdminGatewayError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -148,6 +149,50 @@ pub unsafe extern "C" fn easynet_admin_build_session_list_invocation(
     )
 }
 
+/// Build a complete Invocation JSON carrier for daemon `session.create`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_session_create_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_session_create_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_session_create_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `session.delete`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_session_delete_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_session_delete_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_session_delete_invocation,
+    )
+}
+
 /// Build a complete Invocation JSON carrier for daemon `federation.revoke`.
 ///
 /// # Safety
@@ -255,6 +300,28 @@ pub unsafe extern "C" fn easynet_admin_project_device_session_page(
         "out_sessions_json",
         "sessions_json",
         project_device_session_page,
+    )
+}
+
+/// Project daemon `session.create` JSON into an SDK DeviceSession DTO.
+///
+/// # Safety
+/// `session_json` must be a valid UTF-8 C string and `out_session_json` must
+/// be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_device_session_result(
+    handle: EasynetHandle,
+    session_json: *const c_char,
+    out_session_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        session_json,
+        out_session_json,
+        "easynet_admin_project_device_session_result",
+        "out_session_json",
+        "session_json",
+        project_device_session_result,
     )
 }
 
@@ -451,6 +518,59 @@ mod tests {
             value["items"][0]["device_ura"],
             "easynet:///r/example/device/dev-a"
         );
+        release(handle);
+    }
+
+    #[test]
+    fn admin_build_session_create_invocation_projects_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "hub_ura": "easynet:///r/example/hub",
+            "session_kind": "remote_desktop",
+            "expires_unix_ms": 1893456000000i64
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_admin_build_session_create_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "session.create");
+        assert_eq!(value["args"]["session_kind"], "remote_desktop");
+        release(handle);
+    }
+
+    #[test]
+    fn admin_project_device_session_result_maps_create_output() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "hub_ura": "easynet:///r/example/hub",
+                "session_kind": "remote_desktop",
+                "expires_unix_ms": 1893456000000i64,
+                "result": {
+                    "session_id": "dev-session-1",
+                    "state": "active",
+                    "created_unix_ms": 1767225600000i64
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_admin_project_device_session_result(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "device_session");
+        assert_eq!(value["session_id"], "dev-session-1");
+        assert_eq!(value["metadata"]["source"], "session.create");
         release(handle);
     }
 

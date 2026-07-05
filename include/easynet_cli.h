@@ -747,6 +747,18 @@ int32_t easynet_admin_build_session_list_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_admin_build_session_create_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_session_delete_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_admin_build_revoke_device_invocation(
     EasynetHandle handle,
     const char *request_json,
@@ -775,6 +787,12 @@ int32_t easynet_admin_project_device_session_page(
     EasynetHandle handle,
     const char *sessions_json,
     char **out_sessions_json
+);
+
+int32_t easynet_admin_project_device_session_result(
+    EasynetHandle handle,
+    const char *session_json,
+    char **out_session_json
 );
 
 int32_t easynet_admin_project_device_admin_result(

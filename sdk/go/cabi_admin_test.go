@@ -69,6 +69,33 @@ func TestCABIAdminTransportBuildsInvokesAndProjects(t *testing.T) {
 		t.Fatalf("session page = %#v", sessions)
 	}
 
+	session, err := client.CreateDeviceSession(context.Background(), CreateDeviceSessionRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+		SessionKind:      "remote_desktop",
+		ExpiresUnixMS:    1893456000000,
+	})
+	if err != nil {
+		t.Fatalf("CreateDeviceSession: %v", err)
+	}
+	if session.SessionID != "dev-session-1" || session.SessionKind != "remote_desktop" {
+		t.Fatalf("created session = %#v", session)
+	}
+
+	deleted, err := client.DeleteDeviceSession(context.Background(), DeleteDeviceSessionRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		SessionID:        "dev-session-1",
+		Reason:           "operator closed",
+	})
+	if err != nil {
+		t.Fatalf("DeleteDeviceSession: %v", err)
+	}
+	if deleted.Operation != adminAbilitySessionDelete || deleted.DeviceURA == nil ||
+		*deleted.DeviceURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("delete session result = %#v", deleted)
+	}
+
 	revokeDraft, err := client.BuildRevokeDeviceInvocation(context.Background(), RevokeDeviceRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		DeviceURA:        "easynet:///r/example/device/dev-a",
@@ -214,6 +241,14 @@ int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, 
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"sessions\":[{\"id\":\"dev-session-1\",\"tenant\":\"example\",\"node\":\"dev-a\",\"started_unix_ms\":1767225600000,\"kind\":\"remote_desktop\",\"state\":\"active\"}]},\"error\":null}");
 		return 0;
 	}
+	if (strstr(invocation_json, "session.create") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"session_id\":\"dev-session-1\",\"state\":\"active\",\"created_unix_ms\":1767225600000},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "session.delete") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"device_ura\":\"easynet:///r/example/device/dev-a\"},\"error\":null}");
+		return 0;
+	}
 	if (strstr(invocation_json, "federation.revoke") != 0) {
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"was_active\":true},\"error\":null}");
 		return 0;
@@ -251,6 +286,18 @@ int32_t easynet_admin_build_session_list_invocation(uint64_t handle, const char 
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.session.list@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"include_terminated\":false},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"session.list\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
+int32_t easynet_admin_build_session_create_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "remote_desktop") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.session.create@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"device_ura\":\"easynet:///r/example/device/dev-a\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"session_kind\":\"remote_desktop\",\"expires_unix_ms\":1893456000000},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"session.create\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_admin_build_session_delete_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "dev-session-1") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.session.delete@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"session_id\":\"dev-session-1\",\"reason\":\"operator closed\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"session.delete\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
 int32_t easynet_admin_build_revoke_device_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
 	(void)handle;
 	if (strstr(request_json, "operator/key rotation") == 0) return 10;
@@ -277,8 +324,18 @@ int32_t easynet_admin_project_device_session_page(uint64_t handle, const char *s
 	*out_sessions_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_sessions\",\"state\":\"ok\",\"items\":[{\"profile\":\"admin_gateway\",\"kind\":\"device_session\",\"session_id\":\"dev-session-1\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"state\":\"active\",\"session_kind\":\"remote_desktop\",\"created_unix_ms\":1767225600000,\"expires_unix_ms\":1893456000000,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"session.list\"}}],\"next_cursor\":null,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"session.list\"}}");
 	return 0;
 }
+int32_t easynet_admin_project_device_session_result(uint64_t handle, const char *session_json, char **out_session_json) {
+	(void)handle;
+	if (strstr(session_json, "remote_desktop") == 0) return 10;
+	*out_session_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_session\",\"session_id\":\"dev-session-1\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"state\":\"active\",\"session_kind\":\"remote_desktop\",\"created_unix_ms\":1767225600000,\"expires_unix_ms\":1893456000000,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"session.create\"}}");
+	return 0;
+}
 int32_t easynet_admin_project_device_admin_result(uint64_t handle, const char *result_json, char **out_result_json) {
 	(void)handle;
+	if (strstr(result_json, "session.delete") != 0) {
+		*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_admin_result\",\"operation\":\"session.delete\",\"state\":\"ok\",\"agent_ura\":null,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"ack\":true,\"runtime_not_ready\":false,\"runtime_catalog_not_ready\":false,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"session.delete\"}}");
+		return 0;
+	}
 	if (strstr(result_json, "federation.revoke") == 0) return 10;
 	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_admin_result\",\"operation\":\"federation.revoke\",\"state\":\"ok\",\"agent_ura\":null,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"ack\":true,\"runtime_not_ready\":false,\"runtime_catalog_not_ready\":false,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"federation.revoke\"}}");
 	return 0;

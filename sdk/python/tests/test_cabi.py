@@ -469,6 +469,17 @@ class FakeRawCABI:
                     }
                 ]
             }
+        if system_ability == "session.create":
+            return {
+                "session_id": "dev-session-1",
+                "state": "active",
+                "created_unix_ms": 1767225600000,
+            }
+        if system_ability == "session.delete":
+            return {
+                "ack": True,
+                "device_ura": "easynet:///r/example/device/dev-a",
+            }
         if system_ability == "federation.revoke":
             return {"ack": True, "was_active": True}
         if system_ability == "identity.register_pubkey":
@@ -1013,6 +1024,10 @@ class FakeRawCABI:
             return ADMIN_AGENT_REFRESH_INVOCATION
         if symbol == "easynet_admin_build_session_list_invocation":
             return ADMIN_SESSION_LIST_INVOCATION
+        if symbol == "easynet_admin_build_session_create_invocation":
+            return ADMIN_SESSION_CREATE_INVOCATION
+        if symbol == "easynet_admin_build_session_delete_invocation":
+            return ADMIN_SESSION_DELETE_INVOCATION
         if symbol == "easynet_admin_build_revoke_device_invocation":
             return ADMIN_REVOKE_DEVICE_INVOCATION
         if symbol in {
@@ -1116,7 +1131,11 @@ class FakeRawCABI:
             return ADMIN_STOP_RESULT_PROJECTION
         if symbol == "easynet_admin_project_device_session_page":
             return ADMIN_DEVICE_SESSION_PAGE_PROJECTION
+        if symbol == "easynet_admin_project_device_session_result":
+            return ADMIN_DEVICE_SESSION_PROJECTION
         if symbol == "easynet_admin_project_device_admin_result":
+            if isinstance(request, dict) and request.get("operation") == "session.delete":
+                return ADMIN_SESSION_DELETE_RESULT_PROJECTION
             return ADMIN_DEVICE_ADMIN_RESULT_PROJECTION
         if symbol == "easynet_surface_project_page_record":
             return SURFACE_PAGE_RECORD_PROJECTION
@@ -1858,6 +1877,34 @@ ADMIN_SESSION_LIST_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+ADMIN_SESSION_CREATE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.session.create@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"hub_ura":"easynet:///r/example/hub/main",'
+    b'"session_kind":"remote_desktop","expires_unix_ms":1893456000000},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"session.create",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_SESSION_DELETE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.session.delete@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"session_id":"dev-session-1","reason":"done"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"session.delete",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 ADMIN_REVOKE_DEVICE_INVOCATION = (
     b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
     b'"callee_ura":"easynet:///r/example/device/dev-a",'
@@ -1913,6 +1960,24 @@ ADMIN_DEVICE_SESSION_PAGE_PROJECTION = (
     b'"source":"session.list","agent":"codex"}}],'
     b'"next_cursor":null,"metadata":{"profile":"admin_gateway",'
     b'"source":"session.list","count":1}}'
+)
+
+ADMIN_DEVICE_SESSION_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"device_session",'
+    b'"session_id":"dev-session-1",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"hub_ura":"easynet:///r/example/hub/main","state":"active",'
+    b'"session_kind":"remote_desktop","created_unix_ms":1767225600000,'
+    b'"expires_unix_ms":1893456000000,'
+    b'"metadata":{"profile":"admin_gateway","source":"session.create"}}'
+)
+
+ADMIN_SESSION_DELETE_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"device_admin_result",'
+    b'"operation":"session.delete","state":"ok","agent_ura":null,'
+    b'"device_ura":"easynet:///r/example/device/dev-a","ack":true,'
+    b'"runtime_not_ready":false,"runtime_catalog_not_ready":false,'
+    b'"metadata":{"profile":"admin_gateway","source":"session.delete"}}'
 )
 
 ADMIN_DEVICE_ADMIN_RESULT_PROJECTION = (
@@ -3591,6 +3656,58 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertEqual(raw.buffers, {})
 
+    def test_admin_device_session_mutations_use_carrier_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = AdminClient(CABIAdminTransport(lib, handle=7))
+        base = AdminCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        session = client.create_device_session(
+            CreateDeviceSessionRequest(
+                base=base,
+                device_ura="easynet:///r/example/device/dev-a",
+                hub_ura="easynet:///r/example/hub/main",
+                session_kind="remote_desktop",
+                expires_unix_ms=1_893_456_000_000,
+            )
+        )
+        deleted = client.delete_device_session(
+            DeleteDeviceSessionRequest(base, "dev-session-1", "done")
+        )
+
+        self.assertEqual(session.session_id, "dev-session-1")
+        self.assertEqual(session.session_kind, "remote_desktop")
+        self.assertEqual(deleted.operation, "session.delete")
+        self.assertEqual(deleted.device_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_admin_build_session_create_invocation",
+                "easynet_admin_project_device_session_result",
+                "easynet_admin_build_session_delete_invocation",
+                "easynet_admin_project_device_admin_result",
+            ],
+        )
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"], "session.create"
+        )
+        self.assertEqual(
+            raw.runtime_requests[1][1]["metadata"]["system_ability"], "session.delete"
+        )
+        self.assertEqual(
+            raw.profile_requests[1][2]["device_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(raw.profile_requests[3][2]["operation"], "session.delete")
+        self.assertEqual(raw.buffers, {})
+
     def test_admin_revoke_device_uses_carrier_invoke_and_projection(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
@@ -3670,7 +3787,7 @@ class CABITransportTests(unittest.TestCase):
                 reason="operator\nrotation",
             ).to_json_bytes()
 
-    def test_admin_trust_and_session_mutations_report_daemon_contract_boundary(self) -> None:
+    def test_admin_trust_mutations_report_daemon_contract_boundary(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
         client = AdminClient(CABIAdminTransport(lib, handle=7))
@@ -3729,22 +3846,6 @@ class CABITransportTests(unittest.TestCase):
                 ),
                 "requires a daemon/ABI pairing and device-credential lifecycle contract",
                 "cannot be projected into trust mutation semantics",
-            ),
-            (
-                "session create",
-                lambda: client.create_device_session(
-                    CreateDeviceSessionRequest(base, device, hub, "remote_desktop")
-                ),
-                "requires a daemon/ABI device-session lifecycle contract",
-                "session.list read-model rows cannot be projected",
-            ),
-            (
-                "session delete",
-                lambda: client.delete_device_session(
-                    DeleteDeviceSessionRequest(base, "dev-session-1", "done")
-                ),
-                "requires a daemon/ABI device-session lifecycle contract",
-                "session.list read-model rows cannot be projected",
             ),
         ]
 

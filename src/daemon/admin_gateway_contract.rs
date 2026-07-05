@@ -48,6 +48,8 @@ const ABILITY_AGENT_START: &str = crate::daemon::ability::names::agents::AGENT_S
 const ABILITY_AGENT_STOP: &str = crate::daemon::ability::names::agents::AGENT_STOP;
 const ABILITY_AGENT_REFRESH: &str = crate::daemon::ability::names::agents::AGENT_REFRESH;
 const ABILITY_SESSION_LIST: &str = crate::daemon::ability::names::device_control::SESSION_LIST;
+const ABILITY_SESSION_CREATE: &str = "session.create";
+const ABILITY_SESSION_DELETE: &str = "session.delete";
 const ABILITY_FEDERATION_REVOKE: &str = crate::daemon::ability::names::federation::REVOKE;
 
 pub(crate) type AdminGatewayError = SdkContractError;
@@ -99,6 +101,18 @@ pub(crate) fn build_session_list_invocation(request: &Value) -> Result<Value, Ad
         ABILITY_SESSION_LIST,
         Value::Object(args),
     )
+}
+
+pub(crate) fn build_session_create_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "CreateDeviceSessionRequest")?;
+    let args = device_session_create_args(obj)?;
+    build_system_invocation(obj, ADMIN_PROFILE, ABILITY_SESSION_CREATE, args)
+}
+
+pub(crate) fn build_session_delete_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "DeleteDeviceSessionRequest")?;
+    let args = device_session_delete_args(obj)?;
+    build_system_invocation(obj, ADMIN_PROFILE, ABILITY_SESSION_DELETE, args)
 }
 
 pub(crate) fn build_revoke_device_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
@@ -379,6 +393,32 @@ pub(crate) fn project_device_admin_result(input: &Value) -> Result<Value, AdminG
     }))
 }
 
+pub(crate) fn project_device_session_result(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "DeviceSessionResultInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "DeviceSessionResult")?;
+    let mut merged = result_obj.clone();
+    for field in ["device_ura", "hub_ura", "session_kind", "expires_unix_ms"] {
+        if !merged.contains_key(field) {
+            if let Some(value) = obj.get(field).filter(|value| !value.is_null()) {
+                merged.insert(field.to_string(), value.clone());
+            }
+        }
+    }
+    let mut session = project_device_session(&Value::Object(merged))?;
+    if let Some(metadata) = session.get_mut("metadata").and_then(Value::as_object_mut) {
+        metadata.insert(
+            "source".to_string(),
+            Value::String(ABILITY_SESSION_CREATE.to_string()),
+        );
+        metadata.insert("raw_result".to_string(), result.clone());
+    }
+    Ok(session)
+}
+
 fn project_device_session(input: &Value) -> Result<Value, AdminGatewayError> {
     let obj = object(input, "DeviceSession")?;
     let session_id = first_optional_string_field(obj, "session_id", "id")?
@@ -454,6 +494,51 @@ fn project_device_session(input: &Value) -> Result<Value, AdminGatewayError> {
         "expires_unix_ms": expires_unix_ms,
         "metadata": metadata,
     }))
+}
+
+fn device_session_create_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    let hub_ura = required_string(obj, "hub_ura")?;
+    validate_hub_ura(hub_ura)?;
+    let session_kind = required_string(obj, "session_kind")?;
+    validate_admin_identifier(session_kind, "session_kind")?;
+
+    let mut args = Map::new();
+    args.insert(
+        "device_ura".to_string(),
+        Value::String(device_ura.to_string()),
+    );
+    args.insert("hub_ura".to_string(), Value::String(hub_ura.to_string()));
+    args.insert(
+        "session_kind".to_string(),
+        Value::String(session_kind.to_string()),
+    );
+    if let Some(expires_unix_ms) = optional_positive_u64_field(obj, "expires_unix_ms")? {
+        args.insert("expires_unix_ms".to_string(), json!(expires_unix_ms));
+    }
+    Ok(Value::Object(args))
+}
+
+fn device_session_delete_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let session_id = required_string(obj, "session_id")?;
+    validate_admin_identifier(session_id, "session_id")?;
+    if session_id.to_ascii_lowercase().contains("browser") {
+        return Err(AdminGatewayError::InvalidField(
+            "session_id",
+            "must be a daemon device-session id".to_string(),
+        ));
+    }
+    let mut args = Map::new();
+    args.insert(
+        "session_id".to_string(),
+        Value::String(session_id.to_string()),
+    );
+    if let Some(reason) = optional_string_field(obj, "reason")? {
+        validate_reason(&reason)?;
+        args.insert("reason".to_string(), Value::String(reason));
+    }
+    Ok(Value::Object(args))
 }
 
 fn agent_start_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
@@ -697,6 +782,22 @@ fn validate_agent_type(raw: &str, field: &'static str) -> Result<(), AdminGatewa
         .map_err(|err| AdminGatewayError::InvalidField(field, err.to_string()))
 }
 
+fn validate_admin_identifier(raw: &str, field: &'static str) -> Result<(), AdminGatewayError> {
+    if raw.trim().is_empty() {
+        return Err(AdminGatewayError::InvalidField(
+            field,
+            "must not be empty".to_string(),
+        ));
+    }
+    if raw.chars().any(char::is_whitespace) || raw.chars().any(char::is_control) {
+        return Err(AdminGatewayError::InvalidField(
+            field,
+            "must be a single non-control token".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_agent_name(raw: &str, field: &'static str) -> Result<(), AdminGatewayError> {
     if raw.trim().is_empty() {
         return Err(AdminGatewayError::InvalidField(
@@ -749,6 +850,18 @@ fn validate_device_ura(raw: &str) -> Result<(), AdminGatewayError> {
     Ok(())
 }
 
+fn validate_hub_ura(raw: &str) -> Result<(), AdminGatewayError> {
+    let parsed = ura::parse_ura(raw)
+        .map_err(|err| AdminGatewayError::InvalidField("hub_ura", err.to_string()))?;
+    if parsed.kind != ura::URAKind::Hub {
+        return Err(AdminGatewayError::InvalidField(
+            "hub_ura",
+            "must be a Hub URA".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn agent_name_from_ura(raw: &str) -> Result<String, AdminGatewayError> {
     validate_agent_ura(raw)?;
     let parsed = ura::parse_ura(raw)
@@ -788,6 +901,38 @@ fn optional_u64(obj: &Map<String, Value>, field: &'static str) -> Option<u64> {
         Some(Value::Number(number)) => number.as_u64(),
         Some(Value::String(raw)) => raw.trim().parse::<u64>().ok(),
         _ => None,
+    }
+}
+
+fn optional_positive_u64_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<u64>, AdminGatewayError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => match number.as_u64() {
+            Some(value) if value > 0 => Ok(Some(value)),
+            _ => Err(AdminGatewayError::InvalidField(
+                field,
+                "must be a positive integer".to_string(),
+            )),
+        },
+        Some(Value::String(raw)) => {
+            let value = raw.trim().parse::<u64>().map_err(|_| {
+                AdminGatewayError::InvalidField(field, "must be a positive integer".to_string())
+            })?;
+            if value == 0 {
+                return Err(AdminGatewayError::InvalidField(
+                    field,
+                    "must be a positive integer".to_string(),
+                ));
+            }
+            Ok(Some(value))
+        }
+        Some(_) => Err(AdminGatewayError::InvalidField(
+            field,
+            "must be a positive integer".to_string(),
+        )),
     }
 }
 
@@ -863,6 +1008,43 @@ mod tests {
 
         assert_eq!(carrier["metadata"]["system_ability"], "session.list");
         assert_eq!(carrier["args"]["include_terminated"], false);
+    }
+
+    #[test]
+    fn build_session_create_invocation_projects_mutation_args() {
+        let request = base_request(json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "hub_ura": "easynet:///r/example/hub",
+            "session_kind": "remote_desktop",
+            "expires_unix_ms": 1893456000000i64
+        }));
+
+        let carrier = build_session_create_invocation(&request).unwrap();
+
+        assert_eq!(carrier["metadata"]["system_ability"], "session.create");
+        assert_eq!(
+            carrier["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.session.create@1.0.0"
+        );
+        assert_eq!(
+            carrier["args"]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub");
+        assert_eq!(carrier["args"]["session_kind"], "remote_desktop");
+        assert_eq!(carrier["args"]["expires_unix_ms"], 1893456000000i64);
+    }
+
+    #[test]
+    fn build_session_delete_invocation_rejects_browser_session_id() {
+        let request = base_request(json!({
+            "session_id": "browser-session-1",
+            "reason": "operator closed"
+        }));
+
+        let err = build_session_delete_invocation(&request).unwrap_err();
+
+        assert!(err.to_string().contains("daemon device-session id"));
     }
 
     #[test]
@@ -1013,6 +1195,27 @@ mod tests {
         assert_eq!(projected["items"][0]["metadata"]["source"], "session.list");
         assert_eq!(projected["items"][0]["metadata"]["profile"], ADMIN_PROFILE);
         assert_eq!(projected["items"][0]["expires_unix_ms"], 1893456000000i64);
+    }
+
+    #[test]
+    fn project_device_session_result_merges_request_context() {
+        let projected = project_device_session_result(&json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "hub_ura": "easynet:///r/example/hub",
+            "session_kind": "remote_desktop",
+            "expires_unix_ms": 1893456000000i64,
+            "result": {
+                "session_id": "dev-session-1",
+                "state": "active",
+                "created_unix_ms": 1767225600000i64
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(projected["kind"], "device_session");
+        assert_eq!(projected["session_id"], "dev-session-1");
+        assert_eq!(projected["device_ura"], "easynet:///r/example/device/dev-a");
+        assert_eq!(projected["metadata"]["source"], "session.create");
     }
 
     #[test]

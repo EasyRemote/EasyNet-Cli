@@ -70,26 +70,29 @@ import (
 )
 
 type cabiAdminSymbols struct {
-	abiVersion                  unsafe.Pointer
-	lastErrorJSON               unsafe.Pointer
-	stringFree                  unsafe.Pointer
-	init                        unsafe.Pointer
-	shutdown                    unsafe.Pointer
-	daemonAttach                unsafe.Pointer
-	daemonDetach                unsafe.Pointer
-	daemonStatus                unsafe.Pointer
-	invocationInvoke            unsafe.Pointer
-	buildAgentListInvocation    unsafe.Pointer
-	buildAgentStartInvocation   unsafe.Pointer
-	buildAgentStopInvocation    unsafe.Pointer
-	buildAgentRefreshInvocation unsafe.Pointer
-	buildSessionListInvocation  unsafe.Pointer
-	buildRevokeDeviceInvocation unsafe.Pointer
-	projectGatewayStatus        unsafe.Pointer
-	projectAgentRecords         unsafe.Pointer
-	projectAgentLifecycleResult unsafe.Pointer
-	projectDeviceSessionPage    unsafe.Pointer
-	projectDeviceAdminResult    unsafe.Pointer
+	abiVersion                   unsafe.Pointer
+	lastErrorJSON                unsafe.Pointer
+	stringFree                   unsafe.Pointer
+	init                         unsafe.Pointer
+	shutdown                     unsafe.Pointer
+	daemonAttach                 unsafe.Pointer
+	daemonDetach                 unsafe.Pointer
+	daemonStatus                 unsafe.Pointer
+	invocationInvoke             unsafe.Pointer
+	buildAgentListInvocation     unsafe.Pointer
+	buildAgentStartInvocation    unsafe.Pointer
+	buildAgentStopInvocation     unsafe.Pointer
+	buildAgentRefreshInvocation  unsafe.Pointer
+	buildSessionListInvocation   unsafe.Pointer
+	buildSessionCreateInvocation unsafe.Pointer
+	buildSessionDeleteInvocation unsafe.Pointer
+	buildRevokeDeviceInvocation  unsafe.Pointer
+	projectGatewayStatus         unsafe.Pointer
+	projectAgentRecords          unsafe.Pointer
+	projectAgentLifecycleResult  unsafe.Pointer
+	projectDeviceSessionPage     unsafe.Pointer
+	projectDeviceSessionResult   unsafe.Pointer
+	projectDeviceAdminResult     unsafe.Pointer
 }
 
 // CABIAdminTransport is an optional Admin + Gateway profile transport over
@@ -253,12 +256,39 @@ func (t *CABIAdminTransport) RevokeDevice(ctx context.Context, requestJSON []byt
 	return t.invokeAndProjectDeviceAdmin(ctx, requestJSON, t.symbols.buildRevokeDeviceInvocation, t.symbols.projectDeviceAdminResult, adminAbilityRevokeDevice, request.DeviceURA, "C ABI admin revoke device failed")
 }
 
-func (t *CABIAdminTransport) CreateDeviceSession(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin create device session carrier is not exported yet")
+func (t *CABIAdminTransport) CreateDeviceSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[CreateDeviceSessionRequest](requestJSON, validateCreateDeviceSessionRequest)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, t.symbols.buildSessionCreateInvocation, requestJSON, "C ABI admin create device session failed")
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := t.invoke(handle, draftJSON, "C ABI admin create device session failed")
+	if err != nil {
+		return nil, err
+	}
+	outputJSON, err := outputJSONFromProfileInvocationResult(resultJSON, adminGatewayProfile)
+	if err != nil {
+		return nil, err
+	}
+	projectionInput, err := adminDeviceSessionProjectionInput(outputJSON, request)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, t.symbols.projectDeviceSessionResult, projectionInput, "C ABI admin create device session failed")
 }
 
-func (t *CABIAdminTransport) DeleteDeviceSession(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin delete device session carrier is not exported yet")
+func (t *CABIAdminTransport) DeleteDeviceSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if _, err := decodeAdminRuntimeRequest[DeleteDeviceSessionRequest](requestJSON, validateDeleteDeviceSessionRequest); err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectDeviceAdmin(ctx, requestJSON, t.symbols.buildSessionDeleteInvocation, t.symbols.projectDeviceAdminResult, adminAbilitySessionDelete, "", "C ABI admin delete device session failed")
 }
 
 func (t *CABIAdminTransport) ProjectGatewayStatus(ctx context.Context, statusJSON []byte) ([]byte, error) {
@@ -370,11 +400,34 @@ func adminDeviceAdminProjectionInput(outputJSON []byte, operation string, device
 	if result == nil {
 		return nil, invalidProfilePayload(adminGatewayProfile, "admin device-admin output must be an object", nil)
 	}
-	return json.Marshal(map[string]any{
-		"operation":  operation,
-		"device_ura": deviceURA,
-		"result":     result,
-	})
+	projection := map[string]any{
+		"operation": operation,
+		"result":    result,
+	}
+	if deviceURA != "" {
+		projection["device_ura"] = deviceURA
+	}
+	return json.Marshal(projection)
+}
+
+func adminDeviceSessionProjectionInput(outputJSON []byte, request CreateDeviceSessionRequest) ([]byte, error) {
+	var result map[string]any
+	if err := json.Unmarshal(outputJSON, &result); err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode admin device-session output JSON: %v", err), err)
+	}
+	if result == nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, "admin device-session output must be an object", nil)
+	}
+	projection := map[string]any{
+		"device_ura":   request.DeviceURA,
+		"hub_ura":      request.HubURA,
+		"session_kind": request.SessionKind,
+		"result":       result,
+	}
+	if request.ExpiresUnixMS > 0 {
+		projection["expires_unix_ms"] = request.ExpiresUnixMS
+	}
+	return json.Marshal(projection)
 }
 
 func (t *CABIAdminTransport) callJSONWithOpenHandle(ctx context.Context, symbol unsafe.Pointer, payload []byte, fallback string) ([]byte, error) {
@@ -462,11 +515,14 @@ func bindCABIAdminSymbols(library unsafe.Pointer) (cabiAdminSymbols, error) {
 		{"easynet_admin_build_agent_stop_invocation", &symbols.buildAgentStopInvocation},
 		{"easynet_admin_build_agent_refresh_invocation", &symbols.buildAgentRefreshInvocation},
 		{"easynet_admin_build_session_list_invocation", &symbols.buildSessionListInvocation},
+		{"easynet_admin_build_session_create_invocation", &symbols.buildSessionCreateInvocation},
+		{"easynet_admin_build_session_delete_invocation", &symbols.buildSessionDeleteInvocation},
 		{"easynet_admin_build_revoke_device_invocation", &symbols.buildRevokeDeviceInvocation},
 		{"easynet_admin_project_gateway_status", &symbols.projectGatewayStatus},
 		{"easynet_admin_project_agent_records", &symbols.projectAgentRecords},
 		{"easynet_admin_project_agent_lifecycle_result", &symbols.projectAgentLifecycleResult},
 		{"easynet_admin_project_device_session_page", &symbols.projectDeviceSessionPage},
+		{"easynet_admin_project_device_session_result", &symbols.projectDeviceSessionResult},
 		{"easynet_admin_project_device_admin_result", &symbols.projectDeviceAdminResult},
 	}
 	for _, binding := range bindings {

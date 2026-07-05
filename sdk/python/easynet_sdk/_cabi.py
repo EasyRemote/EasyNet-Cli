@@ -96,11 +96,14 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_admin_build_agent_stop_invocation",
     "easynet_admin_build_agent_refresh_invocation",
     "easynet_admin_build_session_list_invocation",
+    "easynet_admin_build_session_create_invocation",
+    "easynet_admin_build_session_delete_invocation",
     "easynet_admin_build_revoke_device_invocation",
     "easynet_admin_project_gateway_status",
     "easynet_admin_project_agent_records",
     "easynet_admin_project_agent_lifecycle_result",
     "easynet_admin_project_device_session_page",
+    "easynet_admin_project_device_session_result",
     "easynet_admin_project_device_admin_result",
     "easynet_surface_build_list_pages_invocation",
     "easynet_surface_build_create_page_invocation",
@@ -1395,6 +1398,12 @@ class CABIAdminTransport(_CABIProfileTransport):
     def build_session_list_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_admin_build_session_list_invocation", request_json)
 
+    def build_session_create_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_session_create_invocation", request_json)
+
+    def build_session_delete_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_admin_build_session_delete_invocation", request_json)
+
     def build_revoke_device_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_admin_build_revoke_device_invocation", request_json)
 
@@ -1488,10 +1497,28 @@ class CABIAdminTransport(_CABIProfileTransport):
         )
 
     def create_device_session(self, request_json: bytes) -> bytes:
-        return self._missing_device_session_lifecycle("admin create device session")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_admin_build_session_create_invocation",
+            project_symbol="easynet_admin_project_device_session_result",
+            projection_keys=(
+                "device_ura",
+                "hub_ura",
+                "session_kind",
+                "expires_unix_ms",
+            ),
+        )
 
     def delete_device_session(self, request_json: bytes) -> bytes:
-        return self._missing_device_session_lifecycle("admin delete device session")
+        output = self._invoke_output_json(
+            self._require_open(),
+            "easynet_admin_build_session_delete_invocation",
+            request_json,
+        )
+        return self._call(
+            "easynet_admin_project_device_admin_result",
+            _json_bytes({"operation": "session.delete", "result": output}),
+        )
 
     def project_gateway_status(self, status_json: bytes) -> bytes:
         return self._call("easynet_admin_project_gateway_status", status_json)
@@ -1506,6 +1533,9 @@ class CABIAdminTransport(_CABIProfileTransport):
 
     def project_device_session_page(self, sessions_json: bytes) -> bytes:
         return self._call("easynet_admin_project_device_session_page", sessions_json)
+
+    def project_device_session_result(self, session_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_device_session_result", session_json)
 
     def project_device_admin_result(self, result_json: bytes) -> bytes:
         return self._call("easynet_admin_project_device_admin_result", result_json)
@@ -1535,20 +1565,6 @@ class CABIAdminTransport(_CABIProfileTransport):
                 "cannot be projected into trust mutation semantics"
             ),
         )
-
-    def _missing_device_session_lifecycle(self, method: str) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message=(
-                f"{method} requires a daemon/ABI device-session lifecycle contract; "
-                "session.list read-model rows cannot be projected into create/delete "
-                "mutation semantics"
-            ),
-        )
-
 
 @dataclass
 class CABIEventTransport(_CABIProfileTransport):

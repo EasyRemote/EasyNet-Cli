@@ -34,7 +34,7 @@ method spelling.
 | publication | carrier partial | carrier/deploy/lifecycle partial | carrier/lifecycle/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
-| admin + gateway | carrier/status/session partial | carrier/status partial | carrier/status/session seam partial | carrier/status seam partial | gap | gap | gap |
+| admin + gateway | carrier/status/session partial | carrier/status/session partial | carrier/status/session seam partial | carrier/status/session seam partial | gap | gap | gap |
 | events | stream/history partial | stream/history partial | stream/history runtime seam partial | stream/history seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
@@ -89,15 +89,15 @@ method spelling.
   daemon-owned abilities; daemon-side live filtering, backend SSE/WebSocket
   fanout, and product cutovers remain incomplete.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
-  `agent.list/start/stop/refresh`, `session.list`, `federation.revoke`,
-  lifecycle status, agent-record projections, device-session page projections,
-  and device-admin result projections; Go/Python C ABI transports now execute
-  device revoke through Runtime Core invoke. Go/Python facade seams also cover
+  `agent.list/start/stop/refresh`, `session.list`, `session.create/delete`,
+  `federation.revoke`, lifecycle status, agent-record projections,
+  device-session page/result projections, and device-admin result projections;
+  Go/Python C ABI transports now execute device revoke and device-session
+  create/delete through Runtime Core invoke. Go/Python facade seams also cover
   Hub join/leave, pairing preflight/create/validate, device credential
   verification, and device-session create/list/delete projections. Certificate
   policy, daemon/ABI hub lifecycle contracts, daemon/ABI pairing and
-  device-credential lifecycle contracts, daemon/ABI device-session mutation
-  contracts, and product cutovers remain incomplete.
+  device-credential lifecycle contracts, and product cutovers remain incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
   `pages.list/publish/get/unpublish/health`; Go/Python facade seams now expose page
   carriers, typed page records, public page refs, manifests, mutation results,
@@ -174,9 +174,9 @@ method spelling.
   Core-backed execution, plus
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
   credential, credential verification, typed device-session projection seams,
-  C ABI-backed device-admin result projection, and close state seams;
-  certificate policy, C ABI trust/pairing/session lifecycle exports, and
-  backend route cutover remain incomplete.
+  C ABI-backed device-admin/session result projection, and close state seams;
+  certificate policy, C ABI trust/pairing lifecycle exports, and backend route
+  cutover remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, with session subscriptions requiring
   explicit daemon `session_id` rather than product `session_ura`, Runtime
