@@ -357,13 +357,17 @@ method spelling.
   `AdminAgentPage`, lifecycle-result, pairing token, device credential,
   credential verification, C ABI-backed typed device-session page projection,
   device-admin result projection, and close state seams, with an SDK-owned
-  EasyRemote hosted-agent add/list/stop/refresh Admin adapter,
-  SDK-owned EasyRemote profile bridge dispatch/projection glue, SDK-owned
+  EasyRemote hosted-agent add/list/stop/refresh Admin adapter and
+  SDK-owned EasyRemote profile bridge dispatch/projection glue for gateway
+  status, hub join/leave, pairing preflight/create/validate, credential
+  verification, device-session create/list/delete, and device revoke, SDK-owned
   EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file
   validation, endpoint projection, certificate fingerprint projection, and raw
   admin carrier cutover audit gate for `agent.start/list/stop/refresh`;
-  certificate policy, backend trust policy persistence, and daemon-backed Server
-  pairing/hub lifecycle product cutover remain incomplete.
+  invocation-builder carrier methods remain fail-closed in the EasyRemote
+  product bridge, while certificate policy, backend trust policy persistence,
+  and daemon-backed Server pairing/hub lifecycle product cutover remain
+  incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory/device/session/invocation
   subscription execution through Runtime Core open_stream, plus `EventFrame`

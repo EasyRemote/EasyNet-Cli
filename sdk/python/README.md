@@ -116,9 +116,11 @@ AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page/result projection plus close state seams,
 with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
 requests for add/list/stop/refresh, SDK-owned `EasyRemoteProfileBridge`
-dispatch/projection glue, and
-SDK-owned EasyRemote Server/Gateway hub-config materialization, lifecycle state,
-TLS file validation, endpoint projection, and certificate fingerprint projection.
+dispatch/projection glue for gateway status, hub join/leave, pairing
+preflight/create/validate, credential verification, device-session
+create/list/delete, and device revoke, and SDK-owned EasyRemote Server/Gateway
+hub-config materialization, lifecycle state, TLS file validation, endpoint
+projection, and certificate fingerprint projection.
 EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, C ABI-backed directory/device/session/invocation
 subscription execution through Runtime Core open_stream, C ABI-backed bounded
