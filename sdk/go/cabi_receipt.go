@@ -150,6 +150,30 @@ func (t *CABIReceiptTransport) Fetch(ctx context.Context, requestJSON []byte) ([
 	return t.callJSON(handle, t.symbols.receiptProject, outputJSON, "C ABI receipt project failed")
 }
 
+func (t *CABIReceiptTransport) BuildListHistoryInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt list-history invocation is not exported yet")
+}
+
+func (t *CABIReceiptTransport) BuildGetHistoryInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt get-history invocation is not exported yet")
+}
+
+func (t *CABIReceiptTransport) BuildTraceInvocation(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt trace invocation is not exported yet")
+}
+
+func (t *CABIReceiptTransport) ListHistory(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt list history is not exported yet")
+}
+
+func (t *CABIReceiptTransport) GetHistory(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt get history is not exported yet")
+}
+
+func (t *CABIReceiptTransport) GetTrace(context.Context, []byte) ([]byte, error) {
+	return nil, sdkProfileNotImplemented(receiptProfile, "C ABI receipt get trace is not exported yet")
+}
+
 func (t *CABIReceiptTransport) Project(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
