@@ -195,6 +195,41 @@ func TestRuntimeEventsListsDeviceHistoryThroughRuntime(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventsRejectsDeviceHistoryForDifferentDevice(t *testing.T) {
+	identityTransport := &compatibilityRuntimeIdentityTransport{
+		abilityByName: map[string]string{
+			eventsAbilityDeviceHistory: "easynet:///r/example/ability/device.dev-a.events.device.history",
+		},
+		descriptorByAbility: map[string]string{
+			"easynet:///r/example/ability/device.dev-a.events.device.history": "easynet:///r/example/ability/device.dev-a.events.device.history@1.0.0",
+		},
+	}
+	identityClient, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeClient, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: eventsRuntimeDeviceHistoryDifferentDeviceJSON})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeEventClient(runtimeClient, identityClient)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClient: %v", err)
+	}
+
+	_, err = client.ListDeviceEvents(context.Background(), EventsDeviceEventListRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+		Limit:             1,
+	})
+	if err == nil {
+		t.Fatal("expected mismatched device event history rejection")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 const eventsRuntimeDeviceHistoryRawJSON = `{
   "events": [
     {
@@ -212,6 +247,19 @@ const eventsRuntimeDeviceHistoryRawJSON = `{
       "occurred_unix_ms": 1783100001123,
       "kind": "device.status_changed",
       "payload": {"state": "offline"}
+    }
+  ]
+}`
+
+const eventsRuntimeDeviceHistoryDifferentDeviceJSON = `{
+  "events": [
+    {
+      "sequence": 8,
+      "device_ura": "easynet:///r/example/device/dev-b",
+      "realm": "example",
+      "occurred_unix_ms": 1783100000123,
+      "kind": "device.status_changed",
+      "payload": {"state": "online"}
     }
   ]
 }`

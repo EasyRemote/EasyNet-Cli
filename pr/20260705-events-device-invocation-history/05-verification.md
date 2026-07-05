@@ -20,3 +20,10 @@ Failure-path coverage:
 - Missing invocation id.
 - Device history limit bounds.
 - Invalid event history projection row shape.
+- Go Runtime-backed device history rejects daemon output rows whose device
+  subject does not match the requested `device_ura`; the SDK fails closed rather
+  than filtering product data in the facade.
+
+Additional Go Runtime checks:
+
+- `go test ./...` from `sdk/go`

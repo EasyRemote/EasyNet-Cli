@@ -293,8 +293,13 @@ func projectRuntimeDeviceEventPage(request EventsDeviceEventListRequest, outputJ
 	if output == nil {
 		return nil, invalidProfilePayload(eventsProfile, "events device history output must be an object", nil)
 	}
+	requestedDeviceURA := strings.TrimSpace(request.DeviceURA)
 	if output["profile"] == eventsProfile && output["stream"] == string(EventStreamDevice) && output["item_kind"] == "device_event" {
-		if _, err := NewDeviceEventPageFromJSON(outputJSON); err != nil {
+		page, err := NewDeviceEventPageFromJSON(outputJSON)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateRuntimeDeviceEventPageMatchesRequest(page, requestedDeviceURA); err != nil {
 			return nil, err
 		}
 		return outputJSON, nil
@@ -318,6 +323,9 @@ func projectRuntimeDeviceEventPage(request EventsDeviceEventListRequest, outputJ
 	for _, row := range rows[offset:end] {
 		item, err := projectRuntimeDeviceEventRow(row)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateRuntimeDeviceEventMatchesRequest(item, requestedDeviceURA); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -350,6 +358,50 @@ func projectRuntimeDeviceEventPage(request EventsDeviceEventListRequest, outputJ
 		return nil, err
 	}
 	return raw, nil
+}
+
+func validateRuntimeDeviceEventPageMatchesRequest(page DeviceEventPage, requestedDeviceURA string) error {
+	if requestedDeviceURA == "" {
+		return nil
+	}
+	for index := range page.Items {
+		actual := deviceURAFromSubjectRef(page.Items[index].SubjectRef)
+		if actual == "" {
+			return invalidProfilePayload(eventsProfile, "device event page item subject_ref device URA is required", nil)
+		}
+		if actual != requestedDeviceURA {
+			return invalidProfilePayload(eventsProfile, "device event page item does not match requested device_ura", nil)
+		}
+	}
+	return nil
+}
+
+func validateRuntimeDeviceEventMatchesRequest(item map[string]any, requestedDeviceURA string) error {
+	if requestedDeviceURA == "" {
+		return nil
+	}
+	actual := deviceURAFromSubjectRef(item["subject_ref"])
+	if actual == "" {
+		return invalidProfilePayload(eventsProfile, "device event row subject_ref device URA is required", nil)
+	}
+	if actual != requestedDeviceURA {
+		return invalidProfilePayload(eventsProfile, "device event row does not match requested device_ura", nil)
+	}
+	return nil
+}
+
+func deviceURAFromSubjectRef(subjectRef any) string {
+	ref, ok := subjectRef.(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind, _ := ref["kind"].(string)
+	role, _ := ref["role"].(string)
+	ura, _ := ref["ura"].(string)
+	if strings.TrimSpace(kind) != "ura" || strings.TrimSpace(role) != "device" {
+		return ""
+	}
+	return strings.TrimSpace(ura)
 }
 
 func eventsRuntimeEventRows(output map[string]any) ([]map[string]any, error) {
