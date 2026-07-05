@@ -1016,6 +1016,44 @@ class CABIReceiptTransport(_CABIProfileTransport):
     def build_fetch_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_receipt_build_fetch_invocation", request_json)
 
+    def build_list_history_invocation(self, request_json: bytes) -> bytes:
+        return self._call(
+            "easynet_receipt_build_list_history_invocation", request_json
+        )
+
+    def build_get_history_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_receipt_build_get_history_invocation", request_json)
+
+    def build_trace_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_receipt_build_trace_invocation", request_json)
+
+    def list_history(self, request_json: bytes) -> bytes:
+        return _json_bytes(
+            self._invoke_output_json(
+                self._require_open(),
+                "easynet_receipt_build_list_history_invocation",
+                request_json,
+            )
+        )
+
+    def get_history(self, request_json: bytes) -> bytes:
+        return _json_bytes(
+            self._invoke_output_json(
+                self._require_open(),
+                "easynet_receipt_build_get_history_invocation",
+                request_json,
+            )
+        )
+
+    def get_trace(self, request_json: bytes) -> bytes:
+        return _json_bytes(
+            self._invoke_output_json(
+                self._require_open(),
+                "easynet_receipt_build_trace_invocation",
+                request_json,
+            )
+        )
+
     def project(self, receipt_json: bytes) -> bytes:
         return self._call("easynet_receipt_project", receipt_json)
 

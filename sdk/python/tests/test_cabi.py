@@ -65,8 +65,10 @@ from easynet_sdk import (
     PublicationClient,
     PublishedAbilityQuery,
     PublishedAbilityShowRequest,
+    ReceiptCarrierBase,
     ReceiptClient,
     ReceiptFetchRequest,
+    ReceiptHistoryReadRequest,
     ResolveQuery,
     RetryHint,
     RuntimeClient,
@@ -535,6 +537,24 @@ class FakeRawCABI:
                     "steps_failed": 0,
                 },
             }
+        if system_ability == "invocation.history.list":
+            return {
+                "records": [
+                    {"invocation_id": "inv-example-1", "state": "completed"}
+                ],
+                "next_cursor": None,
+            }
+        if system_ability == "invocation.history.get":
+            return {
+                "record": {"invocation_id": "inv-example-1", "state": "completed"}
+            }
+        if system_ability == "invocation.trace.get":
+            return {
+                "trace_id": "trace-1",
+                "nodes": [],
+                "edges": [],
+                "edge_semantics": "Axon causal links",
+            }
         if system_ability == "pages.list":
             return {
                 "projects": [
@@ -888,6 +908,12 @@ class FakeRawCABI:
             return DIRECTORY_RESOLVE_INVOCATION
         if symbol == "easynet_receipt_build_fetch_invocation":
             return RECEIPT_FETCH_INVOCATION
+        if symbol == "easynet_receipt_build_list_history_invocation":
+            return RECEIPT_LIST_HISTORY_INVOCATION
+        if symbol == "easynet_receipt_build_get_history_invocation":
+            return RECEIPT_GET_HISTORY_INVOCATION
+        if symbol == "easynet_receipt_build_trace_invocation":
+            return RECEIPT_TRACE_INVOCATION
         if symbol == "easynet_events_build_directory_subscription_invocation":
             return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
         if symbol == "easynet_events_build_session_subscription_invocation":
@@ -1277,6 +1303,51 @@ RECEIPT_FETCH_INVOCATION = (
     b'"metadata":{"profile":"receipt",'
     b'"system_ability":"invocation.history.get",'
     b'"carrier_owner":"daemon_sdk"}}'
+)
+
+RECEIPT_LIST_HISTORY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.invocation.history.list@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"limit":5},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"receipt",'
+    b'"system_ability":"invocation.history.list",'
+    b'"carrier_owner":"daemon_sdk","timeout_ms":2500}}'
+)
+
+RECEIPT_GET_HISTORY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.invocation.history.get@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"key":{"request_id":"inv-example-1"}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"receipt",'
+    b'"system_ability":"invocation.history.get",'
+    b'"carrier_owner":"daemon_sdk","timeout_ms":2500}}'
+)
+
+RECEIPT_TRACE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.invocation.trace.get@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"key":{"trace_id":"trace-1"}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"receipt",'
+    b'"system_ability":"invocation.trace.get",'
+    b'"carrier_owner":"daemon_sdk","timeout_ms":2500}}'
 )
 
 DIRECTORY_LIST_DEVICES_INVOCATION = (
@@ -2588,6 +2659,70 @@ class CABITransportTests(unittest.TestCase):
             "invocation.history.get",
         )
         self.assertEqual(raw.profile_requests[1][2]["terminal_state"], "Completed")
+        self.assertEqual(raw.buffers, {})
+
+    def test_receipt_history_facade_uses_cabi_carriers_and_runtime_invoke(
+        self,
+    ) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = ReceiptClient(CABIReceiptTransport(lib, handle=7))
+        carrier = ReceiptCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            timeout_ms=2500,
+            metadata={"request_id": "history-1"},
+        )
+
+        list_draft = client.build_list_history_invocation(
+            ReceiptHistoryReadRequest(carrier=carrier, arguments={"limit": 5})
+        )
+        page = client.list_history(
+            ReceiptHistoryReadRequest(carrier=carrier, arguments={"limit": 5})
+        )
+        record = client.get_history(
+            ReceiptHistoryReadRequest(
+                carrier=carrier,
+                arguments={"key": {"request_id": "inv-example-1"}},
+            )
+        )
+        trace = client.get_trace(
+            ReceiptHistoryReadRequest(
+                carrier=carrier,
+                arguments={"key": {"trace_id": "trace-1"}},
+            )
+        )
+
+        self.assertEqual(
+            list_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0",
+        )
+        self.assertEqual(page["records"][0]["invocation_id"], "inv-example-1")
+        self.assertEqual(record["record"]["state"], "completed")
+        self.assertEqual(trace["trace_id"], "trace-1")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_receipt_build_list_history_invocation",
+                "easynet_receipt_build_list_history_invocation",
+                "easynet_receipt_build_get_history_invocation",
+                "easynet_receipt_build_trace_invocation",
+            ],
+        )
+        self.assertEqual(raw.profile_requests[0][2]["timeout_ms"], 2500)
+        self.assertEqual(raw.profile_requests[0][2]["metadata"]["request_id"], "history-1")
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            [
+                "invocation.history.list",
+                "invocation.history.get",
+                "invocation.trace.get",
+            ],
+        )
         self.assertEqual(raw.buffers, {})
 
     def test_directory_live_methods_use_carrier_invoke_and_projection(self) -> None:

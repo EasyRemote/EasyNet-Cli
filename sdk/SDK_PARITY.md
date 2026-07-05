@@ -30,7 +30,7 @@ method spelling.
 | stream | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
 | bidi | existing dispatch | lifecycle partial | state seam partial + optional C ABI callback adapter | state seam partial | gap | gap | gap |
 | directory + identity | read-model/projection partial | read-model/projection partial | read-model/projection seam partial | read-model/projection seam partial | gap | gap | gap |
-| receipt | fetch/projection/ref partial | fetch/projection partial | projection/ref seam partial | projection seam partial | gap | gap | gap |
+| receipt | fetch/projection/ref partial | fetch/projection/history partial | projection/ref seam partial | projection/history seam partial | gap | gap | gap |
 | publication | carrier partial | carrier/deploy partial | carrier/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
@@ -61,8 +61,10 @@ method spelling.
   can be claimed.
 - Receipt fetch carrier, projection, causal-ref guardrails, and
   invocation-history list/get/trace carrier builders exist for Rust/C ABI over
-  daemon `invocation.history.*` and `invocation.trace.get`; Axon-backed full
-  verification and broader language-facade cutovers remain incomplete.
+  daemon `invocation.history.*` and `invocation.trace.get`; Python now exposes
+  the same read models through the Receipt facade and C ABI Runtime Core invoke.
+  Axon-backed full verification and broader language-facade cutovers remain
+  incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, Identity URA/DescriptorRef
   projection guardrails, and identity signing-key register/list/revoke
@@ -252,6 +254,7 @@ method spelling.
   while actual EasyRemote repository extraction remains incomplete.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
+  invocation-history list/get/trace read-model methods,
   receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
   child-context helpers for EasyRemote-style nested calls, typed `ReceiptRef` and
   `ReceiptChain` wrappers that delegate causal-context and continuity projection
@@ -260,8 +263,8 @@ method spelling.
   receipt-summary projection/continuity/causal-ref guardrails, SDK-owned
   `EasyRemoteReceipt`/`EasyRemoteReceiptChain` summary parsing, state projection,
   summary-only verification guardrails, and hash-chain continuity projection,
-  C ABI-backed fetch
-  execution through Runtime Core invoke, and close state seams over opaque receipt refs.
+  C ABI-backed fetch and invocation-history list/get/trace execution through
+  Runtime Core invoke, and close state seams over opaque receipt refs.
   EasyRemote receipt summary verification, hash-chain continuity, and
   parent-receipt-anchored Context child dispatch now delegate to SDK Receipt.
   Axon-backed cryptographic verification and receipt URA construction after

@@ -13,7 +13,9 @@ from easynet_sdk import (
     ReceiptChain,
     ReceiptChainVerificationRequest,
     ReceiptClient,
+    ReceiptCarrierBase,
     ReceiptFetchRequest,
+    ReceiptHistoryReadRequest,
     ReceiptRef,
     ReceiptSummary,
     ReceiptVerification,
@@ -80,8 +82,61 @@ class MemoryReceiptTransport:
             b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
         )
         self.fetch_invocation_json = shared_fixture("receipt-fetch-invocation.v4.json")
+        self.list_history_invocation_json = (
+            b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+            b'"callee_ura":"easynet:///r/example/device/dev-a",'
+            b'"descriptor_ref":"easynet:///r/example/ability/'
+            b'device.dev-a.invocation.history.list@1.0.0",'
+            b'"subject_ura":"easynet:///r/example/device/dev-a",'
+            b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+            b'"causal_context":{"form":"none"},"args":{"limit":5},'
+            b'"content_type":"application/json",'
+            b'"metadata":{"profile":"receipt",'
+            b'"system_ability":"invocation.history.list",'
+            b'"carrier_owner":"daemon_sdk","timeout_ms":2500}}'
+        )
+        self.get_history_invocation_json = (
+            b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+            b'"callee_ura":"easynet:///r/example/device/dev-a",'
+            b'"descriptor_ref":"easynet:///r/example/ability/'
+            b'device.dev-a.invocation.history.get@1.0.0",'
+            b'"subject_ura":"easynet:///r/example/device/dev-a",'
+            b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+            b'"causal_context":{"form":"none"},'
+            b'"args":{"key":{"request_id":"inv-example-1"}},'
+            b'"content_type":"application/json",'
+            b'"metadata":{"profile":"receipt",'
+            b'"system_ability":"invocation.history.get",'
+            b'"carrier_owner":"daemon_sdk","timeout_ms":2500}}'
+        )
+        self.trace_invocation_json = (
+            b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+            b'"callee_ura":"easynet:///r/example/device/dev-a",'
+            b'"descriptor_ref":"easynet:///r/example/ability/'
+            b'device.dev-a.invocation.trace.get@1.0.0",'
+            b'"subject_ura":"easynet:///r/example/device/dev-a",'
+            b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+            b'"causal_context":{"form":"none"},'
+            b'"args":{"key":{"trace_id":"trace-1"}},'
+            b'"content_type":"application/json",'
+            b'"metadata":{"profile":"receipt",'
+            b'"system_ability":"invocation.trace.get",'
+            b'"carrier_owner":"daemon_sdk","timeout_ms":2500}}'
+        )
+        self.history_page_json = (
+            b'{"records":[{"invocation_id":"inv-example-1","state":"completed"}],'
+            b'"next_cursor":null}'
+        )
+        self.history_record_json = (
+            b'{"record":{"invocation_id":"inv-example-1","state":"completed"}}'
+        )
+        self.trace_json = (
+            b'{"trace_id":"trace-1","nodes":[],"edges":[],'
+            b'"edge_semantics":"Axon causal links"}'
+        )
         self.seen_request: dict[str, object] | None = None
         self.seen_fetch_invocation_request: dict[str, object] | None = None
+        self.seen_history_request: dict[str, object] | None = None
         self.seen_chain_request: dict[str, object] | None = None
         self.seen_receipt_raw = b""
         self.close_calls = 0
@@ -93,6 +148,30 @@ class MemoryReceiptTransport:
     def build_fetch_invocation(self, request_json: bytes) -> bytes:
         self.seen_fetch_invocation_request = json.loads(request_json.decode("utf-8"))
         return self.fetch_invocation_json
+
+    def build_list_history_invocation(self, request_json: bytes) -> bytes:
+        self.seen_history_request = json.loads(request_json.decode("utf-8"))
+        return self.list_history_invocation_json
+
+    def build_get_history_invocation(self, request_json: bytes) -> bytes:
+        self.seen_history_request = json.loads(request_json.decode("utf-8"))
+        return self.get_history_invocation_json
+
+    def build_trace_invocation(self, request_json: bytes) -> bytes:
+        self.seen_history_request = json.loads(request_json.decode("utf-8"))
+        return self.trace_invocation_json
+
+    def list_history(self, request_json: bytes) -> bytes:
+        self.seen_history_request = json.loads(request_json.decode("utf-8"))
+        return self.history_page_json
+
+    def get_history(self, request_json: bytes) -> bytes:
+        self.seen_history_request = json.loads(request_json.decode("utf-8"))
+        return self.history_record_json
+
+    def get_trace(self, request_json: bytes) -> bytes:
+        self.seen_history_request = json.loads(request_json.decode("utf-8"))
+        return self.trace_json
 
     def project(self, receipt_json: bytes) -> bytes:
         self.seen_receipt_raw = receipt_json
@@ -125,6 +204,22 @@ def fetch_request() -> ReceiptFetchRequest:
         causal_context={"form": "none"},
         request_id="inv-example-1",
         metadata={"request_id": "receipt-fetch-1"},
+    )
+
+
+def history_request(arguments: dict[str, object] | None = None) -> ReceiptHistoryReadRequest:
+    return ReceiptHistoryReadRequest(
+        carrier=ReceiptCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+            timeout_ms=2500,
+            metadata={"request_id": "history-1"},
+        ),
+        arguments=arguments or {"limit": 5},
     )
 
 
@@ -188,6 +283,62 @@ class ReceiptTests(unittest.TestCase):
             draft.to_json().encode("utf-8"),
             shared_fixture("receipt-fetch-invocation.v4.json"),
         )
+
+    def test_history_requests_preserve_complete_carrier(self) -> None:
+        request = history_request({"limit": 5})
+        raw = json.loads(request.to_json_bytes().decode("utf-8"))
+
+        self.assertEqual(raw["caller_ura"], "easynet:///r/example/agent/alice.sdk")
+        self.assertEqual(raw["callee_ura"], "easynet:///r/example/device/dev-a")
+        self.assertEqual(raw["subject_ura"], "easynet:///r/example/device/dev-a")
+        self.assertEqual(raw["descriptor_version"], "1.0.0")
+        self.assertEqual(raw["nonce_base64"], "AQIDBAUGBwgJCgsMDQ4PEA==")
+        self.assertEqual(raw["causal_context"], {"form": "none"})
+        self.assertEqual(raw["timeout_ms"], 2500)
+        self.assertEqual(raw["arguments"], {"limit": 5})
+
+    def test_history_facade_builds_invocations_and_reads_daemon_models(self) -> None:
+        transport = MemoryReceiptTransport()
+        client = ReceiptClient(transport)
+
+        list_draft = client.build_list_history_invocation(history_request({"limit": 5}))
+        get_draft = client.build_get_history_invocation(
+            history_request({"key": {"request_id": "inv-example-1"}})
+        )
+        trace_draft = client.build_trace_invocation(
+            history_request({"key": {"trace_id": "trace-1"}})
+        )
+        page = client.list_history(history_request({"limit": 5}))
+        record = client.get_history(
+            history_request({"key": {"request_id": "inv-example-1"}})
+        )
+        trace = client.get_trace(history_request({"key": {"trace_id": "trace-1"}}))
+
+        self.assertEqual(
+            list_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0",
+        )
+        self.assertEqual(
+            get_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+        )
+        self.assertEqual(
+            trace_draft.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.invocation.trace.get@1.0.0",
+        )
+        self.assertEqual(page["records"][0]["invocation_id"], "inv-example-1")
+        self.assertEqual(record["record"]["state"], "completed")
+        self.assertEqual(trace["trace_id"], "trace-1")
+        assert transport.seen_history_request is not None
+        self.assertEqual(transport.seen_history_request["timeout_ms"], 2500)
+
+    def test_local_receipt_transport_rejects_daemon_history_reads(self) -> None:
+        client = ReceiptClient(LocalReceiptTransport())
+
+        with self.assertRaises(SDKError) as raised:
+            client.list_history(history_request())
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_client_build_fetch_invocation_delegates_to_transport(self) -> None:
         transport = MemoryReceiptTransport()

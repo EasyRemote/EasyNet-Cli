@@ -66,9 +66,10 @@ C ABI-backed signer-handle projection from daemon key inventory plus
 canonical signing material.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
-child-context helpers for EasyRemote-style nested calls, C ABI-backed fetch execution
-through Runtime Core invoke, and close state seams
-over opaque receipt refs plus typed ReceiptRef/ReceiptChain facades that
+child-context helpers for EasyRemote-style nested calls, C ABI-backed fetch plus
+invocation-history list/get/trace read-model execution through Runtime Core
+invoke, and close state seams over opaque receipt refs plus typed
+ReceiptRef/ReceiptChain facades that
 delegate causal-context and continuity projection back through ReceiptClient,
 plus `ReceiptVerification` cryptographic-assurance guardrails that reject
 summary-only projections as verifier evidence, and SDK-owned

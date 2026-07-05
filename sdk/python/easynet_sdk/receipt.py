@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from ._lifecycle import ClientLifecycle
@@ -17,6 +17,52 @@ from .runtime import InvocationResult, RuntimeReceipt
 _PROFILE = "receipt"
 _EASYREMOTE_RECEIPT_PROFILE = "easyremote_receipt"
 _FETCH_ABILITY = "invocation.history.get"
+
+
+@dataclass(frozen=True)
+class ReceiptCarrierBase:
+    """Complete Invocation carrier context shared by receipt read models."""
+
+    caller_ura: str
+    callee_ura: str
+    subject_ura: str
+    descriptor_version: str
+    nonce_base64: str
+    causal_context: Mapping[str, object]
+    timeout_ms: int = 0
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_dict(self) -> dict[str, object]:
+        _validate_carrier_base(self)
+        value: dict[str, object] = {
+            "caller_ura": self.caller_ura,
+            "callee_ura": self.callee_ura,
+            "subject_ura": self.subject_ura,
+            "descriptor_version": self.descriptor_version,
+            "nonce_base64": self.nonce_base64,
+            "causal_context": dict(self.causal_context),
+        }
+        if self.timeout_ms:
+            value["timeout_ms"] = self.timeout_ms
+        if self.metadata:
+            value["metadata"] = dict(self.metadata)
+        return value
+
+
+@dataclass(frozen=True)
+class ReceiptHistoryReadRequest:
+    """Daemon invocation-history/trace read-model request."""
+
+    carrier: ReceiptCarrierBase
+    arguments: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json_bytes(self) -> bytes:
+        if self.carrier is None:
+            raise _invalid_receipt("receipt carrier is required")
+        value = self.carrier.to_json_dict()
+        if self.arguments:
+            value["arguments"] = dict(self.arguments)
+        return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -561,6 +607,24 @@ class ReceiptTransport(Protocol):
     def build_fetch_invocation(self, request_json: bytes) -> bytes:
         ...
 
+    def build_list_history_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_get_history_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def build_trace_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def list_history(self, request_json: bytes) -> bytes:
+        ...
+
+    def get_history(self, request_json: bytes) -> bytes:
+        ...
+
+    def get_trace(self, request_json: bytes) -> bytes:
+        ...
+
     def project(self, receipt_json: bytes) -> bytes:
         ...
 
@@ -589,6 +653,30 @@ class LocalReceiptTransport:
         raise _invalid_receipt(
             "local receipt transport cannot build daemon fetch invocations"
         )
+
+    def build_list_history_invocation(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt(
+            "local receipt transport cannot build daemon history invocations"
+        )
+
+    def build_get_history_invocation(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt(
+            "local receipt transport cannot build daemon history invocations"
+        )
+
+    def build_trace_invocation(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt(
+            "local receipt transport cannot build daemon trace invocations"
+        )
+
+    def list_history(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt("local receipt transport cannot read daemon history")
+
+    def get_history(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt("local receipt transport cannot read daemon history")
+
+    def get_trace(self, request_json: bytes) -> bytes:
+        raise _invalid_receipt("local receipt transport cannot read daemon traces")
 
     def project(self, receipt_json: bytes) -> bytes:
         receipt = _json_object(receipt_json, "receipt summary")
@@ -725,6 +813,55 @@ class ReceiptClient:
             raise _transport_error("receipt fetch invocation failed", exc) from exc
         return InvocationDraft.from_json(raw)
 
+    def build_list_history_invocation(
+        self, request: ReceiptHistoryReadRequest
+    ) -> InvocationDraft:
+        return self._build_history_invocation(
+            request,
+            self.transport.build_list_history_invocation,
+            "receipt list-history invocation failed",
+        )
+
+    def build_get_history_invocation(
+        self, request: ReceiptHistoryReadRequest
+    ) -> InvocationDraft:
+        return self._build_history_invocation(
+            request,
+            self.transport.build_get_history_invocation,
+            "receipt get-history invocation failed",
+        )
+
+    def build_trace_invocation(self, request: ReceiptHistoryReadRequest) -> InvocationDraft:
+        return self._build_history_invocation(
+            request,
+            self.transport.build_trace_invocation,
+            "receipt trace invocation failed",
+        )
+
+    def list_history(self, request: ReceiptHistoryReadRequest) -> Mapping[str, object]:
+        return self._read_history(
+            request,
+            self.transport.list_history,
+            "receipt list-history failed",
+            "receipt list-history output",
+        )
+
+    def get_history(self, request: ReceiptHistoryReadRequest) -> Mapping[str, object]:
+        return self._read_history(
+            request,
+            self.transport.get_history,
+            "receipt get-history failed",
+            "receipt get-history output",
+        )
+
+    def get_trace(self, request: ReceiptHistoryReadRequest) -> Mapping[str, object]:
+        return self._read_history(
+            request,
+            self.transport.get_trace,
+            "receipt trace failed",
+            "receipt trace output",
+        )
+
     def project(self, receipt_json: bytes) -> ReceiptSummary:
         self._require_open()
         if not receipt_json:
@@ -807,6 +944,37 @@ class ReceiptClient:
     def _require_open(self) -> None:
         self._lifecycle.require_open()
 
+    def _build_history_invocation(
+        self,
+        request: ReceiptHistoryReadRequest,
+        build: Callable[[bytes], bytes],
+        message: str,
+    ) -> InvocationDraft:
+        self._require_open()
+        try:
+            raw = build(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(message, exc) from exc
+        return InvocationDraft.from_json(raw)
+
+    def _read_history(
+        self,
+        request: ReceiptHistoryReadRequest,
+        read: Callable[[bytes], bytes],
+        message: str,
+        label: str,
+    ) -> Mapping[str, object]:
+        self._require_open()
+        try:
+            raw = read(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(message, exc) from exc
+        return _json_object(raw, label)
+
 
 def build_receipt_fetch_invocation(request: ReceiptFetchRequest) -> InvocationDraft:
     """Build a complete Runtime Core carrier for daemon receipt lookup."""
@@ -852,6 +1020,29 @@ def _validate_fetch_request(request: ReceiptFetchRequest) -> None:
     )
     if keys != 1:
         raise _invalid_receipt("exactly one receipt lookup key is required")
+
+
+def _validate_carrier_base(request: ReceiptCarrierBase) -> None:
+    if (
+        not request.caller_ura
+        or not request.callee_ura
+        or not request.subject_ura
+        or not request.descriptor_version
+        or not request.nonce_base64
+    ):
+        raise _invalid_receipt(
+            "caller_ura, callee_ura, subject_ura, descriptor_version, and nonce_base64 are required"
+        )
+    if request.causal_context is None:
+        raise _invalid_receipt("causal_context is required")
+    if not isinstance(request.causal_context, Mapping):
+        raise _invalid_receipt("causal_context must be an object")
+    if not isinstance(request.metadata, Mapping):
+        raise _invalid_receipt("metadata must be an object")
+    if not isinstance(request.timeout_ms, int) or isinstance(request.timeout_ms, bool):
+        raise _invalid_receipt("timeout_ms must be an integer")
+    if request.timeout_ms < 0:
+        raise _invalid_receipt("timeout_ms must be non-negative")
 
 
 def _receipt_fetch_key(request: ReceiptFetchRequest) -> dict[str, object]:
