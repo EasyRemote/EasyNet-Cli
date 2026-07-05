@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -65,6 +66,39 @@ func newMemoryHostBindingTransport() *memoryHostBindingTransport {
 		terminalJSON: hostStreamTerminalFrameFixtureJSON,
 		hashJSON:     hostStreamHashStateFixtureJSON,
 	}
+}
+
+type memoryHostLifecycleProvider struct {
+	calls         []string
+	failReadiness bool
+	failCleanup   bool
+}
+
+func (p *memoryHostLifecycleProvider) CheckReadiness(ctx context.Context, binding HostStreamBinding) (HostStreamReadiness, error) {
+	p.calls = append(p.calls, "readiness:"+binding.BindingID)
+	if p.failReadiness {
+		return HostStreamReadiness{}, errors.New("probe failed")
+	}
+	ready := true
+	return HostStreamReadiness{
+		State:         "ready",
+		Checked:       true,
+		EndpointReady: &ready,
+		Metadata:      map[string]any{"endpoint": binding.Endpoint},
+	}, nil
+}
+
+func (p *memoryHostLifecycleProvider) Cleanup(ctx context.Context, binding HostStreamBinding) (HostStreamCleanup, error) {
+	p.calls = append(p.calls, "cleanup:"+binding.BindingID)
+	if p.failCleanup {
+		return HostStreamCleanup{}, errors.New("cleanup failed")
+	}
+	cleanup := NewHostStreamCleanupFromMap(binding.Cleanup)
+	if cleanup.Mode == "" {
+		cleanup.Mode = "none"
+	}
+	cleanup.Metadata["cleaned"] = true
+	return cleanup, nil
 }
 
 func TestHostBindingBuildBindingAndDecodeRequest(t *testing.T) {
@@ -357,6 +391,90 @@ func TestHostBindingClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 	}
 	if transport.seenRequest != nil {
 		t.Fatalf("transport called after close: %#v", transport.seenRequest)
+	}
+}
+
+func TestHostBindingLifecycleProviderDrivesReadinessAndIdempotentCleanup(t *testing.T) {
+	provider := &memoryHostLifecycleProvider{}
+	client, err := NewHostBindingClientWithLifecycleProvider(newMemoryHostBindingTransport(), provider)
+	if err != nil {
+		t.Fatalf("NewHostBindingClientWithLifecycleProvider: %v", err)
+	}
+	binding, err := NewHostStreamBindingFromJSON([]byte(hostStreamBindingFixtureJSON))
+	if err != nil {
+		t.Fatalf("NewHostStreamBindingFromJSON: %v", err)
+	}
+	lifecycle, err := client.OpenLifecycle(context.Background(), binding, nil)
+	if err != nil {
+		t.Fatalf("OpenLifecycle: %v", err)
+	}
+
+	readiness, err := lifecycle.CheckReadiness(context.Background())
+	if err != nil {
+		t.Fatalf("CheckReadiness: %v", err)
+	}
+	cleanup, err := lifecycle.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	cleanupAgain, err := lifecycle.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("second Cleanup: %v", err)
+	}
+	if err := lifecycle.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := lifecycle.Close(context.Background()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	if readiness.State != "ready" || !readiness.Checked || readiness.EndpointReady == nil || !*readiness.EndpointReady {
+		t.Fatalf("readiness = %#v", readiness)
+	}
+	if cleanup.Mode != "unlink_socket" || cleanup.Metadata["cleaned"] != true {
+		t.Fatalf("cleanup = %#v", cleanup)
+	}
+	if cleanupAgain.Mode != cleanup.Mode || cleanupAgain.Metadata["cleaned"] != true {
+		t.Fatalf("second cleanup = %#v", cleanupAgain)
+	}
+	if lifecycle.State() != HostStreamLifecycleClosed {
+		t.Fatalf("state = %s, want %s", lifecycle.State(), HostStreamLifecycleClosed)
+	}
+	if len(provider.calls) != 2 ||
+		provider.calls[0] != "readiness:binding-weather-1" ||
+		provider.calls[1] != "cleanup:binding-weather-1" {
+		t.Fatalf("provider calls = %#v", provider.calls)
+	}
+}
+
+func TestHostBindingLifecycleProviderFailureMarksStateFailed(t *testing.T) {
+	provider := &memoryHostLifecycleProvider{failReadiness: true}
+	client, err := NewHostBindingClientWithLifecycleProvider(newMemoryHostBindingTransport(), provider)
+	if err != nil {
+		t.Fatalf("NewHostBindingClientWithLifecycleProvider: %v", err)
+	}
+	binding, err := NewHostStreamBindingFromJSON([]byte(hostStreamBindingFixtureJSON))
+	if err != nil {
+		t.Fatalf("NewHostStreamBindingFromJSON: %v", err)
+	}
+	lifecycle, err := client.OpenLifecycle(context.Background(), binding, nil)
+	if err != nil {
+		t.Fatalf("OpenLifecycle: %v", err)
+	}
+
+	_, err = lifecycle.CheckReadiness(context.Background())
+	if err == nil {
+		t.Fatalf("CheckReadiness succeeded")
+	}
+	if !IsCode(err, ErrTransport) {
+		t.Fatalf("error code = %v, want %s", err, ErrTransport)
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Stage != "provider" {
+		t.Fatalf("error = %#v, want provider stage", err)
+	}
+	if lifecycle.State() != HostStreamLifecycleFailed {
+		t.Fatalf("state = %s, want %s", lifecycle.State(), HostStreamLifecycleFailed)
 	}
 }
 

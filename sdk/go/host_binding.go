@@ -148,15 +148,20 @@ func (f HostBindingTransportFunc) FoldOutputHash(ctx context.Context, requestJSO
 
 // HostBindingClient is the Host Binding profile facade.
 type HostBindingClient struct {
-	transport HostBindingTransport
-	lifecycle profileClientLifecycle
+	transport         HostBindingTransport
+	lifecycleProvider HostStreamLifecycleProvider
+	lifecycle         profileClientLifecycle
 }
 
 func NewHostBindingClient(transport HostBindingTransport) (*HostBindingClient, error) {
+	return NewHostBindingClientWithLifecycleProvider(transport, nil)
+}
+
+func NewHostBindingClientWithLifecycleProvider(transport HostBindingTransport, provider HostStreamLifecycleProvider) (*HostBindingClient, error) {
 	if transport == nil {
 		return nil, invalidProfileClient(hostBindingProfile, "host binding transport is required")
 	}
-	return &HostBindingClient{transport: transport}, nil
+	return &HostBindingClient{transport: transport, lifecycleProvider: provider}, nil
 }
 
 func (c *HostBindingClient) BuildHostStreamBinding(ctx context.Context, req HostStreamBindingRequest) (HostStreamBinding, error) {
@@ -262,6 +267,36 @@ func (c *HostBindingClient) FoldOutputHash(ctx context.Context, state HostStream
 		return HostStreamHashState{}, wrapHostBindingTransportError("host binding hash fold failed", err)
 	}
 	return NewHostStreamHashStateFromJSON(raw)
+}
+
+func (c *HostBindingClient) OpenLifecycle(ctx context.Context, binding HostStreamBinding, provider HostStreamLifecycleProvider) (*HostStreamLifecycleController, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return nil, err
+	}
+	resolved := provider
+	if resolved == nil {
+		resolved = c.lifecycleProvider
+	}
+	if resolved == nil {
+		return nil, invalidProfileClient(hostBindingProfile, "host stream lifecycle provider is required")
+	}
+	return NewHostStreamLifecycleController(binding, resolved), nil
+}
+
+func (c *HostBindingClient) CheckReadiness(ctx context.Context, binding HostStreamBinding, provider HostStreamLifecycleProvider) (HostStreamReadiness, error) {
+	lifecycle, err := c.OpenLifecycle(ctx, binding, provider)
+	if err != nil {
+		return HostStreamReadiness{}, err
+	}
+	return lifecycle.CheckReadiness(ctx)
+}
+
+func (c *HostBindingClient) Cleanup(ctx context.Context, binding HostStreamBinding, provider HostStreamLifecycleProvider) (HostStreamCleanup, error) {
+	lifecycle, err := c.OpenLifecycle(ctx, binding, provider)
+	if err != nil {
+		return HostStreamCleanup{}, err
+	}
+	return lifecycle.Cleanup(ctx)
 }
 
 func (c *HostBindingClient) Close(ctx context.Context) error {

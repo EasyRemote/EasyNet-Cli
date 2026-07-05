@@ -678,6 +678,8 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 		"encode_item",
 		"fold_output_hash",
 		"encode_terminal",
+		"check_readiness",
+		"cleanup",
 	} {
 		requireCaseAction(t, hostBindingCase, action)
 	}
@@ -697,6 +699,9 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	requireCaseExpectation(t, hostBindingCase, "rejects_corrupted_zero_state: true")
 	requireCaseExpectation(t, hostBindingCase, "rejects_corrupted_gap_state: true")
 	requireCaseExpectation(t, hostBindingCase, "hash_state_invariant: frames_zero_requires_null_last_seq_and_frames_positive_requires_last_seq_equal_frames_minus_one")
+	requireCaseExpectation(t, hostBindingCase, "lifecycle_provider_backed: true")
+	requireCaseExpectation(t, hostBindingCase, "lifecycle_ready_state: ready")
+	requireCaseExpectation(t, hostBindingCase, "cleanup_is_idempotent: true")
 
 	transport := &sharedHostBindingTransport{
 		bindingJSON:  sharedFixture(t, root, "host-stream-binding.v4.json"),
@@ -722,6 +727,37 @@ func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	}
 	if binding.BindingID != "binding-weather-1" || binding.Lifecycle["frame_contract_owner"] != "daemon_sdk" {
 		t.Fatalf("unexpected binding from shared fixture: %#v", binding)
+	}
+	provider := &memoryHostLifecycleProvider{}
+	lifecycle, err := client.OpenLifecycle(context.Background(), binding, provider)
+	if err != nil {
+		t.Fatalf("OpenLifecycle(shared fixture): %v", err)
+	}
+	readiness, err := lifecycle.CheckReadiness(context.Background())
+	if err != nil {
+		t.Fatalf("CheckReadiness(shared fixture): %v", err)
+	}
+	cleanup, err := lifecycle.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup(shared fixture): %v", err)
+	}
+	cleanupAgain, err := lifecycle.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("second Cleanup(shared fixture): %v", err)
+	}
+	if readiness.State != "ready" || readiness.EndpointReady == nil || !*readiness.EndpointReady {
+		t.Fatalf("unexpected readiness from shared fixture: %#v", readiness)
+	}
+	if cleanup.Mode != "unlink_socket" || cleanupAgain.Mode != cleanup.Mode || cleanupAgain.Metadata["cleaned"] != true {
+		t.Fatalf("unexpected cleanup from shared fixture: %#v / %#v", cleanup, cleanupAgain)
+	}
+	if lifecycle.State() != HostStreamLifecycleCleaned {
+		t.Fatalf("state = %s, want %s", lifecycle.State(), HostStreamLifecycleCleaned)
+	}
+	if len(provider.calls) != 2 ||
+		provider.calls[0] != "readiness:binding-weather-1" ||
+		provider.calls[1] != "cleanup:binding-weather-1" {
+		t.Fatalf("provider calls = %#v", provider.calls)
 	}
 
 	request, err := client.DecodeRequest(context.Background(), HostStreamEnvelope{
@@ -2151,12 +2187,15 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Type:  reflect.TypeOf((*HostBindingClient)(nil)),
 			Operations: map[string]string{
 				"BuildHostStreamBinding": "host_binding.build_host_stream_binding",
+				"CheckReadiness":         "host_binding.check_readiness",
 				"Close":                  "host_binding.close",
+				"Cleanup":                "host_binding.cleanup",
 				"DecodeRequest":          "host_binding.decode_request",
 				"EncodeError":            "host_binding.encode_error",
 				"EncodeItem":             "host_binding.encode_item",
 				"EncodeTerminal":         "host_binding.encode_terminal",
 				"FoldOutputHash":         "host_binding.fold_output_hash",
+				"OpenLifecycle":          "host_binding.open_lifecycle",
 			},
 		},
 		{

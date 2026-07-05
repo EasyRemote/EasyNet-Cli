@@ -28,6 +28,19 @@ class HostStreamSessionState(StrEnum):
     CLOSED = "Closed"
 
 
+class HostStreamLifecycleState(StrEnum):
+    """SDK-owned endpoint lifecycle states for a host-stream binding."""
+
+    DECLARED = "declared"
+    CHECKING = "checking"
+    READY = "ready"
+    NOT_READY = "not_ready"
+    CLEANING = "cleaning"
+    CLEANED = "cleaned"
+    FAILED = "failed"
+    CLOSED = "closed"
+
+
 @dataclass(frozen=True)
 class HostStreamCleanup:
     """Host cleanup contract declared to the daemon."""
@@ -426,6 +439,20 @@ class HostBindingTransport(Protocol):
         ...
 
 
+class HostStreamLifecycleProvider(Protocol):
+    """Product-supplied generic endpoint lifecycle operations.
+
+    The provider may probe endpoints and perform cleanup, but it must not execute
+    product user code or own host-stream frame semantics.
+    """
+
+    def check_readiness(self, binding: HostStreamBinding) -> HostStreamReadiness:
+        ...
+
+    def cleanup(self, binding: HostStreamBinding) -> HostStreamCleanup:
+        ...
+
+
 class LocalHostBindingTransport:
     """Pure SDK host-stream codec/hash transport.
 
@@ -585,6 +612,7 @@ class HostBindingClient:
     """Host Binding profile facade."""
 
     transport: HostBindingTransport
+    lifecycle_provider: Optional[HostStreamLifecycleProvider] = None
     _lifecycle: ClientLifecycle = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -693,11 +721,44 @@ class HostBindingClient:
             writer=self.open_frame_writer(initial_state),
         )
 
+    def open_lifecycle(
+        self,
+        binding: HostStreamBinding,
+        provider: Optional[HostStreamLifecycleProvider] = None,
+    ) -> "HostStreamLifecycleController":
+        self._require_open()
+        return HostStreamLifecycleController(
+            binding=binding,
+            provider=self._resolve_lifecycle_provider(provider),
+        )
+
+    def check_readiness(
+        self,
+        binding: HostStreamBinding,
+        provider: Optional[HostStreamLifecycleProvider] = None,
+    ) -> HostStreamReadiness:
+        return self.open_lifecycle(binding, provider).check_readiness()
+
+    def cleanup(
+        self,
+        binding: HostStreamBinding,
+        provider: Optional[HostStreamLifecycleProvider] = None,
+    ) -> HostStreamCleanup:
+        return self.open_lifecycle(binding, provider).cleanup()
+
     def close(self) -> None:
         self._lifecycle.close(self.transport)
 
     def _require_open(self) -> None:
         self._lifecycle.require_open()
+
+    def _resolve_lifecycle_provider(
+        self, provider: Optional[HostStreamLifecycleProvider]
+    ) -> HostStreamLifecycleProvider:
+        resolved = provider or self.lifecycle_provider
+        if resolved is None:
+            raise _invalid_host_binding("host stream lifecycle provider is required")
+        return resolved
 
 
 @dataclass
@@ -816,6 +877,81 @@ class HostStreamSession:
     def _require_open(self) -> None:
         if self.state != HostStreamSessionState.OPEN:
             raise _invalid_host_binding("host stream session is terminal")
+
+
+@dataclass
+class HostStreamLifecycleController:
+    """SDK-owned readiness/cleanup state machine for one host-stream binding."""
+
+    binding: HostStreamBinding
+    provider: HostStreamLifecycleProvider
+    state: HostStreamLifecycleState = HostStreamLifecycleState.DECLARED
+    readiness: Optional[HostStreamReadiness] = None
+    cleanup_result: Optional[HostStreamCleanup] = None
+
+    def __post_init__(self) -> None:
+        if self.provider is None:
+            raise _invalid_host_binding("host stream lifecycle provider is required")
+        if self.readiness is None:
+            self.readiness = self.binding.readiness
+
+    def check_readiness(self) -> HostStreamReadiness:
+        if self.state in {
+            HostStreamLifecycleState.CHECKING,
+            HostStreamLifecycleState.CLEANING,
+            HostStreamLifecycleState.CLEANED,
+            HostStreamLifecycleState.CLOSED,
+        }:
+            raise _invalid_host_binding("host stream lifecycle is not readable")
+        self.state = HostStreamLifecycleState.CHECKING
+        try:
+            readiness = self.provider.check_readiness(self.binding)
+        except SDKError:
+            self.state = HostStreamLifecycleState.FAILED
+            raise
+        except Exception as exc:
+            self.state = HostStreamLifecycleState.FAILED
+            raise _provider_error("host binding readiness provider failed", exc) from exc
+        if not isinstance(readiness, HostStreamReadiness):
+            raise _invalid_host_binding("readiness provider must return HostStreamReadiness")
+        self.readiness = readiness
+        self.state = (
+            HostStreamLifecycleState.READY
+            if readiness.endpoint_ready is True
+            else HostStreamLifecycleState.NOT_READY
+        )
+        return readiness
+
+    def cleanup(self) -> HostStreamCleanup:
+        if self.state == HostStreamLifecycleState.CLEANED:
+            return self.cleanup_result or self.binding.cleanup
+        if self.state == HostStreamLifecycleState.CLOSED:
+            return self.cleanup_result or self.binding.cleanup
+        if self.state == HostStreamLifecycleState.CLEANING:
+            raise _invalid_host_binding("host stream lifecycle cleanup is already running")
+        if self.state == HostStreamLifecycleState.CHECKING:
+            raise _invalid_host_binding("host stream lifecycle readiness check is running")
+        self.state = HostStreamLifecycleState.CLEANING
+        try:
+            cleanup = self.provider.cleanup(self.binding)
+        except SDKError:
+            self.state = HostStreamLifecycleState.FAILED
+            raise
+        except Exception as exc:
+            self.state = HostStreamLifecycleState.FAILED
+            raise _provider_error("host binding cleanup provider failed", exc) from exc
+        if not isinstance(cleanup, HostStreamCleanup):
+            raise _invalid_host_binding("cleanup provider must return HostStreamCleanup")
+        self.cleanup_result = cleanup
+        self.state = HostStreamLifecycleState.CLEANED
+        return cleanup
+
+    def close(self) -> None:
+        if self.state == HostStreamLifecycleState.CLOSED:
+            return
+        if self.state != HostStreamLifecycleState.CLEANED:
+            self.cleanup()
+        self.state = HostStreamLifecycleState.CLOSED
 
 
 def _validate_binding_request(request: HostStreamBindingRequest) -> None:
@@ -1158,6 +1294,18 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
     return SDKError(
         code=ErrorCode.TRANSPORT,
         stage="transport",
+        retry=RetryHint.SAFE,
+        retryable=True,
+        message=message,
+        details=profile_error_details(_PROFILE),
+        cause=cause,
+    )
+
+
+def _provider_error(message: str, cause: BaseException) -> SDKError:
+    return SDKError(
+        code=ErrorCode.TRANSPORT,
+        stage="provider",
         retry=RetryHint.SAFE,
         retryable=True,
         message=message,

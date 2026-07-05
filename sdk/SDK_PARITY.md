@@ -9,8 +9,8 @@ method spelling.
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | provider-backed Runtime Core substrate; language parity tracked through FFI and future Rust SDK public matrix |
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers |
-| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Mission, Admin + Gateway, and Events; seam for Host Binding, Surface, Compatibility, Wrappers, and conformance runner |
-| Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for Host Binding and conformance runner |
+| Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, and Events; seam for Surface, Compatibility, Wrappers, and conformance runner |
+| Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers; seam for conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
 | Swift | P1 | macOS/iOS-adjacent clients | unsupported |
@@ -37,7 +37,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
 | receipt | Receipt | provider-backed | provider-backed | Axon-backed full cryptographic verification and RFC-007 receipt URA construction remain incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
-| host binding | Host Binding | seam | seam | Behavior-executing host lifecycle, readiness, and cleanup providers remain incomplete. |
+| host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
 | mission | Mission | provider-backed | provider-backed | Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete. |
 | admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
 | events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
@@ -80,11 +80,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
   Plugin/skill lifecycle policy, host binding bridge, backend publication
   cutover, and broader non-P0 language facades remain incomplete.
-- Host Binding codec/hash guardrails exist for Rust/C ABI, and Python exposes a
-  conformance-pinned `LocalHostBindingTransport` facade plus EasyRemote audit
-  checks against raw host-stream codecs; product host lifecycle, cleanup
-  execution, and behavior-executing profile conformance adapters remain
-  incomplete.
+- Host Binding codec/hash guardrails exist for Rust/C ABI, and Go/Python expose
+  conformance-pinned local transports plus SDK-owned lifecycle providers for
+  readiness and cleanup state transitions; product host process startup,
+  user-code execution, and downstream product cutover remain outside the daemon
+  SDK.
 - Mission carrier/status/events guardrails exist for Rust/C ABI over
   `mission.run/track/cancel/events`; Go/Python C ABI transports now execute
   run/run-file/track/cancel/events through Runtime Core invoke. Stream-backed
@@ -169,12 +169,12 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   bridge, plugin/skill lifecycle policy, and backend publication cutover remain
   incomplete.
 - Go Host Binding facade exposes `HostBindingClient` binding DTO, envelope
-  decode, item/error/terminal frame encoding, output-hash folding seams, and
-  shared conformance-pinned hash cursor invariants over schema-backed transport
-  projections plus close state seams; product host readiness execution, cleanup
-  execution, local canonical JSON/hash implementation, EasyRemote host process
-  integration, and behavior-executing host lifecycle conformance remain
-  incomplete.
+  decode, item/error/terminal frame encoding, output-hash folding, typed
+  readiness/cleanup projections, SDK-owned lifecycle provider/controller state,
+  and shared conformance-pinned hash cursor invariants over schema-backed
+  transport projections plus close state; product host process startup,
+  user-code execution, and downstream product cutover remain incomplete outside
+  the daemon SDK.
 - Go Mission facade exposes `MissionClient` run/run-file/track/cancel/events
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel/events
   execution through Runtime Core invoke, daemon `MissionStatus` and
@@ -309,15 +309,16 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   remain incomplete.
 - Python Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, typed cleanup/readiness/lifecycle ownership DTOs,
-  item/error/terminal frame encoding, output-hash folding seams with shared
+  item/error/terminal frame encoding, output-hash folding with shared
   conformance-pinned hash cursor invariants over schema-backed and local SDK
-  codec transports, daemon host-stream line-protocol projection
-  projections, and a `HostStreamFrameWriter` lifecycle helper that delegates all
-  frame/hash semantics through the client plus per-call `HostStreamSession`
-  state seams; EasyRemote warm host frame/error/terminal emission now delegates
-  frame and output-hash semantics to SDK Host Binding. Product host readiness
-  execution, cleanup execution, and behavior-executing host lifecycle
-  conformance remain incomplete.
+  codec transports, daemon host-stream line-protocol projections, an SDK-owned
+  lifecycle provider/controller for readiness and cleanup transitions, and a
+  `HostStreamFrameWriter` lifecycle helper that delegates all frame/hash
+  semantics through the client plus per-call `HostStreamSession` state;
+  EasyRemote warm host frame/error/terminal emission now delegates frame and
+  output-hash semantics to SDK Host Binding. Product host process startup,
+  user-code execution, and downstream product cutover remain incomplete outside
+  the daemon SDK.
 - Python Consumer boundary audit helpers expose source-tree checks for raw
   FFI/Axon imports, raw C ABI symbols, raw Invocation JSON codecs, and raw
   URA/DescriptorRef helpers, raw host-stream frame/hash codecs, raw

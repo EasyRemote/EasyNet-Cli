@@ -5,7 +5,7 @@ required_for:
   - c_abi
   - go
   - python
-description: HostBindingClient builds typed host-stream bindings, decodes daemon envelopes, encodes shared item/error/terminal frames, and folds output hashes with daemon-owned semantics.
+description: HostBindingClient builds typed host-stream bindings, decodes daemon envelopes, encodes shared item/error/terminal frames, folds output hashes, and drives readiness/cleanup lifecycle providers with daemon-owned semantics.
 steps:
   - action: build_host_stream_binding
     request:
@@ -41,6 +41,15 @@ steps:
     summary:
       output_hash: sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15
       frames: 1
+  - action: check_readiness
+    provider_result:
+      state: ready
+      checked: true
+      endpoint_ready: true
+  - action: cleanup
+    provider_result:
+      mode: unlink_socket
+      cleaned: true
 expect:
   result: host_binding_codec_observed
   binding_schema: host-stream-binding.schema.json
@@ -65,4 +74,7 @@ expect:
   rejects_corrupted_gap_state: true
   hash_state_invariant: frames_zero_requires_null_last_seq_and_frames_positive_requires_last_seq_equal_frames_minus_one
   local_transport_matches_shared_hash: true
+  lifecycle_provider_backed: true
+  lifecycle_ready_state: ready
+  cleanup_is_idempotent: true
   product_host_owns_process_warmth: true

@@ -57,10 +57,13 @@ from easynet_sdk import (
     HealthClient,
     HostBindingClient,
     LocalHostBindingTransport,
+    HostStreamCleanup,
     HostStreamBindingRequest,
     HostStreamEnvelope,
     HostStreamEnvelopeRequest,
     HostStreamHashState,
+    HostStreamLifecycleState,
+    HostStreamReadiness,
     HostStreamTerminalSummary,
     IdentityClient,
     IdentityProjection,
@@ -192,6 +195,27 @@ class SharedHostBindingTransport:
 
     def close(self) -> None:
         return None
+
+
+class SharedHostLifecycleProvider:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def check_readiness(self, binding):
+        self.calls.append(f"readiness:{binding.binding_id}")
+        return HostStreamReadiness(
+            state="ready",
+            checked=True,
+            endpoint_ready=True,
+            metadata={"endpoint": binding.endpoint},
+        )
+
+    def cleanup(self, binding):
+        self.calls.append(f"cleanup:{binding.binding_id}")
+        return HostStreamCleanup(
+            mode=binding.cleanup.mode or "none",
+            metadata={"cleaned": True},
+        )
 
 
 class SharedDirectoryTransport:
@@ -1704,6 +1728,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "encode_item",
             "fold_output_hash",
             "encode_terminal",
+            "check_readiness",
+            "cleanup",
         ):
             self._require_case_action(host_binding_case, action)
         for fixture in (
@@ -1735,9 +1761,17 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             host_binding_case, "local_transport_matches_shared_hash: true"
         )
+        self._require_case_expectation(
+            host_binding_case, "lifecycle_provider_backed: true"
+        )
+        self._require_case_expectation(host_binding_case, "lifecycle_ready_state: ready")
+        self._require_case_expectation(
+            host_binding_case, "cleanup_is_idempotent: true"
+        )
 
         transport = SharedHostBindingTransport()
-        client = HostBindingClient(transport)
+        provider = SharedHostLifecycleProvider()
+        client = HostBindingClient(transport, provider)
 
         binding = client.build_host_stream_binding(
             HostStreamBindingRequest(
@@ -1750,6 +1784,22 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(binding.binding_id, "binding-weather-1")
         self.assertEqual(binding.lifecycle["frame_contract_owner"], "daemon_sdk")
+        lifecycle = client.open_lifecycle(binding)
+        readiness = lifecycle.check_readiness()
+        cleanup = lifecycle.cleanup()
+        cleanup_again = lifecycle.cleanup()
+        self.assertEqual(readiness.state, "ready")
+        self.assertTrue(readiness.endpoint_ready)
+        self.assertEqual(cleanup.mode, "unlink_socket")
+        self.assertIs(cleanup_again, cleanup)
+        self.assertEqual(lifecycle.state, HostStreamLifecycleState.CLEANED)
+        self.assertEqual(
+            provider.calls,
+            [
+                "readiness:binding-weather-1",
+                "cleanup:binding-weather-1",
+            ],
+        )
 
         request = client.decode_request(
             HostStreamEnvelope(
@@ -3416,12 +3466,15 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 HostBindingClient,
                 {
                     "build_host_stream_binding": "host_binding.build_host_stream_binding",
+                    "check_readiness": "host_binding.check_readiness",
                     "close": "host_binding.close",
+                    "cleanup": "host_binding.cleanup",
                     "decode_request": "host_binding.decode_request",
                     "encode_error": "host_binding.encode_error",
                     "encode_item": "host_binding.encode_item",
                     "encode_terminal": "host_binding.encode_terminal",
                     "fold_output_hash": "host_binding.fold_output_hash",
+                    "open_lifecycle": "host_binding.open_lifecycle",
                     "open_frame_writer": "host_binding.open_frame_writer",
                     "open_session": "host_binding.open_session",
                 },

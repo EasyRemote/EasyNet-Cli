@@ -198,14 +198,14 @@
       "profile": "host_binding",
       "shared_cases": ["sdk/conformance/cases/host-binding-codec-hash.yaml"],
       "go": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/host_binding_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
       },
       "python": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_host_binding.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Behavior-executing host lifecycle, readiness, and cleanup providers remain incomplete."
+      "remaining": "Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK."
     },
     {
       "capability_id": "mission",

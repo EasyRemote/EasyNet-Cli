@@ -7,12 +7,14 @@ from easynet_sdk.host_binding import (
     HOST_STREAM_HASH_ALGORITHM,
     HOST_STREAM_EMPTY_OUTPUT_HASH,
     HostBindingClient,
+    HostStreamBinding,
     HostStreamBindingRequest,
     HostStreamCleanup,
     HostStreamEnvelope,
     HostStreamEnvelopeRequest,
     HostStreamHashState,
     HostStreamLifecycle,
+    HostStreamLifecycleState,
     HostStreamReadiness,
     HostStreamSessionState,
     HostStreamTerminalSummary,
@@ -142,6 +144,33 @@ class MemoryHostBindingTransport:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+class MemoryHostLifecycleProvider:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.fail_readiness = False
+        self.fail_cleanup = False
+
+    def check_readiness(self, binding):
+        self.calls.append(f"readiness:{binding.binding_id}")
+        if self.fail_readiness:
+            raise RuntimeError("probe failed")
+        return HostStreamReadiness(
+            state="ready",
+            checked=True,
+            endpoint_ready=True,
+            metadata={"endpoint": binding.endpoint},
+        )
+
+    def cleanup(self, binding):
+        self.calls.append(f"cleanup:{binding.binding_id}")
+        if self.fail_cleanup:
+            raise RuntimeError("cleanup failed")
+        return HostStreamCleanup(
+            mode=binding.cleanup.mode or "none",
+            metadata={"cleaned": True},
+        )
 
 
 class HostBindingTests(unittest.TestCase):
@@ -555,6 +584,45 @@ class HostBindingTests(unittest.TestCase):
             client.encode_item(0, {"token": "hello"})
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(transport.seen_request)
+
+    def test_host_lifecycle_provider_drives_readiness_and_idempotent_cleanup(self) -> None:
+        provider = MemoryHostLifecycleProvider()
+        client = HostBindingClient(MemoryHostBindingTransport(), provider)
+        binding = HostStreamBinding.from_json(BINDING_JSON)
+        lifecycle = client.open_lifecycle(binding)
+
+        readiness = lifecycle.check_readiness()
+        cleanup = lifecycle.cleanup()
+        cleanup_again = lifecycle.cleanup()
+        lifecycle.close()
+        lifecycle.close()
+
+        self.assertEqual(readiness.state, "ready")
+        self.assertTrue(readiness.checked)
+        self.assertTrue(readiness.endpoint_ready)
+        self.assertEqual(cleanup.mode, "unlink_socket")
+        self.assertIs(cleanup_again, cleanup)
+        self.assertEqual(lifecycle.state, HostStreamLifecycleState.CLOSED)
+        self.assertEqual(
+            provider.calls,
+            [
+                "readiness:binding-weather-1",
+                "cleanup:binding-weather-1",
+            ],
+        )
+
+    def test_host_lifecycle_provider_failure_marks_state_failed(self) -> None:
+        provider = MemoryHostLifecycleProvider()
+        provider.fail_readiness = True
+        client = HostBindingClient(MemoryHostBindingTransport(), provider)
+        lifecycle = client.open_lifecycle(HostStreamBinding.from_json(BINDING_JSON))
+
+        with self.assertRaises(SDKError) as caught:
+            lifecycle.check_readiness()
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.TRANSPORT))
+        self.assertEqual(caught.exception.stage, "provider")
+        self.assertEqual(lifecycle.state, HostStreamLifecycleState.FAILED)
 
 
 def _weather_envelope() -> HostStreamEnvelope:
