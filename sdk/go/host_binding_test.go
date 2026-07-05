@@ -192,6 +192,94 @@ func TestHostBindingFoldOutputHashRejectsSequenceGap(t *testing.T) {
 	}
 }
 
+func TestLocalHostBindingTransportProjectsCodecAndHash(t *testing.T) {
+	client, err := NewLocalHostBindingClient(nil)
+	if err != nil {
+		t.Fatalf("NewLocalHostBindingClient: %v", err)
+	}
+
+	binding, err := client.BuildHostStreamBinding(context.Background(), HostStreamBindingRequest{
+		BindingID:     "binding-weather-1",
+		DescriptorRef: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+		Endpoint:      "/tmp/easynet-weather.sock",
+		FrameSchema:   hostStreamFrameSchema,
+		Cleanup:       map[string]any{"mode": "unlink_socket"},
+		TimeoutMS:     int64PtrForHostBindingTest(30000),
+		Metadata:      map[string]any{"source": "fixture"},
+	})
+	if err != nil {
+		t.Fatalf("BuildHostStreamBinding: %v", err)
+	}
+	if binding.Lifecycle["frame_contract_owner"] != "daemon_sdk" ||
+		binding.Metadata["hash_algorithm"] != hostStreamHashAlgorithm ||
+		binding.Readiness["state"] != "declared" {
+		t.Fatalf("local binding projection = %#v", binding)
+	}
+
+	request, err := client.DecodeRequest(context.Background(), HostStreamEnvelope{
+		Request: HostStreamEnvelopeRequest{
+			Fn:     "weather.stream",
+			Args:   map[string]any{"city": "Singapore"},
+			CallID: "call-weather-1",
+			Caller: "easynet:///r/example/user/alice",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DecodeRequest: %v", err)
+	}
+	if request.Function != "weather.stream" || request.Metadata["frame_contract_owner"] != "daemon_sdk" {
+		t.Fatalf("local request projection = %#v", request)
+	}
+
+	item, err := client.EncodeItem(context.Background(), 0, map[string]any{"token": "hello"})
+	if err != nil {
+		t.Fatalf("EncodeItem: %v", err)
+	}
+	if item.FrameType != "item" || item.Seq == nil || *item.Seq != 0 {
+		t.Fatalf("local item frame = %#v", item)
+	}
+
+	errorFrame, err := client.EncodeError(context.Background(), &SDKError{
+		Code:    ErrInvalidArgument,
+		Stage:   "host",
+		Retry:   RetryNever,
+		Message: "bad input",
+		Details: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("EncodeError: %v", err)
+	}
+	if errorFrame.FrameType != "error" || errorFrame.Error == nil || errorFrame.Error.Code != ErrInvalidArgument {
+		t.Fatalf("local error frame = %#v", errorFrame)
+	}
+
+	state := HostStreamHashState{
+		Algorithm:  hostStreamHashAlgorithm,
+		OutputHash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		Frames:     0,
+	}
+	folded, err := client.FoldOutputHash(context.Background(), state, 0, map[string]any{"token": "hello"})
+	if err != nil {
+		t.Fatalf("FoldOutputHash: %v", err)
+	}
+	if folded.OutputHash != "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15" ||
+		folded.CanonicalJSON != `{"token":"hello"}` {
+		t.Fatalf("local folded hash = %#v", folded)
+	}
+
+	terminal, err := client.EncodeTerminal(context.Background(), HostStreamTerminalSummary{
+		OutputHash: folded.OutputHash,
+		Frames:     folded.Frames,
+		Metadata:   map[string]any{"canonical_json": folded.CanonicalJSON},
+	})
+	if err != nil {
+		t.Fatalf("EncodeTerminal: %v", err)
+	}
+	if terminal.FrameType != "terminal" || terminal.OutputHash == nil || *terminal.OutputHash != folded.OutputHash {
+		t.Fatalf("local terminal frame = %#v", terminal)
+	}
+}
+
 func TestHostBindingHashStateRejectsCorruptedFrameCursor(t *testing.T) {
 	var zero HostStreamHashState
 	if err := json.Unmarshal([]byte(hostStreamHashStateFixtureJSON), &zero); err != nil {
@@ -270,6 +358,10 @@ func TestHostBindingClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 	if transport.seenRequest != nil {
 		t.Fatalf("transport called after close: %#v", transport.seenRequest)
 	}
+}
+
+func int64PtrForHostBindingTest(value int64) *int64 {
+	return &value
 }
 
 const hostStreamBindingFixtureJSON = `{
