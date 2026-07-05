@@ -198,6 +198,31 @@ def normalize_error_code(code: str) -> ErrorCode:
     return aliases[code]
 
 
+def canonical_failure_code(code: str | None = None) -> ErrorCode:
+    """Project daemon/wire failure codes into the canonical SDK taxonomy."""
+
+    if code:
+        try:
+            return normalize_error_code(code)
+        except SDKError:
+            return ErrorCode.PROTOCOL_MISMATCH
+    return ErrorCode.ADMISSION_DENIED
+
+
+def canonical_terminal_state_code(state: str) -> ErrorCode:
+    """Project terminal runtime states into canonical SDK error codes."""
+
+    match state:
+        case "TimedOut":
+            return ErrorCode.TIMEOUT
+        case "Cancelled":
+            return ErrorCode.CANCELLED
+        case "Failed":
+            return ErrorCode.ADMISSION_DENIED
+        case _:
+            return ErrorCode.PROTOCOL_MISMATCH
+
+
 def profile_error_details(
     profile: str,
     *,

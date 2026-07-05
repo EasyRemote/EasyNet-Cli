@@ -300,6 +300,62 @@ class DirectRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(request.envelope.causal_context.WhichOneof("form"), "none")
 
+    def test_direct_transport_projects_failed_terminal_state_to_admission_denied(self) -> None:
+        class FailedServicer(RecordingInvocationServicer):
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_FAILED,
+                    elapsed_ms=4,
+                )
+
+        servicer = FailedServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
+                )
+            )
+            try:
+                result = transport.invoke(complete_draft())
+            finally:
+                transport.close()
+
+        error = cast(dict[str, object], result["error"])
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["terminal_state"], "Failed")
+        self.assertEqual(error["code"], ErrorCode.ADMISSION_DENIED.value)
+
+    def test_direct_transport_projects_cancelled_terminal_state_to_cancelled(self) -> None:
+        class CancelledServicer(RecordingInvocationServicer):
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_CANCELLED,
+                    elapsed_ms=4,
+                )
+
+        servicer = CancelledServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
+                )
+            )
+            try:
+                result = transport.invoke(complete_draft())
+            finally:
+                transport.close()
+
+        error = cast(dict[str, object], result["error"])
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["terminal_state"], "Cancelled")
+        self.assertEqual(error["code"], ErrorCode.CANCELLED.value)
+
     def test_direct_transport_rejects_non_string_metadata_before_wire_call(
         self,
     ) -> None:

@@ -446,7 +446,7 @@ class WrapperClientTests(unittest.TestCase):
         )
         with self.assertRaises(SDKError) as caught:
             failed.transfer_file(file_transfer_request())
-        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ADMISSION_DENIED))
 
         malformed = WrapperClient(
             RuntimeWrapperTransport(

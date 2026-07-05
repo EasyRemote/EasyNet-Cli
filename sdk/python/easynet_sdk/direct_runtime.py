@@ -24,7 +24,13 @@ from ._axon_pb.axon.v1 import (
     types_pb2 as _types_pb2,
 )
 from .control_ipc import ControlDiscovery, read_control_discovery
-from .errors import ErrorCode, RetryHint, SDKError, normalize_error_code
+from .errors import (
+    ErrorCode,
+    RetryHint,
+    SDKError,
+    canonical_failure_code,
+    canonical_terminal_state_code,
+)
 from .invocation import InvocationDraft
 from .runtime import RuntimeTransport
 from .bidi import BidiFrame, BidiTransport
@@ -997,7 +1003,7 @@ def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
         return _axon_failure(chunk.error, _error_stage(chunk.error.stage))
     state = _state_name(chunk.state)
     if state in {"Failed", "TimedOut", "Cancelled"}:
-        code = ErrorCode.TIMEOUT if state == "TimedOut" else ErrorCode.ABILITY_FAILED
+        code = canonical_terminal_state_code(state)
         return {
             "code": code.value,
             "stage": "direct_runtime.stream",
@@ -1122,7 +1128,7 @@ def _response_failure(
         }
     if terminal_state in {"Completed", "Accepted", "Admitted", "Dispatched", "Running"}:
         return None
-    code = ErrorCode.TIMEOUT if terminal_state == "TimedOut" else ErrorCode.ABILITY_FAILED
+    code = canonical_terminal_state_code(terminal_state)
     return {
         "code": code.value,
         "stage": "direct_runtime.invoke",
@@ -1133,11 +1139,8 @@ def _response_failure(
 
 def _response_error_code(code: str) -> ErrorCode:
     if code:
-        try:
-            return normalize_error_code(code)
-        except SDKError:
-            return ErrorCode.ABILITY_FAILED
-    return ErrorCode.ABILITY_FAILED
+        return canonical_failure_code(code)
+    return ErrorCode.ADMISSION_DENIED
 
 
 def _state_name(value: int) -> str:

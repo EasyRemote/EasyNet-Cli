@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, cast, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
+from .errors import (
+    ErrorCode,
+    RetryHint,
+    SDKError,
+    canonical_failure_code,
+    profile_error_details,
+)
 from .identity import (
     LocalResourceRefRequest,
     ResourceRef,
@@ -860,7 +866,7 @@ class RuntimePublicationTransport:
         result = self.runtime.invoke(draft)
         if not result.ok:
             raise SDKError(
-                code=ErrorCode.ABILITY_FAILED,
+                code=canonical_failure_code(result.error.code if result.error else None),
                 stage="publication",
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
@@ -998,7 +1004,7 @@ class RuntimePublicationTransport:
         result = self.runtime.invoke(draft)
         if not result.ok:
             raise SDKError(
-                code=ErrorCode.ABILITY_FAILED,
+                code=canonical_failure_code(result.error.code if result.error else None),
                 stage="publication",
                 retry=RetryHint.UNKNOWN,
                 retryable=False,

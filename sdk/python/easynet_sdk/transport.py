@@ -22,7 +22,7 @@ from .connection import (
     ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
-from .errors import ErrorCode, RetryHint, SDKError
+from .errors import ErrorCode, RetryHint, SDKError, canonical_failure_code
 from .invocation import InvocationDraft
 from .runtime import InvocationFailure, InvocationResult, PrepareOptions, RuntimeClient
 from .signing import Signer
@@ -797,10 +797,13 @@ def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
     if result.get("ok") is not True:
         error = result.get("error")
         message = "daemon invocation failed"
+        raw_code: str | None = None
         if isinstance(error, Mapping) and isinstance(error.get("message"), str):
             message = error["message"]
+        if isinstance(error, Mapping) and isinstance(error.get("code"), str):
+            raw_code = error["code"]
         raise SDKError(
-            code=ErrorCode.ABILITY_FAILED,
+            code=canonical_failure_code(raw_code),
             stage="transport",
             retry=RetryHint.UNKNOWN,
             retryable=False,
@@ -942,7 +945,7 @@ _REMOTE_ERROR_CODES = {
 def _remote_wire_error(error: object, *, stage: str = "stream") -> SDKError:
     if not isinstance(error, Mapping):
         return SDKError(
-            code=ErrorCode.ABILITY_FAILED,
+            code=ErrorCode.PROTOCOL_MISMATCH,
             stage=stage,
             retry=RetryHint.UNKNOWN,
             retryable=False,
@@ -955,7 +958,13 @@ def _remote_wire_error(error: object, *, stage: str = "stream") -> SDKError:
     kind_text = kind if isinstance(kind, str) else ""
     reason_text = reason if isinstance(reason, str) else ""
     message_text = message if isinstance(message, str) else ""
-    code = _REMOTE_ERROR_CODES.get(kind_text, ErrorCode.ABILITY_FAILED)
+    code = (
+        _REMOTE_ERROR_CODES.get(kind_text)
+        if kind_text
+        else ErrorCode.PROTOCOL_MISMATCH
+    )
+    if code is None:
+        code = canonical_failure_code(kind_text)
     return SDKError(
         code=code,
         stage=stage,

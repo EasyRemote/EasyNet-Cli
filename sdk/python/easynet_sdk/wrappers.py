@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
+from .errors import (
+    ErrorCode,
+    RetryHint,
+    SDKError,
+    canonical_failure_code,
+    profile_error_details,
+)
 from .invocation import InvocationDraft
 from .runtime import RuntimeClient
 
@@ -438,7 +444,7 @@ class RuntimeWrapperTransport:
         result = self.runtime.invoke(draft)
         if not result.ok:
             raise SDKError(
-                code=ErrorCode.ABILITY_FAILED,
+                code=canonical_failure_code(result.error.code if result.error else None),
                 stage="wrappers",
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
