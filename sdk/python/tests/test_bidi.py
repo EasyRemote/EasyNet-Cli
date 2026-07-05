@@ -5,6 +5,7 @@ from easynet_sdk import (
     BidiFrame,
     BidiSession,
     BidiState,
+    BidiTerminalFrame,
     ErrorCode,
     SDKError,
     is_code,
@@ -63,7 +64,9 @@ class BidiTests(unittest.TestCase):
 
     def test_bidi_sends_and_receives_ordered_frames(self) -> None:
         transport = MemoryBidiTransport(
-            [b'{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"ready":true}}']
+            [
+                b'{"sequence":1,"kind":"data","stream_id":1,"payload_json":{"ready":true}}'
+            ]
         )
         session = new_session(transport)
 
@@ -103,6 +106,28 @@ class BidiTests(unittest.TestCase):
         self.assertTrue(outcome.terminal)
         self.assertTrue(transport.closed)
         self.assertEqual(session.state, BidiState.CLOSED)
+
+    def test_terminal_frame_projects_schema_shape(self) -> None:
+        transport = MemoryBidiTransport(
+            [
+                b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
+                b'"payload_json":{"receipt":{"receipt_ura":'
+                b'"easynet:///r/example/receipt/r1"}}}'
+            ]
+        )
+        session = new_session(transport)
+
+        session.receive()
+        terminal = session.terminal_frame()
+
+        self.assertIsInstance(terminal, BidiTerminalFrame)
+        self.assertEqual(terminal.session_id, "bidi-1")
+        self.assertEqual(terminal.frame_type, "terminal")
+        self.assertEqual(terminal.seq, 1)
+        self.assertEqual(
+            terminal.receipt, {"receipt_ura": "easynet:///r/example/receipt/r1"}
+        )
+        self.assertIn(b'"frame_type":"terminal"', terminal.to_json())
 
     def test_cancel_is_terminal(self) -> None:
         transport = MemoryBidiTransport()

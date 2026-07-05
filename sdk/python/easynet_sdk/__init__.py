@@ -86,6 +86,7 @@ from .bidi import (
     BidiSession,
     BidiState,
     BidiStreamDescriptor,
+    BidiTerminalFrame,
     BidiTransport,
 )
 from .connection import (
@@ -352,6 +353,7 @@ from .stream import (
     StreamEvent,
     StreamHandle,
     StreamState,
+    StreamTerminalEvent,
     StreamTransport,
 )
 from .surface import (
@@ -722,12 +724,14 @@ __all__ = [
     "BidiSession",
     "BidiState",
     "BidiStreamDescriptor",
+    "BidiTerminalFrame",
     "BidiTransport",
     "StreamCancel",
     "StreamChatCompletionRequest",
     "StreamEvent",
     "StreamHandle",
     "StreamState",
+    "StreamTerminalEvent",
     "StreamTransport",
     "CreatePageRequest",
     "DeletePageRequest",

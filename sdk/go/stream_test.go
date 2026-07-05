@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -57,11 +58,52 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	if !terminal.Terminal() || stream.State() != StreamTerminalFrameSeen {
 		t.Fatalf("terminal not recorded: %#v state=%s", terminal, stream.State())
 	}
+	terminalEvent, err := stream.TerminalEvent()
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if terminalEvent.StreamID() != "stream-1" || terminalEvent.EventType() != "terminal" || terminalEvent.Seq() != 2 {
+		t.Fatalf("unexpected terminal event projection: %#v", terminalEvent)
+	}
+	if string(terminalEvent.PayloadJSON()) != `{"ok":true}` {
+		t.Fatalf("terminal payload = %s", terminalEvent.PayloadJSON())
+	}
 	if err := stream.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if !transport.closed || stream.State() != StreamClosed {
 		t.Fatalf("stream not closed: transport=%v state=%s", transport.closed, stream.State())
+	}
+}
+
+func TestStreamTerminalEventProjectsReceiptPayload(t *testing.T) {
+	transport := &memoryStreamTransport{events: []string{
+		`{"sequence":1,"event":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`,
+	}}
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+	if _, err := stream.Next(context.Background()); err != nil {
+		t.Fatalf("Next terminal: %v", err)
+	}
+	terminal, err := stream.TerminalEvent()
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+		t.Fatalf("receipt = %s", terminal.ReceiptJSON())
+	}
+	raw, err := json.Marshal(terminal)
+	if err != nil {
+		t.Fatalf("marshal terminal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode terminal: %v", err)
+	}
+	if decoded["event_type"] != "terminal" || decoded["stream_id"] != "stream-1" || decoded["seq"].(float64) != 1 {
+		t.Fatalf("unexpected terminal JSON: %s", raw)
 	}
 }
 

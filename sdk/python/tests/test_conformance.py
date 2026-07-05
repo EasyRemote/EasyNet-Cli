@@ -99,8 +99,10 @@ from easynet_sdk import (
     BidiFrame,
     BidiSession,
     BidiState,
+    BidiTerminalFrame,
     StreamHandle,
     StreamState,
+    StreamTerminalEvent,
     SurfaceCarrierBase,
     SurfaceClient,
     SurfaceCreatePageRequest,
@@ -1518,8 +1520,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_id(lifecycle_case, "stream_bidi/lifecycle_state")
         for action in (
             "open_stream",
+            "project_stream_terminal_event",
             "close_stream",
             "open_bidi",
+            "project_bidi_terminal_frame",
             "close_bidi_send",
             "send_bidi_after_close_send",
             "close_bidi",
@@ -1527,6 +1531,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             self._require_case_action(lifecycle_case, action)
         self._require_case_fixture(lifecycle_case, "invocation.complete.v4.json")
         for expectation in (
+            "stream_terminal_schema: stream-event.schema.json",
+            "bidi_terminal_schema: bidi-frame.schema.json",
             "stream_close_unknown_is_idempotent: true",
             "stream_cross_owner_close_error: ERR_INVALID_HANDLE",
             "bidi_close_send_keeps_session_registered: true",
@@ -1537,6 +1543,63 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             self._require_case_expectation(lifecycle_case, expectation)
 
         InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
+
+        class StreamTerminalTransport:
+            def __init__(self) -> None:
+                self.events = [
+                    b'{"sequence":1,"kind":"terminal","state":"Completed",'
+                    b'"terminal":true,"payload_json":{"receipt":'
+                    b'{"receipt_ura":"easynet:///r/example/receipt/r1"}}}'
+                ]
+
+            def recv(self, timeout: float | None = None) -> bytes:
+                return self.events.pop(0)
+
+            def cancel(self, reason: str) -> bytes:
+                raise SDKError(
+                    code=ErrorCode.NOT_IMPLEMENTED,
+                    stage="test",
+                    retry=RetryHint.NEVER,
+                    message="not used by shared stream terminal projection test",
+                )
+
+            def close(self) -> None:
+                return None
+
+        terminal_stream = StreamHandle.from_json(
+            StreamTerminalTransport(),
+            b'{"stream_id":"stream-terminal-1","state":"Open","max_buffered_events":4}',
+        )
+        terminal_stream.next()
+        stream_terminal = terminal_stream.terminal_event()
+        self.assertIsInstance(stream_terminal, StreamTerminalEvent)
+        self.assertEqual(stream_terminal.stream_id, "stream-terminal-1")
+        self.assertEqual(stream_terminal.event_type, "terminal")
+        self.assertEqual(stream_terminal.seq, 1)
+        self.assertEqual(
+            stream_terminal.receipt,
+            {"receipt_ura": "easynet:///r/example/receipt/r1"},
+        )
+
+        terminal_bidi = BidiSession.from_json(
+            SharedBidiLifecycleTransport(),
+            b'{"session_id":"bidi-terminal-1","state":"Open","max_buffered_frames":4}',
+        )
+        terminal_bidi.transport.recv_frames = [
+            b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
+            b'"payload_json":{"receipt":'
+            b'{"receipt_ura":"easynet:///r/example/receipt/r1"}}}'
+        ]
+        terminal_bidi.receive()
+        bidi_terminal = terminal_bidi.terminal_frame()
+        self.assertIsInstance(bidi_terminal, BidiTerminalFrame)
+        self.assertEqual(bidi_terminal.session_id, "bidi-terminal-1")
+        self.assertEqual(bidi_terminal.frame_type, "terminal")
+        self.assertEqual(bidi_terminal.seq, 1)
+        self.assertEqual(
+            bidi_terminal.receipt,
+            {"receipt_ura": "easynet:///r/example/receipt/r1"},
+        )
 
         class StreamCloseTransport:
             def __init__(self) -> None:

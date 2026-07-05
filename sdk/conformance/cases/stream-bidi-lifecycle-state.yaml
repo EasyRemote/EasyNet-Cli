@@ -9,14 +9,20 @@ description: Stream close and bidi close-send preserve owner scoping, distinguis
 steps:
   - action: open_stream
     fixture: invocation.complete.v4.json
+  - action: project_stream_terminal_event
+    schema: stream-event.schema.json
   - action: close_stream
   - action: open_bidi
     fixture: invocation.complete.v4.json
+  - action: project_bidi_terminal_frame
+    schema: bidi-frame.schema.json
   - action: close_bidi_send
   - action: send_bidi_after_close_send
   - action: close_bidi
 expect:
   result: lifecycle_observed
+  stream_terminal_schema: stream-event.schema.json
+  bidi_terminal_schema: bidi-frame.schema.json
   stream_close_unknown_is_idempotent: true
   stream_cross_owner_close_error: ERR_INVALID_HANDLE
   bidi_close_send_keeps_session_registered: true

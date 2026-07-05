@@ -59,13 +59,14 @@ func (f StreamTransportFunc) Close(ctx context.Context) error {
 
 // StreamHandle is the public ordered stream event state object.
 type StreamHandle struct {
-	streamID     string
-	transport    StreamTransport
-	state        StreamState
-	events       []StreamEvent
-	lastSequence uint64
-	terminalSeen bool
-	maxBuffered  int
+	streamID      string
+	transport     StreamTransport
+	state         StreamState
+	events        []StreamEvent
+	lastSequence  uint64
+	terminalSeen  bool
+	terminalEvent *StreamTerminalEvent
+	maxBuffered   int
 }
 
 // StreamEvent is an SDK stream event projection.
@@ -81,6 +82,16 @@ type StreamEvent struct {
 	schedulingReason   string
 	elapsedMS          int64
 	errorJSON          json.RawMessage
+}
+
+// StreamTerminalEvent is the schema-shaped Runtime Core stream terminal projection.
+type StreamTerminalEvent struct {
+	streamID  string
+	eventType string
+	seq       uint64
+	payload   json.RawMessage
+	errorJSON json.RawMessage
+	receipt   json.RawMessage
 }
 
 // StreamCancel is the stream cancellation outcome projection.
@@ -158,6 +169,16 @@ func (s *StreamHandle) MaxBufferedEvents() int {
 		return 0
 	}
 	return s.maxBuffered
+}
+
+func (s *StreamHandle) TerminalEvent() (StreamTerminalEvent, error) {
+	if s == nil {
+		return StreamTerminalEvent{}, invalidRuntimeClient("stream handle is not initialized")
+	}
+	if s.terminalEvent == nil {
+		return StreamTerminalEvent{}, invalidRuntimePayload("stream terminal event has not been seen", nil)
+	}
+	return *s.terminalEvent, nil
 }
 
 func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
@@ -270,6 +291,12 @@ func (s *StreamHandle) applyEvent(event StreamEvent) error {
 	s.events = append(s.events, event)
 	if event.terminal {
 		s.terminalSeen = true
+		terminal, err := NewStreamTerminalEvent(s.streamID, event)
+		if err != nil {
+			s.state = StreamFailed
+			return err
+		}
+		s.terminalEvent = &terminal
 		s.state = StreamTerminalFrameSeen
 	}
 	return nil
@@ -339,6 +366,66 @@ func (c StreamCancel) Terminal() bool {
 	return c.terminal
 }
 
+// NewStreamTerminalEvent projects a terminal stream event into stream-event.schema.json shape.
+func NewStreamTerminalEvent(streamID string, event StreamEvent) (StreamTerminalEvent, error) {
+	if streamID == "" {
+		return StreamTerminalEvent{}, invalidRuntimePayload("stream_id is required", nil)
+	}
+	if !event.terminal {
+		return StreamTerminalEvent{}, invalidRuntimePayload("stream event is not terminal", nil)
+	}
+	return StreamTerminalEvent{
+		streamID:  streamID,
+		eventType: streamTerminalEventType(event),
+		seq:       event.sequence,
+		payload:   append(json.RawMessage(nil), event.payloadJSON...),
+		errorJSON: append(json.RawMessage(nil), event.errorJSON...),
+		receipt:   receiptFromPayload(event.payloadJSON),
+	}, nil
+}
+
+func (e StreamTerminalEvent) MarshalJSON() ([]byte, error) {
+	value := map[string]any{
+		"stream_id":  e.streamID,
+		"event_type": e.eventType,
+		"seq":        e.seq,
+	}
+	if len(e.payload) != 0 {
+		value["payload"] = json.RawMessage(e.payload)
+	}
+	if len(e.errorJSON) != 0 {
+		value["error"] = json.RawMessage(e.errorJSON)
+	}
+	if len(e.receipt) != 0 {
+		value["receipt"] = json.RawMessage(e.receipt)
+	}
+	return json.Marshal(value)
+}
+
+func (e StreamTerminalEvent) StreamID() string {
+	return e.streamID
+}
+
+func (e StreamTerminalEvent) EventType() string {
+	return e.eventType
+}
+
+func (e StreamTerminalEvent) Seq() uint64 {
+	return e.seq
+}
+
+func (e StreamTerminalEvent) PayloadJSON() json.RawMessage {
+	return append(json.RawMessage(nil), e.payload...)
+}
+
+func (e StreamTerminalEvent) ErrorJSON() json.RawMessage {
+	return append(json.RawMessage(nil), e.errorJSON...)
+}
+
+func (e StreamTerminalEvent) ReceiptJSON() json.RawMessage {
+	return append(json.RawMessage(nil), e.receipt...)
+}
+
 // NewStreamEventFromJSON decodes one daemon stream event projection.
 func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	var dto struct {
@@ -386,6 +473,30 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		elapsedMS:          dto.ElapsedMS,
 		errorJSON:          append(json.RawMessage(nil), dto.Error...),
 	}, nil
+}
+
+func streamTerminalEventType(event StreamEvent) string {
+	switch event.kind {
+	case "terminal", "error", "cancelled", "timeout":
+		return event.kind
+	}
+	if len(event.errorJSON) != 0 {
+		return "error"
+	}
+	return "terminal"
+}
+
+func receiptFromPayload(payload json.RawMessage) json.RawMessage {
+	if len(payload) == 0 {
+		return nil
+	}
+	var decoded struct {
+		Receipt json.RawMessage `json:"receipt"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil || len(decoded.Receipt) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), decoded.Receipt...)
 }
 
 // NewStreamCancelFromJSON decodes stream cancellation outcome JSON.

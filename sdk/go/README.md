@@ -19,8 +19,9 @@ facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
 detach/open-runtime/connect-local state seams, schema-backed SDK error projection, complete
 Invocation draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, local Ed25519 signer provider over daemon/Axon
-canonical signing material, StreamHandle state observation, BidiSession frame
-ordering, half-close, cancel, and terminal-close observation, InvocationHandle
+canonical signing material, StreamHandle state observation with schema-shaped
+terminal event projection, BidiSession frame ordering, half-close, cancel,
+terminal-frame projection, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
 methods behind narrow JSON transport seams, plus DirectoryClient resolve/list

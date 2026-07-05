@@ -29,14 +29,11 @@ class StreamState(StrEnum):
 class StreamTransport(Protocol):
     """Concrete stream frame transport supplied by the integration layer."""
 
-    def recv(self, timeout: float | None = None) -> bytes:
-        ...
+    def recv(self, timeout: float | None = None) -> bytes: ...
 
-    def cancel(self, reason: str) -> bytes:
-        ...
+    def cancel(self, reason: str) -> bytes: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -86,6 +83,48 @@ class StreamEvent:
 
 
 @dataclass(frozen=True)
+class StreamTerminalEvent:
+    """Schema-shaped Runtime Core stream terminal projection."""
+
+    stream_id: str
+    event_type: str
+    seq: int
+    payload: Any = None
+    error: Any = None
+    receipt: Any = None
+
+    @classmethod
+    def from_event(cls, stream_id: str, event: StreamEvent) -> "StreamTerminalEvent":
+        if not stream_id:
+            raise _invalid_stream("stream_id is required")
+        if not event.terminal:
+            raise _invalid_stream("stream event is not terminal")
+        event_type = _stream_terminal_event_type(event)
+        return cls(
+            stream_id=stream_id,
+            event_type=event_type,
+            seq=event.sequence,
+            payload=event.payload_json,
+            error=event.error,
+            receipt=_receipt_from_payload(event.payload_json),
+        )
+
+    def to_json(self) -> bytes:
+        value: dict[str, object] = {
+            "stream_id": self.stream_id,
+            "event_type": self.event_type,
+            "seq": self.seq,
+        }
+        if self.payload is not None:
+            value["payload"] = self.payload
+        if self.error is not None:
+            value["error"] = self.error
+        if self.receipt is not None:
+            value["receipt"] = self.receipt
+        return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+@dataclass(frozen=True)
 class StreamCancel:
     """Stream cancellation outcome projection."""
 
@@ -105,7 +144,9 @@ class StreamCancel:
             raise _invalid_stream("stream cancel JSON must be an object")
         state = _stream_state(_required_string(decoded, "state"))
         if state not in {StreamState.CANCELLED, StreamState.CLOSED, StreamState.FAILED}:
-            raise _invalid_stream("stream cancel state must be Cancelled, Closed, or Failed")
+            raise _invalid_stream(
+                "stream cancel state must be Cancelled, Closed, or Failed"
+            )
         return cls(
             stream_id=_required_string(decoded, "stream_id"),
             cancelled=_required_bool(decoded, "cancelled"),
@@ -125,6 +166,7 @@ class StreamHandle:
     events: list[StreamEvent] = field(default_factory=list)
     _last_sequence: int = 0
     _terminal_seen: bool = False
+    _terminal_event: Optional[StreamTerminalEvent] = None
 
     @classmethod
     def from_json(cls, transport: StreamTransport, raw: bytes | str) -> "StreamHandle":
@@ -137,7 +179,9 @@ class StreamHandle:
             raise _invalid_stream(f"decode stream open JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_stream("stream open JSON must be an object")
-        state = _stream_state(_optional_string(decoded.get("state"), "state") or "Opening")
+        state = _stream_state(
+            _optional_string(decoded.get("state"), "state") or "Opening"
+        )
         if state not in {StreamState.OPENING, StreamState.OPEN}:
             raise _invalid_stream("stream open state must be Opening or Open")
         max_buffered = _optional_non_negative_int(
@@ -201,6 +245,11 @@ class StreamHandle:
             raise _transport_error("stream close transport failed", exc) from exc
         self.state = StreamState.CLOSED
 
+    def terminal_event(self) -> StreamTerminalEvent:
+        if self._terminal_event is None:
+            raise _invalid_stream("stream terminal event has not been seen")
+        return self._terminal_event
+
     def _apply_event(self, event: StreamEvent) -> None:
         if event.sequence <= self._last_sequence:
             self.state = StreamState.FAILED
@@ -208,7 +257,10 @@ class StreamHandle:
         if self._terminal_seen:
             self.state = StreamState.FAILED
             raise _invalid_stream("stream terminal event already seen")
-        if self.max_buffered_events > 0 and len(self.events) >= self.max_buffered_events:
+        if (
+            self.max_buffered_events > 0
+            and len(self.events) >= self.max_buffered_events
+        ):
             self.state = StreamState.FAILED
             raise _invalid_stream("stream event buffer limit exceeded")
         if self.state == StreamState.OPENING:
@@ -217,6 +269,7 @@ class StreamHandle:
         self.events.append(event)
         if event.terminal:
             self._terminal_seen = True
+            self._terminal_event = StreamTerminalEvent.from_event(self.stream_id, event)
             self.state = StreamState.TERMINAL_FRAME_SEEN
 
     def _is_terminal(self) -> bool:
@@ -277,6 +330,20 @@ def _optional_bool(value: object, field_name: str) -> Optional[bool]:
     if not isinstance(value, bool):
         raise _invalid_stream(f"{field_name} must be a boolean or null")
     return value
+
+
+def _stream_terminal_event_type(event: StreamEvent) -> str:
+    if event.kind in {"terminal", "error", "cancelled", "timeout"}:
+        return event.kind
+    if event.error is not None:
+        return "error"
+    return "terminal"
+
+
+def _receipt_from_payload(payload: Any) -> Any:
+    if isinstance(payload, dict) and isinstance(payload.get("receipt"), dict):
+        return payload["receipt"]
+    return None
 
 
 def _invalid_stream(message: str, cause: BaseException | None = None) -> SDKError:

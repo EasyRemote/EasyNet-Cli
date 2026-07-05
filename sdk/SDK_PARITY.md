@@ -129,7 +129,8 @@ method spelling.
   schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, prepared/signed Invocation DTOs,
   local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
-  projection, StreamHandle state observation, BidiSession frame ordering/
+  projection, StreamHandle state observation with schema-shaped terminal event
+  projection, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
@@ -228,7 +229,8 @@ method spelling.
   `InvocationDraft` and staged legacy wire dict construction, object-bound
   Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, prepared/signed Invocation DTOs, signer workflow
   objects over daemon-authorized handles, unary InvocationResult projection plus non-verifying terminal
-  receipt projection, StreamHandle state observation, BidiSession frame ordering/
+  receipt projection, StreamHandle state observation with schema-shaped
+  terminal event projection, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, DaemonHandle-scoped Runtime/Profile client factories, and
   RuntimeClient invoke/invoke-stream/open-bidi/prepare/prepare-builder/prepare-and-sign/submit-signed/close methods behind narrow
@@ -399,9 +401,10 @@ method spelling.
   media helper execution through Runtime Core, while backend HTTP/WebSocket
   bridges, storage policy, concrete stream/bidi adapters, and product wrapper
   cutovers remain incomplete.
-- C ABI stream/bidi now exposes local stream close and bidi close-send
-  half-close controls; schema-backed terminal events, bounded backpressure
-  conformance, and P1 language facades remain incomplete.
+- Go and Python stream/bidi facades now expose schema-shaped Runtime Core
+  terminal projections backed by shared conformance expectations; C ABI terminal
+  projection adapters, bounded backpressure conformance, P1 language facades,
+  and strict Go/Python parity matrix gates remain incomplete.
 - Go and Python now consume shared SDK conformance cases and fixtures for
   selected local facade/projection actions covering Runtime Core
   Invocation/health, Directory + Identity read-model/projection behavior,

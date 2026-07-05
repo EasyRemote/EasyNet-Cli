@@ -1,6 +1,13 @@
 import unittest
 
-from easynet_sdk import ErrorCode, SDKError, StreamHandle, StreamState, is_code
+from easynet_sdk import (
+    ErrorCode,
+    SDKError,
+    StreamHandle,
+    StreamState,
+    StreamTerminalEvent,
+    is_code,
+)
 
 
 class MemoryStreamTransport:
@@ -61,8 +68,35 @@ class StreamTests(unittest.TestCase):
 
         self.assertEqual(first.sequence, 1)
         self.assertTrue(terminal.terminal)
+        terminal_projection = stream.terminal_event()
+        self.assertIsInstance(terminal_projection, StreamTerminalEvent)
+        self.assertEqual(terminal_projection.stream_id, "stream-1")
+        self.assertEqual(terminal_projection.event_type, "terminal")
+        self.assertEqual(terminal_projection.seq, 2)
+        self.assertEqual(terminal_projection.payload, {"ok": True})
         self.assertTrue(transport.closed)
         self.assertEqual(stream.state, StreamState.CLOSED)
+
+    def test_stream_terminal_event_projects_receipt_payload(self) -> None:
+        transport = MemoryStreamTransport(
+            [
+                b'{"sequence":1,"event":"terminal","state":"Completed",'
+                b'"terminal":true,"payload_json":{"receipt":{"receipt_ura":'
+                b'"easynet:///r/example/receipt/r1"}}}'
+            ]
+        )
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        stream.next()
+        terminal = stream.terminal_event()
+
+        self.assertEqual(
+            terminal.receipt, {"receipt_ura": "easynet:///r/example/receipt/r1"}
+        )
+        self.assertIn(b'"event_type":"terminal"', terminal.to_json())
 
     def test_stream_rejects_next_after_terminal(self) -> None:
         transport = MemoryStreamTransport(

@@ -470,8 +470,10 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 	requireCaseID(t, lifecycleCase, "stream_bidi/lifecycle_state")
 	for _, action := range []string{
 		"open_stream",
+		"project_stream_terminal_event",
 		"close_stream",
 		"open_bidi",
+		"project_bidi_terminal_frame",
 		"close_bidi_send",
 		"send_bidi_after_close_send",
 		"close_bidi",
@@ -480,6 +482,8 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 	}
 	requireCaseFixture(t, lifecycleCase, "invocation.complete.v4.json")
 	for _, expected := range []string{
+		"stream_terminal_schema: stream-event.schema.json",
+		"bidi_terminal_schema: bidi-frame.schema.json",
 		"stream_close_unknown_is_idempotent: true",
 		"stream_cross_owner_close_error: ERR_INVALID_HANDLE",
 		"bidi_close_send_keeps_session_registered: true",
@@ -492,6 +496,51 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 
 	if _, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json")); err != nil {
 		t.Fatalf("NewInvocationDraftFromJSON(stream-bidi fixture): %v", err)
+	}
+
+	terminalStream, err := NewStreamHandleFromJSON(StreamTransportFunc{
+		RecvFunc: func(context.Context) ([]byte, error) {
+			return []byte(`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`), nil
+		},
+	}, []byte(`{"stream_id":"stream-terminal-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON(shared terminal projection): %v", err)
+	}
+	if _, err := terminalStream.Next(context.Background()); err != nil {
+		t.Fatalf("Next(shared terminal projection): %v", err)
+	}
+	streamTerminal, err := terminalStream.TerminalEvent()
+	if err != nil {
+		t.Fatalf("TerminalEvent(shared terminal projection): %v", err)
+	}
+	if streamTerminal.StreamID() != "stream-terminal-1" || streamTerminal.EventType() != "terminal" || streamTerminal.Seq() != 1 {
+		t.Fatalf("unexpected shared stream terminal projection: %#v", streamTerminal)
+	}
+	if string(streamTerminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+		t.Fatalf("unexpected shared stream terminal receipt: %s", streamTerminal.ReceiptJSON())
+	}
+
+	terminalBidiTransport := &sharedBidiLifecycleTransport{
+		recvFrames: [][]byte{
+			[]byte(`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`),
+		},
+	}
+	terminalBidi, err := NewBidiSessionFromJSON(terminalBidiTransport, []byte(`{"session_id":"bidi-terminal-1","state":"Open","max_buffered_frames":4}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON(shared terminal projection): %v", err)
+	}
+	if _, err := terminalBidi.Receive(context.Background()); err != nil {
+		t.Fatalf("Receive(shared terminal projection): %v", err)
+	}
+	bidiTerminal, err := terminalBidi.TerminalFrame()
+	if err != nil {
+		t.Fatalf("TerminalFrame(shared terminal projection): %v", err)
+	}
+	if bidiTerminal.SessionID() != "bidi-terminal-1" || bidiTerminal.FrameType() != "terminal" || bidiTerminal.Seq() != 1 {
+		t.Fatalf("unexpected shared bidi terminal projection: %#v", bidiTerminal)
+	}
+	if string(bidiTerminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+		t.Fatalf("unexpected shared bidi terminal receipt: %s", bidiTerminal.ReceiptJSON())
 	}
 
 	streamCloseCalls := 0

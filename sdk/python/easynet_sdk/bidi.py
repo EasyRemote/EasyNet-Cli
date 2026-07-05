@@ -51,20 +51,15 @@ class BidiStreamDescriptor:
 class BidiTransport(Protocol):
     """Concrete bidi frame transport supplied by the integration layer."""
 
-    def send(self, frame_json: bytes) -> bytes:
-        ...
+    def send(self, frame_json: bytes) -> bytes: ...
 
-    def recv(self, timeout: float | None = None) -> bytes:
-        ...
+    def recv(self, timeout: float | None = None) -> bytes: ...
 
-    def close_send(self) -> bytes:
-        ...
+    def close_send(self) -> bytes: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
-    def cancel(self, reason: str) -> bytes:
-        ...
+    def cancel(self, reason: str) -> bytes: ...
 
 
 @dataclass(frozen=True)
@@ -103,7 +98,9 @@ class BidiFrame:
                 decoded.get("payload_content_type"), "payload_content_type"
             )
             or "",
-            payload_base64=_optional_string(decoded.get("payload_base64"), "payload_base64")
+            payload_base64=_optional_string(
+                decoded.get("payload_base64"), "payload_base64"
+            )
             or "",
             payload_json=decoded.get("payload_json"),
             error=decoded.get("error"),
@@ -124,6 +121,48 @@ class BidiFrame:
             value["payload_json"] = self.payload_json
         if self.error is not None:
             value["error"] = self.error
+        return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class BidiTerminalFrame:
+    """Schema-shaped Runtime Core bidi terminal frame projection."""
+
+    session_id: str
+    frame_type: str
+    seq: int
+    payload: Any = None
+    error: Any = None
+    receipt: Any = None
+
+    @classmethod
+    def from_frame(cls, session_id: str, frame: BidiFrame) -> "BidiTerminalFrame":
+        if not session_id:
+            raise _invalid_bidi("session_id is required")
+        if not frame.terminal:
+            raise _invalid_bidi("bidi frame is not terminal")
+        frame_type = _bidi_terminal_frame_type(frame)
+        return cls(
+            session_id=session_id,
+            frame_type=frame_type,
+            seq=frame.sequence,
+            payload=frame.payload_json,
+            error=frame.error,
+            receipt=_receipt_from_payload(frame.payload_json),
+        )
+
+    def to_json(self) -> bytes:
+        value: dict[str, object] = {
+            "session_id": self.session_id,
+            "frame_type": self.frame_type,
+            "seq": self.seq,
+        }
+        if self.payload is not None:
+            value["payload"] = self.payload
+        if self.error is not None:
+            value["error"] = self.error
+        if self.receipt is not None:
+            value["receipt"] = self.receipt
         return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
@@ -156,12 +195,16 @@ class BidiOutcome:
         }:
             raise _invalid_bidi("invalid bidi outcome state")
         terminal = _required_bool(decoded, "terminal")
-        if state in {
-            BidiState.TERMINAL,
-            BidiState.CANCELLED,
-            BidiState.CLOSED,
-            BidiState.FAILED,
-        } and not terminal:
+        if (
+            state
+            in {
+                BidiState.TERMINAL,
+                BidiState.CANCELLED,
+                BidiState.CLOSED,
+                BidiState.FAILED,
+            }
+            and not terminal
+        ):
             raise _invalid_bidi("terminal bidi outcome must set terminal")
         return cls(
             session_id=_required_string(decoded, "session_id"),
@@ -183,6 +226,7 @@ class BidiSession:
     received_frames: list[BidiFrame] = field(default_factory=list)
     _last_send_sequence: int = 0
     _last_recv_sequence: int = 0
+    _terminal_frame: Optional[BidiTerminalFrame] = None
 
     @classmethod
     def from_json(cls, transport: BidiTransport, raw: bytes | str) -> "BidiSession":
@@ -195,7 +239,9 @@ class BidiSession:
             raise _invalid_bidi(f"decode bidi open JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_bidi("bidi open JSON must be an object")
-        state = _bidi_state(_optional_string(decoded.get("state"), "state") or "Opening")
+        state = _bidi_state(
+            _optional_string(decoded.get("state"), "state") or "Opening"
+        )
         if state not in {BidiState.OPENING, BidiState.OPEN}:
             raise _invalid_bidi("bidi open state must be Opening or Open")
         max_buffered = _optional_non_negative_int(
@@ -221,7 +267,10 @@ class BidiSession:
             )
         if self.state != BidiState.OPEN:
             raise _invalid_bidi("bidi send path is closed")
-        if self.max_buffered_frames > 0 and len(self.sent_frames) >= self.max_buffered_frames:
+        if (
+            self.max_buffered_frames > 0
+            and len(self.sent_frames) >= self.max_buffered_frames
+        ):
             self.state = BidiState.FAILED
             raise _invalid_bidi("bidi send buffer limit exceeded")
         try:
@@ -296,7 +345,11 @@ class BidiSession:
     def close(self) -> None:
         if self.state == BidiState.CLOSED:
             return
-        if self.state not in {BidiState.TERMINAL, BidiState.CANCELLED, BidiState.FAILED}:
+        if self.state not in {
+            BidiState.TERMINAL,
+            BidiState.CANCELLED,
+            BidiState.FAILED,
+        }:
             raise _invalid_bidi("bidi session must be terminal before close")
         try:
             self.transport.close()
@@ -307,6 +360,11 @@ class BidiSession:
             self.state = BidiState.FAILED
             raise _transport_error("bidi close transport failed", exc) from exc
         self.state = BidiState.CLOSED
+
+    def terminal_frame(self) -> BidiTerminalFrame:
+        if self._terminal_frame is None:
+            raise _invalid_bidi("bidi terminal frame has not been seen")
+        return self._terminal_frame
 
     def _record_sent(self, frame: BidiFrame) -> None:
         if frame.sequence <= self._last_send_sequence:
@@ -319,7 +377,10 @@ class BidiSession:
         if frame.sequence <= self._last_recv_sequence:
             self.state = BidiState.FAILED
             raise _invalid_bidi("bidi received frames must be strictly ordered")
-        if self.max_buffered_frames > 0 and len(self.received_frames) >= self.max_buffered_frames:
+        if (
+            self.max_buffered_frames > 0
+            and len(self.received_frames) >= self.max_buffered_frames
+        ):
             self.state = BidiState.FAILED
             raise _invalid_bidi("bidi receive buffer limit exceeded")
         self._last_recv_sequence = frame.sequence
@@ -327,6 +388,7 @@ class BidiSession:
 
     def _apply_received_state(self, frame: BidiFrame) -> None:
         if frame.terminal:
+            self._terminal_frame = BidiTerminalFrame.from_frame(self.session_id, frame)
             self.state = BidiState.TERMINAL
         elif frame.kind == "remote_close_send":
             if self.state == BidiState.HALF_CLOSED_LOCAL:
@@ -395,6 +457,20 @@ def _bidi_state(value: str) -> BidiState:
         return BidiState(value)
     except ValueError as exc:
         raise _invalid_bidi(f"unknown bidi state: {value}", exc) from exc
+
+
+def _bidi_terminal_frame_type(frame: BidiFrame) -> str:
+    if frame.kind in {"terminal", "error", "cancelled"}:
+        return frame.kind
+    if frame.error is not None:
+        return "error"
+    return "terminal"
+
+
+def _receipt_from_payload(payload: Any) -> Any:
+    if isinstance(payload, dict) and isinstance(payload.get("receipt"), dict):
+        return payload["receipt"]
+    return None
 
 
 def _invalid_bidi(message: str, cause: BaseException | None = None) -> SDKError:

@@ -32,8 +32,9 @@ target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and explicit
 submit/await/cancel/events/close-handle observation helpers, EasyRemote tuple-like
 object adapter for building SDK `InvocationDraft` values and staged legacy wire
 dicts without raw product codecs, prepared/signed Invocation DTOs, unary
-InvocationResult and non-verifying terminal receipt projection, StreamHandle state observation, BidiSession frame
-ordering, half-close, cancel, and terminal-close observation, object-bound
+InvocationResult and non-verifying terminal receipt projection, StreamHandle state
+observation with schema-shaped terminal event projection, BidiSession frame
+ordering, half-close, cancel, terminal-frame projection, and terminal-close observation, object-bound
 Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
 observation, SDK-owned EasyRemote signed unary prepare/sign/submit/await/

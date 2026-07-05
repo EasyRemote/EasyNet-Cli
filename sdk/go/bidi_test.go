@@ -140,6 +140,38 @@ func TestBidiRemoteCloseThenLocalCloseSendReachesTerminal(t *testing.T) {
 	}
 }
 
+func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
+	transport := &memoryBidiTransport{recvFrames: []string{
+		`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`,
+	}}
+	session := newTestBidiSession(t, transport)
+
+	if _, err := session.Receive(context.Background()); err != nil {
+		t.Fatalf("Receive terminal: %v", err)
+	}
+	terminal, err := session.TerminalFrame()
+	if err != nil {
+		t.Fatalf("TerminalFrame: %v", err)
+	}
+	if terminal.SessionID() != "bidi-1" || terminal.FrameType() != "terminal" || terminal.Seq() != 1 {
+		t.Fatalf("unexpected terminal frame projection: %#v", terminal)
+	}
+	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+		t.Fatalf("receipt = %s", terminal.ReceiptJSON())
+	}
+	raw, err := json.Marshal(terminal)
+	if err != nil {
+		t.Fatalf("marshal terminal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode terminal: %v", err)
+	}
+	if decoded["frame_type"] != "terminal" || decoded["session_id"] != "bidi-1" || decoded["seq"].(float64) != 1 {
+		t.Fatalf("unexpected terminal JSON: %s", raw)
+	}
+}
+
 func TestBidiCancelIsTerminal(t *testing.T) {
 	transport := &memoryBidiTransport{}
 	session := newTestBidiSession(t, transport)
