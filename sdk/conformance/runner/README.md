@@ -61,7 +61,9 @@ profile, missing evidence, or evidence path outside the repository fails as
 The report is closed over the shared manifest. Every record must match an
 existing manifest case and that case must declare the requested language in
 `required_for`; unknown or language-undeclared records invalidate the report
-instead of being ignored.
+instead of being ignored. Evidence kind must match the report language, for
+example `rust_test`, `c_abi_test`, `go_test`, or `python_test`; cross-language
+evidence is rejected.
 
 Rust, C ABI, Go, and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for

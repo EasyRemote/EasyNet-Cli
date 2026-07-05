@@ -272,7 +272,7 @@ fn load_adapter_report(
             anyhow::bail!("adapter record `{}` must include evidence", record.case_id);
         }
         for evidence in &record.evidence {
-            validate_adapter_evidence(root, &record.case_id, evidence)?;
+            validate_adapter_evidence(root, language, &record.case_id, evidence)?;
         }
     }
     Ok(report)
@@ -374,14 +374,26 @@ fn validate_manifest_file_name(raw: &str, suffix: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_adapter_evidence(root: &Path, case_id: &str, evidence: &AdapterEvidence) -> Result<()> {
-    match evidence.kind.as_str() {
-        "go_test" | "python_test" | "rust_test" | "c_abi_test" | "runner_test" => {}
-        other => anyhow::bail!("adapter record `{case_id}` has unknown evidence kind `{other}`"),
+fn validate_adapter_evidence(
+    root: &Path,
+    language: &str,
+    case_id: &str,
+    evidence: &AdapterEvidence,
+) -> Result<()> {
+    let expected_kind = adapter_evidence_kind(language);
+    if evidence.kind != expected_kind {
+        anyhow::bail!(
+            "adapter record `{case_id}` evidence kind `{}` does not match language `{language}`; expected `{expected_kind}`",
+            evidence.kind
+        );
     }
     let path = resolve_repo_path(root, Path::new(&evidence.ref_path));
     ensure_path_inside_root(root, &path)
         .with_context(|| format!("validate adapter evidence {}", path.display()))
+}
+
+fn adapter_evidence_kind(language: &str) -> String {
+    format!("{}_test", language.replace('-', "_"))
 }
 
 fn resolve_repo_path(root: &Path, path: &Path) -> PathBuf {
@@ -439,7 +451,7 @@ fn record_from_adapter(
         ));
     }
     for evidence in &adapter.evidence {
-        if let Err(err) = validate_adapter_evidence(root, &adapter.case_id, evidence) {
+        if let Err(err) = validate_adapter_evidence(root, language, &adapter.case_id, evidence) {
             errors.push(err.to_string());
         }
     }
@@ -1236,7 +1248,7 @@ expect:
       "case_id": "test/minimal",
       "profile": "runtime_core",
       "status": "failed",
-      "evidence": [{"kind": "runner_test", "ref_path": "sdk/conformance/runner/README.md"}],
+      "evidence": [{"kind": "python_test", "ref_path": "sdk/conformance/runner/README.md"}],
       "message": "forced failure"
     }
   ]
@@ -1254,6 +1266,36 @@ expect:
             .as_deref()
             .unwrap_or_default()
             .contains("forced failure"));
+    }
+
+    #[test]
+    fn runner_rejects_cross_language_adapter_evidence() {
+        let root = tempfile::tempdir().expect("tempdir");
+        create_minimal_case_root(root.path(), "go");
+        let report = root.path().join("adapter.json");
+        fs::write(
+            &report,
+            r#"{
+  "schema_version": 1,
+  "language": "go",
+  "adapter_kind": "unit_test",
+  "records": [
+    {
+      "case_id": "test/minimal",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "sdk/conformance/runner/README.md"}],
+      "message": null
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let err = run_manifest(root.path(), "go", Some(&report))
+            .expect_err("cross-language adapter evidence must fail");
+
+        assert!(err.to_string().contains("expected `go_test`"));
     }
 
     #[test]

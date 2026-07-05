@@ -61,7 +61,8 @@ A language runner must:
   `status`, and `error_code`.
 - Provide an action-adapter report for provider-backed language parity claims.
   The shared runner validates that every required case has a passed adapter
-  record and repository-local evidence.
+  record, repository-local evidence, and an evidence kind owned by the report
+  language.
 
 Rust, C ABI, Go, and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
