@@ -15,6 +15,7 @@ sdk/conformance/
   fixture-schema-bindings.json
   runner/
     README.md
+    rust-action-adapter-report.json
     c-abi-action-adapter-report.json
     go-action-adapter-report.json
     python-action-adapter-report.json
@@ -73,7 +74,7 @@ replace the shared case-aware parity gate.
 ## Minimum Commands
 
 ```text
-cargo run --bin sdk-conformance-runner -- --language rust --format jsonl
+cargo run --bin sdk-conformance-runner -- --language rust --adapter-report sdk/conformance/runner/rust-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language go --adapter-report sdk/conformance/runner/go-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language python --adapter-report sdk/conformance/runner/python-action-adapter-report.json --format jsonl

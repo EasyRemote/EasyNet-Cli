@@ -24,7 +24,8 @@
 //
 // Usage
 // -----
-//   cargo run --bin sdk-conformance-runner -- --language rust
+//   cargo run --bin sdk-conformance-runner -- --language rust \
+//     --adapter-report sdk/conformance/runner/rust-action-adapter-report.json
 //   cargo run --bin sdk-conformance-runner -- --language c_abi \
 //     --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
 //   cargo run --bin sdk-conformance-runner -- --language go \
@@ -1162,6 +1163,10 @@ expect:
     fn runner_validates_repository_adapter_reports() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for (language, report) in [
+            (
+                "rust",
+                "sdk/conformance/runner/rust-action-adapter-report.json",
+            ),
             (
                 "c_abi",
                 "sdk/conformance/runner/c-abi-action-adapter-report.json",

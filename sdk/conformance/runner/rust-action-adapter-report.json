@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "language": "rust",
+  "adapter_kind": "rust_daemon_sdk_conformance_tests",
+  "records": [
+    {
+      "case_id": "admin_gateway/carrier_status",
+      "profile": "admin_gateway",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/admin_gateway_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "compatibility/openai_carrier_projection",
+      "profile": "compatibility",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/compatibility_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "daemon/control_only",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/boot/lifecycle/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "directory/list_pagination",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/directory_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "directory/no_default_fanout",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/directory_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "directory/resolve",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/directory_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "error/typed_json",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/errors/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "events/device_invocation_history",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/events_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "events/directory_stream",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/events_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "events/session_stream",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/events_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "profile": "health",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/ability/health.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "host_binding/codec_hash",
+      "profile": "host_binding",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/host_stream_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "identity/ura_descriptor_projection",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/identity_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/builder_handle_state",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/invocation/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/invocation/dispatch/request.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/sdk_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/descriptor_ref_helper_delegation",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/axon_bridge/descriptor_ref.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/handle_terminal_monotonicity",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/invocation/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/local_daemon_signing_boundary",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/invocation/dispatch/request.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/invocation/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/invocation/dispatch/request.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "memc/consumer_coverage",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "sdk/conformance/sdk-parity-matrix.json"}],
+      "message": null
+    },
+    {
+      "case_id": "memc/no_core_bloat",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "sdk/SDK_INTERFACE_SPEC.md"}],
+      "message": null
+    },
+    {
+      "case_id": "memc/profile_exclusivity",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "sdk/SDK_INTERFACE_SPEC.md"}],
+      "message": null
+    },
+    {
+      "case_id": "mission/carrier_status",
+      "profile": "mission",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/mission_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "publication/resource_carriers",
+      "profile": "publication",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/publication_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "receipt/fetch_carrier",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/receipt_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "receipt/projection_causal_ref",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/receipt_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "stream_bidi/lifecycle_state",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/invocation/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "surface/page_carriers",
+      "profile": "surface",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/surface_contract.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/ffi/mod.rs"}],
+      "message": null
+    },
+    {
+      "case_id": "wrappers/profile_records",
+      "profile": "wrappers",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/wrapper_contract.rs"}],
+      "message": null
+    }
+  ]
+}

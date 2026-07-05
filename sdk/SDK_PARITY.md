@@ -429,9 +429,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   behavior, Surface page carrier/projection behavior, Compatibility OpenAI
   carrier/projection behavior, Host Binding codec/hash behavior, Receipt
   projection, and Wrapper record projection. The shared conformance runner now
-  validates C ABI/Go/Python action-adapter reports against every required shared
-  case, while non-P0 language adapter reports and external product cutover
-  smokes remain incomplete.
+  validates Rust/C ABI/Go/Python action-adapter reports against every required
+  shared case, while non-P0 language adapter reports and external product
+  cutover smokes remain incomplete.
 
 ## Capability States
 

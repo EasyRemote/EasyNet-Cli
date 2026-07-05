@@ -22,6 +22,10 @@ turn manifest validation into a language action-adapter gate:
 
 ```bash
 cargo run --bin sdk-conformance-runner -- \
+  --language rust \
+  --adapter-report sdk/conformance/runner/rust-action-adapter-report.json
+
+cargo run --bin sdk-conformance-runner -- \
   --language c_abi \
   --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
 

@@ -197,6 +197,7 @@ for path in \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
+  sdk/conformance/runner/rust-action-adapter-report.json \
   sdk/conformance/runner/c-abi-action-adapter-report.json \
   sdk/conformance/runner/go-action-adapter-report.json \
   sdk/conformance/runner/python-action-adapter-report.json \
@@ -259,6 +260,7 @@ validate_json_file sdk/conformance/backend-route-family-coverage.json
 validate_json_file sdk/conformance/fixture-schema-bindings.json
 validate_fixture_schema_bindings
 validate_json_file sdk/conformance/sdk-parity-matrix.json
+validate_json_file sdk/conformance/runner/rust-action-adapter-report.json
 validate_json_file sdk/conformance/runner/c-abi-action-adapter-report.json
 validate_json_file sdk/conformance/runner/go-action-adapter-report.json
 validate_json_file sdk/conformance/runner/python-action-adapter-report.json
@@ -897,7 +899,7 @@ require_literal sdk/README.md "Go facade | provider-backed"
 require_literal sdk/README.md "Python facade | provider-backed"
 require_literal sdk/README.md "Node / TypeScript facade | unsupported"
 require_literal sdk/README.md "or complete Daemon SDK support"
-require_literal sdk/README.md "C ABI/Go/Python action-adapter reports"
+require_literal sdk/README.md "Rust/C ABI/Go/Python action-adapter reports"
 require_literal sdk/SDK_PARITY.md "No current language is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 

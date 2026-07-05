@@ -19,7 +19,7 @@ workspace entrypoint; it must not drift into a second status ledger.
 | Rust Runtime Core | source-of-truth implementation substrate for daemon SDK semantics and C ABI projection |
 | C ABI | ABI v4 projection with opaque handles, feature discovery, runtime core, and shipped profile carrier/projection entry points |
 | Schemas | shared DTO schema set for Runtime Core, profile clients, stream/bidi terminal projections, and conformance fixtures |
-| Conformance | shared cases, fixtures, manifest runner, and C ABI/Go/Python action-adapter reports |
+| Conformance | shared cases, fixtures, manifest runner, and Rust/C ABI/Go/Python action-adapter reports |
 | Go facade | provider-backed for the shipped P0 Hub/backend profiles listed in `SDK_PARITY.md` |
 | Python facade | provider-backed for the shipped P0 EasyRemote/local automation profiles listed in `SDK_PARITY.md` |
 | Node / TypeScript facade | unsupported |
