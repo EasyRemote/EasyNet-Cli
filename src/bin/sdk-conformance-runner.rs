@@ -25,7 +25,8 @@
 // Usage
 // -----
 //   cargo run --bin sdk-conformance-runner -- --language rust
-//   cargo run --bin sdk-conformance-runner -- --language c_abi --format json
+//   cargo run --bin sdk-conformance-runner -- --language c_abi \
+//     --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
 //   cargo run --bin sdk-conformance-runner -- --language go \
 //     --adapter-report sdk/conformance/runner/go-action-adapter-report.json
 //
@@ -1158,20 +1159,37 @@ expect:
     }
 
     #[test]
-    fn runner_validates_language_adapter_report() {
+    fn runner_validates_repository_adapter_reports() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let report = root.join("sdk/conformance/runner/go-action-adapter-report.json");
-        let records =
-            run_manifest(root, "go", Some(&report)).expect("runner validates adapter report");
+        for (language, report) in [
+            (
+                "c_abi",
+                "sdk/conformance/runner/c-abi-action-adapter-report.json",
+            ),
+            ("go", "sdk/conformance/runner/go-action-adapter-report.json"),
+            (
+                "python",
+                "sdk/conformance/runner/python-action-adapter-report.json",
+            ),
+        ] {
+            let report = root.join(report);
+            let records = run_manifest(root, language, Some(&report))
+                .expect("runner validates adapter report");
 
-        let required: Vec<_> = records
-            .iter()
-            .filter(|record| record.language == "go" && record.status != ConformanceStatus::Skipped)
-            .collect();
-        assert!(!required.is_empty());
-        assert!(required
-            .iter()
-            .all(|record| record.status == ConformanceStatus::Passed));
+            let required: Vec<_> = records
+                .iter()
+                .filter(|record| {
+                    record.language == language && record.status != ConformanceStatus::Skipped
+                })
+                .collect();
+            assert!(!required.is_empty(), "{language} must have required cases");
+            assert!(
+                required
+                    .iter()
+                    .all(|record| record.status == ConformanceStatus::Passed),
+                "{language} adapter report must pass every required case"
+            );
+        }
     }
 
     #[test]

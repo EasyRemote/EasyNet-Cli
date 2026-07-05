@@ -15,6 +15,7 @@ sdk/conformance/
   fixture-schema-bindings.json
   runner/
     README.md
+    c-abi-action-adapter-report.json
     go-action-adapter-report.json
     python-action-adapter-report.json
 ```
@@ -61,7 +62,7 @@ A language runner must:
   The shared runner validates that every required case has a passed adapter
   record and repository-local evidence.
 
-Go and Python facade tests must consume shared cases from
+Rust, C ABI, Go, and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
 shipped local DTO/actions and projection-only profile behavior, including
 Runtime Core, Directory + Identity, Mission, Admin + Gateway, Publication,
@@ -73,7 +74,7 @@ replace the shared case-aware parity gate.
 
 ```text
 cargo run --bin sdk-conformance-runner -- --language rust --format jsonl
-cargo run --bin sdk-conformance-runner -- --language c_abi --format jsonl
+cargo run --bin sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language go --adapter-report sdk/conformance/runner/go-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language python --adapter-report sdk/conformance/runner/python-action-adapter-report.json --format jsonl
 cargo test --lib --features axon-pb sdk_

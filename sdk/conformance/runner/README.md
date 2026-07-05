@@ -22,6 +22,10 @@ turn manifest validation into a language action-adapter gate:
 
 ```bash
 cargo run --bin sdk-conformance-runner -- \
+  --language c_abi \
+  --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
+
+cargo run --bin sdk-conformance-runner -- \
   --language go \
   --adapter-report sdk/conformance/runner/go-action-adapter-report.json
 
@@ -55,7 +59,7 @@ existing manifest case and that case must declare the requested language in
 `required_for`; unknown or language-undeclared records invalidate the report
 instead of being ignored.
 
-Go and Python facade tests must consume shared cases from
+Rust, C ABI, Go, and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
 shipped local DTO/actions and projection-only profile behavior, including
 Runtime Core, Directory + Identity, Mission, Admin + Gateway, Publication,

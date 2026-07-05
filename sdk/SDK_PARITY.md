@@ -412,9 +412,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   bridges, storage policy, concrete stream/bidi adapters, and product wrapper
   cutovers remain incomplete.
 - Go and Python stream/bidi facades now expose schema-shaped Runtime Core
-  terminal projections backed by shared conformance expectations; C ABI terminal
-  projection adapters, bounded backpressure conformance, P1 language facades,
-  and strict Go/Python parity remain incomplete.
+  terminal projections backed by shared conformance expectations; C ABI required
+  cases are now closed by an action-adapter report, while bounded backpressure
+  conformance, P1 language facades, and strict Go/Python parity remain
+  incomplete.
 - Go/Python SDK parity now has a shared machine-checked matrix gate at
   `sdk/conformance/sdk-parity-matrix.json` with status values limited to
   `unsupported`, `seam`, `provider-backed`, and `cutover-ready`; the gate
@@ -428,9 +429,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   behavior, Surface page carrier/projection behavior, Compatibility OpenAI
   carrier/projection behavior, Host Binding codec/hash behavior, Receipt
   projection, and Wrapper record projection. The shared conformance runner now
-  validates Go/Python action-adapter reports against every required shared case,
-  while non-P0 language adapter reports and external product cutover smokes
-  remain incomplete.
+  validates C ABI/Go/Python action-adapter reports against every required shared
+  case, while non-P0 language adapter reports and external product cutover
+  smokes remain incomplete.
 
 ## Capability States
 
