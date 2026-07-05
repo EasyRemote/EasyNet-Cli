@@ -15,7 +15,6 @@ from .runtime import InvocationResult, RuntimeReceipt
 
 
 _PROFILE = "receipt"
-_EASYREMOTE_RECEIPT_PROFILE = "easyremote_receipt"
 _FETCH_ABILITY = "invocation.history.get"
 
 
@@ -451,11 +450,11 @@ class CausalRef:
         return dict(self.causal_context)
 
 
-class EasyRemoteInvocationState(IntEnum):
-    """EasyRemote-facing invocation lifecycle states.
+class InvocationLifecycleState(IntEnum):
+    """Daemon receipt invocation lifecycle states.
 
     Numbering is normative, from ``axon/v1/types.proto``. The SDK owns this
-    projection so product clients do not carry Axon enum parsing code.
+    projection so language facades do not carry Axon enum parsing code.
     """
 
     UNSPECIFIED = 0
@@ -470,34 +469,34 @@ class EasyRemoteInvocationState(IntEnum):
 
     @property
     def is_terminal(self) -> bool:
-        return self in _EASYREMOTE_TERMINAL_STATES
+        return self in _INVOCATION_TERMINAL_STATES
 
 
-_EASYREMOTE_TERMINAL_STATES = frozenset(
+_INVOCATION_TERMINAL_STATES = frozenset(
     {
-        EasyRemoteInvocationState.COMPLETED,
-        EasyRemoteInvocationState.FAILED,
-        EasyRemoteInvocationState.TIMED_OUT,
-        EasyRemoteInvocationState.CANCELLED,
+        InvocationLifecycleState.COMPLETED,
+        InvocationLifecycleState.FAILED,
+        InvocationLifecycleState.TIMED_OUT,
+        InvocationLifecycleState.CANCELLED,
     }
 )
 
-_EASYREMOTE_STATE_NAMES = {
-    "unspecified": EasyRemoteInvocationState.UNSPECIFIED,
-    "accepted": EasyRemoteInvocationState.ACCEPTED,
-    "admitted": EasyRemoteInvocationState.ADMITTED,
-    "dispatched": EasyRemoteInvocationState.DISPATCHED,
-    "running": EasyRemoteInvocationState.RUNNING,
-    "completed": EasyRemoteInvocationState.COMPLETED,
-    "failed": EasyRemoteInvocationState.FAILED,
-    "timed_out": EasyRemoteInvocationState.TIMED_OUT,
-    "cancelled": EasyRemoteInvocationState.CANCELLED,
+_INVOCATION_STATE_NAMES = {
+    "unspecified": InvocationLifecycleState.UNSPECIFIED,
+    "accepted": InvocationLifecycleState.ACCEPTED,
+    "admitted": InvocationLifecycleState.ADMITTED,
+    "dispatched": InvocationLifecycleState.DISPATCHED,
+    "running": InvocationLifecycleState.RUNNING,
+    "completed": InvocationLifecycleState.COMPLETED,
+    "failed": InvocationLifecycleState.FAILED,
+    "timed_out": InvocationLifecycleState.TIMED_OUT,
+    "cancelled": InvocationLifecycleState.CANCELLED,
 }
 
 
 @dataclass(frozen=True)
-class EasyRemoteReceipt:
-    """EasyRemote receipt-summary facade.
+class LocalReceiptSummary:
+    """Local daemon receipt-summary projection.
 
     The daemon currently returns summary receipts on the local invoke path.
     This facade preserves the exact wire body while centralizing all parsing,
@@ -508,7 +507,7 @@ class EasyRemoteReceipt:
     index: int
     invocation_id: str
     receipt_type: str
-    state: EasyRemoteInvocationState
+    state: InvocationLifecycleState
     timestamp_unix_ms: int
     prev_receipt_hash: bytes
     self_hash: bytes
@@ -519,14 +518,14 @@ class EasyRemoteReceipt:
     raw: dict[str, Any] = field(repr=False)
 
     @classmethod
-    def from_wire(cls, wire: Mapping[str, object]) -> "EasyRemoteReceipt":
+    def from_wire(cls, wire: Mapping[str, object]) -> "LocalReceiptSummary":
         try:
             return cls(
-                index=_easyremote_int(wire["index"]),
+                index=_summary_int(wire["index"]),
                 invocation_id=str(wire["invocation_id"]),
                 receipt_type=str(wire["receipt_type"]),
-                state=_easyremote_parse_state(wire["state"]),
-                timestamp_unix_ms=_easyremote_int(wire["timestamp_unix_ms"]),
+                state=_parse_invocation_state(wire["state"]),
+                timestamp_unix_ms=_summary_int(wire["timestamp_unix_ms"]),
                 prev_receipt_hash=bytes.fromhex(str(wire["prev_receipt_hash_hex"])),
                 self_hash=bytes.fromhex(str(wire["self_hash_hex"])),
                 payload_content_type=str(wire.get("payload_content_type", "")),
@@ -536,7 +535,7 @@ class EasyRemoteReceipt:
                 raw=dict(wire),
             )
         except (KeyError, ValueError, TypeError) as exc:
-            raise _easyremote_receipt_protocol_error(
+            raise _local_receipt_protocol_error(
                 f"daemon receipt summary is malformed: {exc}", exc
             ) from exc
 
@@ -560,13 +559,13 @@ class EasyRemoteReceipt:
         verification = verifier.verify(self.to_json_bytes())
         if verification.is_cryptographic:
             return verification
-        raise _easyremote_full_receipt_unavailable(self.invocation_id)
+        raise _full_receipt_unavailable(self.invocation_id)
 
 
-class EasyRemoteReceiptChain(Sequence[EasyRemoteReceipt]):
-    """Ordered EasyRemote receipt summaries with SDK-owned continuity checks."""
+class LocalReceiptSummaryChain(Sequence[LocalReceiptSummary]):
+    """Ordered local receipt summaries with SDK-owned continuity checks."""
 
-    def __init__(self, receipts: Sequence[EasyRemoteReceipt]) -> None:
+    def __init__(self, receipts: Sequence[LocalReceiptSummary]) -> None:
         self._receipts = tuple(receipts)
 
     def __len__(self) -> int:
@@ -575,7 +574,7 @@ class EasyRemoteReceiptChain(Sequence[EasyRemoteReceipt]):
     def __getitem__(self, index):
         return self._receipts[index]
 
-    def __iter__(self) -> Iterator[EasyRemoteReceipt]:
+    def __iter__(self) -> Iterator[LocalReceiptSummary]:
         return iter(self._receipts)
 
     def verify_continuity(
@@ -594,7 +593,7 @@ class EasyRemoteReceiptChain(Sequence[EasyRemoteReceipt]):
         )
         if verification.continuous:
             return verification
-        raise _easyremote_receipt_chain_broken(verification)
+        raise _receipt_summary_chain_broken(verification)
 
 
 @runtime_checkable
@@ -1271,18 +1270,18 @@ def _optional_sdk_error(value: object, field_name: str) -> Optional[SDKError]:
     return SDKError.from_json(json.dumps(value, separators=(",", ":"), sort_keys=True))
 
 
-def _easyremote_parse_state(value: Any) -> EasyRemoteInvocationState:
+def _parse_invocation_state(value: Any) -> InvocationLifecycleState:
     if isinstance(value, str):
-        parsed = _EASYREMOTE_STATE_NAMES.get(value.strip().lower())
+        parsed = _INVOCATION_STATE_NAMES.get(value.strip().lower())
         if parsed is not None:
             return parsed
     try:
-        return EasyRemoteInvocationState(int(value))
+        return InvocationLifecycleState(int(value))
     except (ValueError, TypeError):
-        return EasyRemoteInvocationState.UNSPECIFIED
+        return InvocationLifecycleState.UNSPECIFIED
 
 
-def _easyremote_int(value: object) -> int:
+def _summary_int(value: object) -> int:
     if isinstance(value, bool):
         raise TypeError("boolean is not an integer receipt field")
     if isinstance(value, (str, bytes, bytearray, int)):
@@ -1290,27 +1289,27 @@ def _easyremote_int(value: object) -> int:
     raise TypeError(f"unsupported integer receipt field: {type(value).__name__}")
 
 
-def _easyremote_receipt_protocol_error(
+def _local_receipt_protocol_error(
     message: str, cause: BaseException | None = None
 ) -> SDKError:
     return SDKError(
         code=ErrorCode.PROTOCOL,
-        stage="easyremote_receipt",
+        stage=_PROFILE,
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
         details=profile_error_details(
-            _EASYREMOTE_RECEIPT_PROFILE,
+            _PROFILE,
             details={"reason": "protocol"},
         ),
         cause=cause,
     )
 
 
-def _easyremote_full_receipt_unavailable(invocation_id: str) -> SDKError:
+def _full_receipt_unavailable(invocation_id: str) -> SDKError:
     return SDKError(
         code=ErrorCode.NOT_IMPLEMENTED,
-        stage="easyremote_receipt",
+        stage=_PROFILE,
         retry=RetryHint.NEVER,
         retryable=False,
         message=(
@@ -1319,13 +1318,13 @@ def _easyremote_full_receipt_unavailable(invocation_id: str) -> SDKError:
         ),
         invocation_id=invocation_id or None,
         details=profile_error_details(
-            _EASYREMOTE_RECEIPT_PROFILE,
+            _PROFILE,
             details={"reason": "full_receipt_unavailable"},
         ),
     )
 
 
-def _easyremote_receipt_chain_broken(
+def _receipt_summary_chain_broken(
     verification: ReceiptChainVerification,
 ) -> SDKError:
     broken = next((item for item in verification.items if not item.continuous), None)
@@ -1333,7 +1332,7 @@ def _easyremote_receipt_chain_broken(
     invocation_id = broken.invocation_id if broken is not None else None
     return SDKError(
         code=ErrorCode.PROTOCOL,
-        stage="easyremote_receipt",
+        stage=_PROFILE,
         retry=RetryHint.NEVER,
         retryable=False,
         message=(
@@ -1342,7 +1341,7 @@ def _easyremote_receipt_chain_broken(
         ),
         invocation_id=invocation_id,
         details=profile_error_details(
-            _EASYREMOTE_RECEIPT_PROFILE,
+            _PROFILE,
             details={"reason": "receipt_chain_broken"},
         ),
     )

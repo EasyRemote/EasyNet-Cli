@@ -281,7 +281,7 @@ method spelling.
   through the client, `ReceiptVerification` cryptographic-assurance guardrails
   that reject summary-only projections as verifier evidence, local SDK
   receipt-summary projection/continuity/causal-ref guardrails, SDK-owned
-  `EasyRemoteReceipt`/`EasyRemoteReceiptChain` summary parsing, state projection,
+  `LocalReceiptSummary`/`LocalReceiptSummaryChain` parsing, state projection,
   summary-only verification guardrails, and hash-chain continuity projection,
   C ABI-backed fetch and invocation-history list/get/trace execution through
   Runtime Core invoke, and close state seams over opaque receipt refs.

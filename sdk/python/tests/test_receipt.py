@@ -4,11 +4,11 @@ from pathlib import Path
 
 from easynet_sdk import (
     AbilityCallRequest,
-    EasyRemoteInvocationState,
-    EasyRemoteReceipt,
-    EasyRemoteReceiptChain,
     ErrorCode,
+    InvocationLifecycleState,
     InvocationResult,
+    LocalReceiptSummary,
+    LocalReceiptSummaryChain,
     LocalReceiptTransport,
     ReceiptChain,
     ReceiptChainVerificationRequest,
@@ -223,7 +223,7 @@ def history_request(arguments: dict[str, object] | None = None) -> ReceiptHistor
     )
 
 
-def easyremote_wire_receipt(
+def local_receipt_summary_wire(
     index: int = 0,
     prev_hex: str = "00" * 32,
     self_hex: str = "aa" * 32,
@@ -233,7 +233,7 @@ def easyremote_wire_receipt(
         "index": index,
         "invocation_id": "inv-1",
         "receipt_type": 1,
-        "state": int(EasyRemoteInvocationState.ADMITTED),
+        "state": int(InvocationLifecycleState.ADMITTED),
         "timestamp_unix_ms": 1_700_000_000_000,
         "prev_receipt_hash_hex": prev_hex,
         "self_hash_hex": self_hex,
@@ -762,34 +762,34 @@ class ReceiptTests(unittest.TestCase):
         self.assertIn("index 1", verification.reason)
         self.assertFalse(verification.items[1].continuous)
 
-    def test_easyremote_receipt_facade_parses_summary_wire(self) -> None:
-        receipt = EasyRemoteReceipt.from_wire(
-            easyremote_wire_receipt(receipt_type="admitted", state="admitted")
+    def test_local_receipt_summary_parses_wire(self) -> None:
+        receipt = LocalReceiptSummary.from_wire(
+            local_receipt_summary_wire(receipt_type="admitted", state="admitted")
         )
 
         self.assertEqual(receipt.index, 0)
         self.assertEqual(receipt.invocation_id, "inv-1")
         self.assertEqual(receipt.receipt_type, "admitted")
-        self.assertIs(receipt.state, EasyRemoteInvocationState.ADMITTED)
+        self.assertIs(receipt.state, InvocationLifecycleState.ADMITTED)
         self.assertEqual(receipt.prev_receipt_hash, bytes(32))
         self.assertEqual(receipt.self_hash, b"\xaa" * 32)
         self.assertEqual(receipt.raw["self_hash_hex"], "aa" * 32)
 
-    def test_easyremote_receipt_facade_degrades_unknown_state(self) -> None:
-        receipt = EasyRemoteReceipt.from_wire(easyremote_wire_receipt(state=999))
+    def test_local_receipt_summary_degrades_unknown_state(self) -> None:
+        receipt = LocalReceiptSummary.from_wire(local_receipt_summary_wire(state=999))
 
-        self.assertIs(receipt.state, EasyRemoteInvocationState.UNSPECIFIED)
+        self.assertIs(receipt.state, InvocationLifecycleState.UNSPECIFIED)
         self.assertEqual(receipt.raw["state"], 999)
 
-    def test_easyremote_receipt_facade_reports_malformed_protocol(self) -> None:
+    def test_local_receipt_summary_reports_malformed_protocol(self) -> None:
         with self.assertRaises(SDKError) as caught:
-            EasyRemoteReceipt.from_wire({"index": "zero"})
+            LocalReceiptSummary.from_wire({"index": "zero"})
 
         self.assertTrue(is_code(caught.exception, ErrorCode.PROTOCOL))
         self.assertEqual(caught.exception.details["reason"], "protocol")
 
-    def test_easyremote_receipt_facade_is_honest_about_full_receipts(self) -> None:
-        receipt = EasyRemoteReceipt.from_wire(easyremote_wire_receipt())
+    def test_local_receipt_summary_is_honest_about_full_receipts(self) -> None:
+        receipt = LocalReceiptSummary.from_wire(local_receipt_summary_wire())
 
         with self.assertRaises(SDKError) as caught:
             receipt.verify()
@@ -798,35 +798,35 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.details["reason"], "full_receipt_unavailable"
         )
-        self.assertEqual(caught.exception.details["profile"], "easyremote_receipt")
+        self.assertEqual(caught.exception.details["profile"], "receipt")
         self.assertEqual(
             caught.exception.details["source_ref"],
-            "python_sdk.profile.easyremote_receipt",
+            "python_sdk.profile.receipt",
         )
 
-    def test_easyremote_receipt_chain_facade_projects_continuity(self) -> None:
-        first = EasyRemoteReceipt.from_wire(
-            easyremote_wire_receipt(index=0, self_hex="aa" * 32)
+    def test_local_receipt_summary_chain_projects_continuity(self) -> None:
+        first = LocalReceiptSummary.from_wire(
+            local_receipt_summary_wire(index=0, self_hex="aa" * 32)
         )
-        second = EasyRemoteReceipt.from_wire(
-            easyremote_wire_receipt(index=1, prev_hex="aa" * 32, self_hex="bb" * 32)
+        second = LocalReceiptSummary.from_wire(
+            local_receipt_summary_wire(index=1, prev_hex="aa" * 32, self_hex="bb" * 32)
         )
 
-        verification = EasyRemoteReceiptChain([first, second]).verify_continuity()
+        verification = LocalReceiptSummaryChain([first, second]).verify_continuity()
 
         assert verification is not None
         self.assertTrue(verification.continuous)
 
-    def test_easyremote_receipt_chain_facade_reports_broken_continuity(self) -> None:
-        first = EasyRemoteReceipt.from_wire(
-            easyremote_wire_receipt(index=0, self_hex="aa" * 32)
+    def test_local_receipt_summary_chain_reports_broken_continuity(self) -> None:
+        first = LocalReceiptSummary.from_wire(
+            local_receipt_summary_wire(index=0, self_hex="aa" * 32)
         )
-        second = EasyRemoteReceipt.from_wire(
-            easyremote_wire_receipt(index=1, prev_hex="cc" * 32, self_hex="bb" * 32)
+        second = LocalReceiptSummary.from_wire(
+            local_receipt_summary_wire(index=1, prev_hex="cc" * 32, self_hex="bb" * 32)
         )
 
         with self.assertRaises(SDKError) as caught:
-            EasyRemoteReceiptChain([first, second]).verify_continuity()
+            LocalReceiptSummaryChain([first, second]).verify_continuity()
 
         self.assertTrue(is_code(caught.exception, ErrorCode.PROTOCOL))
         self.assertEqual(caught.exception.details["reason"], "receipt_chain_broken")

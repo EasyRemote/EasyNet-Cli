@@ -75,7 +75,7 @@ ReceiptRef/ReceiptChain facades that
 delegate causal-context and continuity projection back through ReceiptClient,
 plus `ReceiptVerification` cryptographic-assurance guardrails that reject
 summary-only projections as verifier evidence, and SDK-owned
-`EasyRemoteReceipt`/`EasyRemoteReceiptChain` summary parsing, state projection,
+`LocalReceiptSummary`/`LocalReceiptSummaryChain` parsing, state projection,
 summary-only verification guardrails, and hash-chain continuity projection,
 plus PublicationClient resource-ref,
 package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
