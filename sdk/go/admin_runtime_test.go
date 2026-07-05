@@ -98,15 +98,85 @@ func TestAdminRuntimeTransportRevokesDeviceThroughRuntime(t *testing.T) {
 	}
 }
 
+func TestAdminRuntimeTransportCreatesAndDeletesDeviceSessionThroughRuntime(t *testing.T) {
+	identityTransport := newAdminRuntimeIdentityTransport()
+	identity, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: adminRuntimeCreateSessionRawJSON}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAdminClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeAdminClient: %v", err)
+	}
+
+	session, err := client.CreateDeviceSession(context.Background(), CreateDeviceSessionRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+		SessionKind:      "remote_desktop",
+		ExpiresUnixMS:    1893456000000,
+	})
+	if err != nil {
+		t.Fatalf("CreateDeviceSession: %v", err)
+	}
+	if session.SessionID != "dev-session-1" || session.DeviceURA != "easynet:///r/example/device/dev-a" ||
+		session.HubURA != "easynet:///r/example/hub/main" || session.SessionKind != "remote_desktop" {
+		t.Fatalf("device session = %#v", session)
+	}
+	createArgs := runtimeTransport.seenDraft["args"].(map[string]any)
+	if createArgs["device_ura"] != "easynet:///r/example/device/dev-a" ||
+		createArgs["hub_ura"] != "easynet:///r/example/hub/main" ||
+		createArgs["session_kind"] != "remote_desktop" ||
+		createArgs["expires_unix_ms"].(float64) != 1893456000000 {
+		t.Fatalf("session.create args = %#v", createArgs)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.session.create@1.0.0" {
+		t.Fatalf("create descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+
+	runtimeTransport.outputJSON = adminRuntimeDeleteSessionRawJSON
+	deleted, err := client.DeleteDeviceSession(context.Background(), DeleteDeviceSessionRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		SessionID:        "dev-session-1",
+		Reason:           "operator closed",
+	})
+	if err != nil {
+		t.Fatalf("DeleteDeviceSession: %v", err)
+	}
+	if deleted.Operation != adminAbilitySessionDelete || deleted.State != "ok" ||
+		deleted.DeviceURA == nil || *deleted.DeviceURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("delete result = %#v", deleted)
+	}
+	deleteArgs := runtimeTransport.seenDraft["args"].(map[string]any)
+	if deleteArgs["session_id"] != "dev-session-1" || deleteArgs["reason"] != "operator closed" {
+		t.Fatalf("session.delete args = %#v", deleteArgs)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.session.delete@1.0.0" {
+		t.Fatalf("delete descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+	if len(identityTransport.seenBuildURA) != 2 ||
+		identityTransport.seenBuildURA[0]["ability_name"] != adminAbilitySessionCreate ||
+		identityTransport.seenBuildURA[1]["ability_name"] != adminAbilitySessionDelete {
+		t.Fatalf("identity lookups not delegated: %#v", identityTransport.seenBuildURA)
+	}
+}
+
 func newAdminRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 	return &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
-			adminAbilityAgentList:    "easynet:///r/example/ability/device.dev-a.agent.list",
-			adminAbilityAgentStart:   "easynet:///r/example/ability/device.dev-a.agent.start",
-			adminAbilityAgentStop:    "easynet:///r/example/ability/device.dev-a.agent.stop",
-			adminAbilityAgentRefresh: "easynet:///r/example/ability/device.dev-a.agent.refresh",
-			adminAbilitySessionList:  "easynet:///r/example/ability/device.dev-a.session.list",
-			adminAbilityRevokeDevice: "easynet:///r/example/ability/device.dev-a.federation.revoke",
+			adminAbilityAgentList:     "easynet:///r/example/ability/device.dev-a.agent.list",
+			adminAbilityAgentStart:    "easynet:///r/example/ability/device.dev-a.agent.start",
+			adminAbilityAgentStop:     "easynet:///r/example/ability/device.dev-a.agent.stop",
+			adminAbilityAgentRefresh:  "easynet:///r/example/ability/device.dev-a.agent.refresh",
+			adminAbilitySessionList:   "easynet:///r/example/ability/device.dev-a.session.list",
+			adminAbilitySessionCreate: "easynet:///r/example/ability/device.dev-a.session.create",
+			adminAbilitySessionDelete: "easynet:///r/example/ability/device.dev-a.session.delete",
+			adminAbilityRevokeDevice:  "easynet:///r/example/ability/device.dev-a.federation.revoke",
 		},
 		descriptorByAbility: map[string]string{
 			"easynet:///r/example/ability/device.dev-a.agent.list":        "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0",
@@ -114,6 +184,8 @@ func newAdminRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 			"easynet:///r/example/ability/device.dev-a.agent.stop":        "easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.agent.refresh":     "easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.session.list":      "easynet:///r/example/ability/device.dev-a.session.list@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.session.create":    "easynet:///r/example/ability/device.dev-a.session.create@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.session.delete":    "easynet:///r/example/ability/device.dev-a.session.delete@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.federation.revoke": "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0",
 		},
 		descriptorProjection: identityDescriptorProjectionJSON,
@@ -129,4 +201,19 @@ const adminRuntimeAgentStartRawJSON = `{
 const adminRuntimeRevokeRawJSON = `{
 	"ack": true,
 	"was_active": true
+}`
+
+const adminRuntimeCreateSessionRawJSON = `{
+	"session_id": "dev-session-1",
+	"device_ura": "easynet:///r/example/device/dev-a",
+	"hub_ura": "easynet:///r/example/hub/main",
+	"state": "active",
+	"session_kind": "remote_desktop",
+	"created_unix_ms": 1767225600000,
+	"expires_unix_ms": 1893456000000
+}`
+
+const adminRuntimeDeleteSessionRawJSON = `{
+	"ack": true,
+	"device_ura": "easynet:///r/example/device/dev-a"
 }`

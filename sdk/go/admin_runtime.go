@@ -8,12 +8,14 @@ import (
 )
 
 const (
-	adminAbilityAgentList    = "agent.list"
-	adminAbilityAgentStart   = "agent.start"
-	adminAbilityAgentStop    = "agent.stop"
-	adminAbilityAgentRefresh = "agent.refresh"
-	adminAbilitySessionList  = "session.list"
-	adminAbilityRevokeDevice = "federation.revoke"
+	adminAbilityAgentList     = "agent.list"
+	adminAbilityAgentStart    = "agent.start"
+	adminAbilityAgentStop     = "agent.stop"
+	adminAbilityAgentRefresh  = "agent.refresh"
+	adminAbilitySessionList   = "session.list"
+	adminAbilitySessionCreate = "session.create"
+	adminAbilitySessionDelete = "session.delete"
+	adminAbilityRevokeDevice  = "federation.revoke"
 )
 
 // AdminRuntimeTransport lowers Admin + Gateway requests into Runtime Core
@@ -213,12 +215,28 @@ func (t *AdminRuntimeTransport) RevokeDevice(ctx context.Context, requestJSON []
 	return projectAdminLifecycleResult(output, adminAbilityRevokeDevice, &request.DeviceURA)
 }
 
-func (t *AdminRuntimeTransport) CreateDeviceSession(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "create device session runtime transport is not implemented")
+func (t *AdminRuntimeTransport) CreateDeviceSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[CreateDeviceSessionRequest](requestJSON, validateCreateDeviceSessionRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilitySessionCreate, deviceSessionCreateArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectAdminDeviceSession(output, request)
 }
 
-func (t *AdminRuntimeTransport) DeleteDeviceSession(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "delete device session runtime transport is not implemented")
+func (t *AdminRuntimeTransport) DeleteDeviceSession(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[DeleteDeviceSessionRequest](requestJSON, validateDeleteDeviceSessionRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilitySessionDelete, deviceSessionDeleteArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectAdminLifecycleResult(output, adminAbilitySessionDelete, nil)
 }
 
 func (t *AdminRuntimeTransport) Close(context.Context) error {
@@ -342,6 +360,28 @@ func agentStopArgs(request AdminAgentStopRequest) map[string]any {
 	return args
 }
 
+func deviceSessionCreateArgs(request CreateDeviceSessionRequest) map[string]any {
+	args := map[string]any{
+		"device_ura":   strings.TrimSpace(request.DeviceURA),
+		"hub_ura":      strings.TrimSpace(request.HubURA),
+		"session_kind": strings.TrimSpace(request.SessionKind),
+	}
+	if request.ExpiresUnixMS > 0 {
+		args["expires_unix_ms"] = request.ExpiresUnixMS
+	}
+	return args
+}
+
+func deviceSessionDeleteArgs(request DeleteDeviceSessionRequest) map[string]any {
+	args := map[string]any{
+		"session_id": strings.TrimSpace(request.SessionID),
+	}
+	if strings.TrimSpace(request.Reason) != "" {
+		args["reason"] = strings.TrimSpace(request.Reason)
+	}
+	return args
+}
+
 func adminRuntimeMetadata(input map[string]any, abilityName string) map[string]any {
 	metadata := map[string]any{}
 	for key, value := range input {
@@ -412,6 +452,47 @@ func projectAdminDeviceSessionPage(raw []byte) ([]byte, error) {
 	})
 }
 
+func projectAdminDeviceSession(raw []byte, request CreateDeviceSessionRequest) ([]byte, error) {
+	payload, err := adminOutputObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload["profile"] == adminGatewayProfile && payload["kind"] == "device_session" {
+		projected, err := json.Marshal(payload)
+		if err != nil {
+			return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode daemon device session projection: %v", err), err)
+		}
+		if _, err := NewDeviceSessionFromJSON(projected); err != nil {
+			return nil, err
+		}
+		return projected, nil
+	}
+	session := map[string]any{
+		"profile":         adminGatewayProfile,
+		"kind":            "device_session",
+		"session_id":      firstNonEmpty(firstStringFromMap(payload, "session_id", "sessionId", "id"), firstStringFromMap(payload, "session")),
+		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
+		"hub_ura":         firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
+		"state":           firstNonEmpty(firstStringFromMap(payload, "state", "status"), "active"),
+		"session_kind":    firstNonEmpty(firstStringFromMap(payload, "session_kind", "sessionKind", "kind"), strings.TrimSpace(request.SessionKind)),
+		"created_unix_ms": firstAdminNumericInt64(payload, "created_unix_ms", "createdUnixMs", "created_at_ms"),
+		"expires_unix_ms": firstNonZeroAdminInt64(firstAdminNumericInt64(payload, "expires_unix_ms", "expiresUnixMs", "expires_at_ms"), request.ExpiresUnixMS),
+		"metadata": map[string]any{
+			"profile":    adminGatewayProfile,
+			"source":     adminAbilitySessionCreate,
+			"raw_result": payload,
+		},
+	}
+	rawSession, err := json.Marshal(session)
+	if err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode device session projection: %v", err), err)
+	}
+	if _, err := NewDeviceSessionFromJSON(rawSession); err != nil {
+		return nil, err
+	}
+	return rawSession, nil
+}
+
 func projectAdminLifecycleResult(raw []byte, operation string, deviceURA *string) ([]byte, error) {
 	payload, err := adminOutputObject(raw)
 	if err != nil {
@@ -429,13 +510,17 @@ func projectAdminLifecycleResult(raw []byte, operation string, deviceURA *string
 		state = "not_ready"
 	}
 	agentURA := firstStringPtr(firstStringFromMap(payload, "agent_ura", "agentUra"))
+	resolvedDeviceURA := deviceURA
+	if resolvedDeviceURA == nil {
+		resolvedDeviceURA = firstStringPtr(firstStringFromMap(payload, "device_ura", "deviceUra"))
+	}
 	result := map[string]any{
 		"profile":                   adminGatewayProfile,
 		"kind":                      "admin_result",
 		"operation":                 operation,
 		"state":                     state,
 		"agent_ura":                 agentURA,
-		"device_ura":                deviceURA,
+		"device_ura":                resolvedDeviceURA,
 		"ack":                       ack,
 		"runtime_not_ready":         boolArg(payload, "runtime_not_ready"),
 		"runtime_catalog_not_ready": boolArg(payload, "runtime_catalog_not_ready"),
@@ -460,6 +545,47 @@ func adminOutputObject(raw []byte) (map[string]any, error) {
 		return nested, nil
 	}
 	return payload, nil
+}
+
+func firstAdminNumericInt64(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			if numeric, ok := adminNumericInt64(value); ok {
+				return numeric
+			}
+		}
+	}
+	return 0
+}
+
+func adminNumericInt64(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed != float64(int64(typed)) {
+			return 0, false
+		}
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint64:
+		if typed > uint64(^uint64(0)>>1) {
+			return 0, false
+		}
+		return int64(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func firstNonZeroAdminInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func adminMetadataWithSource(row map[string]any, source string) map[string]any {
