@@ -89,8 +89,12 @@ func TestCABIAdminTransportProjectsGatewayAndReportsUnsupported(t *testing.T) {
 		t.Fatalf("gateway status = %#v", status)
 	}
 
-	if _, err := client.GatewayStatus(context.Background(), AdminGatewayStatusRequest{}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("GatewayStatus error = %v, want %s", err, ErrNotImplemented)
+	gateway, err := client.GatewayStatus(context.Background(), AdminGatewayStatusRequest{})
+	if err != nil {
+		t.Fatalf("GatewayStatus: %v", err)
+	}
+	if !gateway.Ready || gateway.GatewayID != "device:example:dev-a" {
+		t.Fatalf("gateway status = %#v", gateway)
 	}
 	if _, err := client.JoinHub(context.Background(), AdminJoinHubRequest{
 		AdminCarrierBase: adminBaseForTest(),
@@ -160,6 +164,17 @@ int32_t easynet_init(const char *control_path, uint64_t *out_handle) {
 	return 0;
 }
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
+int32_t easynet_daemon_attach(const char *options_json, uint64_t *out_daemon_handle) {
+	(void)options_json;
+	*out_daemon_handle = 2002;
+	return 0;
+}
+int32_t easynet_daemon_detach(uint64_t daemon_handle) { (void)daemon_handle; return 0; }
+int32_t easynet_daemon_status(uint64_t daemon_handle, char **out_status_json) {
+	(void)daemon_handle;
+	*out_status_json = dup_json("{\"pid\":4242,\"pid_alive\":true,\"control_accepting\":true,\"invocation_accepting\":true,\"control_endpoint\":\"/tmp/easynet-control.sock\",\"invocation_endpoint\":\"/tmp/easynet-daemon.sock\"}");
+	return 0;
+}
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle;
 	if (strstr(invocation_json, "agent.start") != 0) {

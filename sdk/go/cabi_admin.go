@@ -13,6 +13,9 @@ typedef int32_t (*easynet_admin_last_error_json_fn)(char **out_error_json);
 typedef void (*easynet_admin_string_free_fn)(char *s);
 typedef int32_t (*easynet_admin_init_fn)(const char *control_path, uint64_t *out_handle);
 typedef int32_t (*easynet_admin_shutdown_fn)(uint64_t handle);
+typedef int32_t (*easynet_admin_daemon_attach_fn)(const char *options_json, uint64_t *out_daemon_handle);
+typedef int32_t (*easynet_admin_daemon_detach_fn)(uint64_t daemon_handle);
+typedef int32_t (*easynet_admin_daemon_status_fn)(uint64_t daemon_handle, char **out_status_json);
 typedef int32_t (*easynet_admin_invoke_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
 typedef int32_t (*easynet_admin_json_fn)(uint64_t handle, const char *request_json, char **out_json);
 
@@ -36,6 +39,18 @@ static int32_t easynet_admin_call_shutdown(void *fn, uint64_t handle) {
 	return ((easynet_admin_shutdown_fn)fn)(handle);
 }
 
+static int32_t easynet_admin_call_daemon_attach(void *fn, const char *options_json, uint64_t *out_daemon_handle) {
+	return ((easynet_admin_daemon_attach_fn)fn)(options_json, out_daemon_handle);
+}
+
+static int32_t easynet_admin_call_daemon_detach(void *fn, uint64_t daemon_handle) {
+	return ((easynet_admin_daemon_detach_fn)fn)(daemon_handle);
+}
+
+static int32_t easynet_admin_call_daemon_status(void *fn, uint64_t daemon_handle, char **out_status_json) {
+	return ((easynet_admin_daemon_status_fn)fn)(daemon_handle, out_status_json);
+}
+
 static int32_t easynet_admin_call_invoke(void *fn, uint64_t handle, const char *invocation_json, char **out_result_json) {
 	return ((easynet_admin_invoke_fn)fn)(handle, invocation_json, out_result_json);
 }
@@ -48,6 +63,7 @@ import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -59,6 +75,9 @@ type cabiAdminSymbols struct {
 	stringFree                  unsafe.Pointer
 	init                        unsafe.Pointer
 	shutdown                    unsafe.Pointer
+	daemonAttach                unsafe.Pointer
+	daemonDetach                unsafe.Pointer
+	daemonStatus                unsafe.Pointer
 	invocationInvoke            unsafe.Pointer
 	buildAgentListInvocation    unsafe.Pointer
 	buildAgentStartInvocation   unsafe.Pointer
@@ -80,6 +99,7 @@ type CABIAdminTransport struct {
 	library unsafe.Pointer
 	symbols cabiAdminSymbols
 	handle  uint64
+	daemon  uint64
 	closed  bool
 }
 
@@ -111,10 +131,17 @@ func OpenCABIAdminTransport(path string, controlPath string) (*CABIAdminTranspor
 		C.dlclose(library)
 		return nil, err
 	}
+	daemon, err := cabiAdminAttach(symbols, controlPath)
+	if err != nil {
+		_ = cabiAdminShutdown(symbols, handle)
+		C.dlclose(library)
+		return nil, err
+	}
 	return &CABIAdminTransport{
 		library: library,
 		symbols: symbols,
 		handle:  handle,
+		daemon:  daemon,
 	}, nil
 }
 
@@ -152,8 +179,20 @@ func (t *CABIAdminTransport) BuildSessionListInvocation(ctx context.Context, req
 	return t.callJSONWithOpenHandle(ctx, t.symbols.buildSessionListInvocation, requestJSON, "C ABI admin session-list invocation build failed")
 }
 
-func (t *CABIAdminTransport) GatewayStatus(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin gateway status query is not exported yet")
+func (t *CABIAdminTransport) GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	handle, daemon, err := t.requireOpenHandles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rawStatus, err := t.daemonStatus(daemon)
+	if err != nil {
+		return nil, err
+	}
+	projectionInput, err := adminGatewayStatusProjectionInput(rawStatus, requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, t.symbols.projectGatewayStatus, projectionInput, "C ABI admin gateway status projection failed")
 }
 
 func (t *CABIAdminTransport) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -240,16 +279,23 @@ func (t *CABIAdminTransport) Close(ctx context.Context) error {
 	t.closed = true
 	handle := t.handle
 	t.handle = 0
+	daemon := t.daemon
+	t.daemon = 0
 	library := t.library
 	t.library = nil
 	symbols := t.symbols
 	t.mu.Unlock()
 
 	var first error
-	if handle != 0 {
-		code := int32(C.easynet_admin_call_shutdown(symbols.shutdown, C.uint64_t(handle)))
+	if daemon != 0 {
+		code := int32(C.easynet_admin_call_daemon_detach(symbols.daemonDetach, C.uint64_t(daemon)))
 		if code != 0 {
-			first = cabiAdminLastErrorOrCode(symbols, code, "C ABI admin shutdown failed")
+			first = cabiAdminLastErrorOrCode(symbols, code, "C ABI admin daemon detach failed")
+		}
+	}
+	if handle != 0 {
+		if err := cabiAdminShutdown(symbols, handle); err != nil && first == nil {
+			first = err
 		}
 	}
 	if library != nil {
@@ -287,21 +333,29 @@ func (t *CABIAdminTransport) callJSONWithOpenHandle(ctx context.Context, symbol 
 }
 
 func (t *CABIAdminTransport) requireOpen(ctx context.Context) (uint64, error) {
+	handle, _, err := t.requireOpenHandles(ctx)
+	return handle, err
+}
+
+func (t *CABIAdminTransport) requireOpenHandles(ctx context.Context) (uint64, uint64, error) {
 	if ctx == nil {
-		return 0, invalidRuntimeClient("context is required")
+		return 0, 0, invalidRuntimeClient("context is required")
 	}
 	if t == nil {
-		return 0, invalidRuntimeClient("C ABI admin transport is not initialized")
+		return 0, 0, invalidRuntimeClient("C ABI admin transport is not initialized")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return 0, invalidRuntimeClient("C ABI admin transport is closed")
+		return 0, 0, invalidRuntimeClient("C ABI admin transport is closed")
 	}
 	if t.handle == 0 {
-		return 0, invalidCABIHandle("C ABI admin transport handle is invalid")
+		return 0, 0, invalidCABIHandle("C ABI admin transport handle is invalid")
 	}
-	return t.handle, nil
+	if t.daemon == 0 {
+		return 0, 0, invalidCABIHandle("C ABI admin daemon handle is invalid")
+	}
+	return t.handle, t.daemon, nil
 }
 
 func (t *CABIAdminTransport) callJSON(handle uint64, symbol unsafe.Pointer, payload []byte, fallback string) ([]byte, error) {
@@ -326,6 +380,15 @@ func (t *CABIAdminTransport) invoke(handle uint64, draftJSON []byte, fallback st
 	return cabiAdminTakeCString(t.symbols.stringFree, out), nil
 }
 
+func (t *CABIAdminTransport) daemonStatus(daemon uint64) ([]byte, error) {
+	var out *C.char
+	code := int32(C.easynet_admin_call_daemon_status(t.symbols.daemonStatus, C.uint64_t(daemon), &out))
+	if code != 0 {
+		return nil, cabiAdminLastErrorOrCode(t.symbols, code, "C ABI admin daemon status failed")
+	}
+	return cabiAdminTakeCString(t.symbols.stringFree, out), nil
+}
+
 func bindCABIAdminSymbols(library unsafe.Pointer) (cabiAdminSymbols, error) {
 	var symbols cabiAdminSymbols
 	bindings := []struct {
@@ -337,6 +400,9 @@ func bindCABIAdminSymbols(library unsafe.Pointer) (cabiAdminSymbols, error) {
 		{"easynet_string_free", &symbols.stringFree},
 		{"easynet_init", &symbols.init},
 		{"easynet_shutdown", &symbols.shutdown},
+		{"easynet_daemon_attach", &symbols.daemonAttach},
+		{"easynet_daemon_detach", &symbols.daemonDetach},
+		{"easynet_daemon_status", &symbols.daemonStatus},
 		{"easynet_invocation_invoke", &symbols.invocationInvoke},
 		{"easynet_admin_build_agent_list_invocation", &symbols.buildAgentListInvocation},
 		{"easynet_admin_build_agent_start_invocation", &symbols.buildAgentStartInvocation},
@@ -376,6 +442,61 @@ func cabiAdminInit(symbols cabiAdminSymbols, controlPath string) (uint64, error)
 		return 0, invalidCABIHandle("C ABI admin init returned an invalid handle")
 	}
 	return handle, nil
+}
+
+func cabiAdminAttach(symbols cabiAdminSymbols, controlPath string) (uint64, error) {
+	options := map[string]any{}
+	if controlPath != "" {
+		options["control_path"] = controlPath
+	}
+	optionsJSON, err := json.Marshal(options)
+	if err != nil {
+		return 0, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode daemon attach options: %v", err), err)
+	}
+	var out C.uint64_t
+	code := C.int32_t(cabiWithCString(optionsJSON, func(cOptions *C.char) C.int32_t {
+		return C.easynet_admin_call_daemon_attach(symbols.daemonAttach, cOptions, &out)
+	}))
+	if int32(code) != 0 {
+		return 0, cabiAdminLastErrorOrCode(symbols, int32(code), "C ABI admin daemon attach failed")
+	}
+	handle := uint64(out)
+	if handle == 0 {
+		return 0, invalidCABIHandle("C ABI admin daemon attach returned an invalid handle")
+	}
+	return handle, nil
+}
+
+func cabiAdminShutdown(symbols cabiAdminSymbols, handle uint64) error {
+	code := int32(C.easynet_admin_call_shutdown(symbols.shutdown, C.uint64_t(handle)))
+	if code != 0 {
+		return cabiAdminLastErrorOrCode(symbols, code, "C ABI admin shutdown failed")
+	}
+	return nil
+}
+
+func adminGatewayStatusProjectionInput(statusJSON []byte, requestJSON []byte) ([]byte, error) {
+	var status map[string]any
+	if err := json.Unmarshal(statusJSON, &status); err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode daemon status JSON: %v", err), err)
+	}
+	var request map[string]any
+	if len(requestJSON) > 0 {
+		if err := json.Unmarshal(requestJSON, &request); err != nil {
+			return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode gateway status request JSON: %v", err), err)
+		}
+	}
+	projection := map[string]any{
+		"runtime_status": daemonStateFromCABI(status),
+		"daemon":         status,
+	}
+	if value, ok := request["require_public_listener"].(bool); ok {
+		projection["require_public_listener"] = value
+	}
+	if metadata, ok := request["metadata"].(map[string]any); ok {
+		projection["metadata"] = metadata
+	}
+	return json.Marshal(projection)
 }
 
 func cabiAdminLastErrorOrCode(symbols cabiAdminSymbols, code int32, fallback string) error {
