@@ -8,12 +8,12 @@ from easynet_sdk import (
     CompatibilityClient,
     ConnectOptions,
     DaemonControl,
+    DaemonLifecycleFacade,
     DaemonLifecycleState,
     DaemonMode,
+    DaemonStartProjection,
     DiscoverOptions,
     DirectoryClient,
-    EasyRemoteDaemonLifecycleFacade,
-    EasyRemoteDaemonStartConfig,
     ErrorCode,
     EventClient,
     HealthClient,
@@ -191,14 +191,14 @@ def ready_status() -> bytes:
 
 
 class DaemonTests(unittest.TestCase):
-    def test_easyremote_start_config_preserves_legacy_wire_shape(self) -> None:
-        config = EasyRemoteDaemonStartConfig.hub(
+    def test_daemon_start_projection_preserves_wire_shape(self) -> None:
+        config = DaemonStartProjection.hub(
             " acme ",
             env={"RUST_LOG": "info"},
             log_path="/tmp/daemon.log",
             detached=True,
         )
-        foreground = EasyRemoteDaemonStartConfig.device(
+        foreground = DaemonStartProjection.device(
             "dev-a",
             detached=False,
         )
@@ -210,20 +210,20 @@ class DaemonTests(unittest.TestCase):
                 "realm": "acme",
                 "env": {"RUST_LOG": "info"},
                 "log_path": "/tmp/daemon.log",
-                "detach": True,
+                "detached": True,
             },
         )
         self.assertEqual(
             foreground.to_wire_dict(),
-            {"mode": "device", "node_id": "dev-a", "detach": False},
+            {"mode": "device", "device_id": "dev-a", "detached": False},
         )
         self.assertNotIn(
-            "detach",
-            EasyRemoteDaemonStartConfig.device("dev-a").to_wire_dict(),
+            "detached",
+            DaemonStartProjection.device("dev-a").to_wire_dict(),
         )
 
-    def test_easyremote_start_config_projects_to_runtime_core_start_config(self) -> None:
-        config = EasyRemoteDaemonStartConfig.device(
+    def test_daemon_start_projection_projects_to_runtime_core_start_config(self) -> None:
+        config = DaemonStartProjection.device(
             " dev-a ",
             env={"RUST_LOG": "debug"},
             log_path="/tmp/daemon.log",
@@ -237,24 +237,24 @@ class DaemonTests(unittest.TestCase):
         self.assertTrue(config.detached)
         self.assertEqual(config.env, {"RUST_LOG": "debug"})
 
-    def test_easyremote_start_config_rejects_invalid_inputs(self) -> None:
+    def test_daemon_start_projection_rejects_invalid_inputs(self) -> None:
         with self.assertRaises(SDKError) as missing_realm:
-            EasyRemoteDaemonStartConfig.hub(" ")
+            DaemonStartProjection.hub(" ")
         self.assertEqual(missing_realm.exception.details["reason"], "empty_realm")
 
         with self.assertRaises(SDKError) as missing_node:
-            EasyRemoteDaemonStartConfig.device()
-        self.assertEqual(missing_node.exception.details["reason"], "missing_node_id")
+            DaemonStartProjection.device()
+        self.assertEqual(missing_node.exception.details["reason"], "missing_device_id")
 
         with self.assertRaises(SDKError) as invalid_mode:
-            EasyRemoteDaemonStartConfig.from_legacy(mode="both", realm="acme")
+            DaemonStartProjection.from_profile(mode="both", realm="acme")
         self.assertEqual(invalid_mode.exception.details["reason"], "invalid_daemon_mode")
 
-    def test_easyremote_lifecycle_facade_starts_and_projects_status(self) -> None:
+    def test_daemon_lifecycle_facade_starts_and_projects_status(self) -> None:
         transport = MemoryDaemonTransport()
-        facade = EasyRemoteDaemonLifecycleFacade(DaemonControl(transport))
+        facade = DaemonLifecycleFacade(DaemonControl(transport))
 
-        handle = facade.start(EasyRemoteDaemonStartConfig.hub("acme"))
+        handle = facade.start(DaemonStartProjection.hub("acme"))
         status = handle.status_dict()
 
         assert transport.seen_start is not None
@@ -268,10 +268,10 @@ class DaemonTests(unittest.TestCase):
         self.assertIsInstance(endpoints, dict)
         self.assertEqual(endpoints["invocation_endpoint"], "unix:///tmp/daemon.sock")
 
-    def test_easyremote_handle_facade_opens_transport_adapter(self) -> None:
+    def test_daemon_handle_facade_opens_transport_adapter(self) -> None:
         transport = MemoryDaemonTransport()
-        facade = EasyRemoteDaemonLifecycleFacade(DaemonControl(transport))
-        handle = facade.start(EasyRemoteDaemonStartConfig.hub("acme"))
+        facade = DaemonLifecycleFacade(DaemonControl(transport))
+        handle = facade.start(DaemonStartProjection.hub("acme"))
 
         adapter = handle.open_transport_adapter()
 

@@ -218,8 +218,8 @@ method spelling.
   direct daemon Axon gRPC-over-UDS handle operations composed through an explicit
   RuntimeTransport delegate, runtime connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
   discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
-  facts, SDK-owned `EasyRemoteDaemonStartConfig` and
-  `EasyRemoteDaemonLifecycleFacade` legacy start-wire/status/open-client
+  facts, SDK-owned `DaemonStartProjection` and
+  `DaemonLifecycleFacade` start-wire/status/open-client
   projection, schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, `AbilityInvocationClient`
   descriptor-delegated complete tuple build/invoke/stream/bidi facade plus

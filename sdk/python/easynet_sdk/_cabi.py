@@ -3108,18 +3108,19 @@ def _daemon_start_config_for_cabi(config_json: bytes) -> bytes:
             ),
         )
     projected: dict[str, object] = {}
-    for field_name in ("mode", "realm", "daemon_bin", "log_path", "env"):
+    for field_name in (
+        "mode",
+        "realm",
+        "device_id",
+        "daemon_bin",
+        "log_path",
+        "env",
+    ):
         value = config.get(field_name)
         if value not in (None, "", {}, False):
             projected[field_name] = value
-    if config.get("device_id"):
-        projected["node_id"] = config["device_id"]
-    if config.get("node_id"):
-        projected["node_id"] = config["node_id"]
     if config.get("detached"):
-        projected["detach"] = True
-    if config.get("detach"):
-        projected["detach"] = True
+        projected["detached"] = True
     return _json_bytes(projected)
 
 
