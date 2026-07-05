@@ -305,6 +305,36 @@ class IdentityTests(unittest.TestCase):
             ],
         )
 
+    def test_identity_provides_host_binding_descriptor_canonicalizer(self) -> None:
+        transport = MemoryIdentityTransport()
+        transport.descriptor_json = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        client = IdentityClient(transport)
+
+        canonicalize = client.host_binding_descriptor_ref_canonicalizer()
+        canonical = canonicalize(
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+        )
+
+        self.assertEqual(
+            canonical,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            transport.seen_request,
+            {
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                )
+            },
+        )
+
     def test_addressing_ura_builders_delegate_to_identity_transport(self) -> None:
         transport = MemoryIdentityTransport()
         client = AddressingClient(transport)

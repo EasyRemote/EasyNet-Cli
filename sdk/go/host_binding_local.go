@@ -28,6 +28,15 @@ func NewLocalHostBindingClient(canonicalizer HostBindingDescriptorRefCanonicaliz
 	return NewHostBindingClient(NewLocalHostBindingTransport(canonicalizer))
 }
 
+func NewIdentityHostBindingDescriptorRefCanonicalizer(identity *IdentityClient) HostBindingDescriptorRefCanonicalizer {
+	return func(ctx context.Context, descriptorRef string) (string, error) {
+		if identity == nil {
+			return "", invalidProfileClient(hostBindingProfile, "identity client is required for descriptor_ref canonicalization")
+		}
+		return identity.CanonicalAbilityDescriptorRef(ctx, descriptorRef, "")
+	}
+}
+
 func (t *LocalHostBindingTransport) BuildHostStreamBinding(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	var req HostStreamBindingRequest
 	if err := json.Unmarshal(requestJSON, &req); err != nil {
@@ -210,23 +219,17 @@ func (t *LocalHostBindingTransport) Close(context.Context) error {
 }
 
 func (t *LocalHostBindingTransport) canonicalDescriptorRef(ctx context.Context, descriptorRef string) (string, error) {
-	if strings.TrimSpace(descriptorRef) != descriptorRef {
-		return "", invalidProfilePayload(hostBindingProfile, "descriptor_ref must not contain surrounding whitespace", nil)
+	if t == nil || t.canonicalizer == nil {
+		return "", invalidProfilePayload(hostBindingProfile, "descriptor_ref canonicalizer is required", nil)
 	}
-	if t != nil && t.canonicalizer != nil {
-		canonical, err := t.canonicalizer(ctx, descriptorRef)
-		if err != nil {
-			return "", err
-		}
-		if canonical == "" {
-			return "", invalidProfilePayload(hostBindingProfile, "descriptor_ref canonicalizer returned empty value", nil)
-		}
-		return canonical, nil
+	canonical, err := t.canonicalizer(ctx, descriptorRef)
+	if err != nil {
+		return "", err
 	}
-	if !strings.Contains(descriptorRef, "@") || strings.HasSuffix(descriptorRef, "@") {
-		return "", invalidProfilePayload(hostBindingProfile, "descriptor_ref must include descriptor version", nil)
+	if canonical == "" {
+		return "", invalidProfilePayload(hostBindingProfile, "descriptor_ref canonicalizer returned empty value", nil)
 	}
-	return descriptorRef, nil
+	return canonical, nil
 }
 
 func hostBindingObject(raw []byte, label string) (map[string]any, error) {

@@ -227,7 +227,9 @@ func TestHostBindingFoldOutputHashRejectsSequenceGap(t *testing.T) {
 }
 
 func TestLocalHostBindingTransportProjectsCodecAndHash(t *testing.T) {
-	client, err := NewLocalHostBindingClient(nil)
+	client, err := NewLocalHostBindingClient(func(context.Context, string) (string, error) {
+		return "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0", nil
+	})
 	if err != nil {
 		t.Fatalf("NewLocalHostBindingClient: %v", err)
 	}
@@ -311,6 +313,26 @@ func TestLocalHostBindingTransportProjectsCodecAndHash(t *testing.T) {
 	}
 	if terminal.FrameType != "terminal" || terminal.OutputHash == nil || *terminal.OutputHash != folded.OutputHash {
 		t.Fatalf("local terminal frame = %#v", terminal)
+	}
+}
+
+func TestLocalHostBindingTransportRequiresDescriptorCanonicalizerForBinding(t *testing.T) {
+	client, err := NewLocalHostBindingClient(nil)
+	if err != nil {
+		t.Fatalf("NewLocalHostBindingClient: %v", err)
+	}
+
+	_, err = client.BuildHostStreamBinding(context.Background(), HostStreamBindingRequest{
+		BindingID:     "binding-weather-1",
+		DescriptorRef: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+		Endpoint:      "/tmp/easynet-weather.sock",
+		FrameSchema:   hostStreamFrameSchema,
+	})
+	if err == nil {
+		t.Fatalf("binding build succeeded without descriptor_ref canonicalizer")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

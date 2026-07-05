@@ -3416,6 +3416,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "device_ability_ura": "directory_identity.identity.device_ability_ura",
                     "device_agent_ura": "directory_identity.identity.device_agent_ura",
                     "device_ura": "directory_identity.identity.device_ura",
+                    "host_binding_descriptor_ref_canonicalizer": "directory_identity.identity.host_binding_descriptor_ref_canonicalizer",
                     "hub_ura": "directory_identity.identity.hub_ura",
                     "list_signing_keys": "directory_identity.identity.list_signing_keys",
                     "owner_ability_descriptor_ref": "directory_identity.identity.owner_ability_descriptor_ref",

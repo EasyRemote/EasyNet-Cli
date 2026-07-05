@@ -977,12 +977,8 @@ def _canonical_host_binding_descriptor_ref(
     descriptor_ref: str,
     canonicalizer: Optional[Callable[[str], str]],
 ) -> str:
-    if descriptor_ref.strip() != descriptor_ref:
-        raise _invalid_host_binding("descriptor_ref must not contain surrounding whitespace")
     if canonicalizer is None:
-        if "@" not in descriptor_ref or descriptor_ref.endswith("@"):
-            raise _invalid_host_binding("descriptor_ref must include descriptor version")
-        return descriptor_ref
+        raise _invalid_host_binding("descriptor_ref canonicalizer is required")
     try:
         canonical = canonicalizer(descriptor_ref)
     except SDKError:

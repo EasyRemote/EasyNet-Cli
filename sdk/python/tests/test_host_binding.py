@@ -253,18 +253,27 @@ class HostBindingTests(unittest.TestCase):
                 )
             )
 
-    def test_local_transport_rejects_descriptor_and_endpoint_drift(self) -> None:
+    def test_local_transport_requires_descriptor_canonicalizer_for_binding(self) -> None:
         client = HostBindingClient(LocalHostBindingTransport())
 
-        with self.assertRaises(SDKError):
+        with self.assertRaises(SDKError) as caught:
             client.build_host_stream_binding(
                 HostStreamBindingRequest(
                     binding_id="binding-weather-1",
-                    descriptor_ref="easynet:///r/example/ability/device.dev-a.weather.stream",
+                    descriptor_ref="easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
                     endpoint="/tmp/easynet-weather.sock",
                 )
             )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+    def test_local_transport_rejects_endpoint_drift_after_descriptor_canonicalization(
+        self,
+    ) -> None:
+        client = HostBindingClient(
+            LocalHostBindingTransport(
+                lambda value: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0"
+            )
+        )
         with self.assertRaises(SDKError):
             client.build_host_stream_binding(
                 HostStreamBindingRequest(

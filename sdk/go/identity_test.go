@@ -221,6 +221,27 @@ func TestIdentityAddressingHelpersDelegateToTransport(t *testing.T) {
 	}
 }
 
+func TestIdentityProvidesHostBindingDescriptorCanonicalizer(t *testing.T) {
+	transport := &memoryIdentityTransport{descriptorJSON: identityDescriptorProjectionJSON}
+	identity, err := NewIdentityClient(transport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+
+	canonicalizer := NewIdentityHostBindingDescriptorRefCanonicalizer(identity)
+	canonical, err := canonicalizer(
+		context.Background(),
+		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("canonicalizer: %v", err)
+	}
+	if canonical != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" ||
+		transport.seenRequest["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		t.Fatalf("host-binding canonicalizer did not delegate: result=%q request=%#v", canonical, transport.seenRequest)
+	}
+}
+
 func TestIdentityBuildResourceRefValidatesProjection(t *testing.T) {
 	transport := &memoryIdentityTransport{resourceJSON: `{
 		"resource_ura":"easynet:///r/example/resource/device.dev-a/fs/tmp/easynet-weather-package",

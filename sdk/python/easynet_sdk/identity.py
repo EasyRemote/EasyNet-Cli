@@ -669,6 +669,13 @@ class AddressingClient:
             raise _invalid_identity("invalid descriptor_ref ability projection")
         return projection.ability_ura
 
+    def host_binding_descriptor_ref_canonicalizer(self) -> Callable[[str], str]:
+        """Return the DescriptorRef seam expected by local Host Binding codecs."""
+
+        return lambda descriptor_ref: self.canonical_ability_descriptor_ref(
+            descriptor_ref
+        )
+
     def ability_address(self, ability_ura: str) -> AbilityAddress:
         """Project an Ability URA into owner/subject facts via Axon helpers."""
 
@@ -800,6 +807,12 @@ class IdentityClient:
 
         self._require_open()
         return self._addressing.ability_ura_from_descriptor_ref(descriptor_ref)
+
+    def host_binding_descriptor_ref_canonicalizer(self) -> Callable[[str], str]:
+        """Return the DescriptorRef seam expected by local Host Binding codecs."""
+
+        self._require_open()
+        return self._addressing.host_binding_descriptor_ref_canonicalizer()
 
     def ability_address(self, ability_ura: str) -> AbilityAddress:
         """Project an Ability URA into owner/subject facts via identity transport."""
