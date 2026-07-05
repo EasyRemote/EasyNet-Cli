@@ -102,7 +102,7 @@ MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
 through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams, an EasyRemote Mission cutover adapter over typed Mission profile
-requests, SDK-owned `EasyRemoteProfileBridge` dispatch/projection glue,
+requests, SDK-owned `DaemonProfileBridge` dispatch/projection glue,
 EasyRemote page-based Mission event access, SDK-owned bounded Mission event
 tailing for EasyRemote Pipeline live updates, SDK-owned EasyRemote Pipeline step
 planning/EAL rendering and child Invocation fact conformance projection, and
@@ -117,7 +117,7 @@ C ABI-backed gateway lifecycle status projection, plus GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
 verification, and C ABI-backed typed device-session page/result projection plus close state seams,
 with an EasyRemote hosted-agent admin cutover adapter over typed Admin profile
-requests for add/list/stop/refresh, SDK-owned `EasyRemoteProfileBridge`
+requests for add/list/stop/refresh, SDK-owned `DaemonProfileBridge`
 dispatch/projection glue for gateway status, hub join/leave, pairing
 preflight/create/validate, credential verification, device-session
 create/list/delete, and device revoke, and SDK-owned EasyRemote Server/Gateway

@@ -1,4 +1,4 @@
-"""EasyRemote profile bridge over SDK-owned Admin and Mission DTOs."""
+"""Daemon profile bridge over SDK-owned Admin and Mission DTOs."""
 
 from __future__ import annotations
 
@@ -23,8 +23,6 @@ from .system_abilities import AdminSystemAbility, MissionSystemAbility
 
 _ADMIN_PROFILE = "admin_gateway"
 _MISSION_PROFILE = "mission"
-_EASYREMOTE_ADMIN_PROFILE = "easyremote_admin_profile"
-_EASYREMOTE_MISSION_PROFILE = "easyremote_mission_profile"
 _DESCRIPTOR_VERSION = "1.0.0"
 _AGENT_START = AdminSystemAbility.AGENT_START
 _AGENT_LIST = AdminSystemAbility.AGENT_LIST
@@ -47,8 +45,8 @@ _MISSION_CANCEL = MissionSystemAbility.CANCEL
 _MISSION_EVENTS = MissionSystemAbility.EVENTS
 
 
-class EasyRemoteProfileDispatcher(Protocol):
-    """Minimal product dispatcher needed by SDK-owned EasyRemote profile bridges."""
+class ProfileBridgeDispatcher(Protocol):
+    """Minimal dispatcher needed by SDK-owned daemon profile bridges."""
 
     def device_ura(self) -> str:
         """Return the caller/callee device URA for daemon system abilities."""
@@ -62,12 +60,12 @@ class EasyRemoteProfileDispatcher(Protocol):
 NonceFactory = Callable[[], bytes]
 
 
-class EasyRemoteProfileBridge:
-    """SDK-owned Admin/Mission bridge for EasyRemote-like product clients."""
+class DaemonProfileBridge:
+    """SDK-owned Admin/Mission bridge for host applications."""
 
     def __init__(
         self,
-        dispatcher: EasyRemoteProfileDispatcher,
+        dispatcher: ProfileBridgeDispatcher,
         *,
         nonce_factory: NonceFactory | None = None,
         descriptor_version: str = _DESCRIPTOR_VERSION,
@@ -78,13 +76,13 @@ class EasyRemoteProfileBridge:
 
     def admin_facade(self) -> EasyRemoteAdminAdapter:
         return EasyRemoteAdminAdapter(
-            AdminClient(_EasyRemoteAdminProfileTransport(self._dispatcher)),
+            AdminClient(_AdminBridgeTransport(self._dispatcher)),
             self.admin_base(),
         )
 
     def mission_facade(self) -> EasyRemoteMissionAdapter:
         return EasyRemoteMissionAdapter(
-            MissionClient(_EasyRemoteMissionProfileTransport(self._dispatcher)),
+            MissionClient(_MissionBridgeTransport(self._dispatcher)),
             self.mission_base(),
         )
 
@@ -97,7 +95,7 @@ class EasyRemoteProfileBridge:
             descriptor_version=self._descriptor_version,
             nonce_base64=self._nonce_base64(),
             causal_context={"form": "none"},
-            metadata={"profile": _ADMIN_PROFILE, "source": "easyremote"},
+            metadata={"profile": _ADMIN_PROFILE, "source": "profile_bridge"},
         )
 
     def mission_base(self) -> MissionCarrierBase:
@@ -109,24 +107,24 @@ class EasyRemoteProfileBridge:
             descriptor_version=self._descriptor_version,
             nonce_base64=self._nonce_base64(),
             causal_context={"form": "none"},
-            metadata={"profile": _MISSION_PROFILE, "source": "easyremote"},
+            metadata={"profile": _MISSION_PROFILE, "source": "profile_bridge"},
         )
 
     def _device_ura(self) -> str:
         device = self._dispatcher.device_ura()
         if not isinstance(device, str) or not device.strip():
-            raise _invalid_admin("EasyRemote dispatcher device_ura is required")
+            raise _invalid_admin("profile bridge dispatcher device_ura is required")
         return device
 
     def _nonce_base64(self) -> str:
         nonce = self._nonce_factory()
         if not isinstance(nonce, bytes) or not nonce:
-            raise _invalid_admin("EasyRemote nonce factory must return bytes")
+            raise _invalid_admin("profile bridge nonce factory must return bytes")
         return base64.b64encode(nonce).decode("ascii")
 
 
-class _EasyRemoteAdminProfileTransport:
-    def __init__(self, dispatcher: EasyRemoteProfileDispatcher) -> None:
+class _AdminBridgeTransport:
+    def __init__(self, dispatcher: ProfileBridgeDispatcher) -> None:
         self._dispatcher = dispatcher
 
     def build_agent_list_invocation(self, request_json: bytes) -> bytes:
@@ -149,7 +147,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def gateway_status(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote gateway status request", _invalid_admin
+            request_json, "profile bridge gateway status request", _invalid_admin
         )
         payload: dict[str, object] = {}
         if "require_public_listener" in request:
@@ -163,7 +161,7 @@ class _EasyRemoteAdminProfileTransport:
         )
 
     def list_agents(self, request_json: bytes) -> bytes:
-        _json_object(request_json, "EasyRemote agent list request", _invalid_admin)
+        _json_object(request_json, "profile bridge agent list request", _invalid_admin)
         response = self._invoke(_AGENT_LIST)
         agents = response.get("agents") or []
         if not isinstance(agents, list):
@@ -186,7 +184,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def agent_start(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote agent start request", _invalid_admin
+            request_json, "profile bridge agent start request", _invalid_admin
         )
         response = self._invoke(
             _AGENT_START,
@@ -207,7 +205,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def agent_refresh(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote agent refresh request", _invalid_admin
+            request_json, "profile bridge agent refresh request", _invalid_admin
         )
         payload: dict[str, object] = {}
         if request.get("name"):
@@ -217,7 +215,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def agent_stop(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote agent stop request", _invalid_admin
+            request_json, "profile bridge agent stop request", _invalid_admin
         )
         payload: dict[str, object] = {}
         if request.get("name"):
@@ -229,7 +227,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote session list request", _invalid_admin
+            request_json, "profile bridge session list request", _invalid_admin
         )
         payload: dict[str, object] = {}
         if "include_terminated" in request:
@@ -241,7 +239,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def join_hub(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote hub join request", _invalid_admin
+            request_json, "profile bridge hub join request", _invalid_admin
         )
         device_ura = _required_admin_string(request, "device_ura")
         response = self._invoke(
@@ -253,7 +251,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def leave_hub(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote hub leave request", _invalid_admin
+            request_json, "profile bridge hub leave request", _invalid_admin
         )
         payload: dict[str, object] = {
             "hub_ura": _required_admin_string(request, "hub_ura")
@@ -265,7 +263,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def pairing_preflight(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote pairing preflight request", _invalid_admin
+            request_json, "profile bridge pairing preflight request", _invalid_admin
         )
         payload: dict[str, object] = {
             "hub_ura": _required_admin_string(request, "hub_ura"),
@@ -281,7 +279,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def validate_pairing(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote pairing validation request", _invalid_admin
+            request_json, "profile bridge pairing validation request", _invalid_admin
         )
         response = self._invoke(
             _PAIRING_VALIDATE,
@@ -293,7 +291,7 @@ class _EasyRemoteAdminProfileTransport:
     def verify_device_credential(self, request_json: bytes) -> bytes:
         request = _json_object(
             request_json,
-            "EasyRemote device credential verification request",
+            "profile bridge device credential verification request",
             _invalid_admin,
         )
         response = self._invoke(
@@ -306,7 +304,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def create_pairing(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote pairing create request", _invalid_admin
+            request_json, "profile bridge pairing create request", _invalid_admin
         )
         payload: dict[str, object] = {
             "hub_ura": _required_admin_string(request, "hub_ura"),
@@ -323,7 +321,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def revoke_device(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote device revoke request", _invalid_admin
+            request_json, "profile bridge device revoke request", _invalid_admin
         )
         device_ura = _required_admin_string(request, "device_ura")
         response = self._invoke(
@@ -339,7 +337,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def create_device_session(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote session create request", _invalid_admin
+            request_json, "profile bridge session create request", _invalid_admin
         )
         payload: dict[str, object] = {
             "device_ura": _required_admin_string(request, "device_ura"),
@@ -355,7 +353,7 @@ class _EasyRemoteAdminProfileTransport:
 
     def delete_device_session(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote session delete request", _invalid_admin
+            request_json, "profile bridge session delete request", _invalid_admin
         )
         payload: dict[str, object] = {
             "session_id": _required_admin_string(request, "session_id")
@@ -374,8 +372,8 @@ class _EasyRemoteAdminProfileTransport:
         return dict(self._dispatcher.invoke_system_ability(ability.value, **kwargs))
 
 
-class _EasyRemoteMissionProfileTransport:
-    def __init__(self, dispatcher: EasyRemoteProfileDispatcher) -> None:
+class _MissionBridgeTransport:
+    def __init__(self, dispatcher: ProfileBridgeDispatcher) -> None:
         self._dispatcher = dispatcher
 
     def build_run_eal_invocation(self, request_json: bytes) -> bytes:
@@ -392,7 +390,7 @@ class _EasyRemoteMissionProfileTransport:
 
     def run_eal(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote mission run request", _invalid_mission
+            request_json, "profile bridge mission run request", _invalid_mission
         )
         payload: dict[str, object] = {
             "source": _required_mission_string(request, "source")
@@ -404,7 +402,7 @@ class _EasyRemoteMissionProfileTransport:
 
     def run_file(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote mission run-file request", _invalid_mission
+            request_json, "profile bridge mission run-file request", _invalid_mission
         )
         payload: dict[str, object] = {"path": _required_mission_string(request, "path")}
         if request.get("label"):
@@ -414,7 +412,7 @@ class _EasyRemoteMissionProfileTransport:
 
     def track(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote mission track request", _invalid_mission
+            request_json, "profile bridge mission track request", _invalid_mission
         )
         run_id = _required_mission_string(request, "mission_id")
         response = self._invoke(_MISSION_TRACK, run_id=run_id)
@@ -422,7 +420,7 @@ class _EasyRemoteMissionProfileTransport:
 
     def cancel(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote mission cancel request", _invalid_mission
+            request_json, "profile bridge mission cancel request", _invalid_mission
         )
         run_id = _required_mission_string(request, "mission_id")
         response = self._invoke(_MISSION_CANCEL, run_id=run_id)
@@ -430,7 +428,7 @@ class _EasyRemoteMissionProfileTransport:
 
     def events(self, request_json: bytes) -> bytes:
         request = _json_object(
-            request_json, "EasyRemote mission events request", _invalid_mission
+            request_json, "profile bridge mission events request", _invalid_mission
         )
         run_id = _required_mission_string(request, "mission_id")
         payload: dict[str, object] = {
@@ -1202,38 +1200,38 @@ def _gateway_listener(value: object) -> dict[str, object]:
 def _invalid_admin(message: str) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
-        stage="easyremote_admin_profile",
+        stage="admin_gateway",
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
-        details=profile_error_details(_EASYREMOTE_ADMIN_PROFILE),
+        details=profile_error_details(_ADMIN_PROFILE),
     )
 
 
 def _invalid_mission(message: str) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
-        stage="easyremote_mission_profile",
+        stage="mission",
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
-        details=profile_error_details(_EASYREMOTE_MISSION_PROFILE),
+        details=profile_error_details(_MISSION_PROFILE),
     )
 
 
 def _unsupported_admin_profile(method_name: str) -> bytes:
     raise SDKError(
         code=ErrorCode.NOT_IMPLEMENTED,
-        stage="easyremote_admin_profile",
+        stage="admin_gateway",
         retry=RetryHint.NEVER,
         retryable=False,
         message=(
-            f"EasyRemote Admin bridge does not support SDK profile method "
+            f"Admin profile bridge does not support SDK profile method "
             f"{method_name}; use the EasyNet-Cli SDK/Admin backend facade for "
             "Hub, pairing, session, gateway, and invocation-builder operations"
         ),
         details=profile_error_details(
-            _EASYREMOTE_ADMIN_PROFILE,
+            _ADMIN_PROFILE,
             details={"profile_method": method_name},
         ),
     )
@@ -1242,16 +1240,16 @@ def _unsupported_admin_profile(method_name: str) -> bytes:
 def _unsupported_mission_profile(method_name: str) -> bytes:
     raise SDKError(
         code=ErrorCode.NOT_IMPLEMENTED,
-        stage="easyremote_mission_profile",
+        stage="mission",
         retry=RetryHint.NEVER,
         retryable=False,
         message=(
-            f"EasyRemote Mission bridge does not support SDK profile method "
+            f"Mission profile bridge does not support SDK profile method "
             f"{method_name}; use the EasyNet-Cli SDK/Mission backend facade for "
             "file execution and invocation-builder operations"
         ),
         details=profile_error_details(
-            _EASYREMOTE_MISSION_PROFILE,
+            _MISSION_PROFILE,
             details={"profile_method": method_name},
         ),
     )

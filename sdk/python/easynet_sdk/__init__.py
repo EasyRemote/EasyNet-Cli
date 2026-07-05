@@ -113,9 +113,9 @@ from .cutover_audit import (
     EasyRemoteCutoverAuditor,
     audit_easyremote_cutover,
 )
-from .easyremote_profiles import (
-    EasyRemoteProfileBridge,
-    EasyRemoteProfileDispatcher,
+from .profile_bridge import (
+    DaemonProfileBridge,
+    ProfileBridgeDispatcher,
 )
 from .daemon import (
     AttachOptions,
@@ -495,8 +495,8 @@ __all__ = [
     "EasyRemoteGatewayFacade",
     "EasyRemoteGatewayRuntime",
     "EasyRemoteGatewayState",
-    "EasyRemoteProfileBridge",
-    "EasyRemoteProfileDispatcher",
+    "DaemonProfileBridge",
+    "ProfileBridgeDispatcher",
     "StreamValueAdapter",
     "StreamValue",
     "UnaryDispatchPool",

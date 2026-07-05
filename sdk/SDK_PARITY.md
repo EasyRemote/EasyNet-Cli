@@ -324,7 +324,7 @@ method spelling.
   unary wait/retire lifecycle, stream value projection, invocation,
   bidi session lifecycle, addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
-  extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
+  extraction, SDK-owned Admin/Mission Daemon profile bridge, and page-based
   Pipeline event access/live-tail plus publication product catalogue extraction and
   Server/Gateway hub-config/lifecycle/fingerprint projection plus Pipeline step
   planning/EAL rendering/child Invocation fact conformance projection, plus
@@ -341,7 +341,7 @@ method spelling.
   through Runtime Core invoke, C ABI-backed mission events execution through
   Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
   projection seams, an SDK-owned EasyRemote Mission cutover adapter with
-  event-page projection, SDK-owned EasyRemote profile bridge dispatch/projection
+  event-page projection, SDK-owned Daemon profile bridge dispatch/projection
   glue, EasyRemote `MissionControl`/`MissionRun` page-based
   event access, SDK-owned bounded Mission event tailing for EasyRemote Pipeline
   live updates, SDK-owned EasyRemote Pipeline step planning/EAL rendering and
@@ -361,7 +361,7 @@ method spelling.
   credential verification, C ABI-backed typed device-session page projection,
   device-admin result projection, and close state seams, with an SDK-owned
   EasyRemote hosted-agent add/list/stop/refresh Admin adapter and
-  SDK-owned EasyRemote profile bridge dispatch/projection glue for gateway
+  SDK-owned Daemon profile bridge dispatch/projection glue for gateway
   status, hub join/leave, pairing preflight/create/validate, credential
   verification, device-session create/list/delete, and device revoke, SDK-owned
   EasyRemote Server/Gateway hub-config materialization, lifecycle state, TLS file

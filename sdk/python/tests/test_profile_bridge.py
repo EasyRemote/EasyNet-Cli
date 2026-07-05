@@ -10,7 +10,7 @@ from easynet_sdk import (
     CreateDeviceSessionRequest,
     CreatePairingRequest,
     DeleteDeviceSessionRequest,
-    EasyRemoteProfileBridge,
+    DaemonProfileBridge,
     ErrorCode,
     MissionRunFileRequest,
     PairingPreflightRequest,
@@ -22,12 +22,12 @@ from easynet_sdk import (
 )
 
 
-class EasyRemoteProfileBridgeTests(unittest.TestCase):
+class DaemonProfileBridgeTests(unittest.TestCase):
     def test_admin_facade_dispatches_agent_start_and_list_through_sdk_bridge(
         self,
     ) -> None:
         dispatcher = MemoryProfileDispatcher()
-        bridge = EasyRemoteProfileBridge(
+        bridge = DaemonProfileBridge(
             dispatcher, nonce_factory=lambda: bytes(range(1, 17))
         )
 
@@ -58,7 +58,7 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
 
     def test_mission_facade_dispatches_run_track_cancel_and_events(self) -> None:
         dispatcher = MemoryProfileDispatcher()
-        bridge = EasyRemoteProfileBridge(
+        bridge = DaemonProfileBridge(
             dispatcher, nonce_factory=lambda: bytes(range(1, 17))
         )
         mission = bridge.mission_facade()
@@ -100,7 +100,7 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
 
     def test_admin_profile_dispatches_gateway_trust_and_sessions(self) -> None:
         dispatcher = MemoryProfileDispatcher()
-        bridge = EasyRemoteProfileBridge(
+        bridge = DaemonProfileBridge(
             dispatcher, nonce_factory=lambda: bytes(range(1, 17))
         )
         client = bridge.admin_facade()._client  # noqa: SLF001
@@ -204,7 +204,7 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         )
 
     def test_carrier_base_uses_dispatcher_device_and_sdk_nonce(self) -> None:
-        bridge = EasyRemoteProfileBridge(
+        bridge = DaemonProfileBridge(
             MemoryProfileDispatcher(), nonce_factory=lambda: bytes(range(1, 17))
         )
 
@@ -216,7 +216,7 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         self.assertEqual(base.nonce_base64, "AQIDBAUGBwgJCgsMDQ4PEA==")
 
     def test_unsupported_profile_operations_fail_closed(self) -> None:
-        bridge = EasyRemoteProfileBridge(MemoryProfileDispatcher())
+        bridge = DaemonProfileBridge(MemoryProfileDispatcher())
 
         with self.assertRaises(SDKError) as caught:
             bridge.admin_facade()._client.build_agent_list_invocation(  # noqa: SLF001
@@ -226,11 +226,11 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
         self.assertEqual(
             caught.exception.details["profile"],
-            "easyremote_admin_profile",
+            "admin_gateway",
         )
         self.assertEqual(
             caught.exception.details["source_ref"],
-            "python_sdk.profile.easyremote_admin_profile",
+            "python_sdk.profile.admin_gateway",
         )
         self.assertEqual(
             caught.exception.details["profile_method"],
@@ -245,11 +245,11 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         self.assertTrue(is_code(mission_caught.exception, ErrorCode.NOT_IMPLEMENTED))
         self.assertEqual(
             mission_caught.exception.details["profile"],
-            "easyremote_mission_profile",
+            "mission",
         )
         self.assertEqual(
             mission_caught.exception.details["source_ref"],
-            "python_sdk.profile.easyremote_mission_profile",
+            "python_sdk.profile.mission",
         )
         self.assertEqual(
             mission_caught.exception.details["profile_method"],
@@ -257,13 +257,13 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
         )
 
     def test_mission_bad_response_uses_mission_error_stage(self) -> None:
-        bridge = EasyRemoteProfileBridge(BadMissionResponseDispatcher())
+        bridge = DaemonProfileBridge(BadMissionResponseDispatcher())
 
         with self.assertRaises(SDKError) as caught:
             bridge.mission_facade().track("run-1")
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-        self.assertEqual(caught.exception.stage, "easyremote_mission_profile")
+        self.assertEqual(caught.exception.stage, "mission")
 
 
 class MemoryProfileDispatcher:
