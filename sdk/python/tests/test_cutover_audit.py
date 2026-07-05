@@ -423,6 +423,19 @@ class EasyRemoteCutoverAuditTests(unittest.TestCase):
 
                     def stop(client):
                         return client.invoke("agent.stop")
+
+                    def trust(client):
+                        client.invoke("gateway.status")
+                        client.invoke("hub.join")
+                        client.invoke("hub.leave")
+                        client.invoke("pairing.preflight")
+                        client.invoke("pairing.create")
+                        client.invoke("pairing.validate")
+                        client.invoke("credential.verify")
+                        client.invoke("session.list")
+                        client.invoke("session.create")
+                        client.invoke("session.delete")
+                        return client.invoke("federation.revoke")
                     '''
                 ),
                 encoding="utf-8",

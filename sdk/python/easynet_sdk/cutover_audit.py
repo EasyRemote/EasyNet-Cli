@@ -502,7 +502,23 @@ def _audit_admin_carrier_semantics(
         path,
         text,
         rule="raw_admin_carrier",
-        values={"agent.start", "agent.list", "agent.stop", "agent.refresh"},
+        values={
+            "agent.start",
+            "agent.list",
+            "agent.stop",
+            "agent.refresh",
+            "gateway.status",
+            "session.list",
+            "session.create",
+            "session.delete",
+            "hub.join",
+            "hub.leave",
+            "pairing.preflight",
+            "pairing.validate",
+            "credential.verify",
+            "pairing.create",
+            "federation.revoke",
+        },
     )
 
 
