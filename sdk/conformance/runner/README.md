@@ -42,6 +42,11 @@ a report record fails as `ACTION_ADAPTER_MISSING`; a failed record, mismatched
 profile, missing evidence, or evidence path outside the repository fails as
 `ACTION_ADAPTER_FAILED`.
 
+The report is closed over the shared manifest. Every record must match an
+existing manifest case and that case must declare the requested language in
+`required_for`; unknown or language-undeclared records invalidate the report
+instead of being ignored.
+
 Go and Python facade tests must consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
 shipped local DTO/actions and projection-only profile behavior, including

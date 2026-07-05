@@ -398,6 +398,10 @@ bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"
 require_literal src/bin/sdk-conformance-runner.rs "CONFORMANCE_MANIFEST_INVALID"
+require_literal src/bin/sdk-conformance-runner.rs "ManifestCaseIndex"
+require_literal src/bin/sdk-conformance-runner.rs "does not match any manifest case"
+require_literal src/bin/sdk-conformance-runner.rs "is not declared for language"
+require_literal sdk/conformance/runner/README.md "closed over the shared manifest"
 require_literal sdk/go/conformance_test.go "sdk/conformance/cases"
 require_literal sdk/go/conformance_test.go "sdk/conformance/fixtures"
 require_literal sdk/go/conformance_test.go "TestGoFacadeExecutesSharedRuntimeCoreConformanceCases"

@@ -10,9 +10,9 @@
 // -----------------------
 // Own the executable runner contract for the repository's SDK conformance
 // manifest. This runner validates the shared case/fixture/schema graph that
-// every language facade must consume. It does not claim that a language profile
-// passed behavioral API execution; language adapters remain responsible for
-// action execution over the same cases.
+// every language facade must consume. When given a language action-adapter
+// report, it also proves that the report is closed over required manifest cases
+// and backed by repository-local evidence.
 //
 // Implementation Approach
 // -----------------------
@@ -25,6 +25,8 @@
 // -----
 //   cargo run --bin sdk-conformance-runner -- --language rust
 //   cargo run --bin sdk-conformance-runner -- --language c_abi --format json
+//   cargo run --bin sdk-conformance-runner -- --language go \
+//     --adapter-report sdk/conformance/runner/go-action-adapter-report.json
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -136,9 +138,12 @@ fn run_manifest(
     adapter_report_path: Option<&Path>,
 ) -> Result<Vec<ConformanceResultRecord>> {
     let cases = load_cases(root)?;
-    let adapter_report = adapter_report_path
-        .map(|path| load_adapter_report(root, language, path))
-        .transpose()?;
+    let adapter_report = {
+        let case_index = ManifestCaseIndex::new(&cases);
+        adapter_report_path
+            .map(|path| load_adapter_report(root, language, path, &case_index))
+            .transpose()?
+    };
     let adapter_report = adapter_report.as_ref().map(AdapterReportIndex::new);
     let duplicate_errors = duplicate_case_errors(&cases);
     let mut records = Vec::with_capacity(cases.len());
@@ -191,7 +196,12 @@ fn run_manifest(
     Ok(records)
 }
 
-fn load_adapter_report(root: &Path, language: &str, path: &Path) -> Result<AdapterReport> {
+fn load_adapter_report(
+    root: &Path,
+    language: &str,
+    path: &Path,
+    case_index: &ManifestCaseIndex<'_>,
+) -> Result<AdapterReport> {
     let path = resolve_repo_path(root, path);
     ensure_path_inside_root(root, &path).with_context(|| {
         format!(
@@ -228,6 +238,19 @@ fn load_adapter_report(root: &Path, language: &str, path: &Path) -> Result<Adapt
         if !seen.insert(record.case_id.clone()) {
             anyhow::bail!("duplicate adapter record case_id `{}`", record.case_id);
         }
+        let Some(case) = case_index.find(&record.case_id) else {
+            anyhow::bail!(
+                "adapter record `{}` does not match any manifest case",
+                record.case_id
+            );
+        };
+        if !case.required_for.contains(language) {
+            anyhow::bail!(
+                "adapter record `{}` is not declared for language `{}`",
+                record.case_id,
+                language
+            );
+        }
         if record.evidence.is_empty() {
             anyhow::bail!("adapter record `{}` must include evidence", record.case_id);
         }
@@ -236,6 +259,23 @@ fn load_adapter_report(root: &Path, language: &str, path: &Path) -> Result<Adapt
         }
     }
     Ok(report)
+}
+
+#[derive(Debug)]
+struct ManifestCaseIndex<'a> {
+    cases: BTreeMap<&'a str, &'a ConformanceCase>,
+}
+
+impl<'a> ManifestCaseIndex<'a> {
+    fn new(cases: &'a [ConformanceCase]) -> Self {
+        Self {
+            cases: cases.iter().map(|case| (case.id.as_str(), case)).collect(),
+        }
+    }
+
+    fn find(&self, case_id: &str) -> Option<&'a ConformanceCase> {
+        self.cases.get(case_id).copied()
+    }
 }
 
 #[derive(Debug)]
@@ -667,6 +707,68 @@ expect:
             .as_deref()
             .unwrap_or_default()
             .contains("forced failure"));
+    }
+
+    #[test]
+    fn runner_rejects_unknown_adapter_record_case() {
+        let root = tempfile::tempdir().expect("tempdir");
+        create_minimal_case_root(root.path(), "go");
+        let report = root.path().join("adapter.json");
+        fs::write(
+            &report,
+            r#"{
+  "schema_version": 1,
+  "language": "go",
+  "adapter_kind": "unit_test",
+  "records": [
+    {
+      "case_id": "test/unknown",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "runner_test", "ref_path": "sdk/conformance/runner/README.md"}],
+      "message": null
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let err = run_manifest(root.path(), "go", Some(&report))
+            .expect_err("unknown adapter case must fail");
+
+        assert!(err.to_string().contains("does not match any manifest case"));
+    }
+
+    #[test]
+    fn runner_rejects_language_undeclared_adapter_record_case() {
+        let root = tempfile::tempdir().expect("tempdir");
+        create_minimal_case_root(root.path(), "rust");
+        let report = root.path().join("adapter.json");
+        fs::write(
+            &report,
+            r#"{
+  "schema_version": 1,
+  "language": "go",
+  "adapter_kind": "unit_test",
+  "records": [
+    {
+      "case_id": "test/minimal",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "runner_test", "ref_path": "sdk/conformance/runner/README.md"}],
+      "message": null
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let err = run_manifest(root.path(), "go", Some(&report))
+            .expect_err("language-undeclared adapter case must fail");
+
+        assert!(err
+            .to_string()
+            .contains("is not declared for language `go`"));
     }
 
     fn create_minimal_case_root(root: &Path, language: &str) {
