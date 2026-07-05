@@ -52,7 +52,7 @@ fn dispatch_remote_via_forward_invoke(
         // socket, the same surface every other in-process invocation
         // uses. Skip the forward_invoke envelope entirely — the
         // self-target shortcut on the daemon side covers a different
-        // case (canonical self URI), not the keyword `local`.
+        // case (canonical self URA), not the keyword `local`.
         let self_node = crate::daemon::persistence::config::load_credentials()
             .ok()
             .map(|c| c.node_id);

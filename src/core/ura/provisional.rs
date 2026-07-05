@@ -5,7 +5,7 @@
 //
 // Computes the §A2 pre-membership identity for a freshly-generated
 // device keypair: `provisional:<sha256(public_key) hex>`. This is
-// the only caller URI a non-member is permitted to present, and it
+// the only caller URA a non-member is permitted to present, and it
 // is only valid as caller of `federation.join` (§A6, enforced by
 // the membership gate at the receiving daemon).
 //

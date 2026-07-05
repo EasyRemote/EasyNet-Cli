@@ -217,7 +217,7 @@ func TestIdentityAddressingHelpersDelegateToTransport(t *testing.T) {
 		t.Fatalf("AbilityURAFromDescriptorRef: %v", err)
 	}
 	if fromDescriptor != "easynet:///r/example/ability/device.dev-a.observe.health" {
-		t.Fatalf("unexpected ability URI from descriptor ref: %q", fromDescriptor)
+		t.Fatalf("unexpected ability URA from descriptor ref: %q", fromDescriptor)
 	}
 }
 

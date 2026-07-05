@@ -356,7 +356,7 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
 ///     federation.advertise URAs.
 ///   * `node_id` — the local device's node id from `~/.easynet/credentials.json`.
 ///   * `dispatch_endpoint` — `ipc://<absolute-path>`. Typically
-///     `runtime_dispatch::dispatch_endpoint_uri()`.
+///     `runtime_dispatch::dispatch_endpoint_ura()`.
 ///
 /// Returns one `PublishOutcome` per registration attempt. Best-
 /// effort: a registration failure is logged but never aborts boot.

@@ -85,7 +85,7 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
     // (`liangbing.chat`, `fs.read`, ...), while public Ability URAs
     // store the owner-local name (`chat`, `fs.read`, ...). Project through
     // the CLI URA boundary object before calling Axon's canonical builder;
-    // do not duplicate URI grammar in this adapter.
+    // do not duplicate URA grammar in this adapter.
     let callee_public_name =
         crate::core::ura::owner_local_ability_name(&binding.callee.ura, ability_name);
     let caller_public_name =

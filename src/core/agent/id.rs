@@ -15,7 +15,7 @@
 //   - `NodeId`         — validated hosting-substrate handle.
 //
 // What this file is NOT:
-//   - Not a URI parser. URI shapes (`easynet://...`) belong to URA L3,
+//   - Not a URA parser. URA shapes (`easynet://...`) belong to URA L3,
 //     a separate (future) layer.
 //   - Not a registry directory. Resolution lives in
 //     `src/daemon/persistence/agent_registry.rs`.
@@ -86,7 +86,7 @@ impl AgentId {
     /// - empty segments (`/`, `claude/`, `/claude`)
     /// - more than two segments (`a/b/c` — multi-level reserved for v2)
     /// - instance ids (`claude#42` — reserved for v2 per ontology §6.4)
-    /// - URI-shaped strings (`easynet://...` — wrong layer)
+    /// - URA-shaped strings (`easynet://...` — wrong layer)
     /// - non-ASCII characters
     /// - uppercase letters
     /// - characters outside `[a-z0-9_-]`
@@ -410,7 +410,7 @@ pub enum AgentIdError {
     /// identity model. Distinct error so future code can flip the
     /// rejection without changing the error vocabulary.
     ReservedV2 { feature: &'static str },
-    /// Input looked like a URI from L3 (URA), which belongs to a
+    /// Input looked like a URA from L3, which belongs to a
     /// different addressing layer entirely.
     WrongLayer,
 }
@@ -443,7 +443,7 @@ impl fmt::Display for AgentIdError {
             ),
             Self::WrongLayer => write!(
                 f,
-                "agent id looks like a URI; URI addressing belongs to \
+                "agent id looks like a URA; URA addressing belongs to \
                  the URA L3 layer (../URA/README.md), not to AgentId"
             ),
         }

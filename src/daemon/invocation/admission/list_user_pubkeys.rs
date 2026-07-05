@@ -3,7 +3,7 @@
 //
 // File: src/daemon/invocation/list_user_pubkeys.rs
 // DEC-EU §multi-host-list. Read-only inventory of the realm-trust
-// entries registered under a given user URI. Backend's list
+// entries registered under a given user URA. Backend's list
 // endpoint calls this instead of reading the TOML directly, so
 // multi-host deployments (backend ↔ daemon on separate machines)
 // stay consistent with what admission actually sees.

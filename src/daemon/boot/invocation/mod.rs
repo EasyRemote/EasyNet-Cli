@@ -1751,19 +1751,19 @@ mod tests {
     }
 
     #[test]
-    fn backend_identity_reader_rejects_retired_agent_uri_alias() {
+    fn backend_identity_reader_rejects_unknown_agent_identity_alias() {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
 
-        let realm = "realm-retired-agent-uri";
+        let realm = "realm-retired-agent-alias";
         let identity_dir = temp.path().join(".easynet-hub").join(realm);
         std::fs::create_dir_all(&identity_dir).expect("identity dir");
         std::fs::write(
             identity_dir.join("identity.json"),
             serde_json::json!({
                 "private_key_seed_hex": hex::encode([0x42u8; 32]),
-                "agent_uri": crate::core::ura::hub_ura(realm),
+                "agent_identity_alias": crate::core::ura::hub_ura(realm),
                 "created_at_unix_ms": 1_714_492_800_000i64,
             })
             .to_string(),
@@ -1772,7 +1772,7 @@ mod tests {
 
         assert!(
             read_backend_identity_record(realm).is_none(),
-            "retired agent_uri must not be accepted as backend identity agent_ura"
+            "unknown identity alias must not be accepted as backend identity agent_ura"
         );
     }
 

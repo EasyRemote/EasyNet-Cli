@@ -82,7 +82,7 @@ pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::Abili
     };
     let consent_ura =
         crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
-    let mcp_uri =
+    let mcp_ura =
         crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default");
     let llm_uras: Vec<(String, String)> = local
         .hosted_agents
@@ -93,7 +93,7 @@ pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::Abili
     all_descriptors_for_host(
         &host_ura,
         consent_ura.as_deref(),
-        mcp_uri.as_deref(),
+        mcp_ura.as_deref(),
         &llm_uras,
     )
 }
@@ -108,7 +108,7 @@ pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::Abili
 pub fn all_descriptors_for_host(
     device_ura: &str,
     consent_ura: Option<&str>,
-    mcp_uri: Option<&str>,
+    mcp_ura: Option<&str>,
     llm_uras: &[(String, String)], // (sub_agent_name, ura)
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let llm_catalog = if llm_uras.is_empty() {
@@ -121,7 +121,7 @@ pub fn all_descriptors_for_host(
     if let Some(ura) = consent_ura {
         out.extend(consent::descriptors_for(ura));
     }
-    if let Some(ura) = mcp_uri {
+    if let Some(ura) = mcp_ura {
         out.extend(mcp::descriptors_for(ura));
     }
     for (_name, ura) in llm_uras {

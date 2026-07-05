@@ -1200,14 +1200,14 @@ added_at_unix_ms = 1
     }
 
     #[test]
-    fn read_backend_hub_pubkey_rejects_legacy_agent_uri_field() {
+    fn read_backend_hub_pubkey_rejects_unknown_agent_identity_alias() {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let tmp = tempfile::tempdir().expect("tempdir");
         let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
         std::fs::create_dir_all(&identity_dir).expect("create identity dir");
         std::fs::write(
             identity_dir.join("identity.json"),
-            r#"{"private_key_seed_hex":"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a","agent_uri":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}"#,
+            r#"{"private_key_seed_hex":"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a","agent_identity_alias":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}"#,
         )
         .expect("write identity.json");
 

@@ -422,9 +422,9 @@ mod tests {
     }
 
     #[test]
-    fn peer_entry_rejects_retired_peer_uri_alias() {
+    fn peer_entry_rejects_unknown_peer_identity_alias() {
         let value = serde_json::json!({
-            "peer_uri": "easynet:///r/realm/device/dev-1",
+            "peer_identity_alias": "easynet:///r/realm/device/dev-1",
             "fingerprint_b64": b64_encode(&[0_u8; 32]),
             "public_key_b64": b64_encode(&[1_u8; 32]),
             "status": "trusted",
@@ -433,7 +433,7 @@ mod tests {
             "last_seen_unix_ms": 1
         });
         let err = serde_json::from_value::<PeerEntry>(value)
-            .expect_err("peer_uri must not deserialize as peer_ura")
+            .expect_err("unknown peer identity alias must not deserialize as peer_ura")
             .to_string();
         assert!(
             err.contains("peer_ura"),

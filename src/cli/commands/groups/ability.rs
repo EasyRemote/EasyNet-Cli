@@ -243,7 +243,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .or_else(|| {
             // Fall back to deriving owner from the qualified name
             // (`<owner>.<verb>`); aligns with `ability list`'s
-            // owner column when discover doesn't surface a URI.
+            // owner column when discover doesn't surface a URA.
             name.split_once('.').map(|(o, _)| o)
         })
         .unwrap_or("-");

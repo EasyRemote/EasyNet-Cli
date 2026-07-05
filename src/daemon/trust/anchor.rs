@@ -182,7 +182,7 @@ pub struct TrustedAgent {
     /// **PR-N1 schema-B**. Realm this peer hub serves, in the form
     /// embedded in the peer's canonical hub URA. Set
     /// only on `role = Hub` entries; the admission gate uses this
-    /// to resolve `caller.uri.tenant() → peer hub URA` when an
+    /// to resolve the caller URA realm into a peer hub URA when an
     /// invoke targets a tenant outside the local realm. `None` on
     /// Backend/Device entries and on schema-A Hub entries written
     /// before PR-N1; the dialer fail-closes when this is `None`.
@@ -1249,7 +1249,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
     }
 
     #[test]
-    fn schema_b_rejects_retired_hub_endpoint_field_alias() {
+    fn schema_b_rejects_unknown_hub_endpoint_field_alias() {
         let toml_content = r#"
 [[trusted_agent]]
 agent_ura = "easynet:///r/peer-realm/hub"
@@ -1257,20 +1257,20 @@ public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = 1714492800000
 origin_realm = "peer-realm"
-hub_uri = "https://peer-hub.example:50443"
+hub_endpoint_alias = "https://peer-hub.example:50443"
 tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
         "#;
         let file = write_temp(toml_content);
         let err = RealmTrustAnchor::try_load_strict(file.path())
-            .expect_err("obsolete hub_uri must not deserialize as hub_endpoint");
+            .expect_err("unknown hub endpoint alias must not deserialize as hub_endpoint");
         assert!(
             matches!(err, RealmTrustError::ParseFailed { .. }),
-            "obsolete hub_uri should be rejected at schema parse: {err:?}"
+            "unknown hub endpoint alias should be rejected at schema parse: {err:?}"
         );
         let err_text = err.to_string();
         assert!(
-            err_text.contains("hub_uri") || err_text.contains("hub_endpoint"),
-            "parse error should name the retired or canonical hub endpoint field: {err_text}"
+            err_text.contains("hub_endpoint_alias") || err_text.contains("hub_endpoint"),
+            "parse error should name the unknown or canonical hub endpoint field: {err_text}"
         );
     }
 

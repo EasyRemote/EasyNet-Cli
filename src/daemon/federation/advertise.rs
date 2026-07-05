@@ -146,7 +146,7 @@ pub struct BridgeAbilityInvoker<'a> {
     pub timeout_ms: u64,
     /// Caller URA to stamp on every envelope this invoker emits
     /// when the resource URA's subject is hub-shaped. The bridge's
-    /// unsigned-invoke path uses this as the `caller.uri` field
+    /// unsigned-invoke path uses this as the caller URA field
     /// instead of synthesising one from the subject_id (which for
     /// `easynet:prv:hub:<realm>` would otherwise produce a
     /// nonsensical `agents/easynet:prv:hub:<realm>` literal). Empty

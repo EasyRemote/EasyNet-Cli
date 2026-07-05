@@ -164,7 +164,7 @@ pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value>
 /// envelope subject through to the daemon. The subject lands in
 /// `EnvelopeContext.subject` for handlers that consume it
 /// (e.g. `camera.snapshot`, which routes its frame from the
-/// resource the subject URI names).
+/// resource the subject URA names).
 pub fn invoke_local_ability_with_subject(
     ability: &str,
     args: Value,

@@ -106,7 +106,7 @@ impl BridgeForwardInvoker {
     /// through its installed `GrpcHubForwardDispatcher` to the
     /// owning shard.
     fn dispatch_to_bridge(&self, target_ura: &str, ability: &str, args: &Value) -> Result<Value> {
-        // Pin the caller URI to the daemon's own keyring-bound
+        // Pin the caller URA to the daemon's own keyring-bound
         // device subject so the receiving hub's KeyResolver can
         // find the public key. Today's KeyResolver finds it by
         // bound_subject; the device record was mirrored at boot

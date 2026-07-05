@@ -171,7 +171,7 @@ pub fn dispatch_socket_path() -> PathBuf {
 /// `dispatch_endpoint`. Always uses the resolved socket path; an
 /// integration test can predict-then-verify without re-deriving the
 /// override logic.
-pub fn dispatch_endpoint_uri() -> String {
+pub fn dispatch_endpoint_ura() -> String {
     format!("ipc://{}", dispatch_socket_path().display())
 }
 
@@ -697,11 +697,11 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_endpoint_uri_uses_ipc_prefix() {
+    fn dispatch_endpoint_ura_uses_ipc_prefix() {
         let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("EASYNET_RUNTIME_DISPATCH_SOCK").ok();
         std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", "/tmp/x.sock");
-        let ura = dispatch_endpoint_uri();
+        let ura = dispatch_endpoint_ura();
         assert_eq!(ura, "ipc:///tmp/x.sock");
         match prev {
             Some(v) => std::env::set_var("EASYNET_RUNTIME_DISPATCH_SOCK", v),

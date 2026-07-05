@@ -1161,7 +1161,7 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
         TARGET_DEVICE_URI, inner_b64
     );
     let req = Request::new(InvokeRequest {
-        envelope: Some(test_envelope_with_uri(DAEMON_A_URI)),
+        envelope: Some(test_envelope_with_ura(DAEMON_A_URI)),
         function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
         arguments: forward_args.into_bytes(),
         ..InvokeRequest::default()
@@ -1238,7 +1238,7 @@ impl FederationClient for ForwardingPeerClient {
     }
 }
 
-fn test_envelope_with_uri(ura: &str) -> Envelope {
+fn test_envelope_with_ura(ura: &str) -> Envelope {
     Envelope {
         caller: Some(AgentIdentity {
             ura: ura.to_string(),

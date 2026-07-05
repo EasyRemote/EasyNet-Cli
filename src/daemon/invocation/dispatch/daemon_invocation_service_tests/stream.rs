@@ -422,7 +422,7 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
     let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
         LocalRuntime::new(),
         AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URI)
-            .expect("test daemon URI is a valid device authority root"),
+            .expect("test daemon URA is a valid device authority root"),
     );
     let handler: LocalStreamHandler = Arc::new(|_args| {
         Ok(StreamSource::Snapshot(vec![serde_json::json!({
@@ -696,7 +696,7 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DAEMON_URI,
             )
-            .expect("test daemon URI is a valid device authority root"),
+            .expect("test daemon URA is a valid device authority root"),
         );
     crate::daemon::ability::builtins::device_control::file_transfer::register(&mut catalog);
 

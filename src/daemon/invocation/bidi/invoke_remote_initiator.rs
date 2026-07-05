@@ -33,7 +33,7 @@
 //   initial_args        = JSON-encoded:
 //     {
 //       "type": "request",
-//       "subject_device": "<canonical device URI>",
+//       "subject_device": "<canonical device URA>",
 //       "ability_ura":    "<canonical Ability URA the remote owner runs>",
 //       "args":           <bytes — opaque to invoke_remote handler>
 //     }
@@ -159,7 +159,7 @@ impl SessionContentEnvelope {
 pub enum InvokeRemoteUp {
     /// The only frame-0 variant — start a cross-device dispatch.
     Request {
-        /// Canonical URI of the device whose `session.open` stream
+        /// Canonical URA of the device whose `session.open` stream
         /// the daemon must look up via `PresenceRegistry::lookup`.
         subject_device: String,
         /// Inner ability subject. Resource-backed abilities use this
@@ -359,11 +359,11 @@ pub enum RequestOutcome {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionRequestError {
-    /// Hub's PresenceRegistry has no entry for the target URI
+    /// Hub's PresenceRegistry has no entry for the target URA
     /// (forwarding to a nonexistent device).
     TargetOffline,
     /// Hub-side `forward_invoke` admission rejected the call
-    /// (caller URI not in trust anchor, ability not known, etc.).
+    /// (caller URA not in trust anchor, ability not known, etc.).
     PermissionDenied { reason: String },
     /// Hub's cross-hub dial failed (peer hub down, TLS handshake
     /// failure, etc.).
@@ -1228,7 +1228,7 @@ mod tests {
         let cases = vec![
             SessionRequestError::TargetOffline,
             SessionRequestError::PermissionDenied {
-                reason: "caller URI not in trust anchor".into(),
+                reason: "caller URA not in trust anchor".into(),
             },
             SessionRequestError::UpstreamFailure {
                 reason: "peer hub TLS handshake failed".into(),

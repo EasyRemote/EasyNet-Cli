@@ -17,7 +17,7 @@
 //
 // `UraScope` (Prv|Org) remains as informational metadata for callers
 // that want a hint at the federation posture, but does NOT influence
-// URI shape — v4.1.5 §A.URA-7 has one canonical form per role
+// URA shape — v4.1.5 §A.URA-7 has one canonical form per role
 // (`easynet:///r/<realm>/<role>/<tail>`); the legacy
 // `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` shapes are dead.
 //
@@ -190,12 +190,12 @@ pub fn resolve(realm: &str, cfg: &ResolverConfig) -> RealmResolution {
 
 /// Build a v4.1.5 standard device URA. Shape is identical regardless
 /// of `resolution.scope` (prv/org) — v4.1.5 §A.URA-7 has only one
-/// device URI form: `easynet:///r/<realm>/device/<node-id>`. The
-/// realm rides in the URA; tenant binding rides envelope, not URI,
+/// device URA form: `easynet:///r/<realm>/device/<node-id>`. The
+/// realm rides in the URA; tenant binding rides envelope, not URA,
 /// so the legacy `?tenant_id=<t>` query is gone. The `scope` field
 /// remains on `RealmResolution` as informational metadata for the
 /// federation layer's hub-discovery decision but does NOT appear in
-/// any URI.
+/// any URA.
 pub fn canonical_device_ura(node_id: &str, resolution: &RealmResolution) -> String {
     crate::core::ura::device_ura(&resolution.realm, node_id)
 }
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_device_uri_is_v4_1_5_regardless_of_scope() {
+    fn canonical_device_ura_is_v4_1_5_regardless_of_scope() {
         // v4.1.5 §A.URA-7: one device shape, no scope-dependent forms,
         // no `?tenant_id=` query. The legacy
         // `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` shapes are dead.

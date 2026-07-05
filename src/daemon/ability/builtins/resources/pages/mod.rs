@@ -38,7 +38,7 @@ pub use identity::PagesIdentity;
 
 /// Installation parameters for the Pages reference system. Carry
 /// the daemon's user identity (the `<user>` segment in every
-/// pages-rooted URI), the realm, and the in-daemon Hub listener
+/// pages-rooted URA), the realm, and the in-daemon Hub listener
 /// port (only used to format the dev-only listener URL surfaced
 /// from `pages.get`).
 #[derive(Debug, Clone)]

@@ -392,7 +392,7 @@ mod tests {
         // fresh. Tests run without a daemon, so the call path
         // surfaces a structured `ok: false` envelope (NOT panic)
         // with a message naming the missing daemon transport or
-        // the parse arm if the URI shape rejects first.
+        // the parse arm if the URA shape rejects first.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let resp = send_task_handler(
             json!({
@@ -415,11 +415,11 @@ mod tests {
     }
 
     #[test]
-    fn send_task_rejects_retired_target_node_uri_alias() {
+    fn send_task_rejects_unknown_retired_target_alias() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let resp = send_task_handler(
             json!({
-                "target_node_uri": "easynet:///r/acme/device/N1",
+                "target_node_legacy": "easynet:///r/acme/device/N1",
                 "agent_name": "claude",
                 "skill_name": "chat",
             }),
@@ -430,7 +430,7 @@ mod tests {
         let msg = resp["error"].as_str().unwrap();
         assert!(
             msg.contains("`target_node_ura`"),
-            "retired alias must be rejected at validation; got: {msg}"
+            "retired aliases must be rejected at validation; got: {msg}"
         );
     }
 
@@ -445,7 +445,7 @@ mod tests {
             );
             assert_eq!(s["properties"][field]["minLength"], 1);
         }
-        assert!(s["properties"].get("target_node_uri").is_none());
+        assert!(s["properties"].get("target_node_legacy").is_none());
         assert!(s.get("anyOf").is_none());
         assert_eq!(s["additionalProperties"], false);
     }

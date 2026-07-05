@@ -361,7 +361,7 @@ impl LocalDaemonAbilityClient {
     fn require_host_device_ura(caller_ura: impl Into<String>) -> anyhow::Result<()> {
         let caller_ura = caller_ura.into();
         if caller_ura.trim().is_empty() {
-            anyhow::bail!("host device URI is empty; cannot invoke local daemon abilities");
+            anyhow::bail!("host device URA is empty; cannot invoke local daemon abilities");
         }
         normalized_local_daemon_ura(caller_ura.trim(), "host_device_ura")?;
         Ok(())
@@ -408,7 +408,7 @@ impl LocalDaemonAbilityClient {
         {
             let caller_ura = trimmed.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "local daemon caller URI is unavailable; pair/start this device before \
+                    "local daemon caller URA is unavailable; pair/start this device before \
                      using agent management"
                 )
             })?;

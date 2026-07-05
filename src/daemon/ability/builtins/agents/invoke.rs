@@ -1155,7 +1155,7 @@ mod tests {
     #[test]
     fn forward_invoke_falls_through_when_invoker_does_not_know_target() {
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|_uri| false); // invoker rejects every target
+        fwd::set_test_knower(|_ura| false); // invoker rejects every target
         fwd::set_test_router(|_t, _a, _x| panic!("router must not be called"));
 
         let dispatch = fixture(&[], AgentRegistry::default());
@@ -1193,7 +1193,7 @@ mod tests {
         // path even if the router claims to know them, because
         // is_federation_target rejects bare names.
         let _g = fwd::test_lock();
-        fwd::set_test_knower(|_uri| true);
+        fwd::set_test_knower(|_ura| true);
         fwd::set_test_router(|_t, _a, _x| {
             panic!("router must not be called for non-federation targets")
         });

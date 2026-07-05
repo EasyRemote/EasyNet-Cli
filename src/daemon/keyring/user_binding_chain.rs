@@ -63,14 +63,14 @@ pub const USER_BINDING_FRESHNESS_MS: u64 = 24 * 60 * 60 * 1000;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UserBindingToken {
     /// Realm of the issuing user / hub. Must be a non-empty
-    /// realm string per the canonical URI scheme.
+    /// realm string per the canonical URA scheme.
     pub source_realm: String,
-    /// User URI on the source realm, in the canonical form
+    /// User URA on the source realm, in the canonical form
     /// `easynet:///r/<source_realm>/user/<user-id>`.
     pub source_user_ura: String,
     /// Source user's Ed25519 verifying-key bytes. Carried inline
     /// so the consuming realm doesn't need to round-trip
-    /// `federation.resolve_key` separately for the user URI; the
+    /// `federation.resolve_key` separately for the user URA; the
     /// signature step still proves the *backend* identity issued
     /// the token, not just any actor with the user's pubkey.
     /// Wire shape is a `Vec<u8>` for serde compat (stable serde

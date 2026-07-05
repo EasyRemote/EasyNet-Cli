@@ -56,7 +56,7 @@ pub struct FederatedUserBinding {
     /// Realm of the issuing daemon (the source_realm field of
     /// the consumed `UserBindingToken`).
     pub source_realm: String,
-    /// User URI on the source realm.
+    /// User URA on the source realm.
     pub source_user_ura: String,
     /// Source user's Ed25519 verifying key, base64-encoded for
     /// stable JSON. The structural length contract (32 bytes)

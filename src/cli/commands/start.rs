@@ -494,7 +494,7 @@ pub(crate) fn republish_via_federation_best_effort(
         }
     };
     // Pin the caller URA for hub-shaped federation calls so the
-    // bridge stamps `envelope.caller.uri` to a canonical URA —
+    // bridge stamps the envelope caller to a canonical URA —
     // `plan.host_device_ura` already carries that shape (see
     // `build_bootstrap_plan_from`).
     let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
@@ -576,7 +576,7 @@ pub(crate) fn republish_via_federation_best_effort(
     // its dispatch UDS. Best-effort: a register failure leaves the
     // dispatch path degraded but keeps boot moving.
     if !plan.realm.is_empty() && !plan.host_device_ura.is_empty() {
-        let dispatch_endpoint = crate::daemon::control::runtime_dispatch::dispatch_endpoint_uri();
+        let dispatch_endpoint = crate::daemon::control::runtime_dispatch::dispatch_endpoint_ura();
         let reg_outcomes = crate::daemon::federation::publish::register_local_tools_via_runtime(
             &invoker,
             &creds.realm,

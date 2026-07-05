@@ -528,7 +528,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn node_id_from_v414_device_uri_extracts_uuid() {
+    fn node_id_from_v414_device_ura_extracts_uuid() {
         // URA v4.1.4: device-profile URA is `device/<uuid>`.
         let uuid = "4065c47a-ec6f-4330-87a5-0d69787709b8";
         assert_eq!(

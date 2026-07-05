@@ -454,7 +454,7 @@ impl PresenceRegistry {
     ) -> Option<DispatchSender> {
         let prior = self
             .by_ura
-            .remove_if(ura, |_uri, slot| slot.session_id == session_id)
+            .remove_if(ura, |_ura, slot| slot.session_id == session_id)
             .map(|(_k, slot)| slot.sender);
         if prior.is_some() {
             let _ = self.events.send(PresenceEvent::Offline {
@@ -544,7 +544,7 @@ impl PresenceRegistry {
     ) -> Option<DispatchSender> {
         let prior = self
             .by_ura
-            .remove_if(ura, |_uri, slot| {
+            .remove_if(ura, |_ura, slot| {
                 slot.trust.matches_admitted_key(public_key_b64)
             })
             .map(|(_k, slot)| slot.sender);

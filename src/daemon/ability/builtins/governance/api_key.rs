@@ -23,7 +23,7 @@
 //              where `<id>` is the same unguessable string the
 //              caller uses as Bearer (≥256 bits of entropy).
 //
-// Conformance: RFC-006-C v0.1 INV-2 (Capability-URI Key).
+// Conformance: RFC-006-C v0.1 INV-2 (Capability-URA Key).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
