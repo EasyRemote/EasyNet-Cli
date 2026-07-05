@@ -115,6 +115,7 @@ struct LastErrorRecord {
 /// Record an error message for later retrieval by
 /// `easynet_last_error`. Called internally from exported functions
 /// immediately before returning a non-zero code.
+#[cfg(test)]
 pub(crate) fn set_last_error(msg: impl Into<String>) {
     set_last_error_record(None, msg);
 }

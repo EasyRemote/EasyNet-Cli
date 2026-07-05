@@ -42,7 +42,7 @@ use crate::ffi::errors::{
     ERR_TIMEOUT,
 };
 use crate::ffi::errors::{
-    set_last_error, set_last_error_code, ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
+    set_last_error_code, ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
@@ -1752,11 +1752,13 @@ fn invoke_with_axon_pb(
     };
 
     if let Some(err) = response.error {
-        set_last_error(format!(
-            "easynet_invocation_invoke: daemon returned error \"{}\": {}",
-            err.code, err.message
-        ));
-        return ERR_ABILITY_FAILED;
+        return record_invocation_error(
+            ERR_ABILITY_FAILED,
+            format!(
+                "easynet_invocation_invoke: daemon returned error \"{}\": {}",
+                err.code, err.message
+            ),
+        );
     }
 
     let output = invocation_output_json(&spec, response);
@@ -1929,13 +1931,7 @@ fn submit_signed_sync_with_axon_pb(
     };
     let result = handle.await_result();
     let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
-    if let Some(code) = sync_submit_error_code_for_result(&result) {
-        let message = result
-            .error
-            .as_ref()
-            .map(|err| err.message.as_str())
-            .unwrap_or("submitted invocation failed before terminal result");
-        set_last_error(format!("easynet_invocation_submit_signed: {message}"));
+    if let Some(code) = record_sync_submit_terminal_error(&result) {
         return code;
     }
     let json = invocation_result_json(result).to_string();
@@ -3371,8 +3367,7 @@ fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
         crate::daemon::DaemonError::InvokeBidiClosed { .. } => ERR_CANCELLED,
         _ => ERR_GENERIC,
     };
-    set_last_error(format!("{context}: {err}"));
-    code
+    record_invocation_error(code, format!("{context}: {err}"))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4710,6 +4705,20 @@ fn sync_submit_error_code_for_result(result: &crate::daemon::InvocationResult) -
         _ if error.stage == "transport" => Some(ERR_DAEMON_DOWN),
         _ => None,
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn record_sync_submit_terminal_error(result: &crate::daemon::InvocationResult) -> Option<i32> {
+    let code = sync_submit_error_code_for_result(result)?;
+    let message = result
+        .error
+        .as_ref()
+        .map(|err| err.message.as_str())
+        .unwrap_or("submitted invocation failed before terminal result");
+    Some(record_invocation_error(
+        code,
+        format!("easynet_invocation_submit_signed: {message}"),
+    ))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6441,6 +6450,65 @@ mod tests {
             ffi_status_code_to_error(tonic::Code::Internal),
             ERR_PROTOCOL
         );
+    }
+
+    #[test]
+    fn daemon_transport_error_records_typed_last_error() {
+        let code = ffi_daemon_error(
+            "easynet_invocation_invoke",
+            crate::daemon::DaemonError::InvocationEndpointMissing {
+                control: "/tmp/easynet/control.json".into(),
+            },
+        );
+
+        assert_eq!(code, ERR_DAEMON_DOWN);
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "DAEMON_DOWN");
+        assert_eq!(error["stage"], "transport");
+        assert_eq!(error["retry"], "after_backoff");
+        assert_eq!(error["details"]["abi_code"], ERR_DAEMON_DOWN);
+        assert_eq!(error["details"]["legacy_untyped"], false);
+    }
+
+    #[test]
+    fn daemon_status_error_records_typed_last_error() {
+        let code = ffi_daemon_error(
+            "easynet_invocation_stream_open",
+            crate::daemon::DaemonError::InvokeStreamStatus {
+                ability: "observe.health".to_string(),
+                code: tonic::Code::PermissionDenied,
+                message: "caller is not authorized".to_string(),
+            },
+        );
+
+        assert_eq!(code, ERR_PERMISSION_DENIED);
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "PERMISSION_DENIED");
+        assert_eq!(error["stage"], "runtime");
+        assert_eq!(error["retry"], "never");
+        assert_eq!(error["details"]["abi_code"], ERR_PERMISSION_DENIED);
+        assert_eq!(error["details"]["legacy_untyped"], false);
+    }
+
+    #[test]
+    fn sync_submit_terminal_error_records_typed_last_error() {
+        let mut result = completed_result_for_tuple(signed_fixture_tuple());
+        result.error = Some(crate::daemon::RuntimeErrorSummary {
+            code: "DEADLINE_EXCEEDED".to_string(),
+            stage: "transport".to_string(),
+            message: "runtime deadline exceeded".to_string(),
+            retryable: true,
+        });
+
+        let code = record_sync_submit_terminal_error(&result);
+
+        assert_eq!(code, Some(ERR_TIMEOUT));
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "TIMEOUT");
+        assert_eq!(error["stage"], "transport");
+        assert_eq!(error["retry"], "safe");
+        assert_eq!(error["details"]["abi_code"], ERR_TIMEOUT);
+        assert_eq!(error["details"]["legacy_untyped"], false);
     }
 
     #[test]
