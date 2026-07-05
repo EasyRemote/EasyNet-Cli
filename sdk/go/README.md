@@ -40,9 +40,10 @@ seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders plus MissionStatus and MissionEventPage projection
 seams and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
-builders plus GatewayStatus, AdminAgentPage, lifecycle-result, pairing token,
-device credential, credential verification, and typed device-session projection
-seams plus close state seams. EventClient exposes directory/device/session/invocation subscription
+builders, explicit daemon-owned GatewayStatus provider seams, GatewayStatus,
+AdminAgentPage, lifecycle-result, pairing token, device credential, credential
+verification, and typed device-session projection seams plus close state seams.
+EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, device event history pages, and EventFrame
 cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers plus

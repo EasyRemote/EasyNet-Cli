@@ -173,8 +173,9 @@ method spelling.
   scheduler/retry policy, and backend automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
   session-list, hub join/leave, pairing preflight/create/validate, credential
-  verification, device-session create/delete, and device-revoke Runtime
-  Core-backed execution, plus
+  verification, device-session create/delete, device-revoke Runtime
+  Core-backed execution, explicit daemon-owned GatewayStatus provider seams,
+  plus
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
   credential, credential verification, typed device-session projection seams,
   C ABI-backed device-admin/session result projection, and close state seams;
