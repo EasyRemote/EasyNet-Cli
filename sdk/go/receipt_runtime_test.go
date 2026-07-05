@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -113,6 +114,105 @@ func TestReceiptRuntimeTransportMapsTerminalFailure(t *testing.T) {
 	}
 	if !IsCode(err, ErrAbilityFailed) {
 		t.Fatalf("error code = %v, want %s", err, ErrAbilityFailed)
+	}
+}
+
+func TestReceiptRuntimeTransportDelegatesReceiptProjectionsToProvider(t *testing.T) {
+	identity, err := NewIdentityClient(newReceiptRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: receiptHistoryListRawJSON})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	seen := map[string]string{}
+	provider := ReceiptTransportFunc{
+		ProjectFunc: func(ctx context.Context, receiptJSON []byte) ([]byte, error) {
+			seen["project"] = string(receiptJSON)
+			return []byte(`{"receipt_ura":null,"invocation_id":"inv-example-1","state":"completed","verified":false,"output":{"ok":true},"error":null,"causal_ref":null,"metadata":{}}`), nil
+		},
+		VerifyFunc: func(ctx context.Context, receiptJSON []byte) ([]byte, error) {
+			seen["verify"] = string(receiptJSON)
+			return []byte(`{"verified":false,"receipt_ura":null,"invocation_id":"inv-example-1","method":"daemon_receipt_projection","reason":"projection only","metadata":{}}`), nil
+		},
+		VerifyChainFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			seen["chain"] = string(requestJSON)
+			return []byte(`{"verified":false,"continuous":true,"method":"daemon_receipt_chain_continuity","reason":"continuity only","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{}}],"metadata":{}}`), nil
+		},
+		CausalRefFunc: func(ctx context.Context, receiptJSON []byte) ([]byte, error) {
+			seen["causal"] = string(receiptJSON)
+			return []byte(`{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`), nil
+		},
+	}
+	client, err := NewRuntimeReceiptClientWithProjectionProvider(runtime, identity, provider)
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptClientWithProjectionProvider: %v", err)
+	}
+
+	summary, err := client.Project(context.Background(), []byte(`{"raw":true}`))
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	verification, err := client.Verify(context.Background(), []byte(`{"raw":"verify"}`))
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	chain, err := client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
+		Receipts: []json.RawMessage{
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-2","self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("VerifyChain: %v", err)
+	}
+	causal, err := client.CausalRef(context.Background(), []byte(`{"raw":"causal"}`))
+	if err != nil {
+		t.Fatalf("CausalRef: %v", err)
+	}
+
+	if summary.State != "completed" || verification.Method != "daemon_receipt_projection" ||
+		!chain.Continuous || causal.Form != "scalar" {
+		t.Fatalf("unexpected projections: summary=%#v verification=%#v chain=%#v causal=%#v", summary, verification, chain, causal)
+	}
+	if seen["project"] != `{"raw":true}` || seen["verify"] != `{"raw":"verify"}` || seen["causal"] != `{"raw":"causal"}` {
+		t.Fatalf("provider did not receive receipt bodies: %#v", seen)
+	}
+	if seen["chain"] == "" {
+		t.Fatalf("provider did not receive chain request")
+	}
+}
+
+func TestReceiptRuntimeTransportProjectionMethodsFailClosedWithoutProvider(t *testing.T) {
+	identity, err := NewIdentityClient(newReceiptRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: receiptHistoryListRawJSON})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeReceiptClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptClient: %v", err)
+	}
+
+	if _, err := client.Project(context.Background(), []byte(`{"raw":true}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Project error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := client.Verify(context.Background(), []byte(`{"raw":true}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Verify error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
+		Receipts: []json.RawMessage{
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		},
+	}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("VerifyChain error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := client.CausalRef(context.Background(), []byte(`{"raw":true}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("CausalRef error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

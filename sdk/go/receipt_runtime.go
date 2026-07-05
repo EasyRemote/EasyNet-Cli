@@ -9,22 +9,46 @@ import (
 // ReceiptRuntimeTransport lowers Receipt profile read requests into daemon
 // Runtime Core invocations and projects daemon ledger facts back unchanged.
 type ReceiptRuntimeTransport struct {
-	runtime  *RuntimeClient
-	identity *IdentityClient
+	runtime            *RuntimeClient
+	identity           *IdentityClient
+	projectionProvider ReceiptProjectionProvider
+}
+
+// ReceiptProjectionProvider supplies daemon/Axon-owned Receipt DTO projections
+// to the Runtime-backed Receipt facade. Runtime Core remains responsible for
+// invocation execution; projection and verification semantics stay behind this
+// explicit provider seam.
+type ReceiptProjectionProvider interface {
+	Project(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	Verify(ctx context.Context, receiptJSON []byte) ([]byte, error)
+	VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error)
+	CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error)
 }
 
 func NewReceiptRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*ReceiptRuntimeTransport, error) {
+	return NewReceiptRuntimeTransportWithProjectionProvider(runtime, identity, nil)
+}
+
+func NewReceiptRuntimeTransportWithProjectionProvider(runtime *RuntimeClient, identity *IdentityClient, projectionProvider ReceiptProjectionProvider) (*ReceiptRuntimeTransport, error) {
 	if runtime == nil {
 		return nil, invalidProfileClient(receiptProfile, "runtime client is required")
 	}
 	if identity == nil {
 		return nil, invalidProfileClient(receiptProfile, "identity client is required")
 	}
-	return &ReceiptRuntimeTransport{runtime: runtime, identity: identity}, nil
+	return &ReceiptRuntimeTransport{
+		runtime:            runtime,
+		identity:           identity,
+		projectionProvider: projectionProvider,
+	}, nil
 }
 
 func NewRuntimeReceiptClient(runtime *RuntimeClient, identity *IdentityClient) (*ReceiptClient, error) {
-	transport, err := NewReceiptRuntimeTransport(runtime, identity)
+	return NewRuntimeReceiptClientWithProjectionProvider(runtime, identity, nil)
+}
+
+func NewRuntimeReceiptClientWithProjectionProvider(runtime *RuntimeClient, identity *IdentityClient, projectionProvider ReceiptProjectionProvider) (*ReceiptClient, error) {
+	transport, err := NewReceiptRuntimeTransportWithProjectionProvider(runtime, identity, projectionProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -74,24 +98,78 @@ func (t *ReceiptRuntimeTransport) GetTrace(ctx context.Context, requestJSON []by
 	return t.invokeHistory(ctx, requestJSON, receiptTraceGetAbility)
 }
 
-func (t *ReceiptRuntimeTransport) Project(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "receipt projection is not implemented by the runtime transport")
+func (t *ReceiptRuntimeTransport) Project(ctx context.Context, receiptJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.Project(ctx, receiptJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewReceiptSummaryFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func (t *ReceiptRuntimeTransport) Verify(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "receipt verification is daemon/Axon-owned and not implemented by the runtime transport")
+func (t *ReceiptRuntimeTransport) Verify(ctx context.Context, receiptJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.Verify(ctx, receiptJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewReceiptVerificationFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func (t *ReceiptRuntimeTransport) VerifyChain(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "receipt-chain verification is daemon/Axon-owned and not implemented by the runtime transport")
+func (t *ReceiptRuntimeTransport) VerifyChain(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.VerifyChain(ctx, requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewReceiptChainVerificationFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func (t *ReceiptRuntimeTransport) CausalRef(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(receiptProfile, "receipt causal-ref projection is not implemented by the runtime transport")
+func (t *ReceiptRuntimeTransport) CausalRef(ctx context.Context, receiptJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.CausalRef(ctx, receiptJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewCausalRefFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func (t *ReceiptRuntimeTransport) Close(context.Context) error {
 	return nil
+}
+
+func (t *ReceiptRuntimeTransport) requireProjectionProvider(ctx context.Context) (ReceiptProjectionProvider, error) {
+	if ctx == nil {
+		return nil, invalidProfileClient(receiptProfile, "context is required")
+	}
+	if t == nil || t.projectionProvider == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt runtime projection provider is required")
+	}
+	return t.projectionProvider, nil
 }
 
 func (t *ReceiptRuntimeTransport) buildHistoryInvocationJSON(ctx context.Context, requestJSON []byte, abilityName string) ([]byte, error) {
