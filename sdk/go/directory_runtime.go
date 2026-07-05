@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 const (
@@ -35,6 +36,8 @@ var directoryCarrierArgKeys = map[string]struct{}{
 type DirectoryRuntimeTransport struct {
 	runtime  *RuntimeClient
 	identity *IdentityClient
+	mu       sync.Mutex
+	streams  map[string]*StreamHandle
 }
 
 func NewDirectoryRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*DirectoryRuntimeTransport, error) {
@@ -44,7 +47,11 @@ func NewDirectoryRuntimeTransport(runtime *RuntimeClient, identity *IdentityClie
 	if identity == nil {
 		return nil, invalidProfileClient(directoryIdentityProfile, "identity client is required")
 	}
-	return &DirectoryRuntimeTransport{runtime: runtime, identity: identity}, nil
+	return &DirectoryRuntimeTransport{
+		runtime:  runtime,
+		identity: identity,
+		streams:  map[string]*StreamHandle{},
+	}, nil
 }
 
 func NewRuntimeDirectoryClient(runtime *RuntimeClient, identity *IdentityClient) (*DirectoryClient, error) {
@@ -144,12 +151,49 @@ func (t *DirectoryRuntimeTransport) ListAbilities(ctx context.Context, requestJS
 	return projectDirectoryAbilityPage(output, request.DirectoryQueryBase)
 }
 
-func (t *DirectoryRuntimeTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(directoryIdentityProfile, "directory subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *DirectoryRuntimeTransport) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, _, err := decodeDirectorySubscriptionForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	draft, err := t.buildInvocation(ctx, request.DirectoryQueryBase, directoryAbilitySubscribeDirectory, request)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := t.runtime.InvokeStream(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = map[string]*StreamHandle{}
+	}
+	t.streams[handle.StreamID()] = handle
+	t.mu.Unlock()
+	return directoryRuntimeSubscriptionOpenJSON(request, handle)
 }
 
-func (t *DirectoryRuntimeTransport) Close(context.Context) error {
-	return nil
+func (t *DirectoryRuntimeTransport) Close(ctx context.Context) error {
+	if ctx == nil {
+		return invalidProfileClient(directoryIdentityProfile, "context is required")
+	}
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	streams := make([]*StreamHandle, 0, len(t.streams))
+	for id, stream := range t.streams {
+		streams = append(streams, stream)
+		delete(t.streams, id)
+	}
+	t.mu.Unlock()
+	var first error
+	for _, stream := range streams {
+		if err := stream.Close(ctx); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func (t *DirectoryRuntimeTransport) buildInvocationJSON(ctx context.Context, requestJSON []byte, base DirectoryQueryBase, abilityName string, args any) ([]byte, error) {
@@ -205,6 +249,59 @@ func (t *DirectoryRuntimeTransport) invoke(ctx context.Context, requestJSON []by
 		return nil, invalidProfilePayload(directoryIdentityProfile, "directory invocation output_json is required", nil)
 	}
 	return outputJSON, nil
+}
+
+func (t *DirectoryRuntimeTransport) bindDirectorySubscriptionHandle(subscription DirectorySubscription) DirectorySubscription {
+	if t == nil {
+		return subscription
+	}
+	streamID := subscription.MetadataStreamID()
+	if streamID == "" {
+		return subscription
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	subscription.handle = t.streams[streamID]
+	subscription.release = t.releaseDirectorySubscriptionHandle
+	return subscription
+}
+
+func (t *DirectoryRuntimeTransport) releaseDirectorySubscriptionHandle(streamID string) {
+	if t == nil || streamID == "" {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, streamID)
+	t.mu.Unlock()
+}
+
+func directoryRuntimeSubscriptionOpenJSON(request DirectorySubscriptionRequest, handle *StreamHandle) ([]byte, error) {
+	if handle == nil {
+		return nil, invalidProfileClient(directoryIdentityProfile, "runtime stream handle is required")
+	}
+	cursor := DirectorySubscriptionCursor{
+		Stream:   directorySubscriptionStream,
+		Sequence: 0,
+		Token:    fmt.Sprintf("%s:%d", directorySubscriptionStream, 0),
+	}
+	if request.ResumeCursor != nil {
+		cursor = *request.ResumeCursor
+	}
+	metadata := directoryRuntimeMetadata(request.Metadata, directoryAbilitySubscribeDirectory)
+	metadata["source"] = "runtime_stream"
+	metadata["runtime_stream_id"] = handle.StreamID()
+	metadata["max_buffered_events"] = handle.MaxBufferedEvents()
+	return json.Marshal(map[string]any{
+		"profile":      directoryIdentityProfile,
+		"kind":         "directory_subscription",
+		"stream":       directorySubscriptionStream,
+		"state":        DirectorySubscriptionOpening,
+		"cursor":       cursor,
+		"resume_token": cursor.ResumeToken(),
+		"events":       []any{},
+		"drop_count":   0,
+		"metadata":     metadata,
+	})
 }
 
 func decodeDirectoryResolveForRuntime(requestJSON []byte) (ResolveQuery, map[string]any, error) {

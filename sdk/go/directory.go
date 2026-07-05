@@ -143,6 +143,8 @@ type DirectorySubscription struct {
 	Events      []DirectorySubscriptionEvent `json:"events"`
 	DropCount   int                          `json:"drop_count"`
 	Metadata    map[string]any               `json:"metadata"`
+	handle      *StreamHandle                `json:"-"`
+	release     func(string)                 `json:"-"`
 }
 
 // DirectoryTransport supplies read-model operations behind the SDK facade.
@@ -256,7 +258,14 @@ func (c *DirectoryClient) SubscribeDirectory(ctx context.Context, req DirectoryS
 	if err != nil {
 		return DirectorySubscription{}, wrapDirectoryTransportError("directory subscribe failed", err)
 	}
-	return NewDirectorySubscriptionFromJSON(raw)
+	subscription, err := NewDirectorySubscriptionFromJSON(raw)
+	if err != nil {
+		return DirectorySubscription{}, err
+	}
+	if binder, ok := c.transport.(directorySubscriptionHandleBinder); ok {
+		subscription = binder.bindDirectorySubscriptionHandle(subscription)
+	}
+	return subscription, nil
 }
 
 func (c *DirectoryClient) Resolve(ctx context.Context, query ResolveQuery) (ResolvedRef, error) {
@@ -566,6 +575,124 @@ func NewDirectorySubscriptionFromJSON(raw []byte) (DirectorySubscription, error)
 	return subscription, nil
 }
 
+type directorySubscriptionHandleBinder interface {
+	bindDirectorySubscriptionHandle(DirectorySubscription) DirectorySubscription
+}
+
+func (s *DirectorySubscription) Next(ctx context.Context) (DirectorySubscriptionEvent, error) {
+	if s == nil || s.handle == nil {
+		return DirectorySubscriptionEvent{}, invalidProfileClient(directoryIdentityProfile, "directory subscription is not backed by a runtime stream handle")
+	}
+	event, err := s.handle.Next(ctx)
+	if err != nil {
+		s.State = DirectorySubscriptionFailed
+		return DirectorySubscriptionEvent{}, err
+	}
+	payload := event.PayloadJSON()
+	if len(payload) == 0 || string(payload) == "null" {
+		s.State = DirectorySubscriptionFailed
+		return DirectorySubscriptionEvent{}, invalidProfilePayload(directoryIdentityProfile, "directory subscription frame payload_json is required", nil)
+	}
+	directoryEvent, err := NewDirectorySubscriptionEventFromJSON(payload)
+	if err != nil {
+		s.State = DirectorySubscriptionFailed
+		return DirectorySubscriptionEvent{}, err
+	}
+	if err := s.applyEvent(directoryEvent); err != nil {
+		return DirectorySubscriptionEvent{}, err
+	}
+	return directoryEvent, nil
+}
+
+func (s *DirectorySubscription) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
+	if s == nil || s.handle == nil {
+		return StreamCancel{}, invalidProfileClient(directoryIdentityProfile, "directory subscription is not backed by a runtime stream handle")
+	}
+	cancel, err := s.handle.Cancel(ctx, reason)
+	if err != nil {
+		s.State = DirectorySubscriptionFailed
+		return StreamCancel{}, err
+	}
+	if cancel.State() == StreamFailed {
+		s.State = DirectorySubscriptionFailed
+	} else {
+		s.State = DirectorySubscriptionClosed
+		s.releaseRuntimeHandle()
+	}
+	return cancel, nil
+}
+
+func (s *DirectorySubscription) Close(ctx context.Context) error {
+	if s != nil && s.State == DirectorySubscriptionClosed && s.handle == nil {
+		return nil
+	}
+	if s == nil || s.handle == nil {
+		return invalidProfileClient(directoryIdentityProfile, "directory subscription is not backed by a runtime stream handle")
+	}
+	if err := s.handle.Close(ctx); err != nil {
+		s.State = DirectorySubscriptionFailed
+		return err
+	}
+	s.State = DirectorySubscriptionClosed
+	s.releaseRuntimeHandle()
+	return nil
+}
+
+func (s *DirectorySubscription) MetadataStreamID() string {
+	if s == nil || s.Metadata == nil {
+		return ""
+	}
+	value, _ := s.Metadata["runtime_stream_id"].(string)
+	return value
+}
+
+func (s *DirectorySubscription) applyEvent(event DirectorySubscriptionEvent) error {
+	if s == nil {
+		return invalidProfileClient(directoryIdentityProfile, "directory subscription is not initialized")
+	}
+	nextEvents := append(append([]DirectorySubscriptionEvent(nil), s.Events...), event)
+	if err := validateDirectorySubscriptionEvents(nextEvents); err != nil {
+		s.State = DirectorySubscriptionFailed
+		return err
+	}
+	s.Events = nextEvents
+	s.Cursor = event.Cursor
+	s.ResumeToken = event.ResumeToken
+	if event.Terminal {
+		s.State = DirectorySubscriptionClosed
+		s.releaseRuntimeHandle()
+	} else if event.Phase == "live" {
+		s.State = DirectorySubscriptionLive
+	} else if event.Phase == "snapshot_complete" {
+		s.State = DirectorySubscriptionLive
+	} else {
+		s.State = DirectorySubscriptionCatchingUp
+	}
+	return nil
+}
+
+func (s *DirectorySubscription) releaseRuntimeHandle() {
+	if s == nil {
+		return
+	}
+	if s.release != nil && s.handle != nil {
+		s.release(s.handle.StreamID())
+	}
+	s.handle = nil
+	s.release = nil
+}
+
+func NewDirectorySubscriptionEventFromJSON(raw []byte) (DirectorySubscriptionEvent, error) {
+	var event DirectorySubscriptionEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return DirectorySubscriptionEvent{}, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("decode directory subscription event JSON: %v", err), err)
+	}
+	if err := validateDirectorySubscriptionEventShape(&event); err != nil {
+		return DirectorySubscriptionEvent{}, err
+	}
+	return event, nil
+}
+
 func marshalDirectorySubscriptionRequest(req DirectorySubscriptionRequest) ([]byte, error) {
 	normalized, err := normalizeDirectorySubscriptionRequest(req)
 	if err != nil {
@@ -699,17 +826,13 @@ func validateDirectorySubscriptionEvents(events []DirectorySubscriptionEvent) er
 	lastSequence := uint64(0)
 	for idx := range events {
 		event := &events[idx]
-		if event.Profile != directoryIdentityProfile || event.Stream != directorySubscriptionStream ||
-			event.Kind == "" || event.EventID == "" || event.Phase == "" || event.Metadata == nil {
-			return invalidProfilePayload(directoryIdentityProfile, "invalid directory subscription event projection", nil)
+		if err := validateDirectorySubscriptionEventShape(event); err != nil {
+			return err
 		}
 		if _, ok := seen[event.EventID]; ok {
 			return invalidProfilePayload(directoryIdentityProfile, "duplicate directory subscription event id", nil)
 		}
 		seen[event.EventID] = struct{}{}
-		if err := validateDirectorySubscriptionCursor(event.Cursor); err != nil {
-			return err
-		}
 		if idx > 0 && event.Cursor.Sequence <= lastSequence {
 			return invalidProfilePayload(directoryIdentityProfile, "directory subscription event sequence must increase", nil)
 		}
@@ -726,6 +849,23 @@ func validateDirectorySubscriptionEvents(events []DirectorySubscriptionEvent) er
 		if event.Phase == "snapshot_complete" {
 			snapshotComplete = true
 		}
+	}
+	return nil
+}
+
+func validateDirectorySubscriptionEventShape(event *DirectorySubscriptionEvent) error {
+	if event.Profile != directoryIdentityProfile || event.Stream != directorySubscriptionStream ||
+		event.Kind == "" || event.EventID == "" || event.Phase == "" || event.Metadata == nil {
+		return invalidProfilePayload(directoryIdentityProfile, "invalid directory subscription event projection", nil)
+	}
+	if err := validateDirectorySubscriptionCursor(event.Cursor); err != nil {
+		return err
+	}
+	if event.ResumeToken == "" {
+		event.ResumeToken = event.Cursor.ResumeToken()
+	}
+	if event.ResumeToken != event.Cursor.ResumeToken() {
+		return invalidProfilePayload(directoryIdentityProfile, "directory subscription event resume token mismatch", nil)
 	}
 	return nil
 }

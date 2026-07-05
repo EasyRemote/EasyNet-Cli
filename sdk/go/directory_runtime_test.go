@@ -160,6 +160,172 @@ func TestDirectoryRuntimeTransportListsPeerUserDevices(t *testing.T) {
 	}
 }
 
+func TestDirectoryRuntimeTransportOpensDirectorySubscriptionStream(t *testing.T) {
+	identity, err := NewIdentityClient(newDirectoryRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	recvCount := 0
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{
+		streamTransport: StreamTransportFunc{
+			RecvFunc: func(ctx context.Context) ([]byte, error) {
+				recvCount++
+				switch recvCount {
+				case 1:
+					return []byte(directoryRuntimeSnapshotCompleteFrameJSON), nil
+				case 2:
+					return []byte(directoryRuntimeLiveFrameJSON), nil
+				default:
+					t.Fatalf("unexpected recv call %d", recvCount)
+					return nil, nil
+				}
+			},
+			CancelFunc: func(ctx context.Context, reason string) ([]byte, error) {
+				if reason != "done" {
+					t.Fatalf("cancel reason = %q, want done", reason)
+				}
+				return []byte(`{"stream_id":"runtime-stream-1","cancelled":true,"state":"Cancelled","terminal":true}`), nil
+			},
+		},
+	}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeDirectoryClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeDirectoryClient: %v", err)
+	}
+
+	subscription, err := client.SubscribeDirectory(context.Background(), DirectorySubscriptionRequest{
+		DirectoryQueryBase: directoryBaseForTest(),
+		DeviceURA:          "easynet:///r/example/device/dev-a",
+		ItemKind:           "ability",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeDirectory: %v", err)
+	}
+	if subscription.State != DirectorySubscriptionOpening || subscription.MetadataStreamID() != "runtime-stream-1" {
+		t.Fatalf("unexpected subscription open state: %#v", subscription)
+	}
+	if !runtimeTransport.openStreamCalled || runtimeTransport.seenStreamDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0" {
+		t.Fatalf("runtime stream was not opened with directory draft: %#v", runtimeTransport.seenStreamDraft)
+	}
+
+	snapshotComplete, err := subscription.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next snapshot: %v", err)
+	}
+	if snapshotComplete.Phase != "snapshot_complete" || subscription.State != DirectorySubscriptionLive {
+		t.Fatalf("unexpected snapshot event/state: event=%#v subscription=%#v", snapshotComplete, subscription)
+	}
+	live, err := subscription.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next live: %v", err)
+	}
+	if live.Phase != "live" || live.ItemKind != "ability" || subscription.ResumeToken != "directory:2" {
+		t.Fatalf("unexpected live event/state: event=%#v subscription=%#v", live, subscription)
+	}
+	cancel, err := subscription.Cancel(context.Background(), "done")
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if !cancel.Cancelled() || subscription.State != DirectorySubscriptionClosed {
+		t.Fatalf("unexpected cancel/subscription state: cancel=%#v subscription=%#v", cancel, subscription)
+	}
+	if err := subscription.Close(context.Background()); err != nil {
+		t.Fatalf("Close after cancel should be idempotent: %v", err)
+	}
+}
+
+func TestDirectorySubscriptionReleasesRuntimeHandleOnTerminalEvent(t *testing.T) {
+	released := ""
+	handle, err := NewStreamHandleFromJSON(StreamTransportFunc{
+		RecvFunc: func(ctx context.Context) ([]byte, error) {
+			return []byte(directoryRuntimeTerminalFrameJSON), nil
+		},
+	}, []byte(`{"stream_id":"runtime-stream-terminal","state":"Open","max_buffered_events":16}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+	subscription := DirectorySubscription{
+		Profile:     directoryIdentityProfile,
+		Kind:        "directory_subscription",
+		Stream:      directorySubscriptionStream,
+		State:       DirectorySubscriptionLive,
+		Cursor:      NewDirectorySubscriptionCursor(0),
+		ResumeToken: "directory:0",
+		Events:      []DirectorySubscriptionEvent{},
+		DropCount:   0,
+		Metadata:    map[string]any{"runtime_stream_id": "runtime-stream-terminal"},
+		handle:      handle,
+		release: func(streamID string) {
+			released = streamID
+		},
+	}
+
+	event, err := subscription.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next terminal: %v", err)
+	}
+	if !event.Terminal || subscription.State != DirectorySubscriptionClosed {
+		t.Fatalf("unexpected terminal event/state: event=%#v subscription=%#v", event, subscription)
+	}
+	if released != "runtime-stream-terminal" || subscription.handle != nil {
+		t.Fatalf("runtime handle was not released: released=%q handle=%#v", released, subscription.handle)
+	}
+}
+
+func TestDirectoryRuntimeTransportReleasesTerminalDirectorySubscriptionStream(t *testing.T) {
+	identity, err := NewIdentityClient(newDirectoryRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{
+		streamTransport: StreamTransportFunc{
+			RecvFunc: func(ctx context.Context) ([]byte, error) {
+				return []byte(directoryRuntimeTerminalFrameJSON), nil
+			},
+		},
+	}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	directoryTransport, err := NewDirectoryRuntimeTransport(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewDirectoryRuntimeTransport: %v", err)
+	}
+	client, err := NewDirectoryClient(directoryTransport)
+	if err != nil {
+		t.Fatalf("NewDirectoryClient: %v", err)
+	}
+
+	subscription, err := client.SubscribeDirectory(context.Background(), DirectorySubscriptionRequest{
+		DirectoryQueryBase: directoryBaseForTest(),
+		DeviceURA:          "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeDirectory: %v", err)
+	}
+	event, err := subscription.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next terminal: %v", err)
+	}
+	if !event.Terminal || subscription.State != DirectorySubscriptionClosed {
+		t.Fatalf("terminal event did not close subscription: event=%#v subscription=%#v", event, subscription)
+	}
+	if subscription.handle != nil {
+		t.Fatalf("terminal subscription retained runtime stream handle")
+	}
+	directoryTransport.mu.Lock()
+	streamCount := len(directoryTransport.streams)
+	directoryTransport.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("terminal subscription retained %d transport streams", streamCount)
+	}
+}
+
 func newDirectoryRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 	return &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
@@ -231,4 +397,63 @@ const directoryRuntimePeerDeviceRawJSON = `{
 		"hub_endpoint": "https://peer-hub.example:50443",
 		"last_seen_unix_ms": 1783100000123
 	}]
+}`
+
+const directoryRuntimeSnapshotCompleteFrameJSON = `{
+	"sequence": 1,
+	"kind": "data",
+	"state": "Open",
+	"terminal": false,
+	"payload_content_type": "application/json",
+	"payload_json": {
+		"profile": "directory_identity",
+		"stream": "directory",
+		"kind": "snapshot_complete",
+		"event_id": "dir-evt-1",
+		"phase": "snapshot_complete",
+		"cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+		"resume_token": "directory:1",
+		"terminal": false,
+		"metadata": {"source": "runtime"}
+	}
+}`
+
+const directoryRuntimeLiveFrameJSON = `{
+	"sequence": 2,
+	"kind": "data",
+	"state": "Open",
+	"terminal": false,
+	"payload_content_type": "application/json",
+	"payload_json": {
+		"profile": "directory_identity",
+		"stream": "directory",
+		"kind": "upsert",
+		"event_id": "dir-evt-2",
+		"phase": "live",
+		"item_kind": "ability",
+		"item": {"ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+		"cursor": {"stream": "directory", "sequence": 2, "token": "directory:2"},
+		"resume_token": "directory:2",
+		"terminal": false,
+		"metadata": {"source": "runtime"}
+	}
+}`
+
+const directoryRuntimeTerminalFrameJSON = `{
+	"sequence": 1,
+	"kind": "data",
+	"state": "TerminalFrameSeen",
+	"terminal": true,
+	"payload_content_type": "application/json",
+	"payload_json": {
+		"profile": "directory_identity",
+		"stream": "directory",
+		"kind": "snapshot_complete",
+		"event_id": "dir-evt-terminal",
+		"phase": "snapshot_complete",
+		"cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+		"resume_token": "directory:1",
+		"terminal": true,
+		"metadata": {"source": "runtime"}
+	}
 }`
