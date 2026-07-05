@@ -26,4 +26,5 @@ Failure-path coverage:
 
 Additional Go Runtime checks:
 
-- `go test ./...` from `sdk/go`
+- `go test -count=1 ./...` from `sdk/go`
+- `go test -count=1 -tags easynet_cabi ./...` from `sdk/go`
