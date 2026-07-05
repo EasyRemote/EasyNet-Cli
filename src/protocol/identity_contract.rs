@@ -1,7 +1,7 @@
 // EasyNet CLI — Identity shared contract
 // ======================================
 //
-// File: src/daemon/identity_contract.rs
+// File: src/protocol/identity_contract.rs
 // Description: Shared daemon SDK contract for Identity signing-key carriers.
 //
 // Protocol Responsibility
@@ -33,7 +33,7 @@ use base64::Engine as _;
 use serde_json::{json, Map, Value};
 use sha2::Digest as _;
 
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string_field, required_string,
     typed_object_or_default, validate_ura, SdkContractError,
 };

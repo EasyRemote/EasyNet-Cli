@@ -16,7 +16,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
 // boundary. Delegate Surface carrier and projection semantics to
-// `daemon::surface_contract`.
+// `protocol::surface_contract`.
 //
 // Usage Contract
 // --------------
@@ -32,14 +32,14 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::surface_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::surface_contract::{
     build_create_page_invocation, build_delete_page_invocation, build_health_invocation,
     build_list_pages_invocation, build_manifest_invocation, project_mutation_result,
     project_page_page, project_page_record, project_public_page_ref, project_surface_health,
     project_surface_manifest, SurfaceError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `pages.list`.
 ///

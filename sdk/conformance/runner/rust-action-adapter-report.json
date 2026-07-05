@@ -7,14 +7,14 @@
       "case_id": "admin_gateway/carrier_status",
       "profile": "admin_gateway",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/admin_gateway_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/admin_gateway_contract.rs"}],
       "message": null
     },
     {
       "case_id": "compatibility/openai_carrier_projection",
       "profile": "compatibility",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/compatibility_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/compatibility_contract.rs"}],
       "message": null
     },
     {
@@ -28,21 +28,21 @@
       "case_id": "directory/list_pagination",
       "profile": "directory_identity",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/directory_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/directory_contract.rs"}],
       "message": null
     },
     {
       "case_id": "directory/no_default_fanout",
       "profile": "directory_identity",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/directory_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/directory_contract.rs"}],
       "message": null
     },
     {
       "case_id": "directory/resolve",
       "profile": "directory_identity",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/directory_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/directory_contract.rs"}],
       "message": null
     },
     {
@@ -56,21 +56,21 @@
       "case_id": "events/device_invocation_history",
       "profile": "events",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/events_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/events_contract.rs"}],
       "message": null
     },
     {
       "case_id": "events/directory_stream",
       "profile": "events",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/events_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/events_contract.rs"}],
       "message": null
     },
     {
       "case_id": "events/session_stream",
       "profile": "events",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/events_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/events_contract.rs"}],
       "message": null
     },
     {
@@ -84,14 +84,14 @@
       "case_id": "host_binding/codec_hash",
       "profile": "host_binding",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/host_stream_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/host_stream_contract.rs"}],
       "message": null
     },
     {
       "case_id": "identity/ura_descriptor_projection",
       "profile": "directory_identity",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/identity_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/identity_contract.rs"}],
       "message": null
     },
     {
@@ -112,7 +112,7 @@
       "case_id": "invocation/complete_tuple",
       "profile": "runtime_core",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/sdk_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/sdk_contract.rs"}],
       "message": null
     },
     {
@@ -175,28 +175,28 @@
       "case_id": "mission/carrier_status",
       "profile": "mission",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/mission_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/mission_contract.rs"}],
       "message": null
     },
     {
       "case_id": "publication/resource_carriers",
       "profile": "publication",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/publication_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/publication_contract.rs"}],
       "message": null
     },
     {
       "case_id": "receipt/fetch_carrier",
       "profile": "receipt",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/receipt_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/receipt_contract.rs"}],
       "message": null
     },
     {
       "case_id": "receipt/projection_causal_ref",
       "profile": "receipt",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/receipt_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/receipt_contract.rs"}],
       "message": null
     },
     {
@@ -210,7 +210,7 @@
       "case_id": "surface/page_carriers",
       "profile": "surface",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/surface_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/surface_contract.rs"}],
       "message": null
     },
     {
@@ -231,7 +231,7 @@
       "case_id": "wrappers/profile_records",
       "profile": "wrappers",
       "status": "passed",
-      "evidence": [{"kind": "rust_test", "ref_path": "src/daemon/wrapper_contract.rs"}],
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/wrapper_contract.rs"}],
       "message": null
     }
   ]

@@ -39,11 +39,6 @@ use easynet_axon::invocation::{
 use crate::core::ura::{
     self, AbilityOwner, AbilitySelector, ParsedURA, URAKind, PROFILE_STRICT_V2,
 };
-use crate::daemon::identity_contract::{
-    build_list_signing_keys_invocation, build_register_signing_key_invocation,
-    build_revoke_signing_key_invocation, project_signer_handle, project_signing_key_page,
-    project_signing_key_record, project_signing_key_revoke_result, IdentitySdkError,
-};
 use crate::ffi::client::handle::{get, EasynetHandle};
 use crate::ffi::errors::{
     clear_last_error, set_last_error_code, EASYNET_OK, ERR_GENERIC, ERR_INVALID_ARG,
@@ -51,6 +46,11 @@ use crate::ffi::errors::{
 };
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
+use crate::protocol::identity_contract::{
+    build_list_signing_keys_invocation, build_register_signing_key_invocation,
+    build_revoke_signing_key_invocation, project_signer_handle, project_signing_key_page,
+    project_signing_key_record, project_signing_key_revoke_result, IdentitySdkError,
+};
 
 /// Project a canonical EasyNet URA into a typed identity DTO.
 ///

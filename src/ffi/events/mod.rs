@@ -15,7 +15,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and allocation mechanics at the exported
 // boundary. Delegate carrier and frame semantics to
-// `daemon::events_contract`.
+// `protocol::events_contract`.
 //
 // Usage Contract
 // --------------
@@ -30,14 +30,14 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::events_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::events_contract::{
     build_device_event_history_invocation, build_device_subscription_invocation,
     build_directory_subscription_invocation, build_invocation_subscription_invocation,
     build_session_subscription_invocation, project_device_event_page, project_directory_event,
     project_drop_report, project_terminal, EventsError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon
 /// `federation.subscribe_directory_v2`.

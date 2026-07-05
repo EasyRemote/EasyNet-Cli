@@ -1,7 +1,7 @@
 // EasyNet CLI — Directory shared contract
 // ========================================
 //
-// File: src/daemon/directory_contract.rs
+// File: src/protocol/directory_contract.rs
 // Description: Shared daemon SDK contract for Directory resolve/read-model
 //              carriers and paginated device/agent/ability page projections.
 //
@@ -35,8 +35,8 @@
 use serde_json::{json, Map, Value};
 
 use crate::core::ura::{self, URAKind};
-use crate::daemon::agent_record_contract;
-use crate::daemon::sdk_contract::{
+use crate::protocol::agent_record_contract;
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_bool_field, optional_string, optional_string_field,
     required_string, validate_ura, SdkContractError,
 };

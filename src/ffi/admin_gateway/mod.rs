@@ -14,7 +14,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
 // boundary. Delegate Admin + Gateway carrier and projection semantics to
-// `daemon::admin_gateway_contract`.
+// `protocol::admin_gateway_contract`.
 //
 // Usage Contract
 // --------------
@@ -29,7 +29,9 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::admin_gateway_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::admin_gateway_contract::{
     build_agent_list_invocation, build_agent_refresh_invocation, build_agent_start_invocation,
     build_agent_stop_invocation, build_credential_verify_invocation, build_hub_join_invocation,
     build_hub_leave_invocation, build_pairing_create_invocation,
@@ -41,8 +43,6 @@ use crate::daemon::admin_gateway_contract::{
     project_device_session_result, project_gateway_status, project_hub_lifecycle_result,
     project_pairing_preflight, project_pairing_token, AdminGatewayError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `agent.list`.
 ///

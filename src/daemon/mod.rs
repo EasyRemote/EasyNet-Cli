@@ -32,33 +32,20 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod ability;
-pub mod admin_gateway_contract;
-pub mod agent_record_contract;
 pub mod axon_bridge;
 pub mod boot;
-pub mod compatibility_contract;
 pub mod control;
-pub mod directory_contract;
-pub mod events_contract;
 pub mod execution;
 pub mod federation;
-pub mod host_stream_contract;
 pub mod identity;
-pub mod identity_contract;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod keyring;
-pub mod mission_contract;
 pub mod persistence;
 pub mod plugins;
-pub mod publication_contract;
-pub mod receipt_contract;
 pub mod resources;
-pub mod sdk_contract;
-pub mod surface_contract;
 pub mod telemetry;
 pub mod trust;
-pub mod wrapper_contract;
 
 pub use boot::lifecycle;
 pub use boot::DaemonError;

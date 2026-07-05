@@ -1,7 +1,7 @@
 // EasyNet CLI — Publication shared contract
 // ==========================================
 //
-// File: src/daemon/publication_contract.rs
+// File: src/protocol/publication_contract.rs
 // Description: Shared daemon SDK contract for Publication ResourceRef,
 //              package validation, and system-ability Invocation carriers.
 //
@@ -41,7 +41,7 @@ use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::core::ura;
 use crate::daemon::ability::builtins::device_control::ability_management::store::manifest_digest;
 use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string_field, required_string, validate_ura,
     SdkContractError,
 };

@@ -1,7 +1,7 @@
 // EasyNet CLI — daemon SDK shared contract
 // =========================================
 //
-// File: src/daemon/sdk_contract.rs
+// File: src/protocol/sdk_contract.rs
 // Description: Shared JSON DTO helpers for daemon SDK profile carriers.
 //
 // Protocol Responsibility
@@ -24,7 +24,7 @@
 //
 // Architectural Position
 // ----------------------
-// EasyNet-Cli SDK contract layer. Axon remains the protocol authority for
+// EasyNet-Cli SDK protocol projection layer. Axon remains the protocol authority for
 // canonical Invocation and Receipt semantics; this module only assembles the
 // binding-facing JSON carrier used by EasyNet-Cli profiles.
 

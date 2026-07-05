@@ -15,7 +15,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at this exported
 // boundary. Delegate Mission carrier and status semantics to
-// `daemon::mission_contract`.
+// `protocol::mission_contract`.
 //
 // Usage Contract
 // --------------
@@ -30,13 +30,13 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::mission_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::mission_contract::{
     build_cancel_invocation, build_events_invocation, build_run_eal_invocation,
     build_run_file_invocation, build_track_invocation, project_events, project_status,
     MissionError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `mission.run` from EAL
 /// source text.

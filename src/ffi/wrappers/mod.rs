@@ -16,7 +16,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
 // boundary. Delegate wrapper carrier validation and record normalization to
-// `daemon::wrapper_contract`.
+// `protocol::wrapper_contract`.
 //
 // Usage Contract
 // --------------
@@ -31,14 +31,14 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::wrapper_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::wrapper_contract::{
     build_browser_session_invocation, build_file_transfer_invocation,
     build_media_session_invocation, build_remote_desktop_session_invocation,
     build_terminal_session_invocation, project_browser_session, project_file_record,
     project_media_session, project_remote_desktop_session, project_terminal_session, WrapperError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `wrapper.file.transfer`.
 ///

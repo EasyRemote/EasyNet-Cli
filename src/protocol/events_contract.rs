@@ -1,7 +1,7 @@
 // EasyNet CLI — Events shared contract
 // =====================================
 //
-// File: src/daemon/events_contract.rs
+// File: src/protocol/events_contract.rs
 // Description: Shared daemon SDK contract for Events profile directory stream
 //              Invocation carriers and typed event-frame projection.
 //
@@ -37,7 +37,7 @@ use chrono::TimeZone;
 use serde_json::{json, Map, Value};
 
 use crate::core::ura;
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string, required_string, validate_ura,
     SdkContractError,
 };

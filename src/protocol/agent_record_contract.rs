@@ -1,7 +1,7 @@
 // EasyNet CLI — Agent record shared contract
 // ===========================================
 //
-// File: src/daemon/agent_record_contract.rs
+// File: src/protocol/agent_record_contract.rs
 // Description: Shared SDK AgentRecord projection for daemon agent list rows.
 //
 // Protocol Responsibility
@@ -29,7 +29,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::core::ura;
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     first_optional_string_field, object, optional_bool_field, optional_string_array_field,
     optional_string_field, required_string, SdkContractError,
 };

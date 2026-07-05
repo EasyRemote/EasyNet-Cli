@@ -14,7 +14,7 @@
 // Implementation Approach
 // -----------------------
 // Keep pointer, handle, and JSON validation at the C ABI boundary. Delegate
-// host-stream request/frame/hash semantics to `daemon::host_stream_contract`
+// host-stream request/frame/hash semantics to `protocol::host_stream_contract`
 // and descriptor-ref grammar to Axon helpers.
 //
 // Usage Contract
@@ -36,16 +36,16 @@ use std::path::{Component, Path};
 use easynet_axon::invocation::canonical_ability_descriptor_ref;
 use serde_json::{json, Map, Value};
 
-use crate::daemon::host_stream_contract::{
-    canonical_value_json, decode_host_stream_request, hash_state_from_json, sdk_error_frame,
-    sdk_item_frame, sdk_terminal_frame, HOST_STREAM_FRAME_SCHEMA, HOST_STREAM_HASH_ALGORITHM,
-};
 use crate::ffi::client::handle::{get, EasynetHandle};
 use crate::ffi::errors::{
     clear_last_error, set_last_error_code, EASYNET_OK, ERR_GENERIC, ERR_INVALID_ARG,
     ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
 use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
+use crate::protocol::host_stream_contract::{
+    canonical_value_json, decode_host_stream_request, hash_state_from_json, sdk_error_frame,
+    sdk_item_frame, sdk_terminal_frame, HOST_STREAM_FRAME_SCHEMA, HOST_STREAM_HASH_ALGORITHM,
+};
 
 /// Build a schema-backed host-stream binding DTO.
 ///
@@ -555,8 +555,8 @@ impl fmt::Display for HostBindingError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::host_stream_contract::HostStreamHashState;
     use crate::ffi::client::handle::{alloc, release, test_session};
+    use crate::protocol::host_stream_contract::HostStreamHashState;
     use std::ffi::{CStr, CString};
 
     fn handle() -> EasynetHandle {

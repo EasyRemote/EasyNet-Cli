@@ -1,7 +1,7 @@
 // EasyNet CLI — Receipt shared contract
 // ======================================
 //
-// File: src/daemon/receipt_contract.rs
+// File: src/protocol/receipt_contract.rs
 // Description: Shared daemon SDK contract for Receipt fetch carriers and
 //              conservative receipt DTO projections.
 //
@@ -32,7 +32,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string_field, required_string, system_descriptor_ref,
     SdkContractError,
 };

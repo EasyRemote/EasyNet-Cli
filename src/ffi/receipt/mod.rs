@@ -15,7 +15,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
 // boundary. Delegate Receipt carrier and projection semantics to
-// `daemon::receipt_contract`.
+// `protocol::receipt_contract`.
 //
 // Usage Contract
 // --------------
@@ -31,13 +31,13 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::receipt_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::receipt_contract::{
     build_fetch_invocation, build_get_history_invocation, build_list_history_invocation,
     build_trace_invocation, project_causal_ref, project_receipt_chain_verification,
     project_receipt_summary, project_receipt_verification, ReceiptError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `invocation.history.get`.
 ///

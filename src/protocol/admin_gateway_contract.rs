@@ -1,7 +1,7 @@
 // EasyNet CLI — Admin + Gateway shared contract
 // ==============================================
 //
-// File: src/daemon/admin_gateway_contract.rs
+// File: src/protocol/admin_gateway_contract.rs
 // Description: Shared daemon SDK contract for Admin + Gateway Invocation
 //              carriers, gateway readiness projection, and agent records.
 //
@@ -35,9 +35,9 @@ use std::str::FromStr;
 use serde_json::{json, Map, Value};
 
 use crate::core::ura;
-use crate::daemon::agent_record_contract;
 use crate::daemon::persistence::agent_registry::AgentType;
-use crate::daemon::sdk_contract::{
+use crate::protocol::agent_record_contract;
+use crate::protocol::sdk_contract::{
     build_system_invocation, first_optional_string_field, object, optional_bool_field,
     optional_string_array_field, optional_string_field, required_string, validate_ura,
     SdkContractError,

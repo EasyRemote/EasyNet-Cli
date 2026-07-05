@@ -34,10 +34,10 @@ use crate::daemon::ability::names::integrations::{
     OPENAI_CHAT_COMPLETIONS, OPENAI_FILES_DELETE, OPENAI_FILES_RETRIEVE, OPENAI_FILES_UPLOAD,
     OPENAI_LIST_MODELS,
 };
-use crate::daemon::compatibility_contract::{
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::protocol::compatibility_contract::{
     project_file, project_file_delete_result, project_file_upload,
 };
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use crate::support::platform::process_singleton::ProcessSingleton;
 
 /// Process-wide handle to the live ability registry. The inner

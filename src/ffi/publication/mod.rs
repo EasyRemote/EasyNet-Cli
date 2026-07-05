@@ -16,7 +16,7 @@
 // -----------------------
 // Keep pointer, handle, and JSON validation at the exported boundary. Delegate
 // ResourceRef, package validation, and carrier semantics to
-// `daemon::publication_contract`.
+// `protocol::publication_contract`.
 //
 // Usage Contract
 // --------------
@@ -31,7 +31,9 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::publication_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::publication_contract::{
     build_deploy_invocation, build_disable_ability_impl_invocation,
     build_enable_ability_impl_invocation, build_list_abilities_invocation,
     build_local_resource_ref, build_show_ability_invocation, build_unpublish_invocation,
@@ -39,8 +41,6 @@ use crate::daemon::publication_contract::{
     project_ability_impl_enable_result, project_ability_unpublish_result,
     project_published_ability_page, project_published_ability_record, validate_package,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a daemon-authored local filesystem ResourceRef DTO.
 ///
@@ -382,8 +382,10 @@ fn project_publication_json(
     input_name: &'static str,
     project: fn(
         &serde_json::Value,
-    )
-        -> Result<serde_json::Value, crate::daemon::publication_contract::PublicationError>,
+    ) -> Result<
+        serde_json::Value,
+        crate::protocol::publication_contract::PublicationError,
+    >,
 ) -> i32 {
     project_profile_json(
         handle,

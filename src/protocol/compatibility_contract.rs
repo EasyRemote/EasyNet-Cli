@@ -1,7 +1,7 @@
 // EasyNet CLI — Compatibility shared contract
 // ============================================
 //
-// File: src/daemon/compatibility_contract.rs
+// File: src/protocol/compatibility_contract.rs
 // Description: Shared daemon SDK contract for OpenAI-compatible carrier
 //              construction and result/file DTO projection.
 //
@@ -40,7 +40,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::builtins::integrations::openai_compat;
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_bool_field, optional_string_field, required_string,
     validate_ura, SdkContractError,
 };

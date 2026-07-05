@@ -39,7 +39,7 @@ use tokio::sync::broadcast;
 
 use crate::core::ability::spec::HostStreamExec;
 use crate::daemon::ability::dispatch::StreamSource;
-use crate::daemon::host_stream_contract::{
+use crate::protocol::host_stream_contract::{
     decode_host_frame, verify_terminal, HostFrame, HostStreamFailure, HostStreamFailureKind,
     HostStreamHashState,
 };

@@ -1,7 +1,7 @@
 // EasyNet CLI — Convenience Wrapper shared contract
 // =================================================
 //
-// File: src/daemon/wrapper_contract.rs
+// File: src/protocol/wrapper_contract.rs
 // Description: Shared daemon SDK contract for Convenience Wrapper carriers and
 //              record projections.
 //
@@ -37,7 +37,7 @@ use std::fmt;
 
 use serde_json::{json, Map, Value};
 
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string_field, required_string, validate_ura,
     SdkContractError,
 };

@@ -16,7 +16,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
 // boundary. Delegate carrier and projection semantics to
-// `daemon::compatibility_contract`.
+// `protocol::compatibility_contract`.
 //
 // Usage Contract
 // --------------
@@ -31,15 +31,15 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::compatibility_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::compatibility_contract::{
     build_chat_completion_invocation, build_file_delete_invocation, build_file_retrieve_invocation,
     build_file_upload_invocation, build_list_models_invocation,
     build_stream_chat_completion_invocation, project_chat_completion, project_chat_stream,
     project_file, project_file_delete_result, project_file_upload, project_model_page,
     CompatibilityError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `openai.list_models`.
 ///

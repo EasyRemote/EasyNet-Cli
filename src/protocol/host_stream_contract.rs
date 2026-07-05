@@ -1,7 +1,7 @@
 // EasyNet CLI — host-stream shared contract
 // ==========================================
 //
-// File: src/daemon/host_stream_contract.rs
+// File: src/protocol/host_stream_contract.rs
 // Description: Shared daemon SDK contract for host_stream frames, terminal
 //              verification, and rolling output hashes.
 //

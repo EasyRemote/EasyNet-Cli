@@ -1,7 +1,7 @@
 // EasyNet CLI — Mission shared contract
 // ======================================
 //
-// File: src/daemon/mission_contract.rs
+// File: src/protocol/mission_contract.rs
 // Description: Shared daemon SDK contract for Mission/EAL Invocation carriers
 //              and typed MissionStatus projection.
 //
@@ -35,7 +35,7 @@ use std::path::{Component, Path};
 
 use serde_json::{json, Map, Value};
 
-use crate::daemon::sdk_contract::{
+use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string, required_string, SdkContractError,
 };
 

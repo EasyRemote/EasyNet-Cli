@@ -14,7 +14,7 @@
 // -----------------------
 // Keep pointer, handle, UTF-8, JSON, and string allocation at the exported
 // boundary. Delegate Directory carrier and projection semantics to
-// `daemon::directory_contract`.
+// `protocol::directory_contract`.
 //
 // Usage Contract
 // --------------
@@ -29,13 +29,13 @@
 
 use std::os::raw::c_char;
 
-use crate::daemon::directory_contract::{
+use crate::ffi::client::handle::EasynetHandle;
+use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
+use crate::protocol::directory_contract::{
     build_list_abilities_invocation, build_list_agents_invocation, build_list_devices_invocation,
     build_resolve_invocation, project_ability_page, project_agent_page, project_device_page,
     project_resolved_ref, DirectoryError,
 };
-use crate::ffi::client::handle::EasynetHandle;
-use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 
 /// Build a complete Invocation JSON carrier for daemon `node.list`.
 ///
