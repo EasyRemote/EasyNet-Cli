@@ -30,6 +30,17 @@ _AGENT_START = AdminSystemAbility.AGENT_START
 _AGENT_LIST = AdminSystemAbility.AGENT_LIST
 _AGENT_STOP = AdminSystemAbility.AGENT_STOP
 _AGENT_REFRESH = AdminSystemAbility.AGENT_REFRESH
+_GATEWAY_STATUS = AdminSystemAbility.GATEWAY_STATUS
+_SESSION_LIST = AdminSystemAbility.SESSION_LIST
+_SESSION_CREATE = AdminSystemAbility.SESSION_CREATE
+_SESSION_DELETE = AdminSystemAbility.SESSION_DELETE
+_HUB_JOIN = AdminSystemAbility.HUB_JOIN
+_HUB_LEAVE = AdminSystemAbility.HUB_LEAVE
+_PAIRING_PREFLIGHT = AdminSystemAbility.PAIRING_PREFLIGHT
+_PAIRING_VALIDATE = AdminSystemAbility.PAIRING_VALIDATE
+_CREDENTIAL_VERIFY = AdminSystemAbility.CREDENTIAL_VERIFY
+_PAIRING_CREATE = AdminSystemAbility.PAIRING_CREATE
+_FEDERATION_REVOKE = AdminSystemAbility.FEDERATION_REVOKE
 _MISSION_RUN = MissionSystemAbility.RUN
 _MISSION_TRACK = MissionSystemAbility.TRACK
 _MISSION_CANCEL = MissionSystemAbility.CANCEL
@@ -137,7 +148,19 @@ class _EasyRemoteAdminProfileTransport:
         return _unsupported_admin_profile("build_revoke_device_invocation")
 
     def gateway_status(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("gateway_status")
+        request = _json_object(
+            request_json, "EasyRemote gateway status request", _invalid_admin
+        )
+        payload: dict[str, object] = {}
+        if "require_public_listener" in request:
+            payload["require_public_listener"] = _optional_bool(
+                request.get("require_public_listener"), "require_public_listener"
+            )
+        response = self._invoke(_GATEWAY_STATUS, **payload)
+        return _gateway_status_json(
+            response,
+            require_public_listener=payload.get("require_public_listener"),
+        )
 
     def list_agents(self, request_json: bytes) -> bytes:
         _json_object(request_json, "EasyRemote agent list request", _invalid_admin)
@@ -205,34 +228,142 @@ class _EasyRemoteAdminProfileTransport:
         return _admin_result_json(_AGENT_STOP, response)
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("list_device_sessions")
+        request = _json_object(
+            request_json, "EasyRemote session list request", _invalid_admin
+        )
+        payload: dict[str, object] = {}
+        if "include_terminated" in request:
+            payload["include_terminated"] = _optional_bool(
+                request.get("include_terminated"), "include_terminated"
+            )
+        response = self._invoke(_SESSION_LIST, **payload)
+        return _device_session_page_json(response)
 
     def join_hub(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("join_hub")
+        request = _json_object(
+            request_json, "EasyRemote hub join request", _invalid_admin
+        )
+        device_ura = _required_admin_string(request, "device_ura")
+        response = self._invoke(
+            _HUB_JOIN,
+            hub_ura=_required_admin_string(request, "hub_ura"),
+            device_ura=device_ura,
+        )
+        return _admin_result_json(_HUB_JOIN, response, device_ura=device_ura)
 
     def leave_hub(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("leave_hub")
+        request = _json_object(
+            request_json, "EasyRemote hub leave request", _invalid_admin
+        )
+        payload: dict[str, object] = {
+            "hub_ura": _required_admin_string(request, "hub_ura")
+        }
+        if request.get("reason"):
+            payload["reason"] = _required_admin_string(request, "reason")
+        response = self._invoke(_HUB_LEAVE, **payload)
+        return _admin_result_json(_HUB_LEAVE, response)
 
     def pairing_preflight(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("pairing_preflight")
+        request = _json_object(
+            request_json, "EasyRemote pairing preflight request", _invalid_admin
+        )
+        payload: dict[str, object] = {
+            "hub_ura": _required_admin_string(request, "hub_ura"),
+            "device_ura": _required_admin_string(request, "device_ura"),
+        }
+        requested_scopes = _string_array(
+            request.get("requested_scopes"), "requested_scopes"
+        )
+        if requested_scopes:
+            payload["requested_scopes"] = list(requested_scopes)
+        response = self._invoke(_PAIRING_PREFLIGHT, **payload)
+        return _pairing_preflight_json(response, request)
 
     def validate_pairing(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("validate_pairing")
+        request = _json_object(
+            request_json, "EasyRemote pairing validation request", _invalid_admin
+        )
+        response = self._invoke(
+            _PAIRING_VALIDATE,
+            token=_required_admin_string(request, "token"),
+            device_ura=_required_admin_string(request, "device_ura"),
+        )
+        return _device_credential_json(response, request)
 
     def verify_device_credential(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("verify_device_credential")
+        request = _json_object(
+            request_json,
+            "EasyRemote device credential verification request",
+            _invalid_admin,
+        )
+        response = self._invoke(
+            _CREDENTIAL_VERIFY,
+            credential_id=_required_admin_string(request, "credential_id"),
+            device_ura=_required_admin_string(request, "device_ura"),
+            hub_ura=_required_admin_string(request, "hub_ura"),
+        )
+        return _credential_verification_json(response, request)
 
     def create_pairing(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("create_pairing")
+        request = _json_object(
+            request_json, "EasyRemote pairing create request", _invalid_admin
+        )
+        payload: dict[str, object] = {
+            "hub_ura": _required_admin_string(request, "hub_ura"),
+            "device_ura": _required_admin_string(request, "device_ura"),
+            "expires_unix_ms": _positive_admin_int(
+                request.get("expires_unix_ms"), "expires_unix_ms"
+            ),
+        }
+        scopes = _string_array(request.get("scopes"), "scopes")
+        if scopes:
+            payload["scopes"] = list(scopes)
+        response = self._invoke(_PAIRING_CREATE, **payload)
+        return _pairing_token_json(response, request)
 
     def revoke_device(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("revoke_device")
+        request = _json_object(
+            request_json, "EasyRemote device revoke request", _invalid_admin
+        )
+        device_ura = _required_admin_string(request, "device_ura")
+        response = self._invoke(
+            _FEDERATION_REVOKE,
+            agent_ura=device_ura,
+            reason=_required_admin_string(request, "reason"),
+        )
+        return _admin_result_json(
+            _FEDERATION_REVOKE,
+            response,
+            device_ura=device_ura,
+        )
 
     def create_device_session(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("create_device_session")
+        request = _json_object(
+            request_json, "EasyRemote session create request", _invalid_admin
+        )
+        payload: dict[str, object] = {
+            "device_ura": _required_admin_string(request, "device_ura"),
+            "hub_ura": _required_admin_string(request, "hub_ura"),
+            "session_kind": _required_admin_string(request, "session_kind"),
+        }
+        if request.get("expires_unix_ms"):
+            payload["expires_unix_ms"] = _positive_admin_int(
+                request.get("expires_unix_ms"), "expires_unix_ms"
+            )
+        response = self._invoke(_SESSION_CREATE, **payload)
+        return _device_session_json(response, request)
 
     def delete_device_session(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("delete_device_session")
+        request = _json_object(
+            request_json, "EasyRemote session delete request", _invalid_admin
+        )
+        payload: dict[str, object] = {
+            "session_id": _required_admin_string(request, "session_id")
+        }
+        if request.get("reason"):
+            payload["reason"] = _required_admin_string(request, "reason")
+        response = self._invoke(_SESSION_DELETE, **payload)
+        return _admin_result_json(_SESSION_DELETE, response)
 
     def close(self) -> None:
         return None
@@ -275,9 +406,7 @@ class _EasyRemoteMissionProfileTransport:
         request = _json_object(
             request_json, "EasyRemote mission run-file request", _invalid_mission
         )
-        payload: dict[str, object] = {
-            "path": _required_mission_string(request, "path")
-        }
+        payload: dict[str, object] = {"path": _required_mission_string(request, "path")}
         if request.get("label"):
             payload["label"] = _required_mission_string(request, "label")
         response = self._invoke(_MISSION_RUN, **payload)
@@ -325,26 +454,373 @@ class _EasyRemoteMissionProfileTransport:
 
 
 def _admin_result_json(
-    operation: AdminSystemAbility, response: Mapping[str, object]
+    operation: AdminSystemAbility,
+    response: Mapping[str, object],
+    *,
+    device_ura: str | None = None,
 ) -> bytes:
+    raw = dict(response)
+    ack = raw.get("ack")
+    if ack is None:
+        ack = raw.get("ok", True)
+    kind = raw.get("kind")
+    if not isinstance(kind, str):
+        kind = (
+            "agent_lifecycle_result"
+            if operation in {_AGENT_START, _AGENT_STOP, _AGENT_REFRESH}
+            else "admin_result"
+        )
     return _json_bytes(
         {
             "profile": _ADMIN_PROFILE,
-            "kind": "agent_lifecycle_result",
+            "kind": kind,
             "operation": operation.value,
-            "state": str(response.get("state") or "ok"),
+            "state": str(raw.get("state") or raw.get("status") or "ok"),
             "agent_ura": _optional_string(
-                response.get("agent_ura"), "agent_ura", _invalid_admin
+                raw.get("agent_ura"), "agent_ura", _invalid_admin
             ),
-            "ack": _optional_bool(response.get("ack"), "ack"),
-            "runtime_not_ready": bool(response.get("runtime_not_ready", False)),
+            "device_ura": _optional_string(
+                raw.get("device_ura") or device_ura, "device_ura", _invalid_admin
+            ),
+            "ack": _optional_bool(ack, "ack"),
+            "runtime_not_ready": bool(raw.get("runtime_not_ready", False)),
             "runtime_catalog_not_ready": bool(
-                response.get("runtime_catalog_not_ready", False)
+                raw.get("runtime_catalog_not_ready", False)
             ),
             "metadata": {
                 "profile": _ADMIN_PROFILE,
                 "source": operation.value,
-                "raw_result": dict(response),
+                "raw_result": raw,
+            },
+        }
+    )
+
+
+def _gateway_status_json(
+    response: Mapping[str, object], *, require_public_listener: object = None
+) -> bytes:
+    raw = _admin_output_object(response)
+    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "gateway_status":
+        return _json_bytes(raw)
+    listeners = raw.get("listeners") if isinstance(raw.get("listeners"), list) else []
+    process_live = _admin_bool(raw.get("process_live"), fallback=raw.get("running"))
+    control_ready = _admin_bool(raw.get("control_ready"), fallback=raw.get("ready"))
+    runtime_ready = _admin_bool(raw.get("runtime_ready"), fallback=raw.get("ready"))
+    directory_ready = _admin_bool(raw.get("directory_ready"), fallback=raw.get("ready"))
+    trust_ready = _admin_bool(raw.get("trust_ready"), fallback=raw.get("ready"))
+    public_ready = _admin_bool(raw.get("public_listener_ready"), fallback=False)
+    require_public = (
+        require_public_listener if isinstance(require_public_listener, bool) else False
+    )
+    ready = _admin_bool(
+        raw.get("ready"),
+        fallback=(
+            process_live
+            and control_ready
+            and runtime_ready
+            and directory_ready
+            and trust_ready
+            and (public_ready or not require_public)
+        ),
+    )
+    return _json_bytes(
+        {
+            "profile": _ADMIN_PROFILE,
+            "gateway_id": _first_admin_string(raw, "gateway_id", "id", "device_ura"),
+            "ready": ready,
+            "state": str(
+                raw.get("state")
+                or raw.get("status")
+                or ("ready" if ready else "not_ready")
+            ),
+            "process_live": process_live,
+            "control_ready": control_ready,
+            "runtime_ready": runtime_ready,
+            "directory_ready": directory_ready,
+            "trust_ready": trust_ready,
+            "public_listener_ready": public_ready,
+            "listeners": [_gateway_listener(row) for row in listeners],
+            "identity": _optional_mapping(
+                raw.get("identity"), "identity", _invalid_admin
+            ),
+            "metadata": {
+                **_mapping_or_empty(raw.get("metadata")),
+                "profile": _ADMIN_PROFILE,
+                "source": _GATEWAY_STATUS.value,
+                "raw_result": raw,
+            },
+        }
+    )
+
+
+def _device_session_page_json(response: Mapping[str, object]) -> bytes:
+    raw = _admin_output_object(response)
+    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "device_sessions":
+        return _json_bytes(raw)
+    rows = raw.get("sessions") or raw.get("items") or []
+    if not isinstance(rows, list):
+        raise _invalid_admin("session.list response field 'sessions' must be an array")
+    return _json_bytes(
+        {
+            "profile": _ADMIN_PROFILE,
+            "kind": "device_sessions",
+            "state": str(raw.get("state") or raw.get("status") or "ok"),
+            "items": [
+                _device_session(row, source=_SESSION_LIST, request={}) for row in rows
+            ],
+            "next_cursor": raw.get("next_cursor") or raw.get("nextCursor"),
+            "metadata": {
+                **_mapping_or_empty(raw.get("metadata")),
+                "profile": _ADMIN_PROFILE,
+                "source": _SESSION_LIST.value,
+                "raw_result": raw,
+            },
+        }
+    )
+
+
+def _device_session_json(
+    response: Mapping[str, object], request: Mapping[str, object]
+) -> bytes:
+    raw = _admin_output_object(response)
+    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "device_session":
+        return _json_bytes(raw)
+    return _json_bytes(_device_session(raw, source=_SESSION_CREATE, request=request))
+
+
+def _device_session(
+    value: object, *, source: AdminSystemAbility, request: Mapping[str, object]
+) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_admin("device session item must be an object")
+    raw = dict(value)
+    return {
+        "profile": _ADMIN_PROFILE,
+        "kind": "device_session",
+        "session_id": _first_admin_string(
+            raw, "session_id", "sessionId", "id", "session"
+        ),
+        "device_ura": _first_admin_string_with_default(
+            raw,
+            (
+                _required_admin_string(request, "device_ura")
+                if "device_ura" in request
+                else ""
+            ),
+            "device_ura",
+            "deviceUra",
+        ),
+        "hub_ura": _first_admin_string_with_default(
+            raw,
+            _required_admin_string(request, "hub_ura") if "hub_ura" in request else "",
+            "hub_ura",
+            "hubUra",
+        ),
+        "state": str(raw.get("state") or raw.get("status") or "active"),
+        "session_kind": _first_admin_string_with_default(
+            raw,
+            (
+                _required_admin_string(request, "session_kind")
+                if "session_kind" in request
+                else ""
+            ),
+            "session_kind",
+            "sessionKind",
+            "kind",
+        ),
+        "created_unix_ms": _positive_admin_int(
+            raw.get("created_unix_ms")
+            or raw.get("createdUnixMs")
+            or raw.get("created_at_ms"),
+            "created_unix_ms",
+        ),
+        "expires_unix_ms": _non_negative_admin_int(
+            raw.get("expires_unix_ms")
+            or raw.get("expiresUnixMs")
+            or raw.get("expires_at_ms")
+            or request.get("expires_unix_ms")
+            or 0,
+            "expires_unix_ms",
+        ),
+        "metadata": {
+            **_mapping_or_empty(raw.get("metadata")),
+            "profile": _ADMIN_PROFILE,
+            "source": source.value,
+            "raw_result": raw,
+        },
+    }
+
+
+def _pairing_preflight_json(
+    response: Mapping[str, object], request: Mapping[str, object]
+) -> bytes:
+    raw = _admin_output_object(response)
+    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "pairing_preflight":
+        return _json_bytes(raw)
+    return _json_bytes(
+        {
+            "profile": _ADMIN_PROFILE,
+            "kind": "pairing_preflight",
+            "state": str(raw.get("state") or raw.get("status") or "unknown"),
+            "hub_ura": _first_admin_string_with_default(
+                raw, _required_admin_string(request, "hub_ura"), "hub_ura", "hubUra"
+            ),
+            "device_ura": _first_admin_string_with_default(
+                raw,
+                _required_admin_string(request, "device_ura"),
+                "device_ura",
+                "deviceUra",
+            ),
+            "pairing_required": _admin_bool(raw.get("pairing_required"), fallback=True),
+            "trust_ready": _admin_bool(raw.get("trust_ready"), fallback=False),
+            "scopes": list(
+                _string_array(
+                    raw.get("scopes") or raw.get("requested_scopes"), "scopes"
+                )
+            ),
+            "metadata": {
+                **_mapping_or_empty(raw.get("metadata")),
+                "profile": _ADMIN_PROFILE,
+                "source": _PAIRING_PREFLIGHT.value,
+                "raw_result": raw,
+            },
+        }
+    )
+
+
+def _pairing_token_json(
+    response: Mapping[str, object], request: Mapping[str, object]
+) -> bytes:
+    raw = _admin_output_object(response)
+    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "pairing_token":
+        return _json_bytes(raw)
+    return _json_bytes(
+        {
+            "profile": _ADMIN_PROFILE,
+            "kind": "pairing_token",
+            "token_id": _first_admin_string(raw, "token_id", "tokenId", "id"),
+            "token": _first_admin_string(raw, "token", "pairing_token", "pairingToken"),
+            "hub_ura": _first_admin_string_with_default(
+                raw, _required_admin_string(request, "hub_ura"), "hub_ura", "hubUra"
+            ),
+            "device_ura": _first_admin_string_with_default(
+                raw,
+                _required_admin_string(request, "device_ura"),
+                "device_ura",
+                "deviceUra",
+            ),
+            "state": str(raw.get("state") or raw.get("status") or "issued"),
+            "expires_unix_ms": _positive_admin_int(
+                raw.get("expires_unix_ms")
+                or raw.get("expiresUnixMs")
+                or raw.get("expires_at_ms")
+                or request.get("expires_unix_ms"),
+                "expires_unix_ms",
+            ),
+            "scopes": list(
+                _string_array(raw.get("scopes") or raw.get("granted_scopes"), "scopes")
+            ),
+            "metadata": {
+                **_mapping_or_empty(raw.get("metadata")),
+                "profile": _ADMIN_PROFILE,
+                "source": _PAIRING_CREATE.value,
+                "raw_result": raw,
+            },
+        }
+    )
+
+
+def _device_credential_json(
+    response: Mapping[str, object], request: Mapping[str, object]
+) -> bytes:
+    raw = _admin_output_object(response)
+    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "device_credential":
+        return _json_bytes(raw)
+    return _json_bytes(
+        {
+            "profile": _ADMIN_PROFILE,
+            "kind": "device_credential",
+            "credential_id": _first_admin_string(
+                raw, "credential_id", "credentialId", "id"
+            ),
+            "device_ura": _first_admin_string_with_default(
+                raw,
+                _required_admin_string(request, "device_ura"),
+                "device_ura",
+                "deviceUra",
+            ),
+            "hub_ura": _first_admin_string(raw, "hub_ura", "hubUra"),
+            "state": str(raw.get("state") or raw.get("status") or "active"),
+            "issued_unix_ms": _positive_admin_int(
+                raw.get("issued_unix_ms")
+                or raw.get("issuedUnixMs")
+                or raw.get("created_unix_ms"),
+                "issued_unix_ms",
+            ),
+            "expires_unix_ms": _positive_admin_int(
+                raw.get("expires_unix_ms")
+                or raw.get("expiresUnixMs")
+                or raw.get("expires_at_ms"),
+                "expires_unix_ms",
+            ),
+            "scopes": list(
+                _string_array(raw.get("scopes") or raw.get("granted_scopes"), "scopes")
+            ),
+            "metadata": {
+                **_mapping_or_empty(raw.get("metadata")),
+                "profile": _ADMIN_PROFILE,
+                "source": _PAIRING_VALIDATE.value,
+                "raw_result": raw,
+            },
+        }
+    )
+
+
+def _credential_verification_json(
+    response: Mapping[str, object], request: Mapping[str, object]
+) -> bytes:
+    raw = _admin_output_object(response)
+    if (
+        raw.get("profile") == _ADMIN_PROFILE
+        and raw.get("kind") == "device_credential_verification"
+    ):
+        return _json_bytes(raw)
+    return _json_bytes(
+        {
+            "profile": _ADMIN_PROFILE,
+            "kind": "device_credential_verification",
+            "verified": _admin_bool(raw.get("verified"), fallback=False),
+            "credential_id": _first_admin_string_with_default(
+                raw,
+                _required_admin_string(request, "credential_id"),
+                "credential_id",
+                "credentialId",
+                "id",
+            ),
+            "device_ura": _first_admin_string_with_default(
+                raw,
+                _required_admin_string(request, "device_ura"),
+                "device_ura",
+                "deviceUra",
+            ),
+            "hub_ura": _first_admin_string_with_default(
+                raw, _required_admin_string(request, "hub_ura"), "hub_ura", "hubUra"
+            ),
+            "method": (
+                _first_admin_string(
+                    raw, "method", "verification_method", "verificationMethod"
+                )
+                if _admin_bool(raw.get("verified"), fallback=False)
+                else _first_admin_optional_string(
+                    raw, "method", "verification_method", "verificationMethod"
+                )
+                or ""
+            ),
+            "metadata": {
+                **_mapping_or_empty(raw.get("metadata")),
+                "profile": _ADMIN_PROFILE,
+                "source": _CREDENTIAL_VERIFY.value,
+                "raw_result": raw,
             },
         }
     )
@@ -371,15 +847,15 @@ def _agent_record(value: object) -> dict[str, object]:
         "agent_ura": raw.get("agent_ura"),
         "owner_ura": raw.get("owner_ura"),
         "device_ura": raw.get("device_ura"),
-        "state": raw.get("state")
-        if isinstance(raw.get("state"), str)
-        else "registered",
+        "state": (
+            raw.get("state") if isinstance(raw.get("state"), str) else "registered"
+        ),
         "runtime": runtime,
         "model": raw.get("model"),
         "label": raw.get("label"),
-        "abilities": raw.get("abilities")
-        if isinstance(raw.get("abilities"), list)
-        else [],
+        "abilities": (
+            raw.get("abilities") if isinstance(raw.get("abilities"), list) else []
+        ),
         "metadata": metadata,
     }
 
@@ -557,9 +1033,7 @@ def _output_refs(raw: Mapping[str, object]) -> list[dict[str, object]]:
             refs.append(
                 {
                     "kind": _required_mission_string(item, "kind"),
-                    "path": _optional_string(
-                        item.get("path"), "path", _invalid_mission
-                    )
+                    "path": _optional_string(item.get("path"), "path", _invalid_mission)
                     or "",
                     "metadata": _optional_mapping(
                         item.get("metadata"), "metadata", _invalid_mission
@@ -644,12 +1118,85 @@ def _mapping_or_empty(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _admin_output_object(value: Mapping[str, object]) -> dict[str, object]:
+    raw = dict(value)
+    nested = raw.get("result")
+    if isinstance(nested, Mapping):
+        return dict(nested)
+    return raw
+
+
 def _string_array(value: object, field_name: str) -> tuple[str, ...]:
     if value is None:
         return tuple()
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise _invalid_admin(f"{field_name} must be an array of strings")
     return tuple(value)
+
+
+def _admin_bool(value: object, *, fallback: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(fallback, bool):
+        return fallback
+    return False
+
+
+def _positive_admin_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise _invalid_admin(f"{field_name} must be a positive integer")
+    return value
+
+
+def _non_negative_admin_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_admin(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def _first_admin_string(value: Mapping[str, object], *field_names: str) -> str:
+    for field_name in field_names:
+        raw = value.get(field_name)
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    raise _invalid_admin(f"{field_names[0]} is required")
+
+
+def _first_admin_optional_string(
+    value: Mapping[str, object], *field_names: str
+) -> str | None:
+    for field_name in field_names:
+        raw = value.get(field_name)
+        if raw is None:
+            continue
+        if not isinstance(raw, str):
+            raise _invalid_admin(f"{field_name} must be a string")
+        if raw.strip():
+            return raw
+    return None
+
+
+def _first_admin_string_with_default(
+    value: Mapping[str, object], default: str, *field_names: str
+) -> str:
+    found = _first_admin_optional_string(value, *field_names)
+    if found:
+        return found
+    if default:
+        return default
+    raise _invalid_admin(f"{field_names[0]} is required")
+
+
+def _gateway_listener(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise _invalid_admin("gateway listener must be an object")
+    raw = dict(value)
+    return {
+        "kind": _first_admin_string(raw, "kind"),
+        "endpoint": _first_admin_string(raw, "endpoint", "address"),
+        "ready": _admin_bool(raw.get("ready"), fallback=False),
+        "public": _admin_bool(raw.get("public"), fallback=False),
+    }
 
 
 def _invalid_admin(message: str) -> SDKError:

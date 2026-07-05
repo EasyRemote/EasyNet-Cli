@@ -3,10 +3,21 @@ from collections.abc import Mapping
 
 from easynet_sdk import (
     AdminAgentListRequest,
+    AdminGatewayStatusRequest,
+    AdminJoinHubRequest,
+    AdminLeaveHubRequest,
+    AdminSessionListRequest,
+    CreateDeviceSessionRequest,
+    CreatePairingRequest,
+    DeleteDeviceSessionRequest,
     EasyRemoteProfileBridge,
     ErrorCode,
     MissionRunFileRequest,
+    PairingPreflightRequest,
+    RevokeDeviceRequest,
     SDKError,
+    ValidatePairingRequest,
+    VerifyDeviceCredentialRequest,
     is_code,
 )
 
@@ -84,6 +95,111 @@ class EasyRemoteProfileBridgeTests(unittest.TestCase):
                     "mission.events",
                     {"run_id": "run-1", "cursor_sequence": 4, "limit": 25},
                 ),
+            ],
+        )
+
+    def test_admin_profile_dispatches_gateway_trust_and_sessions(self) -> None:
+        dispatcher = MemoryProfileDispatcher()
+        bridge = EasyRemoteProfileBridge(
+            dispatcher, nonce_factory=lambda: bytes(range(1, 17))
+        )
+        client = bridge.admin_facade()._client  # noqa: SLF001
+        base = bridge.admin_base()
+        hub = "easynet:///r/example/hub/main"
+        device = "easynet:///r/example/device/dev-a"
+
+        status = client.gateway_status(
+            AdminGatewayStatusRequest(require_public_listener=True)
+        )
+        joined = client.join_hub(AdminJoinHubRequest(base, hub, device))
+        preflight = client.pairing_preflight(
+            PairingPreflightRequest(base, hub, device, ("invoke", "events"))
+        )
+        token = client.create_pairing(
+            CreatePairingRequest(base, hub, device, 1893456000000, ("invoke",))
+        )
+        credential = client.validate_pairing(
+            ValidatePairingRequest(base, "pair-token-value", device)
+        )
+        verification = client.verify_device_credential(
+            VerifyDeviceCredentialRequest(base, "cred-dev-a", device, hub)
+        )
+        session = client.create_device_session(
+            CreateDeviceSessionRequest(
+                base, device, hub, "remote_desktop", 1893456000000
+            )
+        )
+        page = client.list_device_sessions(
+            AdminSessionListRequest(base, include_terminated=False)
+        )
+        left = client.leave_hub(AdminLeaveHubRequest(base, hub, reason="rotation"))
+        revoked = client.revoke_device(RevokeDeviceRequest(base, device, "rotation"))
+        deleted = client.delete_device_session(
+            DeleteDeviceSessionRequest(base, "dev-session-1", "done")
+        )
+
+        self.assertTrue(status.ready)
+        self.assertTrue(status.public_listener_ready)
+        self.assertEqual(joined.operation, "hub.join")
+        self.assertTrue(joined.ack)
+        self.assertTrue(preflight.pairing_required)
+        self.assertEqual(token.token_id, "pair-token-1")
+        self.assertEqual(credential.credential_id, "cred-dev-a")
+        self.assertTrue(verification.verified)
+        self.assertEqual(session.session_kind, "remote_desktop")
+        self.assertEqual(page.items[0].session_id, "dev-session-1")
+        self.assertEqual(left.operation, "hub.leave")
+        self.assertEqual(revoked.operation, "federation.revoke")
+        self.assertEqual(deleted.operation, "session.delete")
+        self.assertEqual(
+            dispatcher.calls[-10:],
+            [
+                ("hub.join", {"hub_ura": hub, "device_ura": device}),
+                (
+                    "pairing.preflight",
+                    {
+                        "hub_ura": hub,
+                        "device_ura": device,
+                        "requested_scopes": ["invoke", "events"],
+                    },
+                ),
+                (
+                    "pairing.create",
+                    {
+                        "hub_ura": hub,
+                        "device_ura": device,
+                        "expires_unix_ms": 1893456000000,
+                        "scopes": ["invoke"],
+                    },
+                ),
+                (
+                    "pairing.validate",
+                    {"token": "pair-token-value", "device_ura": device},
+                ),
+                (
+                    "credential.verify",
+                    {
+                        "credential_id": "cred-dev-a",
+                        "device_ura": device,
+                        "hub_ura": hub,
+                    },
+                ),
+                (
+                    "session.create",
+                    {
+                        "device_ura": device,
+                        "hub_ura": hub,
+                        "session_kind": "remote_desktop",
+                        "expires_unix_ms": 1893456000000,
+                    },
+                ),
+                ("session.list", {"include_terminated": False}),
+                ("hub.leave", {"hub_ura": hub, "reason": "rotation"}),
+                (
+                    "federation.revoke",
+                    {"agent_ura": device, "reason": "rotation"},
+                ),
+                ("session.delete", {"session_id": "dev-session-1", "reason": "done"}),
             ],
         )
 
@@ -189,6 +305,92 @@ class MemoryProfileDispatcher:
                 "stopped": True,
                 "agent_ura": "easynet:///r/example/agent/assistant",
             }
+        if ability == "gateway.status":
+            return {
+                "gateway_id": "gateway-dev-a",
+                "ready": True,
+                "state": "ready",
+                "process_live": True,
+                "control_ready": True,
+                "runtime_ready": True,
+                "directory_ready": True,
+                "trust_ready": True,
+                "public_listener_ready": True,
+                "listeners": [
+                    {
+                        "kind": "tcp",
+                        "endpoint": "127.0.0.1:17337",
+                        "ready": True,
+                        "public": True,
+                    }
+                ],
+                "identity": {"device_ura": "easynet:///r/example/device/dev-a"},
+            }
+        if ability == "hub.join":
+            return {"state": "ok", "ack": True, "device_ura": kwargs["device_ura"]}
+        if ability == "hub.leave":
+            return {"state": "ok", "ack": True}
+        if ability == "pairing.preflight":
+            return {
+                "state": "requires_pairing",
+                "pairing_required": True,
+                "trust_ready": False,
+                "scopes": kwargs["requested_scopes"],
+            }
+        if ability == "pairing.create":
+            return {
+                "token_id": "pair-token-1",
+                "token": "pair-token-value",
+                "state": "issued",
+                "expires_unix_ms": kwargs["expires_unix_ms"],
+                "scopes": kwargs["scopes"],
+            }
+        if ability == "pairing.validate":
+            return {
+                "credential_id": "cred-dev-a",
+                "device_ura": kwargs["device_ura"],
+                "hub_ura": "easynet:///r/example/hub/main",
+                "state": "active",
+                "issued_unix_ms": 1767225600000,
+                "expires_unix_ms": 1893456000000,
+                "scopes": ["invoke"],
+            }
+        if ability == "credential.verify":
+            return {
+                "verified": True,
+                "credential_id": kwargs["credential_id"],
+                "device_ura": kwargs["device_ura"],
+                "hub_ura": kwargs["hub_ura"],
+                "method": "daemon-trust-store",
+            }
+        if ability == "session.create":
+            return {
+                "session_id": "dev-session-1",
+                "device_ura": kwargs["device_ura"],
+                "hub_ura": kwargs["hub_ura"],
+                "state": "active",
+                "session_kind": kwargs["session_kind"],
+                "created_unix_ms": 1767225600000,
+                "expires_unix_ms": kwargs["expires_unix_ms"],
+            }
+        if ability == "session.list":
+            return {
+                "sessions": [
+                    {
+                        "session_id": "dev-session-1",
+                        "device_ura": "easynet:///r/example/device/dev-a",
+                        "hub_ura": "easynet:///r/example/hub/main",
+                        "state": "active",
+                        "session_kind": "remote_desktop",
+                        "created_unix_ms": 1767225600000,
+                        "expires_unix_ms": 1893456000000,
+                    }
+                ]
+            }
+        if ability == "federation.revoke":
+            return {"state": "ok", "ack": True, "device_ura": kwargs["agent_ura"]}
+        if ability == "session.delete":
+            return {"state": "deleted", "ack": True}
         if ability == "mission.run":
             if "path" in kwargs:
                 return {

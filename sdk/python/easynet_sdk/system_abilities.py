@@ -15,6 +15,17 @@ class AdminSystemAbility(str, Enum):
     AGENT_LIST = "agent.list"
     AGENT_STOP = "agent.stop"
     AGENT_REFRESH = "agent.refresh"
+    GATEWAY_STATUS = "gateway.status"
+    SESSION_LIST = "session.list"
+    SESSION_CREATE = "session.create"
+    SESSION_DELETE = "session.delete"
+    HUB_JOIN = "hub.join"
+    HUB_LEAVE = "hub.leave"
+    PAIRING_PREFLIGHT = "pairing.preflight"
+    PAIRING_VALIDATE = "pairing.validate"
+    CREDENTIAL_VERIFY = "credential.verify"
+    PAIRING_CREATE = "pairing.create"
+    FEDERATION_REVOKE = "federation.revoke"
 
 
 class MissionSystemAbility(str, Enum):
