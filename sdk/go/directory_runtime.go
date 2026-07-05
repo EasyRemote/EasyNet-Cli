@@ -352,6 +352,9 @@ func projectDirectoryResolvedRef(raw []byte, sourceAbility string) ([]byte, erro
 		answer = nested
 	}
 	answerKind := firstStringFromMap(answer, "answerKind", "answer_kind")
+	if answerKind == "" && firstValue(answer, "negative") != nil {
+		answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"
+	}
 	if answerKind == "" {
 		return nil, invalidProfilePayload(directoryIdentityProfile, "directory resolve answer_kind is required", nil)
 	}
