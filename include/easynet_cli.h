@@ -765,6 +765,42 @@ int32_t easynet_admin_build_session_delete_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_admin_build_hub_join_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_hub_leave_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_pairing_preflight_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_pairing_create_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_pairing_validate_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_admin_build_credential_verify_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_admin_build_revoke_device_invocation(
     EasynetHandle handle,
     const char *request_json,
@@ -784,6 +820,36 @@ int32_t easynet_admin_project_agent_records(
 );
 
 int32_t easynet_admin_project_agent_lifecycle_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
+int32_t easynet_admin_project_hub_lifecycle_result(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
+int32_t easynet_admin_project_pairing_preflight(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
+int32_t easynet_admin_project_pairing_token(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
+int32_t easynet_admin_project_device_credential(
+    EasynetHandle handle,
+    const char *result_json,
+    char **out_result_json
+);
+
+int32_t easynet_admin_project_device_credential_verification(
     EasynetHandle handle,
     const char *result_json,
     char **out_result_json

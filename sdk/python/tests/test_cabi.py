@@ -481,6 +481,47 @@ class FakeRawCABI:
                 "ack": True,
                 "device_ura": "easynet:///r/example/device/dev-a",
             }
+        if system_ability in {"hub.join", "hub.leave"}:
+            return {
+                "ack": True,
+                "hub_ura": "easynet:///r/example/hub/main",
+                "device_ura": "easynet:///r/example/device/dev-a",
+            }
+        if system_ability == "pairing.preflight":
+            return {
+                "state": "ready",
+                "hub_ura": "easynet:///r/example/hub/main",
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "pairing_required": True,
+                "trust_ready": False,
+                "scopes": ["invoke"],
+            }
+        if system_ability == "pairing.create":
+            return {
+                "token_id": "pair-token-1",
+                "token": "pair-token-value",
+                "hub_ura": "easynet:///r/example/hub/main",
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "expires_unix_ms": 1893456000000,
+                "scopes": ["invoke"],
+            }
+        if system_ability == "pairing.validate":
+            return {
+                "credential_id": "cred-dev-a",
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "hub_ura": "easynet:///r/example/hub/main",
+                "issued_unix_ms": 1767225600000,
+                "expires_unix_ms": 1893456000000,
+                "scopes": ["invoke"],
+            }
+        if system_ability == "credential.verify":
+            return {
+                "verified": True,
+                "credential_id": "cred-dev-a",
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "hub_ura": "easynet:///r/example/hub/main",
+                "method": "daemon_trust_store",
+            }
         if system_ability == "mission.events":
             return {
                 "has_more": False,
@@ -1044,6 +1085,18 @@ class FakeRawCABI:
             return ADMIN_SESSION_CREATE_INVOCATION
         if symbol == "easynet_admin_build_session_delete_invocation":
             return ADMIN_SESSION_DELETE_INVOCATION
+        if symbol == "easynet_admin_build_hub_join_invocation":
+            return ADMIN_HUB_JOIN_INVOCATION
+        if symbol == "easynet_admin_build_hub_leave_invocation":
+            return ADMIN_HUB_LEAVE_INVOCATION
+        if symbol == "easynet_admin_build_pairing_preflight_invocation":
+            return ADMIN_PAIRING_PREFLIGHT_INVOCATION
+        if symbol == "easynet_admin_build_pairing_create_invocation":
+            return ADMIN_PAIRING_CREATE_INVOCATION
+        if symbol == "easynet_admin_build_pairing_validate_invocation":
+            return ADMIN_PAIRING_VALIDATE_INVOCATION
+        if symbol == "easynet_admin_build_credential_verify_invocation":
+            return ADMIN_CREDENTIAL_VERIFY_INVOCATION
         if symbol == "easynet_admin_build_revoke_device_invocation":
             return ADMIN_REVOKE_DEVICE_INVOCATION
         if symbol in {
@@ -1147,6 +1200,16 @@ class FakeRawCABI:
             if isinstance(request, dict) and "agent_ura" in request:
                 return ADMIN_START_RESULT_PROJECTION
             return ADMIN_STOP_RESULT_PROJECTION
+        if symbol == "easynet_admin_project_hub_lifecycle_result":
+            return ADMIN_HUB_RESULT_PROJECTION
+        if symbol == "easynet_admin_project_pairing_preflight":
+            return ADMIN_PAIRING_PREFLIGHT_PROJECTION
+        if symbol == "easynet_admin_project_pairing_token":
+            return ADMIN_PAIRING_TOKEN_PROJECTION
+        if symbol == "easynet_admin_project_device_credential":
+            return ADMIN_DEVICE_CREDENTIAL_PROJECTION
+        if symbol == "easynet_admin_project_device_credential_verification":
+            return ADMIN_CREDENTIAL_VERIFICATION_PROJECTION
         if symbol == "easynet_admin_project_device_session_page":
             return ADMIN_DEVICE_SESSION_PAGE_PROJECTION
         if symbol == "easynet_admin_project_device_session_result":
@@ -1936,6 +1999,91 @@ ADMIN_SESSION_DELETE_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+ADMIN_HUB_JOIN_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.hub.join@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"hub_ura":"easynet:///r/example/hub/main",'
+    b'"device_ura":"easynet:///r/example/device/dev-a"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"hub.join",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_HUB_LEAVE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.hub.leave@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"hub_ura":"easynet:///r/example/hub/main","reason":"rotation"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"hub.leave",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_PAIRING_PREFLIGHT_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.pairing.preflight@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"hub_ura":"easynet:///r/example/hub/main",'
+    b'"device_ura":"easynet:///r/example/device/dev-a","requested_scopes":["invoke"]},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"pairing.preflight",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_PAIRING_CREATE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.pairing.create@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"hub_ura":"easynet:///r/example/hub/main",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"expires_unix_ms":1893456000000},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"pairing.create",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_PAIRING_VALIDATE_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.pairing.validate@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"token":"pair-token-value",'
+    b'"device_ura":"easynet:///r/example/device/dev-a"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"pairing.validate",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+ADMIN_CREDENTIAL_VERIFY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.credential.verify@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"credential_id":"cred-dev-a",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"hub_ura":"easynet:///r/example/hub/main"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"admin_gateway","system_ability":"credential.verify",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 ADMIN_REVOKE_DEVICE_INVOCATION = (
     b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
     b'"callee_ura":"easynet:///r/example/device/dev-a",'
@@ -2039,6 +2187,52 @@ ADMIN_REFRESH_RESULT_PROJECTION = (
     b'"operation":"agent.refresh","state":"ok","agent_ura":null,'
     b'"ack":null,"runtime_not_ready":false,'
     b'"runtime_catalog_not_ready":false,"metadata":{}}'
+)
+
+ADMIN_HUB_RESULT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"admin_result",'
+    b'"operation":"hub.join","state":"ok","agent_ura":null,'
+    b'"device_ura":"easynet:///r/example/device/dev-a","ack":true,'
+    b'"runtime_not_ready":false,"runtime_catalog_not_ready":false,'
+    b'"metadata":{"profile":"admin_gateway","source":"hub.join",'
+    b'"hub_ura":"easynet:///r/example/hub/main"}}'
+)
+
+ADMIN_PAIRING_PREFLIGHT_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"pairing_preflight","state":"ready",'
+    b'"hub_ura":"easynet:///r/example/hub/main",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"pairing_required":true,"trust_ready":false,"scopes":["invoke"],'
+    b'"metadata":{"profile":"admin_gateway","source":"pairing.preflight"}}'
+)
+
+ADMIN_PAIRING_TOKEN_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"pairing_token",'
+    b'"token_id":"pair-token-1","token":"pair-token-value",'
+    b'"hub_ura":"easynet:///r/example/hub/main",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"state":"issued","expires_unix_ms":1893456000000,'
+    b'"scopes":["invoke"],'
+    b'"metadata":{"profile":"admin_gateway","source":"pairing.create"}}'
+)
+
+ADMIN_DEVICE_CREDENTIAL_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"device_credential",'
+    b'"credential_id":"cred-dev-a",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"hub_ura":"easynet:///r/example/hub/main","state":"active",'
+    b'"issued_unix_ms":1767225600000,"expires_unix_ms":1893456000000,'
+    b'"scopes":["invoke"],'
+    b'"metadata":{"profile":"admin_gateway","source":"pairing.validate"}}'
+)
+
+ADMIN_CREDENTIAL_VERIFICATION_PROJECTION = (
+    b'{"profile":"admin_gateway","kind":"device_credential_verification",'
+    b'"verified":true,"credential_id":"cred-dev-a",'
+    b'"device_ura":"easynet:///r/example/device/dev-a",'
+    b'"hub_ura":"easynet:///r/example/hub/main",'
+    b'"method":"daemon_trust_store",'
+    b'"metadata":{"profile":"admin_gateway","source":"credential.verify"}}'
 )
 
 SURFACE_LIST_PAGES_INVOCATION = (
@@ -3818,7 +4012,7 @@ class CABITransportTests(unittest.TestCase):
                 reason="operator\nrotation",
             ).to_json_bytes()
 
-    def test_admin_trust_mutations_report_daemon_contract_boundary(self) -> None:
+    def test_admin_trust_mutations_use_carrier_invoke_and_projection(self) -> None:
         raw = FakeRawCABI()
         lib = CLILibrary(raw)
         client = AdminClient(CABIAdminTransport(lib, handle=7))
@@ -3833,64 +4027,58 @@ class CABITransportTests(unittest.TestCase):
         hub = "easynet:///r/example/hub/main"
         device = "easynet:///r/example/device/dev-a"
 
-        cases = [
-            (
-                "hub lifecycle",
-                lambda: client.join_hub(AdminJoinHubRequest(base, hub, device)),
-                "requires a daemon/ABI hub lifecycle contract",
-                "gateway readiness projections cannot be projected",
-            ),
-            (
-                "leave hub",
-                lambda: client.leave_hub(AdminLeaveHubRequest(base, hub, "rotation")),
-                "requires a daemon/ABI hub lifecycle contract",
-                "gateway readiness projections cannot be projected",
-            ),
-            (
-                "pairing preflight",
-                lambda: client.pairing_preflight(
-                    PairingPreflightRequest(base, hub, device, ("invoke",))
-                ),
-                "requires a daemon/ABI pairing and device-credential lifecycle contract",
-                "cannot be projected into trust mutation semantics",
-            ),
-            (
-                "pairing create",
-                lambda: client.create_pairing(
-                    CreatePairingRequest(base, hub, device, 1_893_456_000_000)
-                ),
-                "requires a daemon/ABI pairing and device-credential lifecycle contract",
-                "cannot be projected into trust mutation semantics",
-            ),
-            (
-                "pairing validate",
-                lambda: client.validate_pairing(
-                    ValidatePairingRequest(base, "pair-token-value", device)
-                ),
-                "requires a daemon/ABI pairing and device-credential lifecycle contract",
-                "cannot be projected into trust mutation semantics",
-            ),
-            (
-                "credential verify",
-                lambda: client.verify_device_credential(
-                    VerifyDeviceCredentialRequest(base, "cred-dev-a", device, hub)
-                ),
-                "requires a daemon/ABI pairing and device-credential lifecycle contract",
-                "cannot be projected into trust mutation semantics",
-            ),
-        ]
+        joined = client.join_hub(AdminJoinHubRequest(base, hub, device))
+        left = client.leave_hub(AdminLeaveHubRequest(base, hub, "rotation"))
+        preflight = client.pairing_preflight(
+            PairingPreflightRequest(base, hub, device, ("invoke",))
+        )
+        token = client.create_pairing(
+            CreatePairingRequest(base, hub, device, 1_893_456_000_000)
+        )
+        credential = client.validate_pairing(
+            ValidatePairingRequest(base, "pair-token-value", device)
+        )
+        verified = client.verify_device_credential(
+            VerifyDeviceCredentialRequest(base, "cred-dev-a", device, hub)
+        )
 
-        for name, operation, expected, detail in cases:
-            with self.subTest(name=name):
-                with self.assertRaises(SDKError) as caught:
-                    operation()
-                self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-                self.assertEqual(caught.exception.stage, "cabi")
-                self.assertIn(expected, caught.exception.message)
-                self.assertIn(detail, caught.exception.message)
-
-        self.assertEqual(raw.profile_requests, [])
-        self.assertEqual(raw.runtime_requests, [])
+        self.assertEqual(joined.state, "ok")
+        self.assertEqual(left.state, "ok")
+        self.assertTrue(preflight.pairing_required)
+        self.assertEqual(token.token_id, "pair-token-1")
+        self.assertEqual(credential.credential_id, "cred-dev-a")
+        self.assertTrue(verified.verified)
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_admin_build_hub_join_invocation",
+                "easynet_admin_project_hub_lifecycle_result",
+                "easynet_admin_build_hub_leave_invocation",
+                "easynet_admin_project_hub_lifecycle_result",
+                "easynet_admin_build_pairing_preflight_invocation",
+                "easynet_admin_project_pairing_preflight",
+                "easynet_admin_build_pairing_create_invocation",
+                "easynet_admin_project_pairing_token",
+                "easynet_admin_build_pairing_validate_invocation",
+                "easynet_admin_project_device_credential",
+                "easynet_admin_build_credential_verify_invocation",
+                "easynet_admin_project_device_credential_verification",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            [
+                "hub.join",
+                "hub.leave",
+                "pairing.preflight",
+                "pairing.create",
+                "pairing.validate",
+                "credential.verify",
+            ],
+        )
+        self.assertEqual(raw.profile_requests[1][2]["operation"], "hub.join")
+        self.assertEqual(raw.profile_requests[5][2]["result"]["scopes"], ["invoke"])
+        self.assertEqual(raw.profile_requests[11][2]["credential_id"], "cred-dev-a")
         self.assertEqual(raw.buffers, {})
 
     def test_admin_gateway_status_uses_daemon_lifecycle_status_projection(self) -> None:

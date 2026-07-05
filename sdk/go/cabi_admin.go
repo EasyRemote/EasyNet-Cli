@@ -70,35 +70,45 @@ import (
 )
 
 type cabiAdminSymbols struct {
-	abiVersion                   unsafe.Pointer
-	lastErrorJSON                unsafe.Pointer
-	stringFree                   unsafe.Pointer
-	init                         unsafe.Pointer
-	shutdown                     unsafe.Pointer
-	daemonAttach                 unsafe.Pointer
-	daemonDetach                 unsafe.Pointer
-	daemonStatus                 unsafe.Pointer
-	invocationInvoke             unsafe.Pointer
-	buildAgentListInvocation     unsafe.Pointer
-	buildAgentStartInvocation    unsafe.Pointer
-	buildAgentStopInvocation     unsafe.Pointer
-	buildAgentRefreshInvocation  unsafe.Pointer
-	buildSessionListInvocation   unsafe.Pointer
-	buildSessionCreateInvocation unsafe.Pointer
-	buildSessionDeleteInvocation unsafe.Pointer
-	buildRevokeDeviceInvocation  unsafe.Pointer
-	projectGatewayStatus         unsafe.Pointer
-	projectAgentRecords          unsafe.Pointer
-	projectAgentLifecycleResult  unsafe.Pointer
-	projectDeviceSessionPage     unsafe.Pointer
-	projectDeviceSessionResult   unsafe.Pointer
-	projectDeviceAdminResult     unsafe.Pointer
+	abiVersion                    unsafe.Pointer
+	lastErrorJSON                 unsafe.Pointer
+	stringFree                    unsafe.Pointer
+	init                          unsafe.Pointer
+	shutdown                      unsafe.Pointer
+	daemonAttach                  unsafe.Pointer
+	daemonDetach                  unsafe.Pointer
+	daemonStatus                  unsafe.Pointer
+	invocationInvoke              unsafe.Pointer
+	buildAgentListInvocation      unsafe.Pointer
+	buildAgentStartInvocation     unsafe.Pointer
+	buildAgentStopInvocation      unsafe.Pointer
+	buildAgentRefreshInvocation   unsafe.Pointer
+	buildSessionListInvocation    unsafe.Pointer
+	buildSessionCreateInvocation  unsafe.Pointer
+	buildSessionDeleteInvocation  unsafe.Pointer
+	buildHubJoinInvocation        unsafe.Pointer
+	buildHubLeaveInvocation       unsafe.Pointer
+	buildPairingPreflight         unsafe.Pointer
+	buildPairingCreate            unsafe.Pointer
+	buildPairingValidate          unsafe.Pointer
+	buildCredentialVerify         unsafe.Pointer
+	buildRevokeDeviceInvocation   unsafe.Pointer
+	projectGatewayStatus          unsafe.Pointer
+	projectAgentRecords           unsafe.Pointer
+	projectAgentLifecycleResult   unsafe.Pointer
+	projectHubLifecycleResult     unsafe.Pointer
+	projectPairingPreflight       unsafe.Pointer
+	projectPairingToken           unsafe.Pointer
+	projectDeviceCredential       unsafe.Pointer
+	projectCredentialVerification unsafe.Pointer
+	projectDeviceSessionPage      unsafe.Pointer
+	projectDeviceSessionResult    unsafe.Pointer
+	projectDeviceAdminResult      unsafe.Pointer
 }
 
 // CABIAdminTransport is an optional Admin + Gateway profile transport over
 // libeasynet_cli. It delegates exported admin carriers and projections to the
-// Rust-owned daemon SDK contract while leaving unexported trust/pairing
-// operations explicitly unsupported.
+// Rust-owned daemon SDK contract.
 type CABIAdminTransport struct {
 	mu      sync.Mutex
 	library unsafe.Pointer
@@ -224,28 +234,52 @@ func (t *CABIAdminTransport) ListDeviceSessions(ctx context.Context, requestJSON
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildSessionListInvocation, t.symbols.projectDeviceSessionPage, "C ABI admin list device sessions failed")
 }
 
-func (t *CABIAdminTransport) JoinHub(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin join hub carrier is not exported yet")
+func (t *CABIAdminTransport) JoinHub(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[AdminJoinHubRequest](requestJSON, validateAdminJoinHubRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectHubLifecycle(ctx, requestJSON, t.symbols.buildHubJoinInvocation, adminAbilityHubJoin, request.HubURA, request.DeviceURA, "C ABI admin join hub failed")
 }
 
-func (t *CABIAdminTransport) LeaveHub(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin leave hub carrier is not exported yet")
+func (t *CABIAdminTransport) LeaveHub(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[AdminLeaveHubRequest](requestJSON, validateAdminLeaveHubRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectHubLifecycle(ctx, requestJSON, t.symbols.buildHubLeaveInvocation, adminAbilityHubLeave, request.HubURA, "", "C ABI admin leave hub failed")
 }
 
-func (t *CABIAdminTransport) PairingPreflight(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin pairing preflight carrier is not exported yet")
+func (t *CABIAdminTransport) PairingPreflight(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[PairingPreflightRequest](requestJSON, validatePairingPreflightRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectPairing(ctx, requestJSON, t.symbols.buildPairingPreflight, t.symbols.projectPairingPreflight, adminPairingPreflightProjectionInput(request), "C ABI admin pairing preflight failed")
 }
 
-func (t *CABIAdminTransport) ValidatePairing(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin validate pairing carrier is not exported yet")
+func (t *CABIAdminTransport) ValidatePairing(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[ValidatePairingRequest](requestJSON, validatePairingValidationRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectPairing(ctx, requestJSON, t.symbols.buildPairingValidate, t.symbols.projectDeviceCredential, adminPairingValidateProjectionInput(request), "C ABI admin validate pairing failed")
 }
 
-func (t *CABIAdminTransport) VerifyDeviceCredential(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin verify device credential carrier is not exported yet")
+func (t *CABIAdminTransport) VerifyDeviceCredential(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[VerifyDeviceCredentialRequest](requestJSON, validateDeviceCredentialVerificationRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectPairing(ctx, requestJSON, t.symbols.buildCredentialVerify, t.symbols.projectCredentialVerification, adminCredentialVerifyProjectionInput(request), "C ABI admin verify device credential failed")
 }
 
-func (t *CABIAdminTransport) CreatePairing(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "C ABI admin create pairing carrier is not exported yet")
+func (t *CABIAdminTransport) CreatePairing(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[CreatePairingRequest](requestJSON, validateCreatePairingRequest)
+	if err != nil {
+		return nil, err
+	}
+	return t.invokeAndProjectPairing(ctx, requestJSON, t.symbols.buildPairingCreate, t.symbols.projectPairingToken, adminPairingCreateProjectionInput(request), "C ABI admin create pairing failed")
 }
 
 func (t *CABIAdminTransport) RevokeDevice(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -392,6 +426,48 @@ func (t *CABIAdminTransport) invokeAndProjectDeviceAdmin(ctx context.Context, re
 	return t.callJSON(handle, projectSymbol, projectionInput, fallback)
 }
 
+func (t *CABIAdminTransport) invokeAndProjectHubLifecycle(ctx context.Context, requestJSON []byte, buildSymbol unsafe.Pointer, operation string, hubURA string, deviceURA string, fallback string) ([]byte, error) {
+	return t.invokeAndProjectPairing(ctx, requestJSON, buildSymbol, t.symbols.projectHubLifecycleResult, func(outputJSON []byte) ([]byte, error) {
+		var result map[string]any
+		if err := json.Unmarshal(outputJSON, &result); err != nil {
+			return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode admin hub lifecycle output JSON: %v", err), err)
+		}
+		projection := map[string]any{
+			"operation": operation,
+			"hub_ura":   hubURA,
+			"result":    result,
+		}
+		if deviceURA != "" {
+			projection["device_ura"] = deviceURA
+		}
+		return json.Marshal(projection)
+	}, fallback)
+}
+
+func (t *CABIAdminTransport) invokeAndProjectPairing(ctx context.Context, requestJSON []byte, buildSymbol unsafe.Pointer, projectSymbol unsafe.Pointer, projectionInput func([]byte) ([]byte, error), fallback string) ([]byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, buildSymbol, requestJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := t.invoke(handle, draftJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	outputJSON, err := outputJSONFromProfileInvocationResult(resultJSON, adminGatewayProfile)
+	if err != nil {
+		return nil, err
+	}
+	projectionJSON, err := projectionInput(outputJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, projectSymbol, projectionJSON, fallback)
+}
+
 func adminDeviceAdminProjectionInput(outputJSON []byte, operation string, deviceURA string) ([]byte, error) {
 	var result map[string]any
 	if err := json.Unmarshal(outputJSON, &result); err != nil {
@@ -406,6 +482,58 @@ func adminDeviceAdminProjectionInput(outputJSON []byte, operation string, device
 	}
 	if deviceURA != "" {
 		projection["device_ura"] = deviceURA
+	}
+	return json.Marshal(projection)
+}
+
+func adminPairingPreflightProjectionInput(request PairingPreflightRequest) func([]byte) ([]byte, error) {
+	return func(outputJSON []byte) ([]byte, error) {
+		return adminProjectionInputWithRequest(outputJSON, map[string]any{
+			"hub_ura":    request.HubURA,
+			"device_ura": request.DeviceURA,
+		}, "pairing preflight")
+	}
+}
+
+func adminPairingCreateProjectionInput(request CreatePairingRequest) func([]byte) ([]byte, error) {
+	return func(outputJSON []byte) ([]byte, error) {
+		return adminProjectionInputWithRequest(outputJSON, map[string]any{
+			"hub_ura":         request.HubURA,
+			"device_ura":      request.DeviceURA,
+			"expires_unix_ms": request.ExpiresUnixMS,
+		}, "pairing create")
+	}
+}
+
+func adminPairingValidateProjectionInput(request ValidatePairingRequest) func([]byte) ([]byte, error) {
+	return func(outputJSON []byte) ([]byte, error) {
+		return adminProjectionInputWithRequest(outputJSON, map[string]any{
+			"device_ura": request.DeviceURA,
+		}, "pairing validate")
+	}
+}
+
+func adminCredentialVerifyProjectionInput(request VerifyDeviceCredentialRequest) func([]byte) ([]byte, error) {
+	return func(outputJSON []byte) ([]byte, error) {
+		return adminProjectionInputWithRequest(outputJSON, map[string]any{
+			"credential_id": request.CredentialID,
+			"device_ura":    request.DeviceURA,
+			"hub_ura":       request.HubURA,
+		}, "credential verify")
+	}
+}
+
+func adminProjectionInputWithRequest(outputJSON []byte, request map[string]any, label string) ([]byte, error) {
+	var result map[string]any
+	if err := json.Unmarshal(outputJSON, &result); err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("decode admin %s output JSON: %v", label, err), err)
+	}
+	if result == nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("admin %s output must be an object", label), nil)
+	}
+	projection := map[string]any{"result": result}
+	for key, value := range request {
+		projection[key] = value
 	}
 	return json.Marshal(projection)
 }
@@ -517,10 +645,21 @@ func bindCABIAdminSymbols(library unsafe.Pointer) (cabiAdminSymbols, error) {
 		{"easynet_admin_build_session_list_invocation", &symbols.buildSessionListInvocation},
 		{"easynet_admin_build_session_create_invocation", &symbols.buildSessionCreateInvocation},
 		{"easynet_admin_build_session_delete_invocation", &symbols.buildSessionDeleteInvocation},
+		{"easynet_admin_build_hub_join_invocation", &symbols.buildHubJoinInvocation},
+		{"easynet_admin_build_hub_leave_invocation", &symbols.buildHubLeaveInvocation},
+		{"easynet_admin_build_pairing_preflight_invocation", &symbols.buildPairingPreflight},
+		{"easynet_admin_build_pairing_create_invocation", &symbols.buildPairingCreate},
+		{"easynet_admin_build_pairing_validate_invocation", &symbols.buildPairingValidate},
+		{"easynet_admin_build_credential_verify_invocation", &symbols.buildCredentialVerify},
 		{"easynet_admin_build_revoke_device_invocation", &symbols.buildRevokeDeviceInvocation},
 		{"easynet_admin_project_gateway_status", &symbols.projectGatewayStatus},
 		{"easynet_admin_project_agent_records", &symbols.projectAgentRecords},
 		{"easynet_admin_project_agent_lifecycle_result", &symbols.projectAgentLifecycleResult},
+		{"easynet_admin_project_hub_lifecycle_result", &symbols.projectHubLifecycleResult},
+		{"easynet_admin_project_pairing_preflight", &symbols.projectPairingPreflight},
+		{"easynet_admin_project_pairing_token", &symbols.projectPairingToken},
+		{"easynet_admin_project_device_credential", &symbols.projectDeviceCredential},
+		{"easynet_admin_project_device_credential_verification", &symbols.projectCredentialVerification},
 		{"easynet_admin_project_device_session_page", &symbols.projectDeviceSessionPage},
 		{"easynet_admin_project_device_session_result", &symbols.projectDeviceSessionResult},
 		{"easynet_admin_project_device_admin_result", &symbols.projectDeviceAdminResult},

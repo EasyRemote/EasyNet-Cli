@@ -39,7 +39,8 @@ use crate::daemon::agent_record_contract;
 use crate::daemon::persistence::agent_registry::AgentType;
 use crate::daemon::sdk_contract::{
     build_system_invocation, first_optional_string_field, object, optional_bool_field,
-    optional_string_field, required_string, validate_ura, SdkContractError,
+    optional_string_array_field, optional_string_field, required_string, validate_ura,
+    SdkContractError,
 };
 
 const ADMIN_PROFILE: &str = "admin_gateway";
@@ -50,6 +51,12 @@ const ABILITY_AGENT_REFRESH: &str = crate::daemon::ability::names::agents::AGENT
 const ABILITY_SESSION_LIST: &str = crate::daemon::ability::names::device_control::SESSION_LIST;
 const ABILITY_SESSION_CREATE: &str = "session.create";
 const ABILITY_SESSION_DELETE: &str = "session.delete";
+const ABILITY_HUB_JOIN: &str = "hub.join";
+const ABILITY_HUB_LEAVE: &str = "hub.leave";
+const ABILITY_PAIRING_PREFLIGHT: &str = "pairing.preflight";
+const ABILITY_PAIRING_CREATE: &str = "pairing.create";
+const ABILITY_PAIRING_VALIDATE: &str = "pairing.validate";
+const ABILITY_CREDENTIAL_VERIFY: &str = "credential.verify";
 const ABILITY_FEDERATION_REVOKE: &str = crate::daemon::ability::names::federation::REVOKE;
 
 pub(crate) type AdminGatewayError = SdkContractError;
@@ -113,6 +120,62 @@ pub(crate) fn build_session_delete_invocation(request: &Value) -> Result<Value, 
     let obj = object(request, "DeleteDeviceSessionRequest")?;
     let args = device_session_delete_args(obj)?;
     build_system_invocation(obj, ADMIN_PROFILE, ABILITY_SESSION_DELETE, args)
+}
+
+pub(crate) fn build_hub_join_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "AdminJoinHubRequest")?;
+    build_system_invocation(obj, ADMIN_PROFILE, ABILITY_HUB_JOIN, hub_join_args(obj)?)
+}
+
+pub(crate) fn build_hub_leave_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "AdminLeaveHubRequest")?;
+    build_system_invocation(obj, ADMIN_PROFILE, ABILITY_HUB_LEAVE, hub_leave_args(obj)?)
+}
+
+pub(crate) fn build_pairing_preflight_invocation(
+    request: &Value,
+) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "PairingPreflightRequest")?;
+    build_system_invocation(
+        obj,
+        ADMIN_PROFILE,
+        ABILITY_PAIRING_PREFLIGHT,
+        pairing_preflight_args(obj)?,
+    )
+}
+
+pub(crate) fn build_pairing_create_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "CreatePairingRequest")?;
+    build_system_invocation(
+        obj,
+        ADMIN_PROFILE,
+        ABILITY_PAIRING_CREATE,
+        pairing_create_args(obj)?,
+    )
+}
+
+pub(crate) fn build_pairing_validate_invocation(
+    request: &Value,
+) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "ValidatePairingRequest")?;
+    build_system_invocation(
+        obj,
+        ADMIN_PROFILE,
+        ABILITY_PAIRING_VALIDATE,
+        pairing_validate_args(obj)?,
+    )
+}
+
+pub(crate) fn build_credential_verify_invocation(
+    request: &Value,
+) -> Result<Value, AdminGatewayError> {
+    let obj = object(request, "VerifyDeviceCredentialRequest")?;
+    build_system_invocation(
+        obj,
+        ADMIN_PROFILE,
+        ABILITY_CREDENTIAL_VERIFY,
+        credential_verify_args(obj)?,
+    )
 }
 
 pub(crate) fn build_revoke_device_invocation(request: &Value) -> Result<Value, AdminGatewayError> {
@@ -419,6 +482,207 @@ pub(crate) fn project_device_session_result(input: &Value) -> Result<Value, Admi
     Ok(session)
 }
 
+pub(crate) fn project_hub_lifecycle_result(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "HubLifecycleResultInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "HubLifecycleResult")?;
+    let operation = optional_string_field(obj, "operation")?
+        .or_else(|| {
+            optional_string_field(result_obj, "operation")
+                .ok()
+                .flatten()
+        })
+        .ok_or(AdminGatewayError::MissingField("operation"))?;
+    let ack = result_obj
+        .get("ack")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let state = if optional_bool_value(result_obj, "runtime_not_ready").unwrap_or(false)
+        || optional_bool_value(result_obj, "runtime_catalog_not_ready").unwrap_or(false)
+    {
+        "not_ready"
+    } else if ack {
+        "ok"
+    } else {
+        "not_found"
+    };
+    let device_ura = optional_string_field(obj, "device_ura")?.or_else(|| {
+        optional_string_field(result_obj, "device_ura")
+            .ok()
+            .flatten()
+    });
+    if let Some(device_ura) = device_ura.as_deref() {
+        validate_device_ura(device_ura)?;
+    }
+    let hub_ura = optional_string_field(obj, "hub_ura")?
+        .or_else(|| optional_string_field(result_obj, "hub_ura").ok().flatten());
+    if let Some(hub_ura) = hub_ura.as_deref() {
+        validate_hub_ura(hub_ura)?;
+    }
+
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "admin_result",
+        "operation": operation,
+        "state": state,
+        "agent_ura": Value::Null,
+        "device_ura": device_ura,
+        "ack": ack,
+        "runtime_not_ready": optional_bool_value(result_obj, "runtime_not_ready").unwrap_or(false),
+        "runtime_catalog_not_ready": optional_bool_value(result_obj, "runtime_catalog_not_ready").unwrap_or(false),
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": operation,
+            "hub_ura": hub_ura,
+            "raw_result": result,
+        },
+    }))
+}
+
+pub(crate) fn project_pairing_preflight(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "PairingPreflightInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "PairingPreflightResult")?;
+    let hub_ura = required_context_ura(obj, result_obj, "hub_ura", validate_hub_ura)?;
+    let device_ura = required_context_ura(obj, result_obj, "device_ura", validate_device_ura)?;
+    let scopes = string_array_from_first(
+        result_obj,
+        &["scopes", "requested_scopes", "granted_scopes"],
+    )?;
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "pairing_preflight",
+        "state": first_optional_string_field(result_obj, "state", "status")?.unwrap_or_else(|| "unknown".to_string()),
+        "hub_ura": hub_ura,
+        "device_ura": device_ura,
+        "pairing_required": optional_bool_value(result_obj, "pairing_required").unwrap_or(false),
+        "trust_ready": optional_bool_value(result_obj, "trust_ready").unwrap_or(false),
+        "scopes": scopes,
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": ABILITY_PAIRING_PREFLIGHT,
+            "raw_result": result,
+        },
+    }))
+}
+
+pub(crate) fn project_pairing_token(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "PairingTokenInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "PairingTokenResult")?;
+    let token_id = first_optional_string_field(result_obj, "token_id", "id")?
+        .ok_or(AdminGatewayError::MissingField("token_id"))?;
+    validate_admin_identifier(&token_id, "token_id")?;
+    let token = first_optional_string_field(result_obj, "token", "pairing_token")?
+        .ok_or(AdminGatewayError::MissingField("token"))?;
+    validate_admin_identifier(&token, "token")?;
+    let hub_ura = required_context_ura(obj, result_obj, "hub_ura", validate_hub_ura)?;
+    let device_ura = required_context_ura(obj, result_obj, "device_ura", validate_device_ura)?;
+    let expires_unix_ms = optional_u64(result_obj, "expires_unix_ms")
+        .or_else(|| optional_u64(result_obj, "expires_at_ms"))
+        .or_else(|| optional_u64(obj, "expires_unix_ms"))
+        .ok_or(AdminGatewayError::MissingField("expires_unix_ms"))?;
+    if expires_unix_ms == 0 {
+        return Err(AdminGatewayError::InvalidField(
+            "expires_unix_ms",
+            "must be positive".to_string(),
+        ));
+    }
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "pairing_token",
+        "token_id": token_id,
+        "token": token,
+        "hub_ura": hub_ura,
+        "device_ura": device_ura,
+        "state": first_optional_string_field(result_obj, "state", "status")?.unwrap_or_else(|| "issued".to_string()),
+        "expires_unix_ms": expires_unix_ms,
+        "scopes": string_array_from_first(result_obj, &["scopes", "granted_scopes"])?,
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": ABILITY_PAIRING_CREATE,
+            "raw_result": result,
+        },
+    }))
+}
+
+pub(crate) fn project_device_credential(input: &Value) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "DeviceCredentialInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "DeviceCredentialResult")?;
+    let credential_id = first_optional_string_field(result_obj, "credential_id", "id")?
+        .ok_or(AdminGatewayError::MissingField("credential_id"))?;
+    validate_admin_identifier(&credential_id, "credential_id")?;
+    let device_ura = required_context_ura(obj, result_obj, "device_ura", validate_device_ura)?;
+    let hub_ura = required_context_ura(obj, result_obj, "hub_ura", validate_hub_ura)?;
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "device_credential",
+        "credential_id": credential_id,
+        "device_ura": device_ura,
+        "hub_ura": hub_ura,
+        "state": first_optional_string_field(result_obj, "state", "status")?.unwrap_or_else(|| "active".to_string()),
+        "issued_unix_ms": optional_u64(result_obj, "issued_unix_ms")
+            .or_else(|| optional_u64(result_obj, "created_unix_ms"))
+            .unwrap_or(0),
+        "expires_unix_ms": optional_u64(result_obj, "expires_unix_ms")
+            .or_else(|| optional_u64(result_obj, "expires_at_ms"))
+            .unwrap_or(0),
+        "scopes": string_array_from_first(result_obj, &["scopes", "granted_scopes"])?,
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": ABILITY_PAIRING_VALIDATE,
+            "raw_result": result,
+        },
+    }))
+}
+
+pub(crate) fn project_device_credential_verification(
+    input: &Value,
+) -> Result<Value, AdminGatewayError> {
+    let obj = object(input, "DeviceCredentialVerificationInput")?;
+    let result = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "DeviceCredentialVerificationResult")?;
+    let credential_id = first_optional_string_field(result_obj, "credential_id", "id")?
+        .or_else(|| optional_string_field(obj, "credential_id").ok().flatten())
+        .ok_or(AdminGatewayError::MissingField("credential_id"))?;
+    validate_admin_identifier(&credential_id, "credential_id")?;
+    let device_ura = required_context_ura(obj, result_obj, "device_ura", validate_device_ura)?;
+    let hub_ura = required_context_ura(obj, result_obj, "hub_ura", validate_hub_ura)?;
+    let method = first_optional_string_field(result_obj, "method", "verification_method")?
+        .ok_or(AdminGatewayError::MissingField("method"))?;
+    validate_admin_identifier(&method, "method")?;
+    Ok(json!({
+        "profile": ADMIN_PROFILE,
+        "kind": "device_credential_verification",
+        "verified": optional_bool_value(result_obj, "verified").unwrap_or(false),
+        "credential_id": credential_id,
+        "device_ura": device_ura,
+        "hub_ura": hub_ura,
+        "method": method,
+        "metadata": {
+            "profile": ADMIN_PROFILE,
+            "source": ABILITY_CREDENTIAL_VERIFY,
+            "raw_result": result,
+        },
+    }))
+}
+
 fn project_device_session(input: &Value) -> Result<Value, AdminGatewayError> {
     let obj = object(input, "DeviceSession")?;
     let session_id = first_optional_string_field(obj, "session_id", "id")?
@@ -493,6 +757,99 @@ fn project_device_session(input: &Value) -> Result<Value, AdminGatewayError> {
         "created_unix_ms": created_unix_ms,
         "expires_unix_ms": expires_unix_ms,
         "metadata": metadata,
+    }))
+}
+
+fn hub_join_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let hub_ura = required_string(obj, "hub_ura")?;
+    validate_hub_ura(hub_ura)?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    Ok(json!({
+        "hub_ura": hub_ura,
+        "device_ura": device_ura,
+    }))
+}
+
+fn hub_leave_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let hub_ura = required_string(obj, "hub_ura")?;
+    validate_hub_ura(hub_ura)?;
+    let mut args = Map::new();
+    args.insert("hub_ura".to_string(), Value::String(hub_ura.to_string()));
+    if let Some(reason) = optional_string_field(obj, "reason")? {
+        validate_reason(&reason)?;
+        args.insert("reason".to_string(), Value::String(reason));
+    }
+    Ok(Value::Object(args))
+}
+
+fn pairing_preflight_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let hub_ura = required_string(obj, "hub_ura")?;
+    validate_hub_ura(hub_ura)?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    let mut args = Map::new();
+    args.insert("hub_ura".to_string(), Value::String(hub_ura.to_string()));
+    args.insert(
+        "device_ura".to_string(),
+        Value::String(device_ura.to_string()),
+    );
+    if let Some(scopes) = optional_string_array_field(obj, "requested_scopes")? {
+        validate_admin_scopes(&scopes, "requested_scopes")?;
+        args.insert(
+            "requested_scopes".to_string(),
+            Value::Array(scopes.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(Value::Object(args))
+}
+
+fn pairing_create_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let hub_ura = required_string(obj, "hub_ura")?;
+    validate_hub_ura(hub_ura)?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    let expires_unix_ms = optional_positive_u64_field(obj, "expires_unix_ms")?
+        .ok_or(AdminGatewayError::MissingField("expires_unix_ms"))?;
+    let mut args = Map::new();
+    args.insert("hub_ura".to_string(), Value::String(hub_ura.to_string()));
+    args.insert(
+        "device_ura".to_string(),
+        Value::String(device_ura.to_string()),
+    );
+    args.insert("expires_unix_ms".to_string(), json!(expires_unix_ms));
+    if let Some(scopes) = optional_string_array_field(obj, "scopes")? {
+        validate_admin_scopes(&scopes, "scopes")?;
+        args.insert(
+            "scopes".to_string(),
+            Value::Array(scopes.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(Value::Object(args))
+}
+
+fn pairing_validate_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let token = required_string(obj, "token")?;
+    validate_admin_identifier(token, "token")?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    Ok(json!({
+        "token": token,
+        "device_ura": device_ura,
+    }))
+}
+
+fn credential_verify_args(obj: &Map<String, Value>) -> Result<Value, AdminGatewayError> {
+    let credential_id = required_string(obj, "credential_id")?;
+    validate_admin_identifier(credential_id, "credential_id")?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura)?;
+    let hub_ura = required_string(obj, "hub_ura")?;
+    validate_hub_ura(hub_ura)?;
+    Ok(json!({
+        "credential_id": credential_id,
+        "device_ura": device_ura,
+        "hub_ura": hub_ura,
     }))
 }
 
@@ -798,6 +1155,39 @@ fn validate_admin_identifier(raw: &str, field: &'static str) -> Result<(), Admin
     Ok(())
 }
 
+fn validate_admin_scopes(scopes: &[String], field: &'static str) -> Result<(), AdminGatewayError> {
+    for scope in scopes {
+        validate_admin_identifier(scope, field)?;
+    }
+    Ok(())
+}
+
+fn required_context_ura(
+    request: &Map<String, Value>,
+    result: &Map<String, Value>,
+    field: &'static str,
+    validate: fn(&str) -> Result<(), AdminGatewayError>,
+) -> Result<String, AdminGatewayError> {
+    let value = optional_string_field(result, field)?
+        .or_else(|| optional_string_field(request, field).ok().flatten())
+        .ok_or(AdminGatewayError::MissingField(field))?;
+    validate(&value)?;
+    Ok(value)
+}
+
+fn string_array_from_first(
+    obj: &Map<String, Value>,
+    fields: &[&'static str],
+) -> Result<Vec<String>, AdminGatewayError> {
+    for field in fields {
+        if let Some(values) = optional_string_array_field(obj, field)? {
+            validate_admin_scopes(&values, field)?;
+            return Ok(values);
+        }
+    }
+    Ok(Vec::new())
+}
+
 fn validate_agent_name(raw: &str, field: &'static str) -> Result<(), AdminGatewayError> {
     if raw.trim().is_empty() {
         return Err(AdminGatewayError::InvalidField(
@@ -1048,6 +1438,44 @@ mod tests {
     }
 
     #[test]
+    fn build_pairing_preflight_invocation_projects_trust_args() {
+        let request = base_request(json!({
+            "hub_ura": "easynet:///r/example/hub/main",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "requested_scopes": ["invoke"]
+        }));
+
+        let carrier = build_pairing_preflight_invocation(&request).unwrap();
+
+        assert_eq!(
+            carrier["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.pairing.preflight@1.0.0"
+        );
+        assert_eq!(carrier["metadata"]["system_ability"], "pairing.preflight");
+        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(
+            carrier["args"]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(carrier["args"]["requested_scopes"][0], "invoke");
+    }
+
+    #[test]
+    fn build_credential_verify_invocation_projects_trust_args() {
+        let request = base_request(json!({
+            "credential_id": "cred-dev-a",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "hub_ura": "easynet:///r/example/hub/main"
+        }));
+
+        let carrier = build_credential_verify_invocation(&request).unwrap();
+
+        assert_eq!(carrier["metadata"]["system_ability"], "credential.verify");
+        assert_eq!(carrier["args"]["credential_id"], "cred-dev-a");
+        assert_eq!(carrier["args"]["hub_ura"], "easynet:///r/example/hub/main");
+    }
+
+    #[test]
     fn build_revoke_device_invocation_allows_reason_text() {
         let request = base_request(json!({
             "device_ura": "easynet:///r/example/device/dev-a",
@@ -1216,6 +1644,45 @@ mod tests {
         assert_eq!(projected["session_id"], "dev-session-1");
         assert_eq!(projected["device_ura"], "easynet:///r/example/device/dev-a");
         assert_eq!(projected["metadata"]["source"], "session.create");
+    }
+
+    #[test]
+    fn project_pairing_token_merges_request_context() {
+        let projected = project_pairing_token(&json!({
+            "hub_ura": "easynet:///r/example/hub/main",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "expires_unix_ms": 1893456000000i64,
+            "result": {
+                "token_id": "pair-1",
+                "token": "pair-token-1",
+                "scopes": ["invoke"]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(projected["kind"], "pairing_token");
+        assert_eq!(projected["token_id"], "pair-1");
+        assert_eq!(projected["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(projected["device_ura"], "easynet:///r/example/device/dev-a");
+        assert_eq!(projected["scopes"][0], "invoke");
+    }
+
+    #[test]
+    fn project_device_credential_verification_preserves_method() {
+        let projected = project_device_credential_verification(&json!({
+            "credential_id": "cred-dev-a",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "hub_ura": "easynet:///r/example/hub/main",
+            "result": {
+                "verified": true,
+                "method": "daemon_trust_store"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(projected["kind"], "device_credential_verification");
+        assert_eq!(projected["verified"], true);
+        assert_eq!(projected["method"], "daemon_trust_store");
     }
 
     #[test]

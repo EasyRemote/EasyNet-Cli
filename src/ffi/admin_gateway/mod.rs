@@ -31,10 +31,15 @@ use std::os::raw::c_char;
 
 use crate::daemon::admin_gateway_contract::{
     build_agent_list_invocation, build_agent_refresh_invocation, build_agent_start_invocation,
-    build_agent_stop_invocation, build_revoke_device_invocation, build_session_create_invocation,
+    build_agent_stop_invocation, build_credential_verify_invocation, build_hub_join_invocation,
+    build_hub_leave_invocation, build_pairing_create_invocation,
+    build_pairing_preflight_invocation, build_pairing_validate_invocation,
+    build_revoke_device_invocation, build_session_create_invocation,
     build_session_delete_invocation, build_session_list_invocation, project_agent_lifecycle_result,
-    project_agent_records, project_device_admin_result, project_device_session_page,
-    project_device_session_result, project_gateway_status, AdminGatewayError,
+    project_agent_records, project_device_admin_result, project_device_credential,
+    project_device_credential_verification, project_device_session_page,
+    project_device_session_result, project_gateway_status, project_hub_lifecycle_result,
+    project_pairing_preflight, project_pairing_token, AdminGatewayError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -193,6 +198,138 @@ pub unsafe extern "C" fn easynet_admin_build_session_delete_invocation(
     )
 }
 
+/// Build a complete Invocation JSON carrier for daemon `hub.join`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_hub_join_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_hub_join_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_hub_join_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `hub.leave`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_hub_leave_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_hub_leave_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_hub_leave_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `pairing.preflight`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_pairing_preflight_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_pairing_preflight_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_pairing_preflight_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `pairing.create`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_pairing_create_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_pairing_create_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_pairing_create_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `pairing.validate`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_pairing_validate_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_pairing_validate_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_pairing_validate_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `credential.verify`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_build_credential_verify_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_admin_build_credential_verify_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_credential_verify_invocation,
+    )
+}
+
 /// Build a complete Invocation JSON carrier for daemon `federation.revoke`.
 ///
 /// # Safety
@@ -278,6 +415,116 @@ pub unsafe extern "C" fn easynet_admin_project_agent_lifecycle_result(
         "out_result_json",
         "result_json",
         project_agent_lifecycle_result,
+    )
+}
+
+/// Project daemon hub lifecycle ability results into SDK Admin result DTOs.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_hub_lifecycle_result(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_admin_project_hub_lifecycle_result",
+        "out_result_json",
+        "result_json",
+        project_hub_lifecycle_result,
+    )
+}
+
+/// Project daemon pairing preflight results into SDK PairingPreflight DTOs.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_pairing_preflight(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_admin_project_pairing_preflight",
+        "out_result_json",
+        "result_json",
+        project_pairing_preflight,
+    )
+}
+
+/// Project daemon pairing-token results into SDK PairingToken DTOs.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_pairing_token(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_admin_project_pairing_token",
+        "out_result_json",
+        "result_json",
+        project_pairing_token,
+    )
+}
+
+/// Project daemon pairing validation results into SDK DeviceCredential DTOs.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_device_credential(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_admin_project_device_credential",
+        "out_result_json",
+        "result_json",
+        project_device_credential,
+    )
+}
+
+/// Project daemon credential verification into SDK VerificationResult DTOs.
+///
+/// # Safety
+/// `result_json` must be a valid UTF-8 C string and `out_result_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_admin_project_device_credential_verification(
+    handle: EasynetHandle,
+    result_json: *const c_char,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    project_admin_gateway_json(
+        handle,
+        result_json,
+        out_result_json,
+        "easynet_admin_project_device_credential_verification",
+        "out_result_json",
+        "result_json",
+        project_device_credential_verification,
     )
 }
 
@@ -571,6 +818,59 @@ mod tests {
         assert_eq!(value["kind"], "device_session");
         assert_eq!(value["session_id"], "dev-session-1");
         assert_eq!(value["metadata"]["source"], "session.create");
+        release(handle);
+    }
+
+    #[test]
+    fn admin_build_pairing_create_invocation_projects_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "hub_ura": "easynet:///r/example/hub/main",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "expires_unix_ms": 1893456000000i64,
+            "scopes": ["invoke"]
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_admin_build_pairing_create_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "pairing.create");
+        assert_eq!(value["args"]["hub_ura"], "easynet:///r/example/hub/main");
+        assert_eq!(value["args"]["scopes"][0], "invoke");
+        release(handle);
+    }
+
+    #[test]
+    fn admin_project_credential_verification_preserves_request_context() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "credential_id": "cred-dev-a",
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "hub_ura": "easynet:///r/example/hub/main",
+                "result": {
+                    "verified": true,
+                    "method": "daemon_trust_store"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_admin_project_device_credential_verification(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["kind"], "device_credential_verification");
+        assert_eq!(value["credential_id"], "cred-dev-a");
+        assert_eq!(value["method"], "daemon_trust_store");
         release(handle);
     }
 

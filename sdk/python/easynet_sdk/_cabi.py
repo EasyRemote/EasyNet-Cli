@@ -99,10 +99,21 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_admin_build_session_list_invocation",
     "easynet_admin_build_session_create_invocation",
     "easynet_admin_build_session_delete_invocation",
+    "easynet_admin_build_hub_join_invocation",
+    "easynet_admin_build_hub_leave_invocation",
+    "easynet_admin_build_pairing_preflight_invocation",
+    "easynet_admin_build_pairing_create_invocation",
+    "easynet_admin_build_pairing_validate_invocation",
+    "easynet_admin_build_credential_verify_invocation",
     "easynet_admin_build_revoke_device_invocation",
     "easynet_admin_project_gateway_status",
     "easynet_admin_project_agent_records",
     "easynet_admin_project_agent_lifecycle_result",
+    "easynet_admin_project_hub_lifecycle_result",
+    "easynet_admin_project_pairing_preflight",
+    "easynet_admin_project_pairing_token",
+    "easynet_admin_project_device_credential",
+    "easynet_admin_project_device_credential_verification",
     "easynet_admin_project_device_session_page",
     "easynet_admin_project_device_session_result",
     "easynet_admin_project_device_admin_result",
@@ -1473,22 +1484,52 @@ class CABIAdminTransport(_CABIProfileTransport):
         )
 
     def join_hub(self, request_json: bytes) -> bytes:
-        return self._missing_hub_lifecycle("admin join hub")
+        return self._invoke_hub_lifecycle(
+            request_json,
+            build_symbol="easynet_admin_build_hub_join_invocation",
+            operation="hub.join",
+            projection_keys=("hub_ura", "device_ura"),
+        )
 
     def leave_hub(self, request_json: bytes) -> bytes:
-        return self._missing_hub_lifecycle("admin leave hub")
+        return self._invoke_hub_lifecycle(
+            request_json,
+            build_symbol="easynet_admin_build_hub_leave_invocation",
+            operation="hub.leave",
+            projection_keys=("hub_ura",),
+        )
 
     def pairing_preflight(self, request_json: bytes) -> bytes:
-        return self._missing_pairing_lifecycle("admin pairing preflight")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_admin_build_pairing_preflight_invocation",
+            project_symbol="easynet_admin_project_pairing_preflight",
+            projection_keys=("hub_ura", "device_ura"),
+        )
 
     def validate_pairing(self, request_json: bytes) -> bytes:
-        return self._missing_pairing_lifecycle("admin validate pairing")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_admin_build_pairing_validate_invocation",
+            project_symbol="easynet_admin_project_device_credential",
+            projection_keys=("device_ura",),
+        )
 
     def verify_device_credential(self, request_json: bytes) -> bytes:
-        return self._missing_pairing_lifecycle("admin verify device credential")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_admin_build_credential_verify_invocation",
+            project_symbol="easynet_admin_project_device_credential_verification",
+            projection_keys=("credential_id", "device_ura", "hub_ura"),
+        )
 
     def create_pairing(self, request_json: bytes) -> bytes:
-        return self._missing_pairing_lifecycle("admin create pairing")
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_admin_build_pairing_create_invocation",
+            project_symbol="easynet_admin_project_pairing_token",
+            projection_keys=("hub_ura", "device_ura", "expires_unix_ms"),
+        )
 
     def revoke_device(self, request_json: bytes) -> bytes:
         request = _json_object(request_json, "admin revoke-device request")
@@ -1543,6 +1584,23 @@ class CABIAdminTransport(_CABIProfileTransport):
             "easynet_admin_project_agent_lifecycle_result", result_json
         )
 
+    def project_hub_lifecycle_result(self, result_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_hub_lifecycle_result", result_json)
+
+    def project_pairing_preflight(self, result_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_pairing_preflight", result_json)
+
+    def project_pairing_token(self, result_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_pairing_token", result_json)
+
+    def project_device_credential(self, result_json: bytes) -> bytes:
+        return self._call("easynet_admin_project_device_credential", result_json)
+
+    def project_device_credential_verification(self, result_json: bytes) -> bytes:
+        return self._call(
+            "easynet_admin_project_device_credential_verification", result_json
+        )
+
     def project_device_session_page(self, sessions_json: bytes) -> bytes:
         return self._call("easynet_admin_project_device_session_page", sessions_json)
 
@@ -1552,30 +1610,28 @@ class CABIAdminTransport(_CABIProfileTransport):
     def project_device_admin_result(self, result_json: bytes) -> bytes:
         return self._call("easynet_admin_project_device_admin_result", result_json)
 
-    def _missing_hub_lifecycle(self, method: str) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message=(
-                f"{method} requires a daemon/ABI hub lifecycle contract; "
-                "gateway readiness projections cannot be projected into join/leave "
-                "mutation semantics"
-            ),
-        )
-
-    def _missing_pairing_lifecycle(self, method: str) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message=(
-                f"{method} requires a daemon/ABI pairing and device-credential "
-                "lifecycle contract; session.list and gateway status read models "
-                "cannot be projected into trust mutation semantics"
-            ),
+    def _invoke_hub_lifecycle(
+        self,
+        request_json: bytes,
+        *,
+        build_symbol: str,
+        operation: str,
+        projection_keys: tuple[str, ...],
+    ) -> bytes:
+        handle = self._require_open()
+        output = self._invoke_output_json(handle, build_symbol, request_json)
+        projection = _json_object(request_json, "admin hub lifecycle request")
+        selected = {
+            key: projection[key]
+            for key in projection_keys
+            if key in projection and projection[key] is not None
+        }
+        selected["operation"] = operation
+        selected["result"] = output
+        return self.lib.json_handle_output(
+            "easynet_admin_project_hub_lifecycle_result",
+            handle,
+            _json_bytes(selected),
         )
 
 @dataclass

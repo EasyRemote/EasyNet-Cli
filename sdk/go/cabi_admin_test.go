@@ -120,6 +120,70 @@ func TestCABIAdminTransportBuildsInvokesAndProjects(t *testing.T) {
 		*revoked.DeviceURA != "easynet:///r/example/device/dev-a" {
 		t.Fatalf("revoke result = %#v", revoked)
 	}
+
+	left, err := client.LeaveHub(context.Background(), AdminLeaveHubRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		Reason:           "rotation",
+	})
+	if err != nil {
+		t.Fatalf("LeaveHub: %v", err)
+	}
+	if left.Operation != adminAbilityHubLeave {
+		t.Fatalf("leave result = %#v", left)
+	}
+
+	preflight, err := client.PairingPreflight(context.Background(), PairingPreflightRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		RequestedScopes:  []string{"invoke"},
+	})
+	if err != nil {
+		t.Fatalf("PairingPreflight: %v", err)
+	}
+	if !preflight.PairingRequired || preflight.HubURA != "easynet:///r/example/hub/main" {
+		t.Fatalf("preflight = %#v", preflight)
+	}
+
+	token, err := client.CreatePairing(context.Background(), CreatePairingRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		ExpiresUnixMS:    1893456000000,
+		Scopes:           []string{"invoke"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePairing: %v", err)
+	}
+	if token.TokenID != "pair-1" || token.Token == "" {
+		t.Fatalf("token = %#v", token)
+	}
+
+	credential, err := client.ValidatePairing(context.Background(), ValidatePairingRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		Token:            "pair-token-1",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("ValidatePairing: %v", err)
+	}
+	if credential.CredentialID != "cred-1" || credential.HubURA != "easynet:///r/example/hub/main" {
+		t.Fatalf("credential = %#v", credential)
+	}
+
+	verified, err := client.VerifyDeviceCredential(context.Background(), VerifyDeviceCredentialRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		CredentialID:     "cred-1",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+	})
+	if err != nil {
+		t.Fatalf("VerifyDeviceCredential: %v", err)
+	}
+	if !verified.Verified || verified.Method != "daemon" {
+		t.Fatalf("verification = %#v", verified)
+	}
 }
 
 func TestCABIAdminTransportProjectsGatewayAndReportsUnsupported(t *testing.T) {
@@ -148,12 +212,16 @@ func TestCABIAdminTransportProjectsGatewayAndReportsUnsupported(t *testing.T) {
 	if !gateway.Ready || gateway.GatewayID != "device:example:dev-a" {
 		t.Fatalf("gateway status = %#v", gateway)
 	}
-	if _, err := client.JoinHub(context.Background(), AdminJoinHubRequest{
+	join, err := client.JoinHub(context.Background(), AdminJoinHubRequest{
 		AdminCarrierBase: adminBaseForTest(),
 		HubURA:           "easynet:///r/example/hub/main",
 		DeviceURA:        "easynet:///r/example/device/dev-a",
-	}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("JoinHub error = %v, want %s", err, ErrNotImplemented)
+	})
+	if err != nil {
+		t.Fatalf("JoinHub: %v", err)
+	}
+	if join.Operation != adminAbilityHubJoin || join.DeviceURA == nil || *join.DeviceURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("join result = %#v", join)
 	}
 
 	if err := transport.Close(context.Background()); err != nil {
@@ -249,6 +317,30 @@ int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, 
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"device_ura\":\"easynet:///r/example/device/dev-a\"},\"error\":null}");
 		return 0;
 	}
+	if (strstr(invocation_json, "hub.join") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\"},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "hub.leave") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"hub_ura\":\"easynet:///r/example/hub/main\"},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "pairing.preflight") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"state\":\"ready\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"pairing_required\":true,\"trust_ready\":false,\"scopes\":[\"invoke\"]},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "pairing.create") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"token_id\":\"pair-1\",\"token\":\"pair-token-1\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"expires_unix_ms\":1893456000000,\"scopes\":[\"invoke\"]},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "pairing.validate") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"credential_id\":\"cred-1\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"state\":\"active\",\"issued_unix_ms\":1767225600000,\"expires_unix_ms\":1893456000000,\"scopes\":[\"invoke\"]},\"error\":null}");
+		return 0;
+	}
+	if (strstr(invocation_json, "credential.verify") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"verified\":true,\"credential_id\":\"cred-1\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"method\":\"daemon\"},\"error\":null}");
+		return 0;
+	}
 	if (strstr(invocation_json, "federation.revoke") != 0) {
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"ack\":true,\"was_active\":true},\"error\":null}");
 		return 0;
@@ -298,6 +390,38 @@ int32_t easynet_admin_build_session_delete_invocation(uint64_t handle, const cha
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.session.delete@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"session_id\":\"dev-session-1\",\"reason\":\"operator closed\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"session.delete\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
+int32_t easynet_admin_build_hub_join_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "hub/main") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.hub.join@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"hub.join\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_admin_build_hub_leave_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "hub/main") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.hub.leave@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"hub_ura\":\"easynet:///r/example/hub/main\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"hub.leave\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_admin_build_pairing_preflight_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle; (void)request_json;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.pairing.preflight@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"requested_scopes\":[\"invoke\"]},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"pairing.preflight\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_admin_build_pairing_create_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle; (void)request_json;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.pairing.create@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"expires_unix_ms\":1893456000000,\"scopes\":[\"invoke\"]},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"pairing.create\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_admin_build_pairing_validate_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle; (void)request_json;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.pairing.validate@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"token\":\"pair-token-1\",\"device_ura\":\"easynet:///r/example/device/dev-a\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"pairing.validate\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_admin_build_credential_verify_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle; (void)request_json;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.credential.verify@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"credential_id\":\"cred-1\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"admin_gateway\",\"system_ability\":\"credential.verify\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
 int32_t easynet_admin_build_revoke_device_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
 	(void)handle;
 	if (strstr(request_json, "operator/key rotation") == 0) return 10;
@@ -317,6 +441,35 @@ int32_t easynet_admin_project_agent_records(uint64_t handle, const char *agents_
 int32_t easynet_admin_project_agent_lifecycle_result(uint64_t handle, const char *result_json, char **out_result_json) {
 	(void)handle; (void)result_json;
 	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"agent_lifecycle_result\",\"operation\":\"agent.start\",\"state\":\"ok\",\"agent_ura\":\"easynet:///r/example/agent/alice.codex\",\"ack\":null,\"runtime_not_ready\":false,\"runtime_catalog_not_ready\":false,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"agent_lifecycle\",\"runtime_registered\":3,\"runtime_failed\":0,\"runtime_removed\":0}}");
+	return 0;
+}
+int32_t easynet_admin_project_hub_lifecycle_result(uint64_t handle, const char *result_json, char **out_result_json) {
+	(void)handle;
+	if (strstr(result_json, "hub.leave") != 0) {
+		*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"admin_result\",\"operation\":\"hub.leave\",\"state\":\"ok\",\"agent_ura\":null,\"device_ura\":null,\"ack\":true,\"runtime_not_ready\":false,\"runtime_catalog_not_ready\":false,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"hub.leave\",\"hub_ura\":\"easynet:///r/example/hub/main\"}}");
+		return 0;
+	}
+	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"admin_result\",\"operation\":\"hub.join\",\"state\":\"ok\",\"agent_ura\":null,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"ack\":true,\"runtime_not_ready\":false,\"runtime_catalog_not_ready\":false,\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"hub.join\",\"hub_ura\":\"easynet:///r/example/hub/main\"}}");
+	return 0;
+}
+int32_t easynet_admin_project_pairing_preflight(uint64_t handle, const char *result_json, char **out_result_json) {
+	(void)handle; (void)result_json;
+	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"pairing_preflight\",\"state\":\"ready\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"pairing_required\":true,\"trust_ready\":false,\"scopes\":[\"invoke\"],\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"pairing.preflight\"}}");
+	return 0;
+}
+int32_t easynet_admin_project_pairing_token(uint64_t handle, const char *result_json, char **out_result_json) {
+	(void)handle; (void)result_json;
+	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"pairing_token\",\"token_id\":\"pair-1\",\"token\":\"pair-token-1\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"state\":\"issued\",\"expires_unix_ms\":1893456000000,\"scopes\":[\"invoke\"],\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"pairing.create\"}}");
+	return 0;
+}
+int32_t easynet_admin_project_device_credential(uint64_t handle, const char *result_json, char **out_result_json) {
+	(void)handle; (void)result_json;
+	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_credential\",\"credential_id\":\"cred-1\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"state\":\"active\",\"issued_unix_ms\":1767225600000,\"expires_unix_ms\":1893456000000,\"scopes\":[\"invoke\"],\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"pairing.validate\"}}");
+	return 0;
+}
+int32_t easynet_admin_project_device_credential_verification(uint64_t handle, const char *result_json, char **out_result_json) {
+	(void)handle; (void)result_json;
+	*out_result_json = dup_json("{\"profile\":\"admin_gateway\",\"kind\":\"device_credential_verification\",\"verified\":true,\"credential_id\":\"cred-1\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"hub_ura\":\"easynet:///r/example/hub/main\",\"method\":\"daemon\",\"metadata\":{\"profile\":\"admin_gateway\",\"source\":\"credential.verify\"}}");
 	return 0;
 }
 int32_t easynet_admin_project_device_session_page(uint64_t handle, const char *sessions_json, char **out_sessions_json) {
