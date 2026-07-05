@@ -189,7 +189,13 @@ from .events import (
     SessionEvent,
     SessionEventQuery,
 )
-from .health import HealthClient, HealthTransport, RuntimeHealth
+from .health import (
+    DiagnosticCheck,
+    DiagnosticsReport,
+    HealthClient,
+    HealthTransport,
+    RuntimeHealth,
+)
 from .identity import (
     AddressingClient,
     AddressingTransport,
@@ -570,6 +576,8 @@ __all__ = [
     "GatewayStatus",
     "HealthClient",
     "HealthTransport",
+    "DiagnosticCheck",
+    "DiagnosticsReport",
     "HOST_STREAM_FRAME_SCHEMA",
     "HOST_STREAM_HASH_ALGORITHM",
     "HOST_STREAM_EMPTY_OUTPUT_HASH",

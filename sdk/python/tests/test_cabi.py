@@ -206,6 +206,7 @@ class FakeRawCABI:
             self._identity_build_descriptor_ref
         )
         self.easynet_runtime_health = FakeSymbol(self._runtime_health)
+        self.easynet_runtime_diagnostics = FakeSymbol(self._runtime_diagnostics)
         self.easynet_invocation_invoke = FakeSymbol(self._invocation_invoke)
         self.easynet_invocation_prepare = FakeSymbol(self._invocation_prepare)
         self.easynet_invocation_sign_prepared = FakeSymbol(
@@ -394,6 +395,23 @@ class FakeRawCABI:
             b'{"api_ready":true,"daemon_ready":true,"invocation_ready":true,'
             b'"directory_ready":true,"trust_ready":true,"runtime_ready":true,'
             b'"version":"0.91.30","abi_version":4,"mismatch":null,'
+            b'"diagnostics":[]}',
+        )
+
+    def _runtime_diagnostics(self, handle, out_ptr) -> int:
+        self.runtime_requests.append(("diagnostics", int(handle.value)))
+        return self._write(
+            out_ptr,
+            b'{"profile":"health","kind":"diagnostics_report","state":"Running",'
+            b'"ready":true,"version":"0.91.30","abi_version":4,'
+            b'"control_endpoint":"/tmp/easynet/control.json",'
+            b'"invocation_endpoint":"/tmp/easynet/daemon.sock",'
+            b'"checks":[{"name":"api","ready":true,"message":null},'
+            b'{"name":"daemon","ready":true,"message":null},'
+            b'{"name":"invocation","ready":true,"message":null},'
+            b'{"name":"directory","ready":true,"message":null},'
+            b'{"name":"trust","ready":true,"message":null},'
+            b'{"name":"runtime","ready":true,"message":null}],'
             b'"diagnostics":[]}',
         )
 
@@ -3099,9 +3117,12 @@ class CABITransportTests(unittest.TestCase):
         transport = CABIRuntimeTransport(lib, handle=7)
 
         health = HealthClient(transport).runtime_health()
+        diagnostics = HealthClient(transport).diagnostics()
         result = RuntimeClient(transport).invoke(complete_draft())
 
         self.assertTrue(health.ready())
+        self.assertTrue(diagnostics.ready)
+        self.assertEqual(diagnostics.kind, "diagnostics_report")
         self.assertTrue(result.ok)
         self.assertEqual(result.terminal_state, "Completed")
         self.assertEqual(

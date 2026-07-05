@@ -323,6 +323,11 @@ int32_t easynet_runtime_health(uint64_t handle, char **out_health_json) {
 	*out_health_json = dup_json("{\"api_ready\":true,\"daemon_ready\":true,\"invocation_ready\":true,\"directory_ready\":true,\"trust_ready\":true,\"runtime_ready\":true,\"diagnostics\":[]}");
 	return 0;
 }
+int32_t easynet_runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
+	(void)handle;
+	*out_diagnostics_json = dup_json("{\"profile\":\"health\",\"kind\":\"diagnostics_report\",\"state\":\"Running\",\"ready\":true,\"version\":\"0.91.30\",\"abi_version\":4,\"control_endpoint\":\"/tmp/easynet/control.json\",\"invocation_endpoint\":\"/tmp/easynet/daemon.sock\",\"checks\":[{\"name\":\"api\",\"ready\":true,\"message\":null},{\"name\":\"daemon\",\"ready\":true,\"message\":null},{\"name\":\"invocation\",\"ready\":true,\"message\":null},{\"name\":\"directory\",\"ready\":true,\"message\":null},{\"name\":\"trust\",\"ready\":true,\"message\":null},{\"name\":\"runtime\",\"ready\":true,\"message\":null}],\"diagnostics\":[]}");
+	return 0;
+}
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle; (void)invocation_json; (void)out_result_json;
 	return 10;

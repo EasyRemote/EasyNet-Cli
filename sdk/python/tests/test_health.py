@@ -4,11 +4,17 @@ from easynet_sdk import ErrorCode, HealthClient, SDKError, is_code
 
 
 class StaticHealthTransport:
-    def __init__(self, payload: bytes):
+    def __init__(self, payload: bytes, diagnostics: bytes | None = None):
         self.payload = payload
+        self.diagnostics = diagnostics
 
     def runtime_health(self) -> bytes:
         return self.payload
+
+    def runtime_diagnostics(self) -> bytes:
+        if self.diagnostics is None:
+            raise RuntimeError("diagnostics unavailable")
+        return self.diagnostics
 
 
 class FailingHealthTransport:
@@ -61,6 +67,39 @@ class HealthClientTests(unittest.TestCase):
         self.assertTrue(health.api_alive())
         self.assertFalse(health.ready())
         self.assertFalse(health.invocation_ready)
+
+    def test_runtime_diagnostics_decodes_report_fixture(self) -> None:
+        client = HealthClient(
+            StaticHealthTransport(
+                b"""{
+                    "api_ready": true,
+                    "daemon_ready": true,
+                    "invocation_ready": true,
+                    "directory_ready": true,
+                    "trust_ready": true,
+                    "runtime_ready": true,
+                    "diagnostics": []
+                }""",
+                b"""{
+                    "profile": "health",
+                    "kind": "diagnostics_report",
+                    "state": "Running",
+                    "ready": true,
+                    "version": "0.91.30",
+                    "abi_version": 4,
+                    "control_endpoint": "/tmp/easynet/control.json",
+                    "invocation_endpoint": "/tmp/easynet/daemon.sock",
+                    "checks": [{"name": "runtime", "ready": true, "message": null}],
+                    "diagnostics": []
+                }""",
+            )
+        )
+
+        report = client.diagnostics()
+
+        self.assertTrue(report.ready)
+        self.assertEqual(report.kind, "diagnostics_report")
+        self.assertEqual(len(report.checks), 1)
 
     def test_runtime_health_wraps_transport_failure(self) -> None:
         client = HealthClient(FailingHealthTransport())

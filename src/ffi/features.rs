@@ -57,6 +57,7 @@ pub const AXON_PB_SYMBOLS: &[&str] = &[
     "invocation_handle_observation",
     "stream_bidi_lifecycle",
     "runtime_health",
+    "runtime_diagnostics",
     "prepare_sign_submit",
 ];
 

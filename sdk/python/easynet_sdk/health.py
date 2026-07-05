@@ -16,6 +16,9 @@ class HealthTransport(Protocol):
     def runtime_health(self) -> bytes:
         """Return raw runtime health JSON bytes from a daemon SDK boundary."""
 
+    def runtime_diagnostics(self) -> bytes:
+        """Return raw runtime diagnostics JSON bytes from a daemon SDK boundary."""
+
 
 @dataclass(frozen=True)
 class RuntimeHealth:
@@ -47,6 +50,37 @@ class RuntimeHealth:
         """Return full runtime readiness."""
 
         return self.runtime_ready
+
+
+@dataclass(frozen=True)
+class DiagnosticCheck:
+    """One named readiness check in a diagnostics report."""
+
+    name: str
+    ready: bool
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class DiagnosticsReport:
+    """Language-neutral SDK diagnostics DTO."""
+
+    profile: str
+    kind: str
+    state: str
+    ready: bool
+    version: str
+    abi_version: int
+    control_endpoint: str
+    invocation_endpoint: str | None
+    checks: tuple[DiagnosticCheck, ...]
+    diagnostics: tuple[str, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "DiagnosticsReport":
+        """Decode the shared diagnostics.schema.json DTO."""
+
+        return _decode_diagnostics_report(raw)
 
 
 class HealthClient:
@@ -81,6 +115,34 @@ class HealthClient:
                 cause=exc,
             ) from exc
         return _decode_runtime_health(raw)
+
+    def diagnostics(self) -> DiagnosticsReport:
+        """Read and decode daemon runtime diagnostics."""
+
+        self._require_open()
+        transport = getattr(self._transport, "runtime_diagnostics", None)
+        if transport is None:
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="transport",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="health diagnostics transport is not available",
+            )
+        try:
+            raw = transport()
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise SDKError(
+                code=ErrorCode.TRANSPORT,
+                stage="transport",
+                retry=RetryHint.SAFE,
+                retryable=retryable_for_hint(RetryHint.SAFE),
+                message="runtime diagnostics transport failed",
+                cause=exc,
+            ) from exc
+        return _decode_diagnostics_report(raw)
 
     def close(self) -> None:
         """Close the underlying health transport when it owns resources."""
@@ -134,6 +196,73 @@ def _decode_runtime_health(raw: bytes) -> RuntimeHealth:
         mismatch=_optional_object(decoded.get("mismatch"), "mismatch"),
         diagnostics=_diagnostics(decoded.get("diagnostics", [])),
     )
+
+
+def _decode_diagnostics_report(raw: bytes | str) -> DiagnosticsReport:
+    try:
+        decoded = json.loads(raw)
+    except Exception as exc:
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="decode",
+            retry=RetryHint.NEVER,
+            message=f"decode diagnostics JSON: {exc}",
+            cause=exc,
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="decode",
+            retry=RetryHint.NEVER,
+            message="diagnostics JSON must be an object",
+        )
+    profile = _required_string(decoded, "profile")
+    if profile != "health":
+        raise _invalid_health_field("profile", "must be health")
+    kind = _required_string(decoded, "kind")
+    if kind != "diagnostics_report":
+        raise _invalid_health_field("kind", "must be diagnostics_report")
+    checks_raw = decoded.get("checks")
+    if not isinstance(checks_raw, list) or not checks_raw:
+        raise _invalid_health_field("checks", "must be non-empty")
+    return DiagnosticsReport(
+        profile=profile,
+        kind=kind,
+        state=_required_string(decoded, "state"),
+        ready=_required_bool(decoded, "ready"),
+        version=_required_string(decoded, "version"),
+        abi_version=_required_non_negative_int(decoded, "abi_version"),
+        control_endpoint=_required_string(decoded, "control_endpoint"),
+        invocation_endpoint=_optional_string(
+            decoded.get("invocation_endpoint"), "invocation_endpoint"
+        ),
+        checks=tuple(_diagnostic_check(item) for item in checks_raw),
+        diagnostics=_diagnostics(decoded.get("diagnostics", [])),
+    )
+
+
+def _diagnostic_check(value: object) -> DiagnosticCheck:
+    if not isinstance(value, dict):
+        raise _invalid_health_field("checks", "items must be objects")
+    return DiagnosticCheck(
+        name=_required_string(value, "name"),
+        ready=_required_bool(value, "ready"),
+        message=_optional_string(value.get("message"), "message"),
+    )
+
+
+def _required_string(decoded: Mapping[str, object], field_name: str) -> str:
+    value = decoded.get(field_name)
+    if not isinstance(value, str) or value == "":
+        raise _invalid_health_field(field_name, "must be a non-empty string")
+    return value
+
+
+def _required_non_negative_int(decoded: Mapping[str, object], field_name: str) -> int:
+    value = decoded.get(field_name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_health_field(field_name, "must be a non-negative integer")
+    return value
 
 
 def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:

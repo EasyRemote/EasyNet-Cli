@@ -68,9 +68,12 @@ func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	healthCase := sharedCase(t, root, "health-api-vs-runtime.yaml")
 	requireCaseID(t, healthCase, "health/api_vs_runtime")
 	requireCaseAction(t, healthCase, "read_health")
+	requireCaseAction(t, healthCase, "read_diagnostics")
 	requireCaseFixture(t, healthCase, "health.ready.v4.json")
+	requireCaseFixture(t, healthCase, "diagnostics.ready.v4.json")
 	requireCaseExpectation(t, healthCase, "api_ready_field: api_ready")
 	requireCaseExpectation(t, healthCase, "runtime_ready_field: runtime_ready")
+	requireCaseExpectation(t, healthCase, "diagnostics_kind: diagnostics_report")
 
 	health, err := NewRuntimeHealthFromJSON(sharedFixture(t, root, "health.ready.v4.json"))
 	if err != nil {
@@ -78,6 +81,13 @@ func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	}
 	if !health.APIAlive() || !health.Ready() {
 		t.Fatalf("unexpected runtime health from shared fixture: %#v", health)
+	}
+	diagnostics, err := NewDiagnosticsReportFromJSON(sharedFixture(t, root, "diagnostics.ready.v4.json"))
+	if err != nil {
+		t.Fatalf("NewDiagnosticsReportFromJSON(shared fixture): %v", err)
+	}
+	if !diagnostics.Ready || diagnostics.Kind != "diagnostics_report" {
+		t.Fatalf("unexpected diagnostics report from shared fixture: %#v", diagnostics)
 	}
 }
 
@@ -2103,6 +2113,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Owner: "runtime_core",
 			Type:  reflect.TypeOf((*HealthClient)(nil)),
 			Operations: map[string]string{
+				"Diagnostics":   "runtime_core.health.diagnostics",
 				"RuntimeHealth": "runtime_core.health.runtime_health",
 			},
 		},
@@ -2434,7 +2445,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Surfaces: []sharedConsumerCoverageSurface{
 				{Type: reflect.TypeOf((*Client)(nil)), Methods: []string{"RequireABI", "FeatureDiscovery"}},
 				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Invoke", "InvokeStream", "OpenBidi", "Await", "Cancel"}},
-				{Type: reflect.TypeOf((*HealthClient)(nil)), Methods: []string{"RuntimeHealth"}},
+				{Type: reflect.TypeOf((*HealthClient)(nil)), Methods: []string{"RuntimeHealth", "Diagnostics"}},
 			},
 		},
 		{
@@ -2594,7 +2605,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Surfaces: []sharedConsumerCoverageSurface{
 				{Type: reflect.TypeOf((*DaemonControl)(nil)), Methods: []string{"Start", "Attach", "ConnectLocal"}},
 				{Type: reflect.TypeOf((*RuntimeClient)(nil)), Methods: []string{"Invoke", "InvokeStream", "OpenBidi"}},
-				{Type: reflect.TypeOf((*HealthClient)(nil)), Methods: []string{"RuntimeHealth"}},
+				{Type: reflect.TypeOf((*HealthClient)(nil)), Methods: []string{"RuntimeHealth", "Diagnostics"}},
 			},
 		},
 		{

@@ -1,0 +1,19 @@
+{
+  "profile": "health",
+  "kind": "diagnostics_report",
+  "state": "Running",
+  "ready": true,
+  "version": "0.91.30",
+  "abi_version": 4,
+  "control_endpoint": "/tmp/easynet/control.json",
+  "invocation_endpoint": "/tmp/easynet/daemon.sock",
+  "checks": [
+    {"name": "api", "ready": true, "message": null},
+    {"name": "daemon", "ready": true, "message": null},
+    {"name": "invocation", "ready": true, "message": null},
+    {"name": "directory", "ready": true, "message": null},
+    {"name": "trust", "ready": true, "message": null},
+    {"name": "runtime", "ready": true, "message": null}
+  ],
+  "diagnostics": []
+}

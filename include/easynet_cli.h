@@ -145,6 +145,11 @@ int32_t easynet_runtime_health(
     char **out_health_json
 );
 
+int32_t easynet_runtime_diagnostics(
+    EasynetHandle handle,
+    char **out_diagnostics_json
+);
+
 int32_t easynet_invocation_builder_new(
     EasynetInvocationBuilderId *out_builder_id
 );

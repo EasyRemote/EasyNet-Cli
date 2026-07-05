@@ -225,6 +225,54 @@ pub unsafe extern "C" fn easynet_runtime_health(
     }
 }
 
+/// Return typed runtime diagnostics for an Invocation-capable client
+/// handle.
+///
+/// # Safety
+/// `out_diagnostics_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_runtime_diagnostics(
+    handle: EasynetHandle,
+    out_diagnostics_json: *mut *mut c_char,
+) -> i32 {
+    if out_diagnostics_json.is_null() {
+        set_last_error("easynet_runtime_diagnostics: out_diagnostics_json pointer is null");
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_diagnostics_json = std::ptr::null_mut() };
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            set_last_error(format!(
+                "easynet_runtime_diagnostics: handle {handle} is not registered"
+            ));
+            return ERR_INVALID_HANDLE;
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = session;
+        set_last_error("easynet_runtime_diagnostics: axon-pb feature is not enabled in this build");
+        ERR_NOT_IMPLEMENTED
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        let json = runtime_diagnostics_json(session.as_ref()).to_string();
+        let ptr = alloc_output_cstring(json);
+        if ptr.is_null() {
+            set_last_error(
+                "easynet_runtime_diagnostics: out-of-memory allocating diagnostics string",
+            );
+            return ERR_GENERIC;
+        }
+        unsafe { *out_diagnostics_json = ptr };
+        clear_last_error();
+        EASYNET_OK
+    }
+}
+
 /// Allocate a mutable Invocation builder handle.
 ///
 /// The builder starts empty. Bindings must set the complete seven-tuple
@@ -1336,36 +1384,115 @@ fn read_optional_cstr(ptr: *const c_char) -> Result<Option<String>, StringError>
 
 #[cfg(feature = "axon-pb")]
 fn runtime_health_json(session: &crate::ffi::client::handle::ClientSession) -> serde_json::Value {
-    match invocation_endpoint_for_session(session) {
-        Ok(endpoint) => {
-            let invocation_ready =
-                crate::support::platform::local_daemon_grpc::probe_accepting(&endpoint);
-            serde_json::json!({
-                "sdk_version": env!("CARGO_PKG_VERSION"),
-                "control_endpoint": session.control_path,
-                "invocation_endpoint": endpoint.display().to_string(),
-                "connection_state": if invocation_ready { "Ready" } else { "Degraded" },
-                "control_ready": true,
-                "invocation_ready": invocation_ready,
-                "runtime_ready": invocation_ready,
-                "last_error": null,
-            })
-        }
-        Err(err) => serde_json::json!({
-            "sdk_version": env!("CARGO_PKG_VERSION"),
-            "control_endpoint": session.control_path,
-            "invocation_endpoint": null,
-            "connection_state": "Degraded",
-            "control_ready": true,
-            "invocation_ready": false,
-            "runtime_ready": false,
-            "last_error": {
-                "code": "CONTROL_ONLY",
-                "stage": "runtime_health",
-                "message": err.to_string(),
-                "retryable": true
+    let report = RuntimeHealthReport::from_session(session);
+    serde_json::json!({
+        "api_ready": true,
+        "daemon_ready": true,
+        "invocation_ready": report.invocation_ready,
+        "directory_ready": report.directory_ready,
+        "trust_ready": report.trust_ready,
+        "runtime_ready": report.runtime_ready,
+        "version": env!("CARGO_PKG_VERSION"),
+        "abi_version": crate::ffi::EASYNET_ABI_VERSION,
+        "mismatch": null,
+        "diagnostics": report.diagnostics,
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_diagnostics_json(
+    session: &crate::ffi::client::handle::ClientSession,
+) -> serde_json::Value {
+    let report = RuntimeHealthReport::from_session(session);
+    serde_json::json!({
+        "profile": "health",
+        "kind": "diagnostics_report",
+        "state": if report.runtime_ready { "Running" } else { "ControlOnly" },
+        "ready": report.runtime_ready,
+        "version": env!("CARGO_PKG_VERSION"),
+        "abi_version": crate::ffi::EASYNET_ABI_VERSION,
+        "control_endpoint": session.control_path,
+        "invocation_endpoint": report.invocation_endpoint,
+        "checks": report.checks(),
+        "diagnostics": report.diagnostics,
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+struct RuntimeHealthReport {
+    invocation_endpoint: Option<String>,
+    invocation_ready: bool,
+    directory_ready: bool,
+    trust_ready: bool,
+    runtime_ready: bool,
+    diagnostics: Vec<String>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimeHealthReport {
+    fn from_session(session: &crate::ffi::client::handle::ClientSession) -> Self {
+        match invocation_endpoint_for_session(session) {
+            Ok(endpoint) => {
+                let invocation_ready =
+                    crate::support::platform::local_daemon_grpc::probe_accepting(&endpoint);
+                let diagnostics = if invocation_ready {
+                    Vec::new()
+                } else {
+                    vec!["invocation endpoint is not accepting connections".to_string()]
+                };
+                Self {
+                    invocation_endpoint: Some(endpoint.display().to_string()),
+                    invocation_ready,
+                    directory_ready: invocation_ready,
+                    trust_ready: true,
+                    runtime_ready: invocation_ready,
+                    diagnostics,
+                }
+            }
+            Err(err) => Self {
+                invocation_endpoint: None,
+                invocation_ready: false,
+                directory_ready: false,
+                trust_ready: true,
+                runtime_ready: false,
+                diagnostics: vec![err.to_string()],
             },
-        }),
+        }
+    }
+
+    fn checks(&self) -> serde_json::Value {
+        serde_json::json!([
+            {"name": "api", "ready": true, "message": null},
+            {"name": "daemon", "ready": true, "message": null},
+            {
+                "name": "invocation",
+                "ready": self.invocation_ready,
+                "message": if self.invocation_ready {
+                    None
+                } else {
+                    Some("invocation endpoint unavailable")
+                }
+            },
+            {
+                "name": "directory",
+                "ready": self.directory_ready,
+                "message": if self.directory_ready {
+                    None
+                } else {
+                    Some("directory readiness requires invocation endpoint")
+                }
+            },
+            {"name": "trust", "ready": self.trust_ready, "message": null},
+            {
+                "name": "runtime",
+                "ready": self.runtime_ready,
+                "message": if self.runtime_ready {
+                    None
+                } else {
+                    Some("runtime is degraded")
+                }
+            }
+        ])
     }
 }
 
@@ -5743,6 +5870,49 @@ mod tests {
             invocation_endpoint_for_session(&session).unwrap(),
             std::path::PathBuf::from("/tmp/other/daemon.sock")
         );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_health_json_uses_shared_health_dto_shape() {
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            "/tmp/custom/control.sock".into(),
+            Some("/tmp/other/daemon.sock".into()),
+        );
+        let health = runtime_health_json(&session);
+
+        assert_eq!(health["api_ready"], true);
+        assert_eq!(health["daemon_ready"], true);
+        assert_eq!(health["invocation_ready"], false);
+        assert_eq!(health["runtime_ready"], false);
+        assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(health["abi_version"], crate::ffi::EASYNET_ABI_VERSION);
+        assert!(health["diagnostics"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+        assert!(health.get("control_ready").is_none());
+        assert!(health.get("connection_state").is_none());
+        assert!(health.get("last_error").is_none());
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_diagnostics_json_reports_health_profile_checks() {
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            "/tmp/custom/control.sock".into(),
+            Some("/tmp/other/daemon.sock".into()),
+        );
+        let diagnostics = runtime_diagnostics_json(&session);
+
+        assert_eq!(diagnostics["profile"], "health");
+        assert_eq!(diagnostics["kind"], "diagnostics_report");
+        assert_eq!(diagnostics["ready"], false);
+        assert_eq!(diagnostics["control_endpoint"], "/tmp/custom/control.sock");
+        assert_eq!(diagnostics["invocation_endpoint"], "/tmp/other/daemon.sock");
+        assert_eq!(diagnostics["checks"].as_array().map(Vec::len), Some(6));
+        assert!(diagnostics["diagnostics"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
     }
 
     #[test]

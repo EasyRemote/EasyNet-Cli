@@ -322,6 +322,12 @@ class CLILibrary:
             ctypes.c_uint64(handle),
         )
 
+    def runtime_diagnostics(self, handle: int) -> bytes:
+        return self._call_output(
+            self._raw.easynet_runtime_diagnostics,
+            ctypes.c_uint64(handle),
+        )
+
     def invocation_invoke(self, handle: int, invocation_json: bytes) -> bytes:
         return self._call_output(
             self._raw.easynet_invocation_invoke,
@@ -575,6 +581,11 @@ class CLILibrary:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._raw.easynet_runtime_health.restype = ctypes.c_int32
+        self._raw.easynet_runtime_diagnostics.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_runtime_diagnostics.restype = ctypes.c_int32
         self._raw.easynet_invocation_invoke.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
@@ -2304,6 +2315,9 @@ class CABIRuntimeTransport:
 
     def runtime_health(self) -> bytes:
         return self.lib.runtime_health(self._require_open())
+
+    def runtime_diagnostics(self) -> bytes:
+        return self.lib.runtime_diagnostics(self._require_open())
 
     def invoke(self, draft_json: bytes) -> bytes:
         return self.lib.invocation_invoke(self._require_open(), draft_json)

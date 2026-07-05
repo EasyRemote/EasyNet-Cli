@@ -55,6 +55,7 @@ from easynet_sdk import (
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
     HealthClient,
+    DiagnosticsReport,
     HostBindingClient,
     LocalHostBindingTransport,
     HostStreamCleanup,
@@ -1231,13 +1232,21 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         health_case = shared_case("health-api-vs-runtime.yaml")
         self._require_case_id(health_case, "health/api_vs_runtime")
         self._require_case_action(health_case, "read_health")
+        self._require_case_action(health_case, "read_diagnostics")
         self._require_case_fixture(health_case, "health.ready.v4.json")
+        self._require_case_fixture(health_case, "diagnostics.ready.v4.json")
         self._require_case_expectation(health_case, "api_ready_field: api_ready")
         self._require_case_expectation(health_case, "runtime_ready_field: runtime_ready")
+        self._require_case_expectation(health_case, "diagnostics_kind: diagnostics_report")
 
         health = RuntimeHealth.from_json(shared_fixture("health.ready.v4.json"))
         self.assertTrue(health.api_alive())
         self.assertTrue(health.ready())
+        diagnostics = DiagnosticsReport.from_json(
+            shared_fixture("diagnostics.ready.v4.json")
+        )
+        self.assertTrue(diagnostics.ready)
+        self.assertEqual(diagnostics.kind, "diagnostics_report")
 
     def test_python_runtime_core_executes_shared_lifecycle_version_error_conformance_cases(self) -> None:
         compatible_case = shared_case("version-abi-compatible.yaml")
@@ -3356,6 +3365,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 HealthClient,
                 {
                     "close": "runtime_core.health.close",
+                    "diagnostics": "runtime_core.health.diagnostics",
                     "runtime_health": "runtime_core.health.runtime_health",
                 },
             ),
@@ -3645,7 +3655,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 (
                     (Client, ("require_abi", "feature_discovery")),
                     (RuntimeClient, ("invoke", "invoke_stream", "open_bidi", "await_result", "cancel")),
-                    (HealthClient, ("runtime_health", "close")),
+                    (HealthClient, ("runtime_health", "diagnostics", "close")),
                 ),
             ),
             (
@@ -3777,7 +3787,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 (
                     (DaemonControl, ("start", "attach", "connect_local")),
                     (RuntimeClient, ("invoke", "invoke_stream", "open_bidi")),
-                    (HealthClient, ("runtime_health", "close")),
+                    (HealthClient, ("runtime_health", "diagnostics", "close")),
                 ),
             ),
             (

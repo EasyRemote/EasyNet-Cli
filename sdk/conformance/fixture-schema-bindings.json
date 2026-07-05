@@ -162,6 +162,10 @@
       "schema": "directory-resolved-ref.schema.json"
     },
     {
+      "fixture": "diagnostics.ready.v4.json",
+      "schema": "diagnostics.schema.json"
+    },
+    {
       "fixture": "event.device-page.v4.json",
       "schema": "events-device-event-page.schema.json"
     },

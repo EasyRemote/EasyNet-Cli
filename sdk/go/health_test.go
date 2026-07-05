@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+type staticHealthTransport struct {
+	health      []byte
+	diagnostics []byte
+}
+
+func (s staticHealthTransport) RuntimeHealth(ctx context.Context) ([]byte, error) {
+	return s.health, nil
+}
+
+func (s staticHealthTransport) RuntimeDiagnostics(ctx context.Context) ([]byte, error) {
+	return s.diagnostics, nil
+}
+
 func TestRuntimeHealthDecodesReadyFixture(t *testing.T) {
 	client, err := NewHealthClient(HealthTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{
@@ -38,6 +51,69 @@ func TestRuntimeHealthDecodesReadyFixture(t *testing.T) {
 	}
 	if health.ABIVersion == nil || *health.ABIVersion != 4 {
 		t.Fatalf("ABI version = %v, want 4", health.ABIVersion)
+	}
+}
+
+func TestRuntimeDiagnosticsDecodesReportFixture(t *testing.T) {
+	client, err := NewHealthClient(staticHealthTransport{
+		health: []byte(`{
+			"api_ready": true,
+			"daemon_ready": true,
+			"invocation_ready": true,
+			"directory_ready": true,
+			"trust_ready": true,
+			"runtime_ready": true,
+			"diagnostics": []
+		}`),
+		diagnostics: []byte(`{
+			"profile": "health",
+			"kind": "diagnostics_report",
+			"state": "Running",
+			"ready": true,
+			"version": "0.91.30",
+			"abi_version": 4,
+			"control_endpoint": "/tmp/easynet/control.json",
+			"invocation_endpoint": "/tmp/easynet/daemon.sock",
+			"checks": [{"name": "runtime", "ready": true, "message": null}],
+			"diagnostics": []
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("NewHealthClient: %v", err)
+	}
+
+	report, err := client.Diagnostics(context.Background())
+	if err != nil {
+		t.Fatalf("Diagnostics: %v", err)
+	}
+
+	if !report.Ready || report.Kind != "diagnostics_report" || len(report.Checks) != 1 {
+		t.Fatalf("unexpected diagnostics report: %#v", report)
+	}
+}
+
+func TestRuntimeDiagnosticsRequiresTransportCapability(t *testing.T) {
+	client, err := NewHealthClient(HealthTransportFunc(func(ctx context.Context) ([]byte, error) {
+		return []byte(`{
+			"api_ready": true,
+			"daemon_ready": true,
+			"invocation_ready": true,
+			"directory_ready": true,
+			"trust_ready": true,
+			"runtime_ready": true,
+			"diagnostics": []
+		}`), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewHealthClient: %v", err)
+	}
+
+	_, err = client.Diagnostics(context.Background())
+	if err == nil {
+		t.Fatalf("Diagnostics succeeded without diagnostics transport")
+	}
+	if !IsCode(err, ErrNotImplemented) {
+		t.Fatalf("error code = %v, want %s", err, ErrNotImplemented)
 	}
 }
 

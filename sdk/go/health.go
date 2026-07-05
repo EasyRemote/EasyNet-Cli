@@ -15,6 +15,11 @@ type HealthTransport interface {
 	RuntimeHealth(ctx context.Context) ([]byte, error)
 }
 
+// DiagnosticsTransport supplies the Health profile diagnostics report.
+type DiagnosticsTransport interface {
+	RuntimeDiagnostics(ctx context.Context) ([]byte, error)
+}
+
 // HealthTransportFunc adapts a function into a HealthTransport.
 type HealthTransportFunc func(ctx context.Context) ([]byte, error)
 
@@ -53,6 +58,27 @@ type RuntimeHealth struct {
 	ABIVersion      *uint32        `json:"abi_version,omitempty"`
 	Mismatch        map[string]any `json:"mismatch,omitempty"`
 	Diagnostics     []string       `json:"diagnostics"`
+}
+
+// DiagnosticsReport is the language-neutral SDK diagnostics DTO.
+type DiagnosticsReport struct {
+	Profile            string            `json:"profile"`
+	Kind               string            `json:"kind"`
+	State              string            `json:"state"`
+	Ready              bool              `json:"ready"`
+	Version            string            `json:"version"`
+	ABIVersion         uint32            `json:"abi_version"`
+	ControlEndpoint    string            `json:"control_endpoint"`
+	InvocationEndpoint *string           `json:"invocation_endpoint"`
+	Checks             []DiagnosticCheck `json:"checks"`
+	Diagnostics        []string          `json:"diagnostics"`
+}
+
+// DiagnosticCheck is one named readiness check in a diagnostics report.
+type DiagnosticCheck struct {
+	Name    string  `json:"name"`
+	Ready   bool    `json:"ready"`
+	Message *string `json:"message"`
 }
 
 // APIAlive reports process/API liveness, not full runtime readiness.
@@ -99,9 +125,58 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 	return decodeRuntimeHealth(raw)
 }
 
+// Diagnostics reads and decodes daemon runtime diagnostics.
+func (c *HealthClient) Diagnostics(ctx context.Context) (DiagnosticsReport, error) {
+	if c == nil || c.transport == nil {
+		return DiagnosticsReport{}, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "health client is not initialized",
+		}
+	}
+	if ctx == nil {
+		return DiagnosticsReport{}, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "sdk",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "context is required",
+		}
+	}
+	transport, ok := c.transport.(DiagnosticsTransport)
+	if !ok {
+		return DiagnosticsReport{}, &SDKError{
+			Code:      ErrNotImplemented,
+			Stage:     "transport",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   "health diagnostics transport is not available",
+		}
+	}
+	raw, err := transport.RuntimeDiagnostics(ctx)
+	if err != nil {
+		return DiagnosticsReport{}, &SDKError{
+			Code:      ErrorTransport,
+			Stage:     "transport",
+			Retry:     RetrySafe,
+			Retryable: RetryableForHint(RetrySafe),
+			Message:   "runtime diagnostics transport failed",
+			Cause:     err,
+		}
+	}
+	return decodeDiagnosticsReport(raw)
+}
+
 // NewRuntimeHealthFromJSON decodes the shared health.schema.json DTO.
 func NewRuntimeHealthFromJSON(raw []byte) (RuntimeHealth, error) {
 	return decodeRuntimeHealth(raw)
+}
+
+// NewDiagnosticsReportFromJSON decodes the shared diagnostics.schema.json DTO.
+func NewDiagnosticsReportFromJSON(raw []byte) (DiagnosticsReport, error) {
+	return decodeDiagnosticsReport(raw)
 }
 
 func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
@@ -179,6 +254,44 @@ func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
 		health.Diagnostics = value
 	}
 	return health, nil
+}
+
+func decodeDiagnosticsReport(raw []byte) (DiagnosticsReport, error) {
+	var report DiagnosticsReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return DiagnosticsReport{}, &SDKError{
+			Code:      ErrorInvalidArgument,
+			Stage:     "decode",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   fmt.Sprintf("decode diagnostics JSON: %v", err),
+			Cause:     err,
+		}
+	}
+	if report.Profile != "health" {
+		return DiagnosticsReport{}, invalidHealthField("profile", "must be health")
+	}
+	if report.Kind != "diagnostics_report" {
+		return DiagnosticsReport{}, invalidHealthField("kind", "must be diagnostics_report")
+	}
+	if report.State == "" {
+		return DiagnosticsReport{}, invalidHealthField("state", "is required")
+	}
+	if report.Version == "" {
+		return DiagnosticsReport{}, invalidHealthField("version", "is required")
+	}
+	if report.Checks == nil || len(report.Checks) == 0 {
+		return DiagnosticsReport{}, invalidHealthField("checks", "must be non-empty")
+	}
+	if report.Diagnostics == nil {
+		report.Diagnostics = []string{}
+	}
+	for _, check := range report.Checks {
+		if check.Name == "" {
+			return DiagnosticsReport{}, invalidHealthField("checks.name", "is required")
+		}
+	}
+	return report, nil
 }
 
 func requiredHealthBool(fields map[string]json.RawMessage, name string) (bool, error) {

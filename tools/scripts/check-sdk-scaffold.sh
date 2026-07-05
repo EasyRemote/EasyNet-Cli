@@ -287,6 +287,7 @@ schema_files=(
   directory-resolve-request.schema.json
   directory-page.schema.json
   directory-resolved-ref.schema.json
+  diagnostics.schema.json
   local-resource-ref-request.schema.json
   publication.schema.json
   ability-package-manifest.schema.json
@@ -391,6 +392,7 @@ fixture_files=(
   directory-agent-page.v4.json
   directory-ability-page.v4.json
   directory-resolved-ref.v4.json
+  diagnostics.ready.v4.json
   health.ready.v4.json
   host-stream-binding-request.v4.json
   host-stream-binding.v4.json
@@ -677,7 +679,9 @@ require_literal sdk/go/errors.go "DecodeDaemonErrorJSON"
 require_literal sdk/go/errors.go "RuntimeError"
 require_literal sdk/go/health.go "HealthClient"
 require_literal sdk/go/health.go "RuntimeHealth"
+require_literal sdk/go/health.go "DiagnosticsReport"
 require_literal sdk/go/health.go "NewRuntimeHealthFromJSON"
+require_literal sdk/go/health.go "NewDiagnosticsReportFromJSON"
 require_literal sdk/go/invocation.go "InvocationBuilder"
 require_literal sdk/go/invocation.go "InvocationDraft"
 require_literal sdk/go/runtime.go "RuntimeClient"
@@ -853,6 +857,7 @@ require_literal sdk/python/easynet_sdk/errors.py "from_json"
 require_literal sdk/python/easynet_sdk/errors.py "RuntimeError"
 require_literal sdk/python/easynet_sdk/health.py "HealthClient"
 require_literal sdk/python/easynet_sdk/health.py "RuntimeHealth"
+require_literal sdk/python/easynet_sdk/health.py "DiagnosticsReport"
 require_literal sdk/python/easynet_sdk/invocation.py "InvocationBuilder"
 require_literal sdk/python/easynet_sdk/invocation.py "InvocationDraft"
 require_literal sdk/python/easynet_sdk/invocation.py "inspect"

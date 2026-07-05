@@ -46,6 +46,7 @@
     "invocation_handle_observation": false,
     "stream_bidi_lifecycle": false,
     "runtime_health": false,
+    "runtime_diagnostics": false,
     "prepare_sign_submit": false
   },
   "axon_pb": false
