@@ -35,7 +35,8 @@ optional C ABI v4 concrete transport over Runtime Core invoke, and close state
 seams over opaque receipt refs,
 plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
-install projection, published-ability read-model seams, and close state seams. HostBindingClient
+install projection, explicit daemon-local provider seams for Runtime-backed
+package validation and plugin install, published-ability read-model seams, and close state seams. HostBindingClient
 exposes binding DTO, envelope decode, item/error/terminal frame encoding,
 output-hash folding seams, and hash cursor invariant guardrails plus close state
 seams. MissionClient exposes run/run-file/track/cancel

@@ -156,10 +156,11 @@ method spelling.
   cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
-  install projection, published-ability read-model seams, complete
-  AbilityImpl lifecycle request execution through Runtime Core and optional C
-  ABI v4 carrier/projection, and close state seams; host binding bridge,
-  plugin/skill lifecycle policy, and backend publication cutover remain
+  install projection, explicit daemon-local provider seams for Runtime-backed
+  package validation and plugin install, published-ability read-model seams,
+  complete AbilityImpl lifecycle request execution through Runtime Core and
+  optional C ABI v4 carrier/projection, and close state seams; host binding
+  bridge, plugin/skill lifecycle policy, and backend publication cutover remain
   incomplete.
 - Go Host Binding facade exposes `HostBindingClient` binding DTO, envelope
   decode, item/error/terminal frame encoding, output-hash folding seams, and
