@@ -34,6 +34,48 @@ validate_json_file() {
   fi
 }
 
+validate_declared_file_list() {
+  local array_name="$1"
+  local directory="$2"
+  local suffix="$3"
+  if ! python3 - "$ROOT" "$array_name" "$directory" "$suffix" "$0" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+array_name = sys.argv[2]
+directory = sys.argv[3]
+suffix = sys.argv[4]
+script_path = Path(sys.argv[5])
+
+text = script_path.read_text()
+match = re.search(rf"{re.escape(array_name)}=\(\n(.*?)\n\)", text, re.S)
+if not match:
+    print(f"missing declared list: {array_name}")
+    raise SystemExit(1)
+
+declared = {
+    line.strip()
+    for line in match.group(1).splitlines()
+    if line.strip() and not line.strip().startswith("#")
+}
+actual = {path.name for path in (root / directory).glob(f"*{suffix}")}
+missing = sorted(actual - declared)
+extra = sorted(declared - actual)
+
+if missing or extra:
+    if missing:
+        print(f"{array_name} is missing declared files: " + ", ".join(missing))
+    if extra:
+        print(f"{array_name} declares missing files: " + ", ".join(extra))
+    raise SystemExit(1)
+PY
+  then
+    fail "declared file list is not closed: $array_name"
+  fi
+}
+
 validate_fixture_schema_bindings() {
   if ! python3 - "$ROOT" <<'PY'
 import json
@@ -307,6 +349,7 @@ for schema in "${schema_files[@]}"; do
   require_literal "$path" '"$schema"'
   require_literal "$path" '"title"'
 done
+validate_declared_file_list schema_files sdk/schemas .schema.json
 
 fixture_files=(
   invocation.complete.v4.json
@@ -421,6 +464,7 @@ for fixture in "${fixture_files[@]}"; do
   require_file "$path"
   validate_json_file "$path"
 done
+validate_declared_file_list fixture_files sdk/conformance/fixtures .v4.json
 
 case_files=(
   version-abi-compatible.yaml
@@ -448,10 +492,16 @@ case_files=(
   publication-resource-carriers.yaml
   mission-carrier-status.yaml
   events-directory-stream.yaml
+  events-device-invocation-history.yaml
+  events-session-stream.yaml
   admin-gateway-carrier-status.yaml
   surface-page-carriers.yaml
   compatibility-openai-carrier-projection.yaml
   wrapper-profile-records.yaml
+  python-easyremote-no-raw-ffi.yaml
+  python-easyremote-no-invocation-codec.yaml
+  python-easyremote-no-raw-receipt-continuity.yaml
+  python-easyremote-context-causal.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml
@@ -470,6 +520,7 @@ for case_file in "${case_files[@]}"; do
   require_literal "$path" "steps:"
   require_literal "$path" "expect:"
 done
+validate_declared_file_list case_files sdk/conformance/cases .yaml
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
