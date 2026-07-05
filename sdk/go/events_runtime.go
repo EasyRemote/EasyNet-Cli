@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -13,6 +14,7 @@ const (
 	eventsAbilitySubscribeDevices     = "events.device.subscribe"
 	eventsAbilitySubscribeSessions    = "session.attach"
 	eventsAbilitySubscribeInvocations = "events.invocation.subscribe"
+	eventsAbilityDeviceHistory        = "events.device.history"
 )
 
 var eventsCarrierArgKeys = map[string]struct{}{
@@ -82,8 +84,27 @@ func (t *EventsRuntimeTransport) SubscribeInvocations(context.Context, []byte) (
 	return nil, sdkProfileNotImplemented(eventsProfile, "events invocation subscriptions are opened through RuntimeClient.InvokeStream")
 }
 
-func (t *EventsRuntimeTransport) ListDeviceEvents(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "events device history is not implemented by the runtime transport")
+func (t *EventsRuntimeTransport) ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeEventsDeviceHistoryForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	draft, err := t.buildDeviceHistoryInvocation(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	result, err := t.runtime.Invoke(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	if !result.OK() {
+		return nil, eventsInvocationFailureError(result)
+	}
+	outputJSON := result.OutputJSON()
+	if len(outputJSON) == 0 || string(outputJSON) == "null" {
+		return nil, invalidProfilePayload(eventsProfile, "events device history output_json is required", nil)
+	}
+	return projectRuntimeDeviceEventPage(request, outputJSON)
 }
 
 func (t *EventsRuntimeTransport) ProjectDirectoryEvent(context.Context, []byte) ([]byte, error) {
@@ -146,6 +167,30 @@ func (t *EventsRuntimeTransport) buildSubscriptionInvocation(ctx context.Context
 		Build()
 }
 
+func (t *EventsRuntimeTransport) buildDeviceHistoryInvocation(ctx context.Context, request EventsDeviceEventListRequest) (InvocationDraft, error) {
+	if t == nil || t.runtime == nil || t.identity == nil {
+		return InvocationDraft{}, invalidProfileClient(eventsProfile, "events runtime transport is not initialized")
+	}
+	if ctx == nil {
+		return InvocationDraft{}, invalidProfileClient(eventsProfile, "context is required")
+	}
+	descriptorRef, err := t.identity.OwnerAbilityDescriptorRef(ctx, request.CalleeURA, eventsAbilityDeviceHistory, request.DescriptorVersion)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	return NewInvocationBuilder().
+		WithCallerURA(request.CallerURA).
+		WithCalleeURA(request.CalleeURA).
+		WithDescriptorRef(descriptorRef).
+		WithSubjectURA(request.SubjectURA).
+		WithNonceBase64(request.NonceBase64).
+		WithCausalContext(request.CausalContext).
+		WithJSONArgs(eventsDeviceHistoryRuntimeArgs(request)).
+		WithContentType("application/json").
+		WithMetadata(eventsRuntimeMetadata(request.Metadata, eventsAbilityDeviceHistory)).
+		Build()
+}
+
 func decodeEventsSubscriptionForRuntime(requestJSON []byte, expected EventStreamKind) (EventsSubscriptionRequest, map[string]any, error) {
 	var request EventsSubscriptionRequest
 	if err := json.Unmarshal(requestJSON, &request); err != nil {
@@ -163,6 +208,18 @@ func decodeEventsSubscriptionForRuntime(requestJSON []byte, expected EventStream
 		return EventsSubscriptionRequest{}, nil, invalidProfilePayload(eventsProfile, "events subscription request must be an object", nil)
 	}
 	return normalized, payload, nil
+}
+
+func decodeEventsDeviceHistoryForRuntime(requestJSON []byte) (EventsDeviceEventListRequest, error) {
+	var request EventsDeviceEventListRequest
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
+		return EventsDeviceEventListRequest{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("decode events device history request: %v", err), err)
+	}
+	normalized, err := normalizeEventsDeviceEventListRequest(request)
+	if err != nil {
+		return EventsDeviceEventListRequest{}, err
+	}
+	return normalized, nil
 }
 
 func eventsSubscriptionAbility(stream EventStreamKind) (string, error) {
@@ -211,6 +268,202 @@ func eventsRuntimeArgs(payload map[string]any, stream EventStreamKind, abilityNa
 		args[key] = value
 	}
 	return args
+}
+
+func eventsDeviceHistoryRuntimeArgs(request EventsDeviceEventListRequest) map[string]any {
+	args := map[string]any{
+		"stream":         string(EventStreamDevice),
+		"daemon_ability": eventsAbilityDeviceHistory,
+		"limit":          request.Limit,
+	}
+	if strings.TrimSpace(request.DeviceURA) != "" {
+		args["device_ura"] = strings.TrimSpace(request.DeviceURA)
+	}
+	if strings.TrimSpace(request.Cursor) != "" {
+		args["cursor"] = strings.TrimSpace(request.Cursor)
+	}
+	return args
+}
+
+func projectRuntimeDeviceEventPage(request EventsDeviceEventListRequest, outputJSON []byte) ([]byte, error) {
+	var output map[string]any
+	if err := json.Unmarshal(outputJSON, &output); err != nil {
+		return nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("decode events device history output: %v", err), err)
+	}
+	if output == nil {
+		return nil, invalidProfilePayload(eventsProfile, "events device history output must be an object", nil)
+	}
+	if output["profile"] == eventsProfile && output["stream"] == string(EventStreamDevice) && output["item_kind"] == "device_event" {
+		if _, err := NewDeviceEventPageFromJSON(outputJSON); err != nil {
+			return nil, err
+		}
+		return outputJSON, nil
+	}
+	rows, err := eventsRuntimeEventRows(output)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := eventsRuntimeCursorOffset(request.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	if offset > len(rows) {
+		return nil, invalidProfilePayload(eventsProfile, "cursor must not point past the current event snapshot", nil)
+	}
+	end := offset + request.Limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	items := make([]map[string]any, 0, end-offset)
+	for _, row := range rows[offset:end] {
+		item, err := projectRuntimeDeviceEventRow(row)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	var nextCursor *string
+	if end < len(rows) {
+		cursor := fmt.Sprintf("%s:%d", EventStreamDevice, end)
+		nextCursor = &cursor
+	}
+	page := map[string]any{
+		"profile":     eventsProfile,
+		"stream":      string(EventStreamDevice),
+		"item_kind":   "device_event",
+		"items":       items,
+		"next_cursor": nextCursor,
+		"has_more":    nextCursor != nil,
+		"limit":       request.Limit,
+		"metadata": map[string]any{
+			"profile":        eventsProfile,
+			"source":         "device_event_history",
+			"source_ability": eventsAbilityDeviceHistory,
+			"total_items":    len(rows),
+		},
+	}
+	raw, err := json.Marshal(page)
+	if err != nil {
+		return nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events device event page: %v", err), err)
+	}
+	if _, err := NewDeviceEventPageFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func eventsRuntimeEventRows(output map[string]any) ([]map[string]any, error) {
+	rawRows, ok := output["events"].([]any)
+	if !ok {
+		rawRows, ok = output["items"].([]any)
+	}
+	if !ok {
+		return nil, invalidProfilePayload(eventsProfile, "events device history output events must be an array", nil)
+	}
+	rows := make([]map[string]any, 0, len(rawRows))
+	for index, raw := range rawRows {
+		row, ok := raw.(map[string]any)
+		if !ok {
+			return nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("events device history row %d must be an object", index), nil)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func eventsRuntimeCursorOffset(cursor string) (int, error) {
+	if strings.TrimSpace(cursor) == "" {
+		return 0, nil
+	}
+	stream, sequence, ok := parseEventRuntimeResumeToken(cursor)
+	if !ok || stream != string(EventStreamDevice) {
+		return 0, invalidProfilePayload(eventsProfile, "cursor must use device:<offset> form", nil)
+	}
+	if sequence > uint64(int(^uint(0)>>1)) {
+		return 0, invalidProfilePayload(eventsProfile, "cursor offset is too large", nil)
+	}
+	return int(sequence), nil
+}
+
+func projectRuntimeDeviceEventRow(row map[string]any) (map[string]any, error) {
+	if row["profile"] == eventsProfile {
+		stream, _ := row["stream"].(string)
+		if stream != string(EventStreamDevice) {
+			return nil, invalidProfilePayload(eventsProfile, "device event row stream must be device", nil)
+		}
+		return row, nil
+	}
+	sequence, ok := numericUint64(row["sequence"])
+	if !ok {
+		return nil, invalidProfilePayload(eventsProfile, "device event row sequence is required", nil)
+	}
+	deviceURA, _ := row["device_ura"].(string)
+	if strings.TrimSpace(deviceURA) == "" {
+		return nil, invalidProfilePayload(eventsProfile, "device event row device_ura is required", nil)
+	}
+	occurredUnixMS, ok := numericInt64(row["occurred_unix_ms"])
+	if !ok || occurredUnixMS < 0 {
+		return nil, invalidProfilePayload(eventsProfile, "device event row occurred_unix_ms is required", nil)
+	}
+	kind, _ := row["kind"].(string)
+	if strings.TrimSpace(kind) == "" {
+		kind = "device.event"
+	}
+	payload := row["payload"]
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	cursor := map[string]any{
+		"stream":   string(EventStreamDevice),
+		"sequence": sequence,
+		"token":    fmt.Sprintf("%s:%d", EventStreamDevice, sequence),
+	}
+	return map[string]any{
+		"profile":            eventsProfile,
+		"stream":             string(EventStreamDevice),
+		"kind":               kind,
+		"event_id":           firstNonEmpty(firstStringFromMap(row, "event_id"), fmt.Sprintf("evt-%s-%d", EventStreamDevice, sequence)),
+		"cursor":             cursor,
+		"resume_token":       firstNonEmpty(firstStringFromMap(row, "resume_token"), fmt.Sprintf("%s:%d", EventStreamDevice, sequence)),
+		"occurred_unix_ms":   occurredUnixMS,
+		"occurred_at":        time.UnixMilli(occurredUnixMS).UTC().Format("2006-01-02T15:04:05.000Z"),
+		"subject_ref":        eventsRuntimeDeviceSubjectRef(deviceURA),
+		"tenant_ref":         eventsRuntimeTenantRef(row),
+		"payload":            payload,
+		"dropped_count":      0,
+		"reconnect_after_ms": nil,
+		"terminal":           false,
+		"metadata": map[string]any{
+			"profile":        eventsProfile,
+			"stream":         string(EventStreamDevice),
+			"carrier_owner":  "daemon_sdk",
+			"source":         "daemon_device_event",
+			"stream_ability": eventsAbilityDeviceHistory,
+			"lifecycle":      "history",
+		},
+	}, nil
+}
+
+func eventsRuntimeDeviceSubjectRef(deviceURA string) map[string]any {
+	return map[string]any{
+		"kind": "ura",
+		"ura":  strings.TrimSpace(deviceURA),
+		"role": "device",
+	}
+}
+
+func eventsRuntimeTenantRef(row map[string]any) any {
+	if tenantRef, ok := row["tenant_ref"]; ok && tenantRef != nil {
+		return tenantRef
+	}
+	realm, _ := row["realm"].(string)
+	if strings.TrimSpace(realm) == "" {
+		realm, _ = row["tenant"].(string)
+	}
+	if strings.TrimSpace(realm) == "" {
+		return nil
+	}
+	return map[string]any{"kind": "realm", "realm": strings.TrimSpace(realm)}
 }
 
 func eventRuntimeResumeToken(value any) string {
@@ -264,6 +517,27 @@ func numericUint64(value any) (uint64, bool) {
 	}
 }
 
+func numericInt64(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if typed != float64(int64(typed)) {
+			return 0, false
+		}
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint64:
+		if typed > uint64(^uint64(0)>>1) {
+			return 0, false
+		}
+		return int64(typed), true
+	default:
+		return 0, false
+	}
+}
+
 func isEmptyEventRuntimeArg(value any) bool {
 	switch typed := value.(type) {
 	case nil:
@@ -290,6 +564,39 @@ func eventsRuntimeMetadata(base map[string]any, abilityName string) map[string]a
 	metadata["system_ability"] = abilityName
 	metadata["carrier_owner"] = "daemon_sdk"
 	return metadata
+}
+
+func eventsInvocationFailureError(result InvocationResult) error {
+	failure := result.Failure()
+	message := "events invocation failed"
+	code := ErrAbilityFailed
+	stage := "runtime"
+	retry := RetryNever
+	details := map[string]any{"terminal_state": result.TerminalState()}
+	if failure != nil {
+		if failure.Message() != "" {
+			message = failure.Message()
+		}
+		if failure.Code() != "" {
+			code = NormalizeErrorCode(failure.Code())
+			details["runtime_code"] = failure.Code()
+		}
+		if failure.Stage() != "" {
+			stage = failure.Stage()
+		}
+		if failure.Retryable() {
+			retry = RetrySafe
+		}
+		details["runtime_retryable"] = failure.Retryable()
+	}
+	return withProfileErrorDetails(&SDKError{
+		Code:      code,
+		Stage:     stage,
+		Retry:     retry,
+		Retryable: RetryableForHint(retry),
+		Message:   message,
+		Details:   details,
+	}, eventsProfile)
 }
 
 func sdkProfileNotImplemented(profile string, message string) error {

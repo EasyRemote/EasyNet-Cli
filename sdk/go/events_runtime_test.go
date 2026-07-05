@@ -143,3 +143,75 @@ func TestRuntimeEventsMapsStreamAbilitiesAndRejectsSubscribeShortcut(t *testing.
 		t.Fatalf("SubscribeDirectory error = %v, want %s", err, ErrNotImplemented)
 	}
 }
+
+func TestRuntimeEventsListsDeviceHistoryThroughRuntime(t *testing.T) {
+	identityTransport := &compatibilityRuntimeIdentityTransport{
+		abilityByName: map[string]string{
+			eventsAbilityDeviceHistory: "easynet:///r/example/ability/device.dev-a.events.device.history",
+		},
+		descriptorByAbility: map[string]string{
+			"easynet:///r/example/ability/device.dev-a.events.device.history": "easynet:///r/example/ability/device.dev-a.events.device.history@1.0.0",
+		},
+	}
+	identityClient, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: eventsRuntimeDeviceHistoryRawJSON}
+	runtimeClient, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeEventClient(runtimeClient, identityClient)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClient: %v", err)
+	}
+
+	page, err := client.ListDeviceEvents(context.Background(), EventsDeviceEventListRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+		Limit:             1,
+	})
+	if err != nil {
+		t.Fatalf("ListDeviceEvents: %v", err)
+	}
+	if page.Stream != "device" || page.ItemKind != "device_event" || len(page.Items) != 1 ||
+		page.Items[0].Kind != "device.status_changed" || page.NextCursor == nil || *page.NextCursor != "device:1" {
+		t.Fatalf("device history page = %#v", page)
+	}
+	args := runtimeTransport.seenDraft["args"].(map[string]any)
+	if args["daemon_ability"] != eventsAbilityDeviceHistory ||
+		args["stream"] != "device" ||
+		args["device_ura"] != "easynet:///r/example/device/dev-a" ||
+		args["limit"].(float64) != 1 {
+		t.Fatalf("runtime device history args = %#v", args)
+	}
+	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.events.device.history@1.0.0" {
+		t.Fatalf("descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+	if len(identityTransport.seenBuildURA) != 1 ||
+		identityTransport.seenBuildURA[0]["ability_name"] != eventsAbilityDeviceHistory {
+		t.Fatalf("identity lookup not delegated: %#v", identityTransport.seenBuildURA)
+	}
+}
+
+const eventsRuntimeDeviceHistoryRawJSON = `{
+  "events": [
+    {
+      "sequence": 8,
+      "device_ura": "easynet:///r/example/device/dev-a",
+      "realm": "example",
+      "occurred_unix_ms": 1783100000123,
+      "kind": "device.status_changed",
+      "payload": {"state": "online"}
+    },
+    {
+      "sequence": 9,
+      "device_ura": "easynet:///r/example/device/dev-a",
+      "realm": "example",
+      "occurred_unix_ms": 1783100001123,
+      "kind": "device.status_changed",
+      "payload": {"state": "offline"}
+    }
+  ]
+}`
