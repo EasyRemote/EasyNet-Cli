@@ -48,6 +48,7 @@ import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -64,6 +65,7 @@ type cabiMissionSymbols struct {
 	buildRunFileInvocation unsafe.Pointer
 	buildTrackInvocation   unsafe.Pointer
 	buildCancelInvocation  unsafe.Pointer
+	buildEventsInvocation  unsafe.Pointer
 	projectStatus          unsafe.Pointer
 	projectEvents          unsafe.Pointer
 }
@@ -161,8 +163,35 @@ func (t *CABIMissionTransport) Cancel(ctx context.Context, requestJSON []byte) (
 	return t.invokeAndProjectStatus(ctx, requestJSON, t.symbols.buildCancelInvocation, "C ABI mission cancel failed")
 }
 
-func (t *CABIMissionTransport) Events(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(missionProfile, "C ABI mission event-list carrier is not exported yet")
+func (t *CABIMissionTransport) Events(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	var request MissionEventListRequest
+	if err := json.Unmarshal(requestJSON, &request); err != nil {
+		return nil, invalidProfilePayload(missionProfile, fmt.Sprintf("decode mission events request JSON: %v", err), err)
+	}
+	if err := validateMissionEventListRequest(request); err != nil {
+		return nil, err
+	}
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, t.symbols.buildEventsInvocation, requestJSON, "C ABI mission events failed")
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := t.invoke(handle, draftJSON, "C ABI mission events failed")
+	if err != nil {
+		return nil, err
+	}
+	outputJSON, err := outputJSONFromProfileInvocationResult(resultJSON, missionProfile)
+	if err != nil {
+		return nil, err
+	}
+	projectionInput, err := missionEventsProjectionInput(outputJSON, request)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, t.symbols.projectEvents, projectionInput, "C ABI mission events failed")
 }
 
 func (t *CABIMissionTransport) ProjectStatus(ctx context.Context, statusJSON []byte) ([]byte, error) {
@@ -221,6 +250,22 @@ func (t *CABIMissionTransport) invokeAndProjectStatus(ctx context.Context, reque
 		return nil, err
 	}
 	return t.callJSON(handle, t.symbols.projectStatus, outputJSON, fallback)
+}
+
+func missionEventsProjectionInput(outputJSON []byte, request MissionEventListRequest) ([]byte, error) {
+	var result map[string]any
+	if err := json.Unmarshal(outputJSON, &result); err != nil {
+		return nil, invalidProfilePayload(missionProfile, fmt.Sprintf("decode mission events output JSON: %v", err), err)
+	}
+	if result == nil {
+		return nil, invalidProfilePayload(missionProfile, "mission events output must be an object", nil)
+	}
+	projection := map[string]any{
+		"mission_id":      request.MissionID,
+		"cursor_sequence": request.CursorSequence,
+		"result":          result,
+	}
+	return json.Marshal(projection)
 }
 
 func (t *CABIMissionTransport) callJSONWithOpenHandle(ctx context.Context, symbol unsafe.Pointer, payload []byte, fallback string) ([]byte, error) {
@@ -287,6 +332,7 @@ func bindCABIMissionSymbols(library unsafe.Pointer) (cabiMissionSymbols, error) 
 		{"easynet_mission_build_run_file_invocation", &symbols.buildRunFileInvocation},
 		{"easynet_mission_build_track_invocation", &symbols.buildTrackInvocation},
 		{"easynet_mission_build_cancel_invocation", &symbols.buildCancelInvocation},
+		{"easynet_mission_build_events_invocation", &symbols.buildEventsInvocation},
 		{"easynet_mission_project_status", &symbols.projectStatus},
 		{"easynet_mission_project_events", &symbols.projectEvents},
 	}

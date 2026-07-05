@@ -33,7 +33,7 @@ method spelling.
 | receipt | fetch/projection/ref partial | fetch/projection/history partial | projection/ref seam partial | projection/history seam partial | gap | gap | gap |
 | publication | carrier partial | carrier/deploy/lifecycle partial | carrier/lifecycle/read-model seam partial | carrier/deploy/read-model seam partial | gap | gap | gap |
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
-| mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
+| mission | carrier/status/events partial | carrier/status/events partial | carrier/status/events seam partial | carrier/status/events seam partial | gap | gap | gap |
 | admin + gateway | carrier/status/session partial | carrier/status/session partial | carrier/status/session seam partial | carrier/status/session seam partial | gap | gap | gap |
 | events | stream/history partial | stream/history partial | stream/history runtime seam partial | stream/history seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
@@ -80,9 +80,11 @@ method spelling.
   checks against raw host-stream codecs; product host lifecycle, cleanup
   execution, and behavior-executing profile conformance adapters remain
   incomplete.
-- Mission carrier/status guardrails exist for Rust/C ABI; live event streams,
-  daemon track/cancel convenience methods, language facades, and
-  behavior-executing profile conformance adapters remain incomplete.
+- Mission carrier/status/events guardrails exist for Rust/C ABI over
+  `mission.run/track/cancel/events`; Go/Python C ABI transports now execute
+  run/run-file/track/cancel/events through Runtime Core invoke. Stream-backed
+  live adapters, daemon-backed child Invocation execution behavior conformance,
+  scheduler/retry policy, and backend automation cutover remain incomplete.
 - Events Directory/device/invocation stream carrier guardrails, session stream
   carrier guardrails, DirectoryEvent/drop/terminal projection guardrails, and
   bounded device event history carrier/page guardrails exist for Rust/C ABI over
@@ -163,10 +165,10 @@ method spelling.
   execution, local canonical JSON/hash implementation, EasyRemote host process
   integration, and behavior-executing host lifecycle conformance remain
   incomplete.
-- Go Mission facade exposes `MissionClient` run/run-file/track/cancel
-  Invocation carrier builders plus daemon `MissionStatus` and
-  `MissionEventPage` projection seams and close state seams; daemon mission execution carriers,
-  concrete live-tail adapters, child Invocation behavior conformance,
+- Go Mission facade exposes `MissionClient` run/run-file/track/cancel/events
+  Invocation carrier builders, C ABI-backed run/run-file/track/cancel/events
+  execution through Runtime Core invoke, daemon `MissionStatus` and
+  `MissionEventPage` projection seams, and close state seams; concrete live-tail adapters, child Invocation behavior conformance,
   scheduler/retry policy, and backend automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
   session-list, hub join/leave, pairing preflight/create/validate, credential
@@ -324,9 +326,10 @@ method spelling.
   Pipeline child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover, and full receipt verification remain
   incomplete.
-- Python Mission facade exposes `MissionClient` run/run-file/track/cancel
+- Python Mission facade exposes `MissionClient` run/run-file/track/cancel/events
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
-  through Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
+  through Runtime Core invoke, C ABI-backed mission events execution through
+  Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
   projection seams, an SDK-owned EasyRemote Mission cutover adapter with
   event-page projection, SDK-owned EasyRemote profile bridge dispatch/projection
   glue, EasyRemote `MissionControl`/`MissionRun` page-based

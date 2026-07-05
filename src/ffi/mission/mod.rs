@@ -31,8 +31,9 @@
 use std::os::raw::c_char;
 
 use crate::daemon::mission_contract::{
-    build_cancel_invocation, build_run_eal_invocation, build_run_file_invocation,
-    build_track_invocation, project_events, project_status, MissionError,
+    build_cancel_invocation, build_events_invocation, build_run_eal_invocation,
+    build_run_file_invocation, build_track_invocation, project_events, project_status,
+    MissionError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -124,6 +125,28 @@ pub unsafe extern "C" fn easynet_mission_build_cancel_invocation(
         "out_invocation_json",
         "request_json",
         build_cancel_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon `mission.events`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_mission_build_events_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_mission_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_mission_build_events_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_events_invocation,
     )
 }
 
@@ -316,6 +339,27 @@ mod tests {
             value["child_receipts"][0]["receipt_ura"],
             "easynet:///r/example/receipt/child"
         );
+        release(handle);
+    }
+
+    #[test]
+    fn mission_build_events_invocation_projects_complete_tuple() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "mission_id": "2026-07-04_010203_demo",
+            "cursor_sequence": 4,
+            "limit": 25
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_mission_build_events_invocation(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "mission.events");
+        assert_eq!(value["args"]["run_id"], "2026-07-04_010203_demo");
+        assert_eq!(value["args"]["cursor_sequence"], 4);
         release(handle);
     }
 

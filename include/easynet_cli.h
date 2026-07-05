@@ -651,6 +651,12 @@ int32_t easynet_mission_build_cancel_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_mission_build_events_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_mission_project_status(
     EasynetHandle handle,
     const char *status_json,

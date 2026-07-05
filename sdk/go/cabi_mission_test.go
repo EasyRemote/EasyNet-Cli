@@ -70,22 +70,26 @@ func TestCABIMissionTransportBuildsRunsAndProjects(t *testing.T) {
 	if len(events.Events) != 2 || events.NextCursorSequence != 7 {
 		t.Fatalf("projected events = %#v", events)
 	}
+
+	page, err := client.Events(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+		CursorSequence:     4,
+		Limit:              25,
+	})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(page.Events) != 2 || page.CursorSequence != 4 || page.NextCursorSequence != 7 {
+		t.Fatalf("events page = %#v", page)
+	}
 }
 
-func TestCABIMissionTransportUnsupportedEventsAndClosed(t *testing.T) {
+func TestCABIMissionTransportClosed(t *testing.T) {
 	libraryPath := buildFakeCABIMissionLibrary(t)
 	client, transport, err := NewCABIMissionClient(libraryPath, "")
 	if err != nil {
 		t.Fatalf("NewCABIMissionClient: %v", err)
-	}
-
-	_, err = client.Events(context.Background(), MissionEventListRequest{
-		MissionCarrierBase: baseMissionCarrier(),
-		MissionID:          "2026-07-04_010203_weather",
-		CursorSequence:     0,
-	})
-	if !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("Events error = %v, want %s", err, ErrNotImplemented)
 	}
 
 	if err := transport.Close(context.Background()); err != nil {
@@ -176,6 +180,10 @@ int32_t easynet_init(const char *control_path, uint64_t *out_handle) {
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle;
+	if (strstr(invocation_json, "mission.events") != 0) {
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"has_more\":false,\"dropped_count\":0,\"events\":[{\"sequence\":4,\"event_type\":\"progress\",\"occurred_unix_ms\":1783219200004,\"terminal\":false,\"payload\":{\"step\":\"s1\"},\"receipt\":{}},{\"sequence\":6,\"event_type\":\"completed\",\"occurred_unix_ms\":1783219200006,\"terminal\":true,\"payload\":{\"ok\":true},\"receipt\":{\"receipt_ura\":\"easynet:///r/example/receipt/child\"}}]},\"error\":null}");
+		return 0;
+	}
 	if (strstr(invocation_json, "mission.run") == 0 && strstr(invocation_json, "mission.track") == 0 && strstr(invocation_json, "mission.cancel") == 0) return 10;
 	*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"mission_id\":\"2026-07-04_010203_weather\",\"meta\":{\"trace_id\":\"2026-07-04_010203_weather\",\"status\":\"completed\",\"steps_failed\":0,\"invocation_context\":{\"receipt_ura\":\"easynet:///r/example/receipt/parent\"},\"child_invocations\":[]},\"output_refs\":[{\"kind\":\"run_dir\",\"path\":\"/tmp/easynet/missions/runs/2026-07-04_010203_weather\"}]},\"error\":null}");
 	return 0;
@@ -201,6 +209,12 @@ int32_t easynet_mission_build_cancel_invocation(uint64_t handle, const char *req
 	(void)handle;
 	if (strstr(request_json, "2026-07-04_010203_weather") == 0) return 10;
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"run_id\":\"2026-07-04_010203_weather\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"mission\",\"system_ability\":\"mission.cancel\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_mission_build_events_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "2026-07-04_010203_weather") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.mission.events@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"run_id\":\"2026-07-04_010203_weather\",\"cursor_sequence\":4,\"limit\":25},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"mission\",\"system_ability\":\"mission.events\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
 int32_t easynet_mission_project_status(uint64_t handle, const char *status_json, char **out_status_json) {

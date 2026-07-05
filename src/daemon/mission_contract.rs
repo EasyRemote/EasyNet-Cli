@@ -43,6 +43,7 @@ const MISSION_PROFILE: &str = "mission";
 const SYSTEM_ABILITY_RUN: &str = crate::daemon::ability::names::automation::MISSION_RUN;
 const SYSTEM_ABILITY_TRACK: &str = crate::daemon::ability::names::automation::MISSION_TRACK;
 const SYSTEM_ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::MISSION_CANCEL;
+const SYSTEM_ABILITY_EVENTS: &str = crate::daemon::ability::names::automation::MISSION_EVENTS;
 
 pub(crate) type MissionError = SdkContractError;
 
@@ -99,6 +100,43 @@ pub(crate) fn build_cancel_invocation(request: &Value) -> Result<Value, MissionE
         MISSION_PROFILE,
         SYSTEM_ABILITY_CANCEL,
         json!({ "run_id": mission_id }),
+    )
+}
+
+pub(crate) fn build_events_invocation(request: &Value) -> Result<Value, MissionError> {
+    let obj = object(request, "MissionEventListRequest")?;
+    let mission_id = required_mission_id(obj)?;
+    let cursor_sequence = optional_i64(obj, "cursor_sequence").unwrap_or(0);
+    if cursor_sequence < 0 {
+        return Err(MissionError::InvalidField(
+            "cursor_sequence",
+            "must be non-negative".to_string(),
+        ));
+    }
+    let limit = optional_i64(obj, "limit").unwrap_or(0);
+    if limit < 0 {
+        return Err(MissionError::InvalidField(
+            "limit",
+            "must be non-negative".to_string(),
+        ));
+    }
+    if limit > 1000 {
+        return Err(MissionError::InvalidField(
+            "limit",
+            "exceeds bounds".to_string(),
+        ));
+    }
+    let mut args = Map::new();
+    args.insert("run_id".to_string(), Value::String(mission_id.to_string()));
+    args.insert("cursor_sequence".to_string(), json!(cursor_sequence));
+    if limit > 0 {
+        args.insert("limit".to_string(), json!(limit));
+    }
+    build_system_invocation(
+        obj,
+        MISSION_PROFILE,
+        SYSTEM_ABILITY_EVENTS,
+        Value::Object(args),
     )
 }
 
@@ -209,16 +247,26 @@ pub(crate) fn project_status(input: &Value) -> Result<Value, MissionError> {
 
 pub(crate) fn project_events(input: &Value) -> Result<Value, MissionError> {
     let obj = object(input, "MissionEventPageInput")?;
-    let meta_value = obj.get("meta").unwrap_or(input);
+    let page_value = obj
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let page_obj = object(page_value, "MissionEventPageResult")?;
+    let meta_value = page_obj.get("meta").unwrap_or(page_value);
     let meta_obj = object(meta_value, "MissionEventPageMeta").unwrap_or(obj);
-    let mission_id = optional_string(obj, "mission_id")
+    let mission_id = optional_string(page_obj, "mission_id")
+        .or_else(|| optional_string(page_obj, "run_id"))
+        .or_else(|| optional_string(page_obj, "trace_id"))
+        .or_else(|| optional_string(meta_obj, "trace_id"))
+        .or_else(|| optional_string(obj, "mission_id"))
         .or_else(|| optional_string(obj, "run_id"))
         .or_else(|| optional_string(obj, "trace_id"))
-        .or_else(|| optional_string(meta_obj, "trace_id"))
         .ok_or(MissionError::MissingField("mission_id"))?;
     validate_mission_id(&mission_id)?;
 
-    let cursor_sequence = optional_i64(obj, "cursor_sequence")
+    let cursor_sequence = optional_i64(page_obj, "cursor_sequence")
+        .or_else(|| optional_i64(page_obj, "from_sequence"))
+        .or_else(|| optional_i64(obj, "cursor_sequence"))
         .or_else(|| optional_i64(obj, "from_sequence"))
         .unwrap_or(0);
     if cursor_sequence < 0 {
@@ -227,7 +275,7 @@ pub(crate) fn project_events(input: &Value) -> Result<Value, MissionError> {
             "must be non-negative".to_string(),
         ));
     }
-    let raw_events = event_array(obj)
+    let raw_events = event_array(page_obj)
         .or_else(|| event_array(meta_obj))
         .ok_or(MissionError::MissingField("events"))?;
     let mut events = raw_events
@@ -240,8 +288,12 @@ pub(crate) fn project_events(input: &Value) -> Result<Value, MissionError> {
         .last()
         .map(|event| event.sequence + 1)
         .unwrap_or(cursor_sequence);
-    let has_more = optional_bool(obj, "has_more").unwrap_or(false);
-    let dropped_count = optional_i64(obj, "dropped_count").unwrap_or(0);
+    let has_more = optional_bool(page_obj, "has_more")
+        .or_else(|| optional_bool(obj, "has_more"))
+        .unwrap_or(false);
+    let dropped_count = optional_i64(page_obj, "dropped_count")
+        .or_else(|| optional_i64(obj, "dropped_count"))
+        .unwrap_or(0);
     if dropped_count < 0 {
         return Err(MissionError::InvalidField(
             "dropped_count",
@@ -265,6 +317,7 @@ pub(crate) fn project_events(input: &Value) -> Result<Value, MissionError> {
         "event_source".to_string(),
         Value::String("mission_timeline".to_string()),
     );
+    copy_optional(page_obj, &mut metadata, "source");
     copy_optional(obj, &mut metadata, "source");
     copy_optional(meta_obj, &mut metadata, "trace_id");
 
@@ -707,6 +760,42 @@ mod tests {
     }
 
     #[test]
+    fn build_events_invocation_projects_bounded_replay_args() {
+        let request = base_request(json!({
+            "mission_id": "2026-07-04_010203_demo",
+            "cursor_sequence": 4,
+            "limit": 25
+        }));
+
+        let invocation = build_events_invocation(&request).unwrap();
+
+        assert_eq!(
+            invocation["metadata"]["system_ability"],
+            SYSTEM_ABILITY_EVENTS
+        );
+        assert_eq!(
+            invocation["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0"
+        );
+        assert_eq!(invocation["args"]["run_id"], "2026-07-04_010203_demo");
+        assert_eq!(invocation["args"]["cursor_sequence"], 4);
+        assert_eq!(invocation["args"]["limit"], 25);
+    }
+
+    #[test]
+    fn build_events_invocation_rejects_unbounded_limit() {
+        let request = base_request(json!({
+            "mission_id": "2026-07-04_010203_demo",
+            "cursor_sequence": 4,
+            "limit": 1001
+        }));
+
+        let err = build_events_invocation(&request).unwrap_err();
+
+        assert!(format!("{err}").contains("limit"));
+    }
+
+    #[test]
     fn project_status_exposes_child_receipts_and_parent_context() {
         let status = project_status(&json!({
             "run_id": "2026-07-04_010203_demo",
@@ -807,6 +896,29 @@ mod tests {
             page["events"][1]["receipt"]["receipt_ura"],
             "easynet:///r/example/receipt/terminal"
         );
+    }
+
+    #[test]
+    fn project_events_accepts_runtime_result_wrapper() {
+        let page = project_events(&json!({
+            "mission_id": "2026-07-04_010203_demo",
+            "cursor_sequence": 4,
+            "result": {
+                "has_more": false,
+                "events": [{
+                    "sequence": 4,
+                    "timestamp_unix_ms": 1004,
+                    "type": "completed",
+                    "payload": {"ok": true}
+                }]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(page["mission_id"], "2026-07-04_010203_demo");
+        assert_eq!(page["cursor_sequence"], 4);
+        assert_eq!(page["next_cursor_sequence"], 5);
+        assert_eq!(page["events"][0]["event_type"], "completed");
     }
 
     #[test]

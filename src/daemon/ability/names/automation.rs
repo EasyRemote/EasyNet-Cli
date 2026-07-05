@@ -11,6 +11,7 @@ pub const LOOP_CANCEL: &str = "loop.cancel";
 pub const MISSION_RUN: &str = "mission.run";
 pub const MISSION_TRACK: &str = "mission.track";
 pub const MISSION_CANCEL: &str = "mission.cancel";
+pub const MISSION_EVENTS: &str = "mission.events";
 pub const MISSION_DISCUSS_ROUND: &str = "mission.discuss_round";
 pub const MISSION_THINK: &str = "mission.think";
 

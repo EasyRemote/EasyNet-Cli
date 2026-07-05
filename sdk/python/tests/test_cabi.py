@@ -61,6 +61,7 @@ from easynet_sdk import (
     MissionCancelRequest,
     MissionCarrierBase,
     MissionClient,
+    MissionEventListRequest,
     MissionRunFileRequest,
     MissionRunRequest,
     MissionTrackRequest,
@@ -479,6 +480,21 @@ class FakeRawCABI:
             return {
                 "ack": True,
                 "device_ura": "easynet:///r/example/device/dev-a",
+            }
+        if system_ability == "mission.events":
+            return {
+                "has_more": False,
+                "dropped_count": 0,
+                "events": [
+                    {
+                        "sequence": 1,
+                        "event_type": "completed",
+                        "occurred_unix_ms": 1000,
+                        "terminal": True,
+                        "payload": {},
+                        "receipt": {},
+                    }
+                ],
             }
         if system_ability == "federation.revoke":
             return {"ack": True, "was_active": True}
@@ -1039,6 +1055,8 @@ class FakeRawCABI:
             return MISSION_TRACK_INVOCATION
         if symbol == "easynet_mission_build_cancel_invocation":
             return MISSION_CANCEL_INVOCATION
+        if symbol == "easynet_mission_build_events_invocation":
+            return MISSION_EVENTS_INVOCATION
         if symbol == "easynet_surface_build_list_pages_invocation":
             return SURFACE_LIST_PAGES_INVOCATION
         if symbol == "easynet_surface_build_create_page_invocation":
@@ -1809,6 +1827,19 @@ MISSION_CANCEL_INVOCATION = (
     b'"args":{"run_id":"mission-1"},'
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"mission","system_ability":"mission.cancel",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+MISSION_EVENTS_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.mission.events@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"run_id":"mission-1","cursor_sequence":0,"limit":25},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"mission","system_ability":"mission.events",'
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
@@ -4287,11 +4318,20 @@ class CABITransportTests(unittest.TestCase):
         )
         tracked = client.track(MissionTrackRequest(base=base, mission_id="mission-1"))
         cancelled = client.cancel(MissionCancelRequest(base=base, mission_id="mission-1"))
+        events = client.events(
+            MissionEventListRequest(
+                base=base,
+                mission_id="mission-1",
+                cursor_sequence=0,
+                limit=25,
+            )
+        )
 
         self.assertTrue(run.status.terminal)
         self.assertTrue(run_file.status.terminal)
         self.assertEqual(tracked.state, "completed")
         self.assertEqual(cancelled.state, "completed")
+        self.assertEqual(events.events[0].event_type, "completed")
         self.assertEqual(
             [item[0] for item in raw.profile_requests],
             [
@@ -4303,14 +4343,18 @@ class CABITransportTests(unittest.TestCase):
                 "easynet_mission_project_status",
                 "easynet_mission_build_cancel_invocation",
                 "easynet_mission_project_status",
+                "easynet_mission_build_events_invocation",
+                "easynet_mission_project_events",
             ],
         )
         self.assertEqual(
             [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
-            ["mission.run", "mission.run", "mission.track", "mission.cancel"],
+            ["mission.run", "mission.run", "mission.track", "mission.cancel", "mission.events"],
         )
         self.assertEqual(raw.profile_requests[1][2]["run_id"], "mission-1")
         self.assertEqual(raw.profile_requests[7][2]["meta"]["status"], "cancelled")
+        self.assertEqual(raw.profile_requests[9][2]["mission_id"], "mission-1")
+        self.assertEqual(raw.profile_requests[9][2]["result"]["events"][0]["sequence"], 1)
         self.assertEqual(raw.buffers, {})
 
     def test_runtime_transport_prepare_sign_submit_choreography(self) -> None:

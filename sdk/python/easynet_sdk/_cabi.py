@@ -80,6 +80,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_mission_build_run_file_invocation",
     "easynet_mission_build_track_invocation",
     "easynet_mission_build_cancel_invocation",
+    "easynet_mission_build_events_invocation",
     "easynet_mission_project_status",
     "easynet_mission_project_events",
     "easynet_events_build_directory_subscription_invocation",
@@ -1330,6 +1331,9 @@ class CABIMissionTransport(_CABIProfileTransport):
     def build_cancel_invocation(self, request_json: bytes) -> bytes:
         return self._call("easynet_mission_build_cancel_invocation", request_json)
 
+    def build_events_invocation(self, request_json: bytes) -> bytes:
+        return self._call("easynet_mission_build_events_invocation", request_json)
+
     def run_eal(self, request_json: bytes) -> bytes:
         return self._invoke_output_projected(
             request_json,
@@ -1359,10 +1363,18 @@ class CABIMissionTransport(_CABIProfileTransport):
         )
 
     def events(self, request_json: bytes) -> bytes:
-        return self._call("easynet_mission_project_events", request_json)
+        return self._invoke_output_projected_with_request(
+            request_json,
+            build_symbol="easynet_mission_build_events_invocation",
+            project_symbol="easynet_mission_project_events",
+            projection_keys=("mission_id", "cursor_sequence"),
+        )
 
     def project_status(self, status_json: bytes) -> bytes:
         return self._call("easynet_mission_project_status", status_json)
+
+    def project_events(self, events_json: bytes) -> bytes:
+        return self._call("easynet_mission_project_events", events_json)
 
 
 @dataclass
