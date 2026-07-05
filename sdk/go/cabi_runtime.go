@@ -1219,22 +1219,13 @@ func daemonStartConfigForCABI(configJSON []byte) ([]byte, error) {
 		}
 	}
 	projected := map[string]any{}
-	for _, key := range []string{"mode", "realm", "daemon_bin", "log_path", "env"} {
+	for _, key := range []string{"mode", "realm", "device_id", "daemon_bin", "log_path", "env"} {
 		if !emptyCABIConfigValue(config[key]) {
 			projected[key] = config[key]
 		}
 	}
-	if !emptyCABIConfigValue(config["device_id"]) {
-		projected["node_id"] = config["device_id"]
-	}
-	if !emptyCABIConfigValue(config["node_id"]) {
-		projected["node_id"] = config["node_id"]
-	}
 	if value, ok := config["detached"].(bool); ok && value {
-		projected["detach"] = true
-	}
-	if value, ok := config["detach"].(bool); ok && value {
-		projected["detach"] = true
+		projected["detached"] = true
 	}
 	return json.Marshal(projected)
 }

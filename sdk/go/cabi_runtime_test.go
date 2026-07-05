@@ -35,7 +35,6 @@ func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
 		"mode":"device",
 		"realm":"lab",
 		"device_id":"device-a",
-		"node_id":"node-a",
 		"daemon_bin":"/usr/local/bin/easynet",
 		"log_path":"/tmp/easynet.log",
 		"detached":true,
@@ -49,14 +48,14 @@ func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
 		t.Fatalf("decode projected config: %v", err)
 	}
 
-	if projected["node_id"] != "node-a" {
-		t.Fatalf("node_id = %v, want node-a", projected["node_id"])
+	if projected["device_id"] != "device-a" {
+		t.Fatalf("device_id = %v, want device-a", projected["device_id"])
 	}
-	if projected["device_id"] != nil || projected["detached"] != nil {
-		t.Fatalf("projected config leaked facade-only keys: %v", projected)
+	if projected["node_id"] != nil || projected["detach"] != nil {
+		t.Fatalf("projected config leaked legacy keys: %v", projected)
 	}
-	if projected["detach"] != true {
-		t.Fatalf("detach = %v, want true", projected["detach"])
+	if projected["detached"] != true {
+		t.Fatalf("detached = %v, want true", projected["detached"])
 	}
 	if projected["mode"] != "device" || projected["realm"] != "lab" {
 		t.Fatalf("projected config lost daemon fields: %v", projected)

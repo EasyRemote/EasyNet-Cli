@@ -50,10 +50,10 @@ pub type EasynetDaemonHandle = u64;
 /// ```text
 /// {
 ///   "mode": "device" | "hub",
-///   "node_id": "dev-a",              // required for device
+///   "device_id": "dev-a",            // required for device
 ///   "daemon_bin": "/path/to/bin",    // optional
 ///   "log_path": "/path/to/log",      // optional
-///   "detach": true,                  // optional
+///   "detached": true,                // optional
 ///   "env": {"KEY": "VALUE"}          // optional string map
 /// }
 /// ```
@@ -476,11 +476,11 @@ fn remove_daemon_handle(handle: EasynetDaemonHandle) -> Option<Arc<ActiveDaemonH
 #[derive(Debug)]
 struct DaemonStartConfigJson {
     mode: DaemonStartMode,
-    node_id: Option<String>,
+    device_id: Option<String>,
     realm: Option<String>,
     daemon_bin: Option<String>,
     log_path: Option<String>,
-    detach: Option<bool>,
+    detached: Option<bool>,
     env: std::collections::BTreeMap<String, String>,
 }
 
@@ -492,11 +492,11 @@ impl DaemonStartConfigJson {
             .ok_or(DaemonStartConfigError::ExpectedObject)?;
         Ok(Self {
             mode: DaemonStartMode::parse(required_string(obj, "mode")?)?,
-            node_id: optional_string(obj, "node_id")?,
+            device_id: optional_string(obj, "device_id")?,
             realm: optional_string(obj, "realm")?,
             daemon_bin: optional_string(obj, "daemon_bin")?,
             log_path: optional_string(obj, "log_path")?,
-            detach: optional_bool(obj, "detach")?,
+            detached: optional_bool(obj, "detached")?,
             env: parse_env(obj)?,
         })
     }
@@ -504,10 +504,10 @@ impl DaemonStartConfigJson {
     fn build(self) -> Result<DaemonStartConfig, DaemonStartConfigError> {
         let mut config = match self.mode {
             DaemonStartMode::Device => {
-                let node_id = self
-                    .node_id
-                    .ok_or(DaemonStartConfigError::MissingField("node_id"))?;
-                DaemonStartConfig::device(node_id)?
+                let device_id = self
+                    .device_id
+                    .ok_or(DaemonStartConfigError::MissingField("device_id"))?;
+                DaemonStartConfig::device(device_id)?
             }
             DaemonStartMode::Hub => DaemonStartConfig::hub(),
         };
@@ -520,8 +520,8 @@ impl DaemonStartConfigJson {
         if let Some(path) = self.log_path {
             config = config.with_log_path(path);
         }
-        if let Some(detach) = self.detach {
-            config = config.detached(detach);
+        if let Some(detached) = self.detached {
+            config = config.detached(detached);
         }
         for (key, value) in self.env {
             config = config.with_env(key, value);
@@ -685,10 +685,10 @@ mod tests {
         let config = DaemonStartConfigJson::parse(
             r#"{
                 "mode": "device",
-                "node_id": "dev-a",
+                "device_id": "dev-a",
                 "daemon_bin": "/tmp/easynet-daemon",
                 "log_path": "/tmp/easynet.log",
-                "detach": false,
+                "detached": false,
                 "env": {"EASYNET_TEST": "1"}
             }"#,
         )
@@ -700,14 +700,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_start_config_rejects_device_without_node_id() {
+    fn parse_start_config_rejects_device_without_device_id() {
         let err = DaemonStartConfigJson::parse(r#"{"mode":"device"}"#)
             .unwrap()
             .build()
             .unwrap_err();
         assert!(
-            err.to_string().contains("node_id"),
-            "missing node_id must be reported: {err}"
+            err.to_string().contains("device_id"),
+            "missing device_id must be reported: {err}"
         );
     }
 
