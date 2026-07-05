@@ -1,0 +1,35 @@
+id: events/device_invocation_history
+profile: events
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: EventClient builds daemon-owned device and invocation stream Invocation carriers, projects bounded device event history pages, and routes Python C ABI execution through Runtime Core instead of SDK-local event semantics.
+steps:
+  - action: build_device_subscription_invocation
+    fixture: events-device-subscription-request.v4.json
+  - action: build_invocation_subscription_invocation
+    fixture: events-invocation-subscription-request.v4.json
+  - action: build_device_event_history_invocation
+    fixture: events-device-event-list-request.v4.json
+  - action: project_device_event_page
+    fixture: event.device-page.v4.json
+expect:
+  result: events_device_invocation_history_observed
+  device_request_schema: events-device-subscription-request.schema.json
+  invocation_request_schema: events-invocation-subscription-request.schema.json
+  device_history_request_schema: events-device-event-list-request.schema.json
+  invocation_schema: invocation.schema.json
+  event_schema: events.schema.json
+  device_subscription_invocation_fixture: events-device-subscription-invocation.v4.json
+  invocation_subscription_invocation_fixture: events-invocation-subscription-invocation.v4.json
+  device_history_invocation_fixture: events-device-history-invocation.v4.json
+  device_event_page_fixture: event.device-page.v4.json
+  device_stream_system_ability: events.device.subscribe
+  invocation_stream_system_ability: events.invocation.subscribe
+  device_history_system_ability: events.device.history
+  runtime_core_stream_open_required: true
+  runtime_core_invoke_required: true
+  sdk_local_event_bus_allowed: false
+  daemon_side_filtering_backend_cutover: incomplete

@@ -117,8 +117,9 @@ dispatch/projection glue, and
 SDK-owned EasyRemote Server/Gateway hub-config materialization, lifecycle state,
 TLS file validation, endpoint projection, and certificate fingerprint projection.
 EventClient exposes directory/device/session/invocation subscription
-Invocation carriers, C ABI-backed directory and session subscription execution
-through Runtime Core open_stream, device event history pages, and EventFrame
+Invocation carriers, C ABI-backed directory/device/session/invocation
+subscription execution through Runtime Core open_stream, C ABI-backed bounded
+device event history execution through Runtime Core invoke, and EventFrame
 cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers, C ABI-backed
 page list/create/delete/manifest/health execution through Runtime Core invoke, plus

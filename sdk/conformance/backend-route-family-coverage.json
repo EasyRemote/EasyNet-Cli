@@ -77,7 +77,9 @@
       "sdk_profile_refs": ["events", "directory"],
       "backend_responsibility": "Subscriber registry, tenant authorization, and browser SSE/WS fanout.",
       "coverage_evidence": [
-        {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/events-directory-stream.yaml"}
+        {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/events-directory-stream.yaml"},
+        {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/events-session-stream.yaml"},
+        {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/events-device-invocation-history.yaml"}
       ]
     },
     {

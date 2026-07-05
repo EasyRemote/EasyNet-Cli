@@ -44,13 +44,20 @@ use crate::daemon::sdk_contract::{
 
 const EVENTS_PROFILE: &str = "events";
 const DIRECTORY_STREAM: &str = "directory";
+const DEVICE_STREAM: &str = "device";
 const SESSION_STREAM: &str = "session";
+const INVOCATION_STREAM: &str = "invocation";
 const DIRECTORY_ABILITY: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 const SESSION_ATTACH_ABILITY: &str = crate::daemon::ability::names::device_control::SESSION_ATTACH;
+const DEVICE_SUBSCRIBE_ABILITY: &str = "events.device.subscribe";
+const INVOCATION_SUBSCRIBE_ABILITY: &str = "events.invocation.subscribe";
+const DEVICE_HISTORY_ABILITY: &str = "events.device.history";
 const DEFAULT_RECONNECT_AFTER_MS: u64 = 1_000;
 const MIN_HEARTBEAT_INTERVAL_MS: u64 = 1_000;
 const MAX_HEARTBEAT_INTERVAL_MS: u64 = 300_000;
+const DEFAULT_EVENT_PAGE_SIZE: usize = 50;
+const MAX_EVENT_PAGE_SIZE: usize = 500;
 
 pub(crate) type EventsError = SdkContractError;
 
@@ -62,10 +69,82 @@ pub(crate) fn build_directory_subscription_invocation(
     build_system_invocation(obj, EVENTS_PROFILE, DIRECTORY_ABILITY, args)
 }
 
+pub(crate) fn build_device_subscription_invocation(request: &Value) -> Result<Value, EventsError> {
+    let obj = object(request, "EventsDeviceSubscriptionRequest")?;
+    let args = device_subscription_args(obj)?;
+    build_system_invocation(obj, EVENTS_PROFILE, DEVICE_SUBSCRIBE_ABILITY, args)
+}
+
 pub(crate) fn build_session_subscription_invocation(request: &Value) -> Result<Value, EventsError> {
     let obj = object(request, "EventsSessionSubscriptionRequest")?;
     let args = session_subscription_args(obj)?;
     build_system_invocation(obj, EVENTS_PROFILE, SESSION_ATTACH_ABILITY, args)
+}
+
+pub(crate) fn build_invocation_subscription_invocation(
+    request: &Value,
+) -> Result<Value, EventsError> {
+    let obj = object(request, "EventsInvocationSubscriptionRequest")?;
+    let args = invocation_subscription_args(obj)?;
+    build_system_invocation(obj, EVENTS_PROFILE, INVOCATION_SUBSCRIBE_ABILITY, args)
+}
+
+pub(crate) fn build_device_event_history_invocation(request: &Value) -> Result<Value, EventsError> {
+    let obj = object(request, "EventsDeviceEventListRequest")?;
+    let controls = PageControls::from_request(obj)?;
+    let mut args = Map::new();
+    args.insert(
+        "stream".to_string(),
+        Value::String(DEVICE_STREAM.to_string()),
+    );
+    args.insert("limit".to_string(), Value::Number(controls.limit.into()));
+    if let Some(device_ura) = optional_string(obj, "device_ura") {
+        validate_device_ura(&device_ura, "device_ura")?;
+        args.insert("device_ura".to_string(), Value::String(device_ura));
+    }
+    if let Some(cursor) = optional_string(obj, "cursor") {
+        let cursor = EventCursor::parse_token(&cursor, "cursor")?;
+        cursor.require_stream(DEVICE_STREAM, "cursor")?;
+        args.insert("cursor".to_string(), Value::String(cursor.resume_token()));
+    }
+    build_system_invocation(
+        obj,
+        EVENTS_PROFILE,
+        DEVICE_HISTORY_ABILITY,
+        Value::Object(args),
+    )
+}
+
+pub(crate) fn project_device_event_page(input: &Value) -> Result<Value, EventsError> {
+    let input = object(input, "EventsDeviceEventPageInput")?;
+    let controls = PageControls::from_request(input)?;
+    let fallback_result = Value::Object(input.clone());
+    let result = input
+        .get("result")
+        .filter(|value| !value.is_null())
+        .unwrap_or(&fallback_result);
+    let rows = event_rows(result)?;
+    let page = controls.slice(rows)?;
+    let mut items = Vec::with_capacity(page.rows.len());
+    for row in page.rows {
+        items.push(project_device_event_row(row)?);
+    }
+    let has_more = page.next_cursor.is_some();
+    Ok(json!({
+        "profile": EVENTS_PROFILE,
+        "stream": DEVICE_STREAM,
+        "item_kind": "device_event",
+        "items": items,
+        "next_cursor": page.next_cursor,
+        "has_more": has_more,
+        "limit": controls.limit,
+        "metadata": {
+            "profile": EVENTS_PROFILE,
+            "source": "device_event_history",
+            "source_ability": DEVICE_HISTORY_ABILITY,
+            "total_items": rows.len(),
+        },
+    }))
 }
 
 pub(crate) fn project_directory_event(input: &Value) -> Result<Value, EventsError> {
@@ -206,6 +285,22 @@ fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, Events
     Ok(Value::Object(args))
 }
 
+fn device_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
+    validate_stream_field(obj, DEVICE_STREAM)?;
+    let mut args = subscription_common_args(obj, DEVICE_STREAM, DEVICE_SUBSCRIBE_ABILITY)?;
+    if let Some(device_ura) = optional_string(obj, "device_ura") {
+        validate_device_ura(&device_ura, "device_ura")?;
+        args.insert("device_ura".to_string(), Value::String(device_ura));
+    }
+    for field in ["owner_ura", "agent_ura"] {
+        if let Some(value) = optional_string(obj, field) {
+            validate_ura(&value, field)?;
+            args.insert(field.to_string(), Value::String(value));
+        }
+    }
+    Ok(Value::Object(args))
+}
+
 fn session_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
     validate_stream_field(obj, SESSION_STREAM)?;
     if obj
@@ -234,6 +329,45 @@ fn session_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsEr
     Ok(Value::Object(args))
 }
 
+fn invocation_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
+    validate_stream_field(obj, INVOCATION_STREAM)?;
+    let invocation_id =
+        optional_string(obj, "invocation_id").ok_or(EventsError::MissingField("invocation_id"))?;
+    validate_token(&invocation_id, "invocation_id")?;
+    let mut args = subscription_common_args(obj, INVOCATION_STREAM, INVOCATION_SUBSCRIBE_ABILITY)?;
+    args.insert("invocation_id".to_string(), Value::String(invocation_id));
+    Ok(Value::Object(args))
+}
+
+fn subscription_common_args(
+    obj: &Map<String, Value>,
+    stream: &'static str,
+    daemon_ability: &'static str,
+) -> Result<Map<String, Value>, EventsError> {
+    let mut args = Map::new();
+    args.insert("stream".to_string(), Value::String(stream.to_string()));
+    args.insert(
+        "daemon_ability".to_string(),
+        Value::String(daemon_ability.to_string()),
+    );
+    if let Some(value) = obj.get("resume_cursor").filter(|value| !value.is_null()) {
+        let cursor = EventCursor::parse(value, "resume_cursor")?;
+        cursor.require_stream(stream, "resume_cursor")?;
+        args.insert(
+            "resume_cursor".to_string(),
+            Value::String(cursor.resume_token()),
+        );
+    }
+    if let Some(interval_ms) = optional_u64(obj, "heartbeat_interval_ms") {
+        validate_heartbeat_interval_ms(interval_ms)?;
+        args.insert(
+            "heartbeat_interval_ms".to_string(),
+            Value::Number(interval_ms.into()),
+        );
+    }
+    Ok(args)
+}
+
 fn validate_stream_field(
     obj: &Map<String, Value>,
     expected: &'static str,
@@ -248,6 +382,121 @@ fn validate_stream_field(
         }
     }
     Ok(())
+}
+
+fn validate_device_ura(raw: &str, field: &'static str) -> Result<(), EventsError> {
+    let parsed =
+        ura::parse_ura(raw).map_err(|err| EventsError::InvalidField(field, err.to_string()))?;
+    if parsed.kind != ura::URAKind::Device {
+        return Err(EventsError::InvalidField(
+            field,
+            format!("must be a Device URA, got {}", parsed.kind),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PageControls {
+    limit: usize,
+    offset: usize,
+}
+
+impl PageControls {
+    fn from_request(obj: &Map<String, Value>) -> Result<Self, EventsError> {
+        let limit = optional_usize(obj, "limit")?.unwrap_or(DEFAULT_EVENT_PAGE_SIZE);
+        if limit == 0 || limit > MAX_EVENT_PAGE_SIZE {
+            return Err(EventsError::InvalidField(
+                "limit",
+                format!("must be between 1 and {MAX_EVENT_PAGE_SIZE}"),
+            ));
+        }
+        let offset = optional_cursor_offset(obj, "cursor")?.unwrap_or(0);
+        Ok(Self { limit, offset })
+    }
+
+    fn slice<'a, T>(&self, rows: &'a [T]) -> Result<PageSlice<'a, T>, EventsError> {
+        if self.offset > rows.len() {
+            return Err(EventsError::InvalidField(
+                "cursor",
+                "must not point past the current event snapshot".to_string(),
+            ));
+        }
+        let end = self.offset.saturating_add(self.limit).min(rows.len());
+        let next_cursor = if end < rows.len() {
+            Some(format!("{DEVICE_STREAM}:{end}"))
+        } else {
+            None
+        };
+        Ok(PageSlice {
+            rows: &rows[self.offset..end],
+            next_cursor,
+        })
+    }
+}
+
+struct PageSlice<'a, T> {
+    rows: &'a [T],
+    next_cursor: Option<String>,
+}
+
+fn event_rows(input: &Value) -> Result<&Vec<Value>, EventsError> {
+    let obj = object(input, "DeviceEventRows")?;
+    obj.get("events")
+        .or_else(|| obj.get("items"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| EventsError::InvalidField("events", "must be an array".to_string()))
+}
+
+fn project_device_event_row(row: &Value) -> Result<Value, EventsError> {
+    let obj = object(row, "DeviceEventRow")?;
+    if obj.get("profile").and_then(Value::as_str) == Some(EVENTS_PROFILE) {
+        let stream = required_string(obj, "stream")?;
+        if stream != DEVICE_STREAM {
+            return Err(EventsError::InvalidField(
+                "stream",
+                format!("expected {DEVICE_STREAM:?}, got {stream:?}"),
+            ));
+        }
+        let cursor = EventCursor::parse(
+            obj.get("cursor")
+                .ok_or(EventsError::MissingField("cursor"))?,
+            "cursor",
+        )?;
+        cursor.require_stream(DEVICE_STREAM, "cursor")?;
+        return Ok(Value::Object(obj.clone()));
+    }
+    let sequence = required_u64(obj, "sequence")?;
+    let cursor = EventCursor::new(DEVICE_STREAM, sequence, "sequence")?;
+    let device_ura = required_string(obj, "device_ura")?;
+    validate_device_ura(device_ura, "device_ura")?;
+    let occurred_unix_ms = required_nonnegative_i64(obj, "occurred_unix_ms")?;
+    let kind = optional_string(obj, "kind").unwrap_or_else(|| "device.event".to_string());
+    let payload = obj.get("payload").cloned().unwrap_or_else(|| json!({}));
+    Ok(json!({
+        "profile": EVENTS_PROFILE,
+        "stream": DEVICE_STREAM,
+        "kind": kind,
+        "event_id": optional_string(obj, "event_id").unwrap_or_else(|| cursor.event_id()),
+        "cursor": cursor.to_json(),
+        "resume_token": optional_string(obj, "resume_token").unwrap_or_else(|| cursor.resume_token()),
+        "occurred_unix_ms": occurred_unix_ms,
+        "occurred_at": unix_ms_to_rfc3339(occurred_unix_ms),
+        "subject_ref": typed_ura_ref(device_ura, "device_ura")?,
+        "tenant_ref": tenant_ref_from_input(obj, Some(device_ura))?,
+        "payload": payload,
+        "dropped_count": 0,
+        "reconnect_after_ms": Value::Null,
+        "terminal": false,
+        "metadata": {
+            "profile": EVENTS_PROFILE,
+            "stream": DEVICE_STREAM,
+            "carrier_owner": "daemon_sdk",
+            "source": "daemon_device_event",
+            "stream_ability": DEVICE_HISTORY_ABILITY,
+            "lifecycle": "history",
+        },
+    }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,12 +548,17 @@ impl EventCursor {
 
     fn new(stream: &str, sequence: u64, field: &'static str) -> Result<Self, EventsError> {
         validate_token(stream, field)?;
-        if stream != DIRECTORY_STREAM && stream != SESSION_STREAM {
+        if ![
+            DIRECTORY_STREAM,
+            DEVICE_STREAM,
+            SESSION_STREAM,
+            INVOCATION_STREAM,
+        ]
+        .contains(&stream)
+        {
             return Err(EventsError::InvalidField(
                 field,
-                format!(
-                    "unsupported stream {stream:?}; expected {DIRECTORY_STREAM:?} or {SESSION_STREAM:?}"
-                ),
+                format!("unsupported stream {stream:?}; expected an Events profile stream"),
             ));
         }
         Ok(Self {
@@ -619,6 +873,58 @@ fn optional_u64(obj: &Map<String, Value>, field: &'static str) -> Option<u64> {
     }
 }
 
+fn optional_usize(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<usize>, EventsError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| EventsError::InvalidField(field, "must be unsigned".to_string())),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .parse::<usize>()
+                .map(Some)
+                .map_err(|err| EventsError::InvalidField(field, err.to_string()))
+        }
+        Some(_) => Err(EventsError::InvalidField(
+            field,
+            "must be an integer or decimal string".to_string(),
+        )),
+    }
+}
+
+fn optional_cursor_offset(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<usize>, EventsError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            let cursor = EventCursor::parse_token(trimmed, field)?;
+            cursor.require_stream(DEVICE_STREAM, field)?;
+            usize::try_from(cursor.sequence)
+                .map(Some)
+                .map_err(|err| EventsError::InvalidField(field, err.to_string()))
+        }
+        Some(_) => Err(EventsError::InvalidField(
+            field,
+            "must be a cursor string".to_string(),
+        )),
+    }
+}
+
 fn required_nonnegative_i64(
     obj: &Map<String, Value>,
     field: &'static str,
@@ -758,6 +1064,138 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid field resume_cursor: expected \"session\", got \"directory\""
+        );
+    }
+
+    #[test]
+    fn device_subscription_builds_device_event_invocation() {
+        let request = base_request(json!({
+            "stream": "device",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "owner_ura": "easynet:///r/example/device/dev-a",
+            "resume_cursor": {"stream": "device", "sequence": 2},
+            "heartbeat_interval_ms": 30_000
+        }));
+
+        let carrier = build_device_subscription_invocation(&request).unwrap();
+
+        assert_eq!(
+            carrier["metadata"]["system_ability"],
+            "events.device.subscribe"
+        );
+        assert_eq!(carrier["args"]["stream"], "device");
+        assert_eq!(
+            carrier["args"]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(carrier["args"]["resume_cursor"], "device:2");
+        assert_eq!(
+            carrier["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0"
+        );
+    }
+
+    #[test]
+    fn invocation_subscription_requires_invocation_id() {
+        let request = base_request(json!({
+            "stream": "invocation"
+        }));
+
+        let err = build_invocation_subscription_invocation(&request).unwrap_err();
+
+        assert_eq!(err.to_string(), "missing required field invocation_id");
+    }
+
+    #[test]
+    fn invocation_subscription_builds_invocation_event_invocation() {
+        let request = base_request(json!({
+            "stream": "invocation",
+            "invocation_id": "inv-1",
+            "resume_cursor": "invocation:9"
+        }));
+
+        let carrier = build_invocation_subscription_invocation(&request).unwrap();
+
+        assert_eq!(
+            carrier["metadata"]["system_ability"],
+            "events.invocation.subscribe"
+        );
+        assert_eq!(carrier["args"]["stream"], "invocation");
+        assert_eq!(carrier["args"]["invocation_id"], "inv-1");
+        assert_eq!(carrier["args"]["resume_cursor"], "invocation:9");
+    }
+
+    #[test]
+    fn device_event_history_builds_bounded_page_invocation() {
+        let request = base_request(json!({
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "limit": 25,
+            "cursor": "device:10"
+        }));
+
+        let carrier = build_device_event_history_invocation(&request).unwrap();
+
+        assert_eq!(
+            carrier["metadata"]["system_ability"],
+            "events.device.history"
+        );
+        assert_eq!(carrier["args"]["stream"], "device");
+        assert_eq!(
+            carrier["args"]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(carrier["args"]["limit"], 25);
+        assert_eq!(carrier["args"]["cursor"], "device:10");
+    }
+
+    #[test]
+    fn device_event_history_projects_bounded_device_page() {
+        let page = project_device_event_page(&json!({
+            "limit": 1,
+            "result": {
+                "events": [
+                    {
+                        "sequence": 8,
+                        "device_ura": "easynet:///r/example/device/dev-a",
+                        "occurred_unix_ms": 1783100000123i64,
+                        "kind": "device.status_changed",
+                        "payload": {"state": "online"}
+                    },
+                    {
+                        "sequence": 9,
+                        "device_ura": "easynet:///r/example/device/dev-a",
+                        "occurred_unix_ms": 1783100001123i64
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(page["stream"], "device");
+        assert_eq!(page["item_kind"], "device_event");
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(page["items"][0]["kind"], "device.status_changed");
+        assert_eq!(page["items"][0]["cursor"]["token"], "device:8");
+        assert_eq!(page["next_cursor"], "device:1");
+        assert_eq!(page["has_more"], true);
+    }
+
+    #[test]
+    fn device_event_history_rejects_directory_event_frame() {
+        let err = project_device_event_page(&json!({
+            "result": {
+                "events": [{
+                    "profile": "events",
+                    "stream": "directory",
+                    "cursor": {"stream": "directory", "sequence": 8}
+                }]
+            }
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field stream: expected \"device\", got \"directory\""
         );
     }
 

@@ -669,10 +669,34 @@ int32_t easynet_events_build_directory_subscription_invocation(
     char **out_invocation_json
 );
 
+int32_t easynet_events_build_device_subscription_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
 int32_t easynet_events_build_session_subscription_invocation(
     EasynetHandle handle,
     const char *request_json,
     char **out_invocation_json
+);
+
+int32_t easynet_events_build_invocation_subscription_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_events_build_device_event_history_invocation(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_invocation_json
+);
+
+int32_t easynet_events_project_device_event_page(
+    EasynetHandle handle,
+    const char *page_json,
+    char **out_page_json
 );
 
 int32_t easynet_events_project_directory_event(

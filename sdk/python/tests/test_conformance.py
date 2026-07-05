@@ -45,7 +45,10 @@ from easynet_sdk import (
     EventProjectionInput,
     EventTerminalInput,
     EventsCarrierBase,
+    EventsDeviceEventListRequest,
+    EventsDeviceSubscriptionRequest,
     EventsDirectorySubscriptionRequest,
+    EventsInvocationSubscriptionRequest,
     EventsSessionSubscriptionRequest,
     GatewayStatus,
     HOST_STREAM_FRAME_SCHEMA,
@@ -756,6 +759,15 @@ class SharedEventsTransport:
         self.expected_session_subscription_request = (
             shared_events_session_subscription_request_json()
         )
+        self.expected_device_subscription_request = (
+            shared_events_device_subscription_request_json()
+        )
+        self.expected_invocation_subscription_request = (
+            shared_events_invocation_subscription_request_json()
+        )
+        self.expected_device_event_list_request = (
+            shared_events_device_event_list_request_json()
+        )
         self.expected_directory_projection_input = shared_events_projection_input_json()
         self.expected_drop_report_input = shared_events_drop_report_input_json()
         self.expected_terminal_input = shared_events_terminal_input_json()
@@ -765,6 +777,13 @@ class SharedEventsTransport:
         self.session_subscription_invocation_json = shared_fixture(
             "events-session-subscription-invocation.v4.json"
         )
+        self.device_subscription_invocation_json = shared_fixture(
+            "events-device-subscription-invocation.v4.json"
+        )
+        self.invocation_subscription_invocation_json = shared_fixture(
+            "events-invocation-subscription-invocation.v4.json"
+        )
+        self.device_event_page_json = shared_fixture("event.device-page.v4.json")
         self.directory_event_json = shared_fixture("event.directory.v4.json")
         self.drop_report_json = shared_fixture("event.directory-drop-report.v4.json")
         self.terminal_json = shared_fixture("event.directory-terminal.v4.json")
@@ -776,12 +795,10 @@ class SharedEventsTransport:
         return self.directory_subscription_invocation_json
 
     def build_device_subscription_invocation(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared events conformance fixture test",
+        assert_json_equivalent(
+            request_json, self.expected_device_subscription_request
         )
+        return self.device_subscription_invocation_json
 
     def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
         assert_json_equivalent(
@@ -790,12 +807,10 @@ class SharedEventsTransport:
         return self.session_subscription_invocation_json
 
     def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared events conformance fixture test",
+        assert_json_equivalent(
+            request_json, self.expected_invocation_subscription_request
         )
+        return self.invocation_subscription_invocation_json
 
     def subscribe_directory(self, request_json: bytes) -> bytes:
         raise SDKError(
@@ -830,12 +845,10 @@ class SharedEventsTransport:
         )
 
     def list_device_events(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared events conformance fixture test",
+        assert_json_equivalent(
+            request_json, self.expected_device_event_list_request
         )
+        return self.device_event_page_json
 
     def project_directory_event(self, event_json: bytes) -> bytes:
         assert_json_equivalent(event_json, self.expected_directory_projection_input)
@@ -2581,7 +2594,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             events_case, "terminal_frame_explicit: true"
         )
-        self._require_case_expectation(events_case, "other_event_streams: scaffold_only")
+        self._require_case_expectation(
+            events_case,
+            "related_event_streams_case: events-device-invocation-history.yaml",
+        )
 
         events = EventClient(SharedEventsTransport())
 
@@ -2698,6 +2714,75 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 )
             )
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_python_events_executes_shared_device_invocation_history_case(self) -> None:
+        events_case = shared_case("events-device-invocation-history.yaml")
+        self._require_case_id(events_case, "events/device_invocation_history")
+        for action in (
+            "build_device_subscription_invocation",
+            "build_invocation_subscription_invocation",
+            "build_device_event_history_invocation",
+            "project_device_event_page",
+        ):
+            self._require_case_action(events_case, action)
+        for fixture in (
+            "events-device-subscription-request.v4.json",
+            "events-invocation-subscription-request.v4.json",
+            "events-device-event-list-request.v4.json",
+            "event.device-page.v4.json",
+        ):
+            self._require_case_fixture(events_case, fixture)
+        self._require_case_expectation(
+            events_case,
+            "device_subscription_invocation_fixture: events-device-subscription-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            events_case,
+            "invocation_subscription_invocation_fixture: events-invocation-subscription-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            events_case,
+            "device_history_invocation_fixture: events-device-history-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            events_case, "device_stream_system_ability: events.device.subscribe"
+        )
+        self._require_case_expectation(
+            events_case,
+            "invocation_stream_system_ability: events.invocation.subscribe",
+        )
+        self._require_case_expectation(
+            events_case, "device_history_system_ability: events.device.history"
+        )
+        self._require_case_expectation(
+            events_case, "sdk_local_event_bus_allowed: false"
+        )
+        self._require_case_expectation(
+            events_case, "daemon_side_filtering_backend_cutover: incomplete"
+        )
+
+        events = EventClient(SharedEventsTransport())
+        device_subscription = events.build_device_subscription_invocation(
+            shared_events_device_subscription_request()
+        )
+        invocation_subscription = events.build_invocation_subscription_invocation(
+            shared_events_invocation_subscription_request()
+        )
+        page = events.list_device_events(shared_events_device_event_list_request())
+
+        self.assertEqual(
+            device_subscription.metadata["system_ability"],
+            "events.device.subscribe",
+        )
+        self.assertEqual(device_subscription.args["resume_cursor"], "device:2")
+        self.assertEqual(
+            invocation_subscription.metadata["system_ability"],
+            "events.invocation.subscribe",
+        )
+        self.assertEqual(invocation_subscription.args["invocation_id"], "inv-1")
+        self.assertEqual(page.stream, "device")
+        self.assertEqual(page.items[0].cursor.token, "device:8")
+        self.assertEqual(page.items[0].metadata["source"], "daemon_device_event")
 
     def test_python_surface_executes_shared_page_carrier_conformance_case(self) -> None:
         surface_case = shared_case("surface-page-carriers.yaml")
@@ -4148,6 +4233,57 @@ def shared_events_session_subscription_request() -> EventsSessionSubscriptionReq
 
 def shared_events_session_subscription_request_json() -> bytes:
     return shared_events_session_subscription_request().to_json_bytes("session")
+
+
+def shared_events_device_subscription_request() -> EventsDeviceSubscriptionRequest:
+    decoded = json.loads(shared_fixture("events-device-subscription-request.v4.json"))
+    cursor = decoded.get("resume_cursor")
+    return EventsDeviceSubscriptionRequest(
+        base=shared_events_carrier_base(
+            "events-device-subscription-request.v4.json"
+        ),
+        stream=decoded.get("stream", ""),
+        device_ura=decoded.get("device_ura", ""),
+        resume_cursor=EventCursor(cursor["stream"], cursor["sequence"]) if cursor else None,
+        heartbeat_interval_ms=decoded.get("heartbeat_interval_ms", 0),
+    )
+
+
+def shared_events_device_subscription_request_json() -> bytes:
+    return shared_events_device_subscription_request().to_json_bytes("device")
+
+
+def shared_events_invocation_subscription_request() -> EventsInvocationSubscriptionRequest:
+    decoded = json.loads(
+        shared_fixture("events-invocation-subscription-request.v4.json")
+    )
+    cursor = decoded.get("resume_cursor")
+    return EventsInvocationSubscriptionRequest(
+        base=shared_events_carrier_base(
+            "events-invocation-subscription-request.v4.json"
+        ),
+        stream=decoded.get("stream", ""),
+        invocation_id=decoded.get("invocation_id", ""),
+        resume_cursor=EventCursor(cursor["stream"], cursor["sequence"]) if cursor else None,
+    )
+
+
+def shared_events_invocation_subscription_request_json() -> bytes:
+    return shared_events_invocation_subscription_request().to_json_bytes("invocation")
+
+
+def shared_events_device_event_list_request() -> EventsDeviceEventListRequest:
+    decoded = json.loads(shared_fixture("events-device-event-list-request.v4.json"))
+    return EventsDeviceEventListRequest(
+        base=shared_events_carrier_base("events-device-event-list-request.v4.json"),
+        device_ura=decoded.get("device_ura", ""),
+        cursor=decoded.get("cursor", ""),
+        limit=decoded.get("limit", 50),
+    )
+
+
+def shared_events_device_event_list_request_json() -> bytes:
+    return shared_events_device_event_list_request().to_json_bytes()
 
 
 def shared_events_projection_input() -> EventProjectionInput:

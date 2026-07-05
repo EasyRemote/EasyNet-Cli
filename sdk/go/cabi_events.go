@@ -49,16 +49,21 @@ import (
 )
 
 type cabiEventsSymbols struct {
-	abiVersion                           unsafe.Pointer
-	lastErrorJSON                        unsafe.Pointer
-	stringFree                           unsafe.Pointer
-	init                                 unsafe.Pointer
-	shutdown                             unsafe.Pointer
-	buildDirectorySubscriptionInvocation unsafe.Pointer
-	buildSessionSubscriptionInvocation   unsafe.Pointer
-	projectDirectoryEvent                unsafe.Pointer
-	projectTerminal                      unsafe.Pointer
-	projectDropReport                    unsafe.Pointer
+	abiVersion                            unsafe.Pointer
+	lastErrorJSON                         unsafe.Pointer
+	stringFree                            unsafe.Pointer
+	init                                  unsafe.Pointer
+	shutdown                              unsafe.Pointer
+	invocationInvoke                      unsafe.Pointer
+	buildDirectorySubscriptionInvocation  unsafe.Pointer
+	buildDeviceSubscriptionInvocation     unsafe.Pointer
+	buildSessionSubscriptionInvocation    unsafe.Pointer
+	buildInvocationSubscriptionInvocation unsafe.Pointer
+	buildDeviceEventHistoryInvocation     unsafe.Pointer
+	projectDeviceEventPage                unsafe.Pointer
+	projectDirectoryEvent                 unsafe.Pointer
+	projectTerminal                       unsafe.Pointer
+	projectDropReport                     unsafe.Pointer
 }
 
 // CABIEventsTransport is an optional Events profile projection over
@@ -126,16 +131,16 @@ func (t *CABIEventsTransport) BuildDirectorySubscriptionInvocation(ctx context.C
 	return t.callJSONWithOpenHandle(ctx, t.symbols.buildDirectorySubscriptionInvocation, requestJSON, "C ABI events directory subscription invocation build failed")
 }
 
-func (t *CABIEventsTransport) BuildDeviceSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events device subscription carrier is not exported yet")
+func (t *CABIEventsTransport) BuildDeviceSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.callJSONWithOpenHandle(ctx, t.symbols.buildDeviceSubscriptionInvocation, requestJSON, "C ABI events device subscription invocation build failed")
 }
 
 func (t *CABIEventsTransport) BuildSessionSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	return t.callJSONWithOpenHandle(ctx, t.symbols.buildSessionSubscriptionInvocation, requestJSON, "C ABI events session subscription invocation build failed")
 }
 
-func (t *CABIEventsTransport) BuildInvocationSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events invocation subscription carrier is not exported yet")
+func (t *CABIEventsTransport) BuildInvocationSubscriptionInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.callJSONWithOpenHandle(ctx, t.symbols.buildInvocationSubscriptionInvocation, requestJSON, "C ABI events invocation subscription invocation build failed")
 }
 
 func (t *CABIEventsTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
@@ -154,8 +159,8 @@ func (t *CABIEventsTransport) SubscribeInvocations(context.Context, []byte) ([]b
 	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events subscriptions are opened through RuntimeClient.InvokeStream")
 }
 
-func (t *CABIEventsTransport) ListDeviceEvents(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events device history carrier is not exported yet")
+func (t *CABIEventsTransport) ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.invokeAndProjectDeviceEvents(ctx, requestJSON, "C ABI events device event history failed")
 }
 
 func (t *CABIEventsTransport) ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
@@ -200,6 +205,26 @@ func (t *CABIEventsTransport) Close(ctx context.Context) error {
 	return first
 }
 
+func (t *CABIEventsTransport) invokeAndProjectDeviceEvents(ctx context.Context, requestJSON []byte, fallback string) ([]byte, error) {
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, t.symbols.buildDeviceEventHistoryInvocation, requestJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	resultJSON, err := t.invoke(handle, draftJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	outputJSON, err := outputJSONFromProfileInvocationResult(resultJSON, eventsProfile)
+	if err != nil {
+		return nil, err
+	}
+	return t.callJSON(handle, t.symbols.projectDeviceEventPage, outputJSON, fallback)
+}
+
 func (t *CABIEventsTransport) callJSONWithOpenHandle(ctx context.Context, symbol unsafe.Pointer, payload []byte, fallback string) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
@@ -237,6 +262,17 @@ func (t *CABIEventsTransport) callJSON(handle uint64, symbol unsafe.Pointer, pay
 	return cabiEventsTakeCString(t.symbols.stringFree, out), nil
 }
 
+func (t *CABIEventsTransport) invoke(handle uint64, draftJSON []byte, fallback string) ([]byte, error) {
+	var out *C.char
+	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
+		return C.easynet_events_call_json(t.symbols.invocationInvoke, C.uint64_t(handle), cDraft, &out)
+	}))
+	if code != 0 {
+		return nil, cabiEventsLastErrorOrCode(t.symbols, code, fallback)
+	}
+	return cabiEventsTakeCString(t.symbols.stringFree, out), nil
+}
+
 func bindCABIEventsSymbols(library unsafe.Pointer) (cabiEventsSymbols, error) {
 	var symbols cabiEventsSymbols
 	bindings := []struct {
@@ -248,8 +284,13 @@ func bindCABIEventsSymbols(library unsafe.Pointer) (cabiEventsSymbols, error) {
 		{"easynet_string_free", &symbols.stringFree},
 		{"easynet_init", &symbols.init},
 		{"easynet_shutdown", &symbols.shutdown},
+		{"easynet_invocation_invoke", &symbols.invocationInvoke},
 		{"easynet_events_build_directory_subscription_invocation", &symbols.buildDirectorySubscriptionInvocation},
+		{"easynet_events_build_device_subscription_invocation", &symbols.buildDeviceSubscriptionInvocation},
 		{"easynet_events_build_session_subscription_invocation", &symbols.buildSessionSubscriptionInvocation},
+		{"easynet_events_build_invocation_subscription_invocation", &symbols.buildInvocationSubscriptionInvocation},
+		{"easynet_events_build_device_event_history_invocation", &symbols.buildDeviceEventHistoryInvocation},
+		{"easynet_events_project_device_event_page", &symbols.projectDeviceEventPage},
 		{"easynet_events_project_directory_event", &symbols.projectDirectoryEvent},
 		{"easynet_events_project_terminal", &symbols.projectTerminal},
 		{"easynet_events_project_drop_report", &symbols.projectDropReport},

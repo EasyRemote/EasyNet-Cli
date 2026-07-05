@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 const (
 	eventsAbilitySubscribeDirectory   = "federation.subscribe_directory_v2"
-	eventsAbilitySubscribeDevices     = "events.subscribe_devices"
-	eventsAbilitySubscribeSessions    = "events.subscribe_sessions"
-	eventsAbilitySubscribeInvocations = "events.subscribe_invocations"
+	eventsAbilitySubscribeDevices     = "events.device.subscribe"
+	eventsAbilitySubscribeSessions    = "session.attach"
+	eventsAbilitySubscribeInvocations = "events.invocation.subscribe"
 )
 
 var eventsCarrierArgKeys = map[string]struct{}{
@@ -180,9 +181,10 @@ func eventsSubscriptionAbility(stream EventStreamKind) (string, error) {
 }
 
 func eventsRuntimeArgs(payload map[string]any, stream EventStreamKind, abilityName string) map[string]any {
-	args := map[string]any{
-		"stream":         string(stream),
-		"daemon_ability": abilityName,
+	args := map[string]any{}
+	if stream != EventStreamSession {
+		args["stream"] = string(stream)
+		args["daemon_ability"] = abilityName
 	}
 	for key, value := range payload {
 		if _, carrier := eventsCarrierArgKeys[key]; carrier {
@@ -193,8 +195,17 @@ func eventsRuntimeArgs(payload map[string]any, stream EventStreamKind, abilityNa
 		}
 		if key == "resume_cursor" {
 			if token := eventRuntimeResumeToken(value); token != "" {
-				args[key] = token
+				if stream == EventStreamSession {
+					if _, sequence, ok := parseEventRuntimeResumeToken(token); ok {
+						args["since_seq"] = sequence
+					}
+				} else {
+					args[key] = token
+				}
 			}
+			continue
+		}
+		if stream == EventStreamSession && key == "stream" {
 			continue
 		}
 		args[key] = value
@@ -220,6 +231,18 @@ func eventRuntimeResumeToken(value any) string {
 	default:
 		return ""
 	}
+}
+
+func parseEventRuntimeResumeToken(token string) (string, uint64, bool) {
+	parts := strings.Split(strings.TrimSpace(token), ":")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return "", 0, false
+	}
+	sequence, err := strconv.ParseUint(strings.TrimSpace(parts[1]), 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return strings.TrimSpace(parts[0]), sequence, true
 }
 
 func numericUint64(value any) (uint64, bool) {

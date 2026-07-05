@@ -28,4 +28,4 @@ expect:
   cursor_required: true
   dropped_events_are_first_class: true
   terminal_frame_explicit: true
-  other_event_streams: scaffold_only
+  related_event_streams_case: events-device-invocation-history.yaml

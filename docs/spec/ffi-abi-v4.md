@@ -674,10 +674,34 @@ int32_t easynet_events_build_directory_subscription_invocation(
     char** out_invocation_json
 );
 
+int32_t easynet_events_build_device_subscription_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
 int32_t easynet_events_build_session_subscription_invocation(
     EasynetHandle handle,
     const char* request_json,
     char** out_invocation_json
+);
+
+int32_t easynet_events_build_invocation_subscription_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_events_build_device_event_history_invocation(
+    EasynetHandle handle,
+    const char* request_json,
+    char** out_invocation_json
+);
+
+int32_t easynet_events_project_device_event_page(
+    EasynetHandle handle,
+    const char* page_json,
+    char** out_page_json
 );
 
 int32_t easynet_events_project_directory_event(
@@ -709,6 +733,18 @@ open; this helper does not open the stream itself.
 carrier for daemon `session.attach`. It requires explicit `session_id`; product
 resource/session URAs are not parsed into daemon session ids by the SDK. A
 session resume cursor maps to the daemon `since_seq` argument.
+`build_device_subscription_invocation` and
+`build_invocation_subscription_invocation` return complete Invocation carriers
+for daemon-owned Events stream abilities `events.device.subscribe` and
+`events.invocation.subscribe`. Device subscriptions accept an optional
+`device_ura`, owner/agent filters, device cursor, and heartbeat interval.
+Invocation subscriptions require an explicit `invocation_id` and reject cursors
+from other event streams. Bindings open both carriers through Runtime Core
+stream open; the SDK does not create a local event bus.
+`build_device_event_history_invocation` returns the bounded read-model carrier
+for `events.device.history`, and `easynet_events_project_device_event_page`
+normalizes daemon event rows into `DeviceEventPage` with device cursors,
+typed device subject refs, `has_more`, and `next_cursor`.
 
 `easynet_events_project_directory_event` accepts a daemon `DirectoryEvent`
 frame plus explicit cursor information, for example
@@ -723,10 +759,10 @@ positions from array indexes or timestamps.
 `easynet_events_project_drop_report` and `easynet_events_project_terminal`
 create first-class non-payload stream lifecycle frames. Dropped-event reports
 must include a non-zero `dropped_count`; terminal frames are explicit final
-states. ABI v4 Events support is `directory_stream_partial`: it stabilizes the
-real daemon directory stream carrier/projection boundary, but does not claim
-device/session/invocation event subscriptions, backend SSE/WebSocket fanout, or
-daemon-side directory filtering semantics.
+states. ABI v4 Events support stabilizes directory, device, session, and
+invocation stream carrier construction plus bounded device-history projection.
+It does not claim backend SSE/WebSocket fanout or daemon-side live filtering
+cutover.
 
 ### 2.14 Admin + Gateway Carriers And Status
 

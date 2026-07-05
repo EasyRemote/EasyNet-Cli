@@ -47,7 +47,10 @@ from easynet_sdk import (
     EventClient,
     EventCursor,
     EventsCarrierBase,
+    EventsDeviceEventListRequest,
+    EventsDeviceSubscriptionRequest,
     EventsDirectorySubscriptionRequest,
+    EventsInvocationSubscriptionRequest,
     EventsSessionSubscriptionRequest,
     HealthClient,
     IdentityCarrierBase,
@@ -538,6 +541,18 @@ class FakeRawCABI:
                 ),
                 "impl_id": args.get("impl_id") if isinstance(args, dict) else "impl-1",
             }
+        if system_ability == "events.device.history":
+            return {
+                "events": [
+                    {
+                        "sequence": 8,
+                        "device_ura": "easynet:///r/example/device/dev-a",
+                        "occurred_unix_ms": 1783100000123,
+                        "kind": "device.status_changed",
+                        "payload": {"state": "online"},
+                    }
+                ]
+            }
         if system_ability in {"mission.run", "mission.track", "mission.cancel"}:
             return {
                 "run_id": "mission-1",
@@ -950,8 +965,16 @@ class FakeRawCABI:
             return RECEIPT_TRACE_INVOCATION
         if symbol == "easynet_events_build_directory_subscription_invocation":
             return EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION
+        if symbol == "easynet_events_build_device_subscription_invocation":
+            return EVENTS_DEVICE_SUBSCRIPTION_INVOCATION
         if symbol == "easynet_events_build_session_subscription_invocation":
             return EVENTS_SESSION_SUBSCRIPTION_INVOCATION
+        if symbol == "easynet_events_build_invocation_subscription_invocation":
+            return EVENTS_INVOCATION_SUBSCRIPTION_INVOCATION
+        if symbol == "easynet_events_build_device_event_history_invocation":
+            return EVENTS_DEVICE_HISTORY_INVOCATION
+        if symbol == "easynet_events_project_device_event_page":
+            return EVENTS_DEVICE_EVENT_PAGE
         if symbol == "easynet_publication_build_deploy_invocation":
             return PUBLICATION_DEPLOY_INVOCATION
         if symbol == "easynet_publication_project_deploy_result":
@@ -1183,6 +1206,22 @@ EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION = (
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
+EVENTS_DEVICE_SUBSCRIPTION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.events.device.subscribe@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"stream":"device","device_ura":"easynet:///r/example/device/dev-a",'
+    b'"resume_cursor":{"stream":"device","sequence":2}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"events",'
+    b'"system_ability":"events.device.subscribe",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
 EVENTS_SESSION_SUBSCRIPTION_INVOCATION = (
     b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
     b'"callee_ura":"easynet:///r/example/device/dev-a",'
@@ -1196,6 +1235,54 @@ EVENTS_SESSION_SUBSCRIPTION_INVOCATION = (
     b'"metadata":{"profile":"events",'
     b'"system_ability":"session.attach",'
     b'"carrier_owner":"daemon_sdk"}}'
+)
+
+EVENTS_INVOCATION_SUBSCRIPTION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.events.invocation.subscribe@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"stream":"invocation","invocation_id":"inv-1"},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"events",'
+    b'"system_ability":"events.invocation.subscribe",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+EVENTS_DEVICE_HISTORY_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.events.device.history@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"stream":"device","device_ura":"easynet:///r/example/device/dev-a",'
+    b'"limit":50},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"events",'
+    b'"system_ability":"events.device.history",'
+    b'"carrier_owner":"daemon_sdk"}}'
+)
+
+EVENTS_DEVICE_EVENT_PAGE = (
+    b'{"profile":"events","stream":"device","item_kind":"device_event",'
+    b'"items":[{"profile":"events","stream":"device",'
+    b'"kind":"device.status_changed","event_id":"evt-device-8",'
+    b'"cursor":{"stream":"device","sequence":8,"token":"device:8"},'
+    b'"resume_token":"device:8","occurred_unix_ms":1783100000123,'
+    b'"occurred_at":"2026-07-03T17:33:20.123Z",'
+    b'"subject_ref":{"kind":"ura","ura":"easynet:///r/example/device/dev-a",'
+    b'"role":"device"},"tenant_ref":{"kind":"realm","realm":"example"},'
+    b'"payload":{"state":"online"},"dropped_count":0,'
+    b'"reconnect_after_ms":null,"terminal":false,'
+    b'"metadata":{"profile":"events","stream":"device",'
+    b'"source":"daemon_device_event"}}],'
+    b'"next_cursor":null,"has_more":false,"limit":50,'
+    b'"metadata":{"profile":"events","source":"device_event_history"}}'
 )
 
 PUBLICATION_DEPLOY_INVOCATION = (
@@ -3275,6 +3362,93 @@ class CABITransportTests(unittest.TestCase):
         client.close()
 
         self.assertEqual(raw.stream_closes, [404])
+
+    def test_events_device_and_invocation_subscriptions_use_runtime_stream(self) -> None:
+        raw = FakeRawCABI()
+        raw.stream_events = []
+        lib = CLILibrary(raw)
+        client = EventClient(CABIEventTransport(lib, handle=7))
+        base = EventsCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        device_stream = client.subscribe_devices(
+            EventsDeviceSubscriptionRequest(
+                base,
+                device_ura="easynet:///r/example/device/dev-a",
+                resume_cursor=EventCursor("device", 2),
+            )
+        )
+        invocation_stream = client.subscribe_invocations(
+            EventsInvocationSubscriptionRequest(base, invocation_id="inv-1")
+        )
+
+        self.assertEqual(device_stream.stream, "device")
+        self.assertEqual(device_stream.resume_token, "device:2")
+        self.assertEqual(
+            device_stream.metadata["stream_ability"], "events.device.subscribe"
+        )
+        self.assertEqual(invocation_stream.stream, "invocation")
+        self.assertEqual(
+            invocation_stream.metadata["stream_ability"],
+            "events.invocation.subscribe",
+        )
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_events_build_device_subscription_invocation",
+                "easynet_events_build_invocation_subscription_invocation",
+            ],
+        )
+        self.assertEqual(
+            [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
+            ["events.device.subscribe", "events.invocation.subscribe"],
+        )
+
+        client.close()
+
+        self.assertEqual(raw.stream_closes, [404, 404])
+
+    def test_events_list_device_history_uses_runtime_invoke_and_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = EventClient(CABIEventTransport(lib, handle=7))
+        base = EventsCarrierBase(
+            caller_ura="easynet:///r/example/agent/alice.sdk",
+            callee_ura="easynet:///r/example/device/dev-a",
+            subject_ura="easynet:///r/example/device/dev-a",
+            descriptor_version="1.0.0",
+            nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+            causal_context={"form": "none"},
+        )
+
+        page = client.list_device_events(
+            EventsDeviceEventListRequest(
+                base,
+                device_ura="easynet:///r/example/device/dev-a",
+            )
+        )
+
+        self.assertEqual(page.stream, "device")
+        self.assertEqual(page.items[0].kind, "device.status_changed")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            [
+                "easynet_events_build_device_event_history_invocation",
+                "easynet_events_project_device_event_page",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[0][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[0][1]["metadata"]["system_ability"],
+            "events.device.history",
+        )
+        self.assertEqual(raw.profile_requests[1][2]["result"]["events"][0]["sequence"], 8)
 
     def test_events_client_close_closes_directory_runtime_stream(self) -> None:
         raw = FakeRawCABI()

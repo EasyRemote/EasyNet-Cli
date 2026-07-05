@@ -1382,7 +1382,7 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 	requireCaseExpectation(t, eventsCase, "cursor_required: true")
 	requireCaseExpectation(t, eventsCase, "dropped_events_are_first_class: true")
 	requireCaseExpectation(t, eventsCase, "terminal_frame_explicit: true")
-	requireCaseExpectation(t, eventsCase, "other_event_streams: scaffold_only")
+	requireCaseExpectation(t, eventsCase, "related_event_streams_case: events-device-invocation-history.yaml")
 
 	events, err := NewEventClient(&sharedEventsTransport{
 		t:                                    t,
@@ -1447,6 +1447,81 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 	}
 	if _, err := NewEventFrameFromJSON(sharedEventsTerminalWithoutTerminalFlag(t, root)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("terminal frame without terminal=true did not produce InvalidArgument: %v", err)
+	}
+}
+
+func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	eventsCase := sharedCase(t, root, "events-device-invocation-history.yaml")
+	requireCaseID(t, eventsCase, "events/device_invocation_history")
+	for _, action := range []string{
+		"build_device_subscription_invocation",
+		"build_invocation_subscription_invocation",
+		"build_device_event_history_invocation",
+		"project_device_event_page",
+	} {
+		requireCaseAction(t, eventsCase, action)
+	}
+	for _, fixture := range []string{
+		"events-device-subscription-request.v4.json",
+		"events-invocation-subscription-request.v4.json",
+		"events-device-event-list-request.v4.json",
+		"event.device-page.v4.json",
+	} {
+		requireCaseFixture(t, eventsCase, fixture)
+	}
+	requireCaseExpectation(t, eventsCase, "device_subscription_invocation_fixture: events-device-subscription-invocation.v4.json")
+	requireCaseExpectation(t, eventsCase, "invocation_subscription_invocation_fixture: events-invocation-subscription-invocation.v4.json")
+	requireCaseExpectation(t, eventsCase, "device_history_invocation_fixture: events-device-history-invocation.v4.json")
+	requireCaseExpectation(t, eventsCase, "device_stream_system_ability: events.device.subscribe")
+	requireCaseExpectation(t, eventsCase, "invocation_stream_system_ability: events.invocation.subscribe")
+	requireCaseExpectation(t, eventsCase, "device_history_system_ability: events.device.history")
+	requireCaseExpectation(t, eventsCase, "sdk_local_event_bus_allowed: false")
+	requireCaseExpectation(t, eventsCase, "daemon_side_filtering_backend_cutover: incomplete")
+
+	events, err := NewEventClient(&sharedEventsTransport{
+		t:                                     t,
+		expectedDeviceSubscriptionRequest:     sharedEventsDeviceSubscriptionRequestJSON(t, root),
+		expectedInvocationSubscriptionRequest: sharedEventsInvocationSubscriptionRequestJSON(t, root),
+		expectedDeviceEventListRequest:        sharedEventsDeviceEventListRequestJSON(t, root),
+		deviceSubscriptionInvocationJSON:      sharedFixture(t, root, "events-device-subscription-invocation.v4.json"),
+		invocationSubscriptionInvocationJSON:  sharedFixture(t, root, "events-invocation-subscription-invocation.v4.json"),
+		deviceEventPageJSON:                   sharedFixture(t, root, "event.device-page.v4.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewEventClient: %v", err)
+	}
+
+	deviceSubscription, err := events.BuildDeviceSubscriptionInvocation(context.Background(), sharedEventsDeviceSubscriptionRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildDeviceSubscriptionInvocation(shared fixture): %v", err)
+	}
+	if deviceSubscription.Metadata()["system_ability"] != "events.device.subscribe" {
+		t.Fatalf("unexpected device subscription invocation: %#v", deviceSubscription)
+	}
+	if args := deviceSubscription.JSONArgs().(map[string]any); args["resume_cursor"] != "device:2" {
+		t.Fatalf("unexpected device subscription args: %#v", args)
+	}
+
+	invocationSubscription, err := events.BuildInvocationSubscriptionInvocation(context.Background(), sharedEventsInvocationSubscriptionRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildInvocationSubscriptionInvocation(shared fixture): %v", err)
+	}
+	if invocationSubscription.Metadata()["system_ability"] != "events.invocation.subscribe" {
+		t.Fatalf("unexpected invocation subscription invocation: %#v", invocationSubscription)
+	}
+	if args := invocationSubscription.JSONArgs().(map[string]any); args["invocation_id"] != "inv-1" {
+		t.Fatalf("unexpected invocation subscription args: %#v", args)
+	}
+
+	page, err := events.ListDeviceEvents(context.Background(), sharedEventsDeviceEventListRequest(t, root))
+	if err != nil {
+		t.Fatalf("ListDeviceEvents(shared fixture): %v", err)
+	}
+	if page.Stream != "device" || len(page.Items) != 1 ||
+		page.Items[0].Cursor.Token != "device:8" ||
+		page.Items[0].Metadata["source"] != "daemon_device_event" {
+		t.Fatalf("unexpected device event page: %#v", page)
 	}
 }
 
@@ -2772,17 +2847,23 @@ func (t *sharedAdminGatewayTransport) DeleteDeviceSession(context.Context, []byt
 }
 
 type sharedEventsTransport struct {
-	t                                    *testing.T
-	expectedDirectorySubscriptionRequest []byte
-	expectedSessionSubscriptionRequest   []byte
-	expectedDirectoryProjectionInput     []byte
-	expectedDropReportInput              []byte
-	expectedTerminalInput                []byte
-	directorySubscriptionInvocationJSON  []byte
-	sessionSubscriptionInvocationJSON    []byte
-	directoryEventJSON                   []byte
-	dropReportJSON                       []byte
-	terminalJSON                         []byte
+	t                                     *testing.T
+	expectedDirectorySubscriptionRequest  []byte
+	expectedDeviceSubscriptionRequest     []byte
+	expectedSessionSubscriptionRequest    []byte
+	expectedInvocationSubscriptionRequest []byte
+	expectedDeviceEventListRequest        []byte
+	expectedDirectoryProjectionInput      []byte
+	expectedDropReportInput               []byte
+	expectedTerminalInput                 []byte
+	directorySubscriptionInvocationJSON   []byte
+	deviceSubscriptionInvocationJSON      []byte
+	sessionSubscriptionInvocationJSON     []byte
+	invocationSubscriptionInvocationJSON  []byte
+	deviceEventPageJSON                   []byte
+	directoryEventJSON                    []byte
+	dropReportJSON                        []byte
+	terminalJSON                          []byte
 }
 
 func (t *sharedEventsTransport) BuildDirectorySubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -2790,8 +2871,9 @@ func (t *sharedEventsTransport) BuildDirectorySubscriptionInvocation(_ context.C
 	return t.directorySubscriptionInvocationJSON, nil
 }
 
-func (t *sharedEventsTransport) BuildDeviceSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedEventsTransport) BuildDeviceSubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDeviceSubscriptionRequest)
+	return t.deviceSubscriptionInvocationJSON, nil
 }
 
 func (t *sharedEventsTransport) BuildSessionSubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -2799,8 +2881,9 @@ func (t *sharedEventsTransport) BuildSessionSubscriptionInvocation(_ context.Con
 	return t.sessionSubscriptionInvocationJSON, nil
 }
 
-func (t *sharedEventsTransport) BuildInvocationSubscriptionInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedEventsTransport) BuildInvocationSubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedInvocationSubscriptionRequest)
+	return t.invocationSubscriptionInvocationJSON, nil
 }
 
 func (t *sharedEventsTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
@@ -2819,8 +2902,9 @@ func (t *sharedEventsTransport) SubscribeInvocations(context.Context, []byte) ([
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
-func (t *sharedEventsTransport) ListDeviceEvents(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedEventsTransport) ListDeviceEvents(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDeviceEventListRequest)
+	return t.deviceEventPageJSON, nil
 }
 
 func (t *sharedEventsTransport) ProjectDirectoryEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
@@ -3537,6 +3621,60 @@ func sharedEventsSessionSubscriptionRequestJSON(t *testing.T, root string) []byt
 	raw, err := marshalEventsSubscriptionRequest(sharedEventsSessionSubscriptionRequest(t, root), EventStreamSession)
 	if err != nil {
 		t.Fatalf("marshal shared events session subscription request: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsDeviceSubscriptionRequest(t *testing.T, root string) EventsDeviceSubscriptionRequest {
+	t.Helper()
+	var request EventsDeviceSubscriptionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "events-device-subscription-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared events device subscription request: %v", err)
+	}
+	return request
+}
+
+func sharedEventsDeviceSubscriptionRequestJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := marshalEventsSubscriptionRequest(sharedEventsDeviceSubscriptionRequest(t, root), EventStreamDevice)
+	if err != nil {
+		t.Fatalf("marshal shared events device subscription request: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsInvocationSubscriptionRequest(t *testing.T, root string) EventsInvocationSubscriptionRequest {
+	t.Helper()
+	var request EventsInvocationSubscriptionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "events-invocation-subscription-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared events invocation subscription request: %v", err)
+	}
+	return request
+}
+
+func sharedEventsInvocationSubscriptionRequestJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := marshalEventsSubscriptionRequest(sharedEventsInvocationSubscriptionRequest(t, root), EventStreamInvocation)
+	if err != nil {
+		t.Fatalf("marshal shared events invocation subscription request: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsDeviceEventListRequest(t *testing.T, root string) EventsDeviceEventListRequest {
+	t.Helper()
+	var request EventsDeviceEventListRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "events-device-event-list-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared events device event list request: %v", err)
+	}
+	return request
+}
+
+func sharedEventsDeviceEventListRequestJSON(t *testing.T, root string) []byte {
+	t.Helper()
+	raw, err := marshalEventsDeviceEventListRequest(sharedEventsDeviceEventListRequest(t, root))
+	if err != nil {
+		t.Fatalf("marshal shared events device event list request: %v", err)
 	}
 	return raw
 }

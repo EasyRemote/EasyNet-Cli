@@ -1,0 +1,20 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_version": "1.0.0",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "stream": "device",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "resume_cursor": {
+    "stream": "device",
+    "sequence": 2
+  },
+  "heartbeat_interval_ms": 30000,
+  "metadata": {
+    "request_id": "events-device-subscribe-1"
+  }
+}

@@ -35,7 +35,7 @@ method spelling.
 | host binding | codec/hash partial | codec/hash partial | codec/hash seam partial | codec/hash seam partial | gap | gap | gap |
 | mission | carrier/status partial | carrier/status partial | carrier/status seam partial | carrier/status seam partial | gap | gap | gap |
 | admin + gateway | carrier/status/session partial | carrier/status partial | carrier/status/session seam partial | carrier/status seam partial | gap | gap | gap |
-| events | directory/session stream partial | directory/session stream partial | directory/session stream runtime seam partial | directory/session stream seam partial | gap | gap | gap |
+| events | stream/history partial | stream/history partial | stream/history runtime seam partial | stream/history seam partial | gap | gap | gap |
 | surface | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | compatibility | carrier/projection partial | carrier/projection partial | carrier/projection seam partial | carrier/projection seam partial | gap | gap | gap |
 | wrappers | carrier/projection partial | carrier/projection partial | execution carrier seam partial | execution carrier seam partial | gap | gap | gap |
@@ -82,11 +82,11 @@ method spelling.
 - Mission carrier/status guardrails exist for Rust/C ABI; live event streams,
   daemon track/cancel convenience methods, language facades, and
   behavior-executing profile conformance adapters remain incomplete.
-- Events Directory stream carrier/frame guardrails and session stream carrier
-  guardrails exist for Rust/C ABI over daemon `federation.subscribe_directory_v2`
-  and `session.attach`; device/invocation event streams, device event history,
-  daemon-side directory filtering, backend SSE/WebSocket fanout, and product
-  cutovers remain incomplete.
+- Events Directory/device/invocation stream carrier guardrails, session stream
+  carrier guardrails, DirectoryEvent/drop/terminal projection guardrails, and
+  bounded device event history carrier/page guardrails exist for Rust/C ABI over
+  daemon-owned abilities; daemon-side live filtering, backend SSE/WebSocket
+  fanout, and product cutovers remain incomplete.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
   `agent.list/start/stop/refresh`, `session.list`, lifecycle status, and
   agent-record projections; Go/Python facade seams also cover Hub join/leave,
@@ -347,12 +347,12 @@ method spelling.
   create/delete until daemon/ABI lifecycle contracts exist. Certificate policy
   and daemon-backed Server pairing/hub lifecycle contracts remain incomplete.
 - Python Events facade exposes `EventClient` directory/device/session/invocation
-  subscription Invocation carrier builders, C ABI-backed directory and session
+  subscription Invocation carrier builders, C ABI-backed directory/device/session/invocation
   subscription execution through Runtime Core open_stream, plus `EventFrame`
-  cursor, resume-token, drop-report, terminal projection seams, and bounded
-  device event history pages plus close state seams; device/invocation live
-  stream adapters, device event history execution, daemon-side filtering, and
-  product cutovers remain incomplete.
+  cursor, resume-token, drop-report, terminal projection seams, and C ABI-backed
+  bounded device event history execution through Runtime Core invoke plus close
+  state seams; daemon-side filtering, backend SSE/WebSocket fanout, and product
+  cutovers remain incomplete.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest/health
   Invocation carrier builders, C ABI-backed page list/create/delete/manifest/health
   execution through Runtime Core, plus `SurfacePageRecord`, `SurfacePagePage`,

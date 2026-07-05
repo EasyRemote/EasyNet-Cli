@@ -31,8 +31,10 @@
 use std::os::raw::c_char;
 
 use crate::daemon::events_contract::{
-    build_directory_subscription_invocation, build_session_subscription_invocation,
-    project_directory_event, project_drop_report, project_terminal, EventsError,
+    build_device_event_history_invocation, build_device_subscription_invocation,
+    build_directory_subscription_invocation, build_invocation_subscription_invocation,
+    build_session_subscription_invocation, project_device_event_page, project_directory_event,
+    project_drop_report, project_terminal, EventsError,
 };
 use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
@@ -60,6 +62,28 @@ pub unsafe extern "C" fn easynet_events_build_directory_subscription_invocation(
     )
 }
 
+/// Build a complete Invocation JSON carrier for daemon device events.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_events_build_device_subscription_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_events_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_events_build_device_subscription_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_device_subscription_invocation,
+    )
+}
+
 /// Build a complete Invocation JSON carrier for daemon `session.attach`.
 ///
 /// # Safety
@@ -79,6 +103,72 @@ pub unsafe extern "C" fn easynet_events_build_session_subscription_invocation(
         "out_invocation_json",
         "request_json",
         build_session_subscription_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon Invocation events.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_events_build_invocation_subscription_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_events_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_events_build_invocation_subscription_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_invocation_subscription_invocation,
+    )
+}
+
+/// Build a complete Invocation JSON carrier for daemon device event history.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_events_build_device_event_history_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_events_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_events_build_device_event_history_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_device_event_history_invocation,
+    )
+}
+
+/// Project daemon device event history output into an SDK page DTO.
+///
+/// # Safety
+/// `page_json` must be a valid UTF-8 C string and `out_page_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_events_project_device_event_page(
+    handle: EasynetHandle,
+    page_json: *const c_char,
+    out_page_json: *mut *mut c_char,
+) -> i32 {
+    project_events_json(
+        handle,
+        page_json,
+        out_page_json,
+        "easynet_events_project_device_event_page",
+        "out_page_json",
+        "page_json",
+        project_device_event_page,
     )
 }
 
@@ -255,6 +345,95 @@ mod tests {
         assert_eq!(value["metadata"]["system_ability"], "session.attach");
         assert_eq!(value["args"]["session_id"], "run-1");
         assert_eq!(value["args"]["since_seq"], 4);
+        release(handle);
+    }
+
+    #[test]
+    fn events_build_device_subscription_invocation_projects_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "stream": "device",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "resume_cursor": {"stream": "device", "sequence": 2}
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_events_build_device_subscription_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "events.device.subscribe"
+        );
+        assert_eq!(
+            value["args"]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(value["args"]["resume_cursor"], "device:2");
+        release(handle);
+    }
+
+    #[test]
+    fn events_build_invocation_subscription_invocation_projects_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "stream": "invocation",
+            "invocation_id": "inv-1"
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_events_build_invocation_subscription_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["metadata"]["system_ability"],
+            "events.invocation.subscribe"
+        );
+        assert_eq!(value["args"]["invocation_id"], "inv-1");
+        release(handle);
+    }
+
+    #[test]
+    fn events_project_device_event_page_projects_history() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "limit": 1,
+                "result": {
+                    "events": [
+                        {
+                            "sequence": 8,
+                            "device_ura": "easynet:///r/example/device/dev-a",
+                            "occurred_unix_ms": 1783100000123i64,
+                            "kind": "device.status_changed"
+                        },
+                        {
+                            "sequence": 9,
+                            "device_ura": "easynet:///r/example/device/dev-a",
+                            "occurred_unix_ms": 1783100001123i64
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_events_project_device_event_page(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["stream"], "device");
+        assert_eq!(value["items"].as_array().unwrap().len(), 1);
+        assert_eq!(value["next_cursor"], "device:1");
         release(handle);
     }
 

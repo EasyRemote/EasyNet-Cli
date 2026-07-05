@@ -1,0 +1,53 @@
+{
+  "profile": "events",
+  "stream": "device",
+  "item_kind": "device_event",
+  "items": [
+    {
+      "profile": "events",
+      "stream": "device",
+      "kind": "device.status_changed",
+      "event_id": "evt-device-8",
+      "cursor": {
+        "stream": "device",
+        "sequence": 8,
+        "token": "device:8"
+      },
+      "resume_token": "device:8",
+      "occurred_unix_ms": 1783100000123,
+      "occurred_at": "2026-07-03T17:33:20.123Z",
+      "subject_ref": {
+        "kind": "ura",
+        "ura": "easynet:///r/example/device/dev-a",
+        "role": "device"
+      },
+      "tenant_ref": {
+        "kind": "realm",
+        "realm": "example"
+      },
+      "payload": {
+        "state": "online"
+      },
+      "dropped_count": 0,
+      "reconnect_after_ms": null,
+      "terminal": false,
+      "metadata": {
+        "profile": "events",
+        "stream": "device",
+        "carrier_owner": "daemon_sdk",
+        "source": "daemon_device_event",
+        "stream_ability": "events.device.history",
+        "lifecycle": "history"
+      }
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false,
+  "limit": 50,
+  "metadata": {
+    "profile": "events",
+    "source": "device_event_history",
+    "source_ability": "events.device.history",
+    "total_items": 1
+  }
+}

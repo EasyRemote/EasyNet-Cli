@@ -57,6 +57,44 @@ func TestCABIEventsTransportBuildsCarriersAndProjectsFrames(t *testing.T) {
 		t.Fatalf("session descriptor_ref = %q", sessionDraft.DescriptorRef())
 	}
 
+	deviceCursor, err := NewEventCursor("device", 2)
+	if err != nil {
+		t.Fatalf("NewEventCursor(device): %v", err)
+	}
+	deviceDraft, err := client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+		ResumeCursor:      &deviceCursor,
+	})
+	if err != nil {
+		t.Fatalf("BuildDeviceSubscriptionInvocation: %v", err)
+	}
+	if deviceDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0" {
+		t.Fatalf("device descriptor_ref = %q", deviceDraft.DescriptorRef())
+	}
+
+	invocationDraft, err := client.BuildInvocationSubscriptionInvocation(context.Background(), EventsInvocationSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		InvocationID:      "inv-1",
+	})
+	if err != nil {
+		t.Fatalf("BuildInvocationSubscriptionInvocation: %v", err)
+	}
+	if invocationDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0" {
+		t.Fatalf("invocation descriptor_ref = %q", invocationDraft.DescriptorRef())
+	}
+
+	page, err := client.ListDeviceEvents(context.Background(), EventsDeviceEventListRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("ListDeviceEvents: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Kind != "device.status_changed" || page.Stream != "device" {
+		t.Fatalf("device event page = %#v", page)
+	}
+
 	event, err := client.ProjectDirectoryEvent(context.Background(), EventProjectionInput{
 		Cursor: cursor,
 		Event: map[string]any{
@@ -108,12 +146,6 @@ func TestCABIEventsTransportReportsUnsupportedAndClosed(t *testing.T) {
 		t.Fatalf("NewCABIEventClient: %v", err)
 	}
 
-	if _, err := client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
-		EventsCarrierBase: eventsBaseForTest(),
-		DeviceURA:         "easynet:///r/example/device/dev-a",
-	}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("BuildDeviceSubscriptionInvocation error = %v, want %s", err, ErrNotImplemented)
-	}
 	if _, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()}); !IsCode(err, ErrNotImplemented) {
 		t.Fatalf("SubscribeDirectory error = %v, want %s", err, ErrNotImplemented)
 	}
@@ -181,16 +213,46 @@ int32_t easynet_init(const char *control_path, uint64_t *out_handle) {
 	return 0;
 }
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
+int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
+	(void)handle;
+	if (strstr(invocation_json, "events.device.history") == 0) return 10;
+	*out_result_json = dup_json("{\"output_json\":{\"events\":[{\"sequence\":8,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"occurred_unix_ms\":1783100000123,\"kind\":\"device.status_changed\",\"payload\":{\"state\":\"online\"}}]}}");
+	return 0;
+}
 int32_t easynet_events_build_directory_subscription_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
 	(void)handle;
 	if (strstr(request_json, "directory") == 0) return 10;
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"stream\":\"directory\",\"daemon_ability\":\"federation.subscribe_directory_v2\",\"realm\":\"example\",\"agent_ura\":\"easynet:///r/example/agent/alice.main\",\"resume_cursor\":\"directory:7\",\"heartbeat_interval_ms\":30000},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"events\",\"system_ability\":\"federation.subscribe_directory_v2\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
+int32_t easynet_events_build_device_subscription_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "device") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"stream\":\"device\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"resume_cursor\":\"device:2\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"events\",\"system_ability\":\"events.device.subscribe\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
 int32_t easynet_events_build_session_subscription_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
 	(void)handle;
 	if (strstr(request_json, "run-1") == 0) return 10;
 	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.session.attach@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"stream\":\"session\",\"daemon_ability\":\"session.attach\",\"session_id\":\"run-1\",\"since_seq\":4},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"events\",\"system_ability\":\"session.attach\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_events_build_invocation_subscription_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "inv-1") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"stream\":\"invocation\",\"invocation_id\":\"inv-1\"},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"events\",\"system_ability\":\"events.invocation.subscribe\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_events_build_device_event_history_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
+	(void)handle;
+	if (strstr(request_json, "device") == 0) return 10;
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.events.device.history@1.0.0\",\"subject_ura\":\"easynet:///r/example/device/dev-a\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{\"stream\":\"device\",\"device_ura\":\"easynet:///r/example/device/dev-a\",\"limit\":50},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"events\",\"system_ability\":\"events.device.history\",\"carrier_owner\":\"daemon_sdk\"}}");
+	return 0;
+}
+int32_t easynet_events_project_device_event_page(uint64_t handle, const char *page_json, char **out_page_json) {
+	(void)handle;
+	if (strstr(page_json, "events") == 0) return 10;
+	*out_page_json = dup_json("{\"profile\":\"events\",\"stream\":\"device\",\"item_kind\":\"device_event\",\"items\":[{\"profile\":\"events\",\"stream\":\"device\",\"kind\":\"device.status_changed\",\"event_id\":\"evt-device-8\",\"cursor\":{\"stream\":\"device\",\"sequence\":8,\"token\":\"device:8\"},\"resume_token\":\"device:8\",\"occurred_unix_ms\":1783100000123,\"occurred_at\":\"2026-07-03T17:33:20.123Z\",\"subject_ref\":{\"kind\":\"ura\",\"ura\":\"easynet:///r/example/device/dev-a\",\"role\":\"device\"},\"tenant_ref\":{\"kind\":\"realm\",\"realm\":\"example\"},\"payload\":{\"state\":\"online\"},\"dropped_count\":0,\"reconnect_after_ms\":null,\"terminal\":false,\"metadata\":{\"profile\":\"events\",\"stream\":\"device\",\"source\":\"daemon_device_event\"}}],\"next_cursor\":null,\"has_more\":false,\"limit\":50,\"metadata\":{\"profile\":\"events\",\"source\":\"device_event_history\"}}");
 	return 0;
 }
 int32_t easynet_events_project_directory_event(uint64_t handle, const char *event_json, char **out_event_json) {

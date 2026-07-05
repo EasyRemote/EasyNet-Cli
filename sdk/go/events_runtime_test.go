@@ -75,10 +75,14 @@ func TestRuntimeEventsMapsStreamAbilitiesAndRejectsSubscribeShortcut(t *testing.
 	}
 	identityTransport := &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
-			eventsAbilitySubscribeDevices: "easynet:///r/example/ability/device.dev-a.events.subscribe_devices",
+			eventsAbilitySubscribeDevices:     "easynet:///r/example/ability/device.dev-a.events.device.subscribe",
+			eventsAbilitySubscribeSessions:    "easynet:///r/example/ability/device.dev-a.session.attach",
+			eventsAbilitySubscribeInvocations: "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe",
 		},
 		descriptorByAbility: map[string]string{
-			"easynet:///r/example/ability/device.dev-a.events.subscribe_devices": "easynet:///r/example/ability/device.dev-a.events.subscribe_devices@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.events.device.subscribe":     "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.session.attach":              "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.events.invocation.subscribe": "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0",
 		},
 	}
 	identityClient, err := NewIdentityClient(identityTransport)
@@ -100,6 +104,40 @@ func TestRuntimeEventsMapsStreamAbilitiesAndRejectsSubscribeShortcut(t *testing.
 	args := draft.JSONArgs().(map[string]any)
 	if args["daemon_ability"] != eventsAbilitySubscribeDevices || args["stream"] != "device" {
 		t.Fatalf("unexpected device event args: %#v", args)
+	}
+
+	sessionCursor, _ := NewEventCursor("session", 4)
+	sessionDraft, err := client.BuildSessionSubscriptionInvocation(context.Background(), EventsSessionSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		SessionID:         "run-1",
+		ResumeCursor:      &sessionCursor,
+	})
+	if err != nil {
+		t.Fatalf("BuildSessionSubscriptionInvocation: %v", err)
+	}
+	sessionArgs := sessionDraft.JSONArgs().(map[string]any)
+	if sessionDraft.Metadata()["system_ability"] != eventsAbilitySubscribeSessions ||
+		sessionDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.session.attach@1.0.0" ||
+		sessionArgs["session_id"] != "run-1" ||
+		sessionArgs["since_seq"].(float64) != 4 ||
+		sessionArgs["stream"] != nil ||
+		sessionArgs["daemon_ability"] != nil {
+		t.Fatalf("unexpected session event args: draft=%#v args=%#v", sessionDraft, sessionArgs)
+	}
+
+	invocationDraft, err := client.BuildInvocationSubscriptionInvocation(context.Background(), EventsInvocationSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		InvocationID:      "inv-1",
+	})
+	if err != nil {
+		t.Fatalf("BuildInvocationSubscriptionInvocation: %v", err)
+	}
+	invocationArgs := invocationDraft.JSONArgs().(map[string]any)
+	if invocationDraft.Metadata()["system_ability"] != eventsAbilitySubscribeInvocations ||
+		invocationArgs["daemon_ability"] != eventsAbilitySubscribeInvocations ||
+		invocationArgs["stream"] != "invocation" ||
+		invocationArgs["invocation_id"] != "inv-1" {
+		t.Fatalf("unexpected invocation event args: draft=%#v args=%#v", invocationDraft, invocationArgs)
 	}
 	if _, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()}); !IsCode(err, ErrNotImplemented) {
 		t.Fatalf("SubscribeDirectory error = %v, want %s", err, ErrNotImplemented)

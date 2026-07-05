@@ -1,0 +1,23 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "args": {
+    "stream": "invocation",
+    "daemon_ability": "events.invocation.subscribe",
+    "resume_cursor": "invocation:9",
+    "invocation_id": "inv-1"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "request_id": "events-invocation-subscribe-1",
+    "profile": "events",
+    "system_ability": "events.invocation.subscribe",
+    "carrier_owner": "daemon_sdk"
+  }
+}

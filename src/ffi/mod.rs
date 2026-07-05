@@ -56,10 +56,12 @@
 //   `easynet_mission_project_status`, and
 //   `easynet_mission_project_events`: Mission/EAL carrier, status, and event
 //   projection helpers.
-// - `easynet_events_build_directory_subscription_invocation`,
+// - `easynet_events_build_*_subscription_invocation`,
+//   `easynet_events_build_device_event_history_invocation`,
+//   `easynet_events_project_device_event_page`,
 //   `easynet_events_project_directory_event`,
 //   `easynet_events_project_terminal`, and
-//   `easynet_events_project_drop_report`: Events directory stream carrier and
+//   `easynet_events_project_drop_report`: Events stream/history carriers and
 //   typed frame projection helpers.
 // - `easynet_directory_build_list_*_invocation`,
 //   `easynet_directory_build_resolve_invocation`,

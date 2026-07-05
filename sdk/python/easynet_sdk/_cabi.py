@@ -83,7 +83,11 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_mission_project_status",
     "easynet_mission_project_events",
     "easynet_events_build_directory_subscription_invocation",
+    "easynet_events_build_device_subscription_invocation",
     "easynet_events_build_session_subscription_invocation",
+    "easynet_events_build_invocation_subscription_invocation",
+    "easynet_events_build_device_event_history_invocation",
+    "easynet_events_project_device_event_page",
     "easynet_events_project_directory_event",
     "easynet_events_project_terminal",
     "easynet_events_project_drop_report",
@@ -1535,7 +1539,9 @@ class CABIEventTransport(_CABIProfileTransport):
         )
 
     def build_device_subscription_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("events device subscription carrier")
+        return self._call(
+            "easynet_events_build_device_subscription_invocation", request_json
+        )
 
     def build_session_subscription_invocation(self, request_json: bytes) -> bytes:
         return self._call(
@@ -1543,7 +1549,9 @@ class CABIEventTransport(_CABIProfileTransport):
         )
 
     def build_invocation_subscription_invocation(self, request_json: bytes) -> bytes:
-        return self._missing("events invocation subscription carrier")
+        return self._call(
+            "easynet_events_build_invocation_subscription_invocation", request_json
+        )
 
     def subscribe_directory(self, request_json: bytes) -> EventStream:
         runtime_stream = self._open_runtime_stream(
@@ -1564,8 +1572,24 @@ class CABIEventTransport(_CABIProfileTransport):
         self._event_streams.append(stream)
         return stream
 
-    def subscribe_devices(self, request_json: bytes) -> bytes:
-        return self._missing("events subscribe devices")
+    def subscribe_devices(self, request_json: bytes) -> EventStream:
+        runtime_stream = self._open_runtime_stream(
+            request_json,
+            build_symbol="easynet_events_build_device_subscription_invocation",
+        )
+        stream = EventStream.from_runtime_stream(
+            "device",
+            runtime_stream,
+            resume_token=_resume_token_from_event_subscription(request_json),
+            metadata={
+                "profile": "events",
+                "source": "runtime_stream",
+                "stream_ability": "events.device.subscribe",
+                "carrier_owner": "daemon_sdk",
+            },
+        )
+        self._event_streams.append(stream)
+        return stream
 
     def subscribe_sessions(self, request_json: bytes) -> bytes:
         runtime_stream = self._open_runtime_stream(
@@ -1586,11 +1610,31 @@ class CABIEventTransport(_CABIProfileTransport):
         self._event_streams.append(stream)
         return stream
 
-    def subscribe_invocations(self, request_json: bytes) -> bytes:
-        return self._missing("events subscribe invocations")
+    def subscribe_invocations(self, request_json: bytes) -> EventStream:
+        runtime_stream = self._open_runtime_stream(
+            request_json,
+            build_symbol="easynet_events_build_invocation_subscription_invocation",
+        )
+        stream = EventStream.from_runtime_stream(
+            "invocation",
+            runtime_stream,
+            resume_token=_resume_token_from_event_subscription(request_json),
+            metadata={
+                "profile": "events",
+                "source": "runtime_stream",
+                "stream_ability": "events.invocation.subscribe",
+                "carrier_owner": "daemon_sdk",
+            },
+        )
+        self._event_streams.append(stream)
+        return stream
 
     def list_device_events(self, request_json: bytes) -> bytes:
-        return self._missing("events list device events")
+        return self._invoke_projected_with_controls(
+            request_json,
+            build_symbol="easynet_events_build_device_event_history_invocation",
+            project_symbol="easynet_events_project_device_event_page",
+        )
 
     def project_directory_event(self, event_json: bytes) -> bytes:
         return self._call("easynet_events_project_directory_event", event_json)
