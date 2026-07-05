@@ -10,10 +10,10 @@ from unittest.mock import patch
 from easynet_sdk import (
     BidiState,
     DaemonInvocationTransport,
-    EasyRemoteBidiSessionAdapter,
-    EasyRemoteStreamAdapter,
-    EasyRemoteTransportAdapter,
-    EasyRemoteUnaryDispatchPool,
+    BidiSessionAdapter,
+    StreamValueAdapter,
+    InvocationResultAdapter,
+    UnaryDispatchPool,
     ErrorCode,
     InvocationSignature,
     RetryHint,
@@ -37,7 +37,9 @@ def _load_patch(raw: FakeRawCABI):
 class DaemonInvocationTransportTests(unittest.TestCase):
     def test_invoke_accepts_complete_invocation_mapping(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
 
         result = transport.invoke(complete_draft().to_json_dict())
 
@@ -50,8 +52,8 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
 
-    def test_easyremote_adapter_projects_runtime_result_shape(self) -> None:
-        class EasyRemoteRuntimeTransport(MemoryRuntimeTransport):
+    def test_invocation_result_adapter_projects_runtime_result_shape(self) -> None:
+        class ResultShapeRuntimeTransport(MemoryRuntimeTransport):
             def invoke(self, draft_json: bytes) -> bytes:
                 result = json.loads(super().invoke(draft_json).decode("utf-8"))
                 result.update(
@@ -72,10 +74,8 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                     sort_keys=True,
                 ).encode("utf-8")
 
-        runtime = EasyRemoteRuntimeTransport()
-        adapter = EasyRemoteTransportAdapter.from_runtime_client(
-            RuntimeClient(runtime)
-        )
+        runtime = ResultShapeRuntimeTransport()
+        adapter = InvocationResultAdapter.from_runtime_client(RuntimeClient(runtime))
 
         result = adapter.invoke(complete_draft().to_json_dict())
 
@@ -91,21 +91,25 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["admission_receipt"], {"invocation_id": "inv-1"})
         self.assertEqual(result["sdk_runtime_result"]["terminal_state"], "Completed")
 
-    def test_easyremote_adapter_requires_sdk_signer_for_signed_invocation(self) -> None:
+    def test_invocation_result_adapter_requires_sdk_signer_for_signed_invocation(
+        self,
+    ) -> None:
         runtime = MemoryRuntimeTransport()
-        adapter = EasyRemoteTransportAdapter.from_runtime_client(RuntimeClient(runtime))
+        adapter = InvocationResultAdapter.from_runtime_client(RuntimeClient(runtime))
 
         with self.assertRaises(SDKError) as caught:
             adapter.invoke_signed(complete_draft().to_json_dict(), signer=None)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertEqual(caught.exception.stage, "easyremote_signing")
+        self.assertEqual(caught.exception.stage, "runtime_signing")
         self.assertEqual(caught.exception.details["reason"], "signing_path_pending")
         self.assertIsNone(runtime.seen_draft)
 
-    def test_easyremote_adapter_submits_signed_invocation_through_runtime(self) -> None:
+    def test_invocation_result_adapter_submits_signed_invocation_through_runtime(
+        self,
+    ) -> None:
         runtime = MemoryRuntimeTransport()
-        adapter = EasyRemoteTransportAdapter.from_runtime_client(RuntimeClient(runtime))
+        adapter = InvocationResultAdapter.from_runtime_client(RuntimeClient(runtime))
         signer = Signer.from_signature(
             signer_handle(),
             InvocationSignature(
@@ -136,12 +140,14 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                     "self_hash_hex": "00" * 32,
                     "cleanup_complete": True,
                 }
-                return json.dumps(
-                    result, separators=(",", ":"), sort_keys=True
-                ).encode("utf-8")
+                return json.dumps(result, separators=(",", ":"), sort_keys=True).encode(
+                    "utf-8"
+                )
 
         runtime = ReceiptRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
 
         result = transport.invoke(complete_draft().to_json_dict())
 
@@ -149,7 +155,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["receipt_summary"]["invocation_id"], "inv-1")
         self.assertTrue(result["receipt_summary"]["has_causal_anchor"])
 
-    def test_easyremote_adapter_raises_on_non_ok_runtime_result(self) -> None:
+    def test_invocation_result_adapter_raises_on_non_ok_runtime_result(self) -> None:
         class FailedRuntimeTransport(MemoryRuntimeTransport):
             def invoke(self, draft_json: bytes) -> bytes:
                 draft = json.loads(draft_json.decode("utf-8"))
@@ -169,7 +175,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                     sort_keys=True,
                 ).encode("utf-8")
 
-        adapter = EasyRemoteTransportAdapter.from_runtime_client(
+        adapter = InvocationResultAdapter.from_runtime_client(
             RuntimeClient(FailedRuntimeTransport())
         )
 
@@ -212,7 +218,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
     def test_stream_projects_sdk_events_to_dicts(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
 
         stream = transport.stream(complete_draft())
         event = stream.recv()
@@ -221,9 +229,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(event["terminal"])
         self.assertEqual(event["kind"], "terminal")
 
-    def test_easyremote_adapter_delegates_stream_and_bidi(self) -> None:
+    def test_invocation_result_adapter_delegates_stream_and_bidi(self) -> None:
         runtime = MemoryRuntimeTransport()
-        adapter = EasyRemoteTransportAdapter.from_runtime_client(RuntimeClient(runtime))
+        adapter = InvocationResultAdapter.from_runtime_client(RuntimeClient(runtime))
 
         stream = adapter.stream(complete_draft().to_json_dict())
         event = stream.recv()
@@ -258,7 +266,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 )
 
         runtime = TimeoutRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
 
         stream = transport.stream(complete_draft())
         with self.assertRaises(TimeoutError):
@@ -269,7 +279,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
     def test_bidi_keeps_half_close_cancel_and_close_distinct(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
         channel = transport.bidi(
             complete_draft().to_json_dict(),
             [{"stream_id": 1, "content_type": "application/json"}],
@@ -306,7 +318,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 )
 
         runtime = TimeoutRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
 
         channel = transport.bidi(
             complete_draft().to_json_dict(),
@@ -318,9 +332,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(runtime.bidi_transport.timeout, 0.01)
         self.assertEqual(channel.session.state, BidiState.OPEN)
 
-    def test_easyremote_bidi_close_cancels_open_session_before_release(self) -> None:
-        channel = _EasyRemoteMemoryBidiChannel(close_requires_terminal=True)
-        session = EasyRemoteBidiSessionAdapter(channel)
+    def test_bidi_close_cancels_open_session_before_release(self) -> None:
+        channel = _MemoryBidiChannel(close_requires_terminal=True)
+        session = BidiSessionAdapter(channel)
 
         session.close()
         session.close()
@@ -329,9 +343,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(channel.close_calls, 2)
         self.assertTrue(channel.closed)
 
-    def test_easyremote_bidi_close_preserves_unrelated_invalid_argument(self) -> None:
-        channel = _EasyRemoteMemoryBidiChannel(close_error="invalid frame state")
-        session = EasyRemoteBidiSessionAdapter(channel)
+    def test_bidi_close_preserves_unrelated_invalid_argument(self) -> None:
+        channel = _MemoryBidiChannel(close_error="invalid frame state")
+        session = BidiSessionAdapter(channel)
 
         with self.assertRaises(SDKError) as caught:
             session.close()
@@ -340,9 +354,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(channel.cancel_reasons, [])
         self.assertEqual(channel.close_calls, 1)
 
-    def test_easyremote_bidi_cancel_does_not_close_transport(self) -> None:
-        channel = _EasyRemoteMemoryBidiChannel()
-        session = EasyRemoteBidiSessionAdapter(channel)
+    def test_bidi_cancel_does_not_close_transport(self) -> None:
+        channel = _MemoryBidiChannel()
+        session = BidiSessionAdapter(channel)
 
         session.cancel("user stop")
 
@@ -350,19 +364,19 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(channel.close_calls, 0)
         self.assertFalse(channel.closed)
 
-    def test_easyremote_bidi_recv_timeout_is_typed_client_wait(self) -> None:
-        channel = _EasyRemoteMemoryBidiChannel(timeout=True)
-        session = EasyRemoteBidiSessionAdapter(channel)
+    def test_bidi_recv_timeout_is_typed_client_wait(self) -> None:
+        channel = _MemoryBidiChannel(timeout=True)
+        session = BidiSessionAdapter(channel)
 
         with self.assertRaises(SDKError) as caught:
             session.recv(timeout=0.01)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.TIMEOUT))
-        self.assertEqual(caught.exception.stage, "easyremote_bidi")
+        self.assertEqual(caught.exception.stage, "bidi")
         self.assertEqual(caught.exception.details["reason"], "client_wait_timeout")
 
-    def test_easyremote_bidi_recv_remote_error_is_typed(self) -> None:
-        channel = _EasyRemoteMemoryBidiChannel(
+    def test_bidi_recv_remote_error_is_typed(self) -> None:
+        channel = _MemoryBidiChannel(
             frames=[
                 {
                     "sequence": 1,
@@ -376,29 +390,31 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 }
             ]
         )
-        session = EasyRemoteBidiSessionAdapter(channel)
+        session = BidiSessionAdapter(channel)
 
         with self.assertRaises(SDKError) as caught:
             session.recv()
 
         self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
-        self.assertEqual(caught.exception.stage, "easyremote_bidi")
+        self.assertEqual(caught.exception.stage, "bidi")
         self.assertEqual(caught.exception.details["reason"], "host_gone")
 
-    def test_easyremote_bidi_rejects_send_after_close(self) -> None:
-        channel = _EasyRemoteMemoryBidiChannel()
-        session = EasyRemoteBidiSessionAdapter(channel)
+    def test_bidi_rejects_send_after_close(self) -> None:
+        channel = _MemoryBidiChannel()
+        session = BidiSessionAdapter(channel)
 
         session.close()
         with self.assertRaises(SDKError) as caught:
             session.send({"sequence": 1, "kind": "data", "stream_id": 1})
 
         self.assertTrue(is_code(caught.exception, ErrorCode.CANCELLED))
-        self.assertEqual(caught.exception.stage, "easyremote_bidi")
+        self.assertEqual(caught.exception.stage, "bidi")
 
     def test_rejects_incomplete_invocation_mapping_before_dispatch(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(runtime))
+        transport = DaemonInvocationTransport.from_runtime_client(
+            RuntimeClient(runtime)
+        )
 
         with self.assertRaises(SDKError) as caught:
             transport.invoke({"caller_ura": "easynet:///r/example/agent/alice.sdk"})
@@ -406,11 +422,11 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIsNone(runtime.seen_draft)
 
-    def test_easyremote_unary_pool_retires_timed_out_owned_transport(self) -> None:
+    def test_unary_pool_retires_timed_out_owned_transport(self) -> None:
         first = _SlowUnaryTransport(delay=0.05)
         second = _SlowUnaryTransport()
         transports = [first, second]
-        pool = EasyRemoteUnaryDispatchPool(lambda: transports.pop(0))
+        pool = UnaryDispatchPool(lambda: transports.pop(0))
 
         with self.assertRaises(SDKError) as caught:
             pool.invoke(complete_draft().to_json_dict(), timeout=0.001)
@@ -428,9 +444,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(first.closed)
         self.assertFalse(second.closed)
 
-    def test_easyremote_unary_pool_signed_dispatch_reuses_wait_state(self) -> None:
+    def test_unary_pool_signed_dispatch_reuses_wait_state(self) -> None:
         transport = _SlowUnaryTransport()
-        pool = EasyRemoteUnaryDispatchPool.from_transport(transport)
+        pool = UnaryDispatchPool.from_transport(transport)
         signer = Signer.from_signature(
             signer_handle(),
             InvocationSignature(
@@ -449,13 +465,13 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(len(transport.invocations), 1)
         self.assertEqual(transport.signed_signers, [signer])
 
-    def test_easyremote_unary_pool_queue_timeout_does_not_retire_active_transport(
+    def test_unary_pool_queue_timeout_does_not_retire_active_transport(
         self,
     ) -> None:
         first = _SlowUnaryTransport(delay=0.05)
         second = _SlowUnaryTransport()
         transports = [first, second]
-        pool = EasyRemoteUnaryDispatchPool(lambda: transports.pop(0))
+        pool = UnaryDispatchPool(lambda: transports.pop(0))
         result: list[dict[str, object]] = []
         thread = threading.Thread(
             target=lambda: result.append(
@@ -477,9 +493,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertIs(pool.current_transport, first)
         self.assertEqual(transports, [second])
 
-    def test_easyremote_unary_pool_close_during_active_invoke_is_bounded(self) -> None:
+    def test_unary_pool_close_during_active_invoke_is_bounded(self) -> None:
         transport = _SlowUnaryTransport(delay=0.05)
-        pool = EasyRemoteUnaryDispatchPool(lambda: transport)
+        pool = UnaryDispatchPool(lambda: transport)
         result: list[dict[str, object]] = []
         thread = threading.Thread(
             target=lambda: result.append(
@@ -500,11 +516,11 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result, [{"ok": True}])
         self.assertTrue(transport.closed)
 
-    def test_easyremote_unary_pool_close_releases_and_reconnects(self) -> None:
+    def test_unary_pool_close_releases_and_reconnects(self) -> None:
         first = _SlowUnaryTransport()
         second = _SlowUnaryTransport()
         transports = [first, second]
-        pool = EasyRemoteUnaryDispatchPool(lambda: transports.pop(0))
+        pool = UnaryDispatchPool(lambda: transports.pop(0))
 
         self.assertIs(pool.connected_transport(), first)
         pool.close()
@@ -516,9 +532,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertFalse(second.closed)
         self.assertIs(pool.current_transport, second)
 
-    def test_easyremote_unary_pool_does_not_close_external_transport(self) -> None:
+    def test_unary_pool_does_not_close_external_transport(self) -> None:
         transport = _SlowUnaryTransport(delay=0.02)
-        pool = EasyRemoteUnaryDispatchPool.from_transport(transport)
+        pool = UnaryDispatchPool.from_transport(transport)
 
         with self.assertRaises(SDKError):
             pool.invoke(complete_draft().to_json_dict(), timeout=0.001)
@@ -530,27 +546,27 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertFalse(transport.closed)
 
-    def test_easyremote_stream_adapter_yields_values_until_terminal(self) -> None:
+    def test_stream_adapter_yields_values_until_terminal(self) -> None:
         stream = _FixedFrameStream(
             [_chunk("a"), _chunk("b"), _chunk("c"), _chunk(None, terminal=True)]
         )
 
-        values = [item.value for item in EasyRemoteStreamAdapter(stream)]
+        values = [item.value for item in StreamValueAdapter(stream)]
 
         self.assertEqual(values, ["a", "b", "c"])
         self.assertTrue(stream.closed)
 
-    def test_easyremote_stream_adapter_handles_empty_and_null_payloads(self) -> None:
+    def test_stream_adapter_handles_empty_and_null_payloads(self) -> None:
         empty = _FixedFrameStream([_chunk(None, terminal=True)])
         null_value = _FixedFrameStream([_chunk(None), _chunk(None, terminal=True)])
 
-        self.assertEqual([item.value for item in EasyRemoteStreamAdapter(empty)], [])
+        self.assertEqual([item.value for item in StreamValueAdapter(empty)], [])
         self.assertEqual(
-            [item.value for item in EasyRemoteStreamAdapter(null_value)],
+            [item.value for item in StreamValueAdapter(null_value)],
             [None],
         )
 
-    def test_easyremote_stream_adapter_decodes_non_json_payload_bytes(self) -> None:
+    def test_stream_adapter_decodes_non_json_payload_bytes(self) -> None:
         stream = _FixedFrameStream(
             [
                 {
@@ -564,21 +580,21 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             ]
         )
 
-        values = [item.value for item in EasyRemoteStreamAdapter(stream)]
+        values = [item.value for item in StreamValueAdapter(stream)]
 
         self.assertEqual(values, [b"\x00\x01"])
 
-    def test_easyremote_stream_adapter_idle_timeout_is_sdk_timeout(self) -> None:
+    def test_stream_adapter_idle_timeout_is_sdk_timeout(self) -> None:
         stream = _TimeoutFrameStream()
 
         with self.assertRaises(SDKError) as caught:
-            list(EasyRemoteStreamAdapter(stream, timeout=0.01))
+            list(StreamValueAdapter(stream, timeout=0.01))
 
         self.assertTrue(is_code(caught.exception, ErrorCode.TIMEOUT))
         self.assertEqual(caught.exception.details["reason"], "client_wait_timeout")
         self.assertTrue(stream.closed)
 
-    def test_easyremote_stream_adapter_projects_envelope_errors(self) -> None:
+    def test_stream_adapter_projects_envelope_errors(self) -> None:
         stream = _FixedFrameStream(
             [
                 _chunk("a"),
@@ -588,14 +604,14 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         values: list[object] = []
 
         with self.assertRaises(SDKError) as caught:
-            for item in EasyRemoteStreamAdapter(stream):
+            for item in StreamValueAdapter(stream):
                 values.append(item.value)
 
         self.assertEqual(values, ["a"])
         self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
         self.assertEqual(caught.exception.message, "down")
 
-    def test_easyremote_stream_adapter_projects_host_error_payloads(self) -> None:
+    def test_stream_adapter_projects_host_error_payloads(self) -> None:
         stream = _FixedFrameStream(
             [
                 _chunk(0),
@@ -614,23 +630,25 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         values: list[object] = []
 
         with self.assertRaises(SDKError) as caught:
-            for item in EasyRemoteStreamAdapter(stream):
+            for item in StreamValueAdapter(stream):
                 values.append(item.value)
 
         self.assertEqual(values, [0, 1])
         self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
         self.assertEqual(caught.exception.details["reason"], "function_raised")
 
-    def test_easyremote_stream_adapter_preserves_error_shaped_user_data(self) -> None:
+    def test_stream_adapter_preserves_error_shaped_user_data(self) -> None:
         payload = {"error": {"detail": "data only"}, "ok": True}
         stream = _FixedFrameStream([_chunk(payload), _chunk(None, terminal=True)])
 
-        values = [item.value for item in EasyRemoteStreamAdapter(stream)]
+        values = [item.value for item in StreamValueAdapter(stream)]
 
         self.assertEqual(values, [payload])
 
 
-def _write_control_discovery(tmp: str, *, invocation_endpoint: str | None = None) -> Path:
+def _write_control_discovery(
+    tmp: str, *, invocation_endpoint: str | None = None
+) -> Path:
     path = Path(tmp) / "control.json"
     value = {
         "socket_path": f"{tmp}/control.sock",
@@ -677,7 +695,7 @@ class _SlowUnaryTransport:
         self.closed = True
 
 
-class _EasyRemoteMemoryBidiChannel:
+class _MemoryBidiChannel:
     def __init__(
         self,
         *,

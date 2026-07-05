@@ -37,11 +37,12 @@ observation with schema-shaped terminal event projection, BidiSession frame
 ordering, half-close, cancel, terminal-frame projection, and terminal-close observation, object-bound
 Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandle, signer workflow
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
-observation, SDK-owned EasyRemote signed unary prepare/sign/submit/await/
-free-handle transport path with explicit signer-boundary errors, SDK-owned
-EasyRemote unary wait/timeout/retire/close transport-pool state and stream value
-projection for terminal/timeout/error/payload frames plus
-EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection,
+observation, SDK-owned signed unary prepare/sign/submit/await/free-handle
+transport path with explicit signer-boundary errors, product-neutral
+`InvocationResultAdapter`, `UnaryDispatchPool`, `StreamValueAdapter`, and
+`BidiSessionAdapter` runtime transport helpers for unary wait/timeout/retire/
+close, stream terminal/timeout/error/payload projection, and bidi session
+close/cancel/timeout/wire-error lifecycle projection,
 DaemonHandle-scoped Runtime/Profile client factories, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
 methods behind narrow transport protocols with timeout-aware stream/bidi receive,

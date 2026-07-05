@@ -38,9 +38,7 @@ class DaemonInvocationTransport:
     _closed: bool = False
 
     @classmethod
-    def from_runtime_client(
-        cls, runtime: RuntimeClient
-    ) -> "DaemonInvocationTransport":
+    def from_runtime_client(cls, runtime: RuntimeClient) -> "DaemonInvocationTransport":
         """Wrap an existing Runtime Core client."""
 
         return cls(runtime)
@@ -109,7 +107,9 @@ class DaemonInvocationTransport:
             connection=connection,
         )
 
-    def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> dict[str, object]:
+    def invoke(
+        self, invocation: Mapping[str, object] | InvocationDraft
+    ) -> dict[str, object]:
         """Submit one complete Invocation and return its Runtime result JSON."""
 
         result = self._require_open().invoke(_coerce_draft(invocation))
@@ -125,7 +125,7 @@ class DaemonInvocationTransport:
         """Prepare, sign, submit, await, and release one signed Invocation."""
 
         if signer is None:
-            raise _missing_easyremote_signer()
+            raise _missing_required_signer()
         runtime = self._require_open()
         signed, _material = runtime.prepare_and_sign(
             _coerce_draft(invocation),
@@ -184,15 +184,13 @@ class DaemonInvocationTransport:
 
 
 @dataclass
-class EasyRemoteTransportAdapter:
-    """EasyRemote cutover adapter over the SDK daemon Invocation transport."""
+class InvocationResultAdapter:
+    """Runtime result adapter over the SDK daemon Invocation transport."""
 
     transport: DaemonInvocationTransport
 
     @classmethod
-    def from_runtime_client(
-        cls, runtime: RuntimeClient
-    ) -> "EasyRemoteTransportAdapter":
+    def from_runtime_client(cls, runtime: RuntimeClient) -> "InvocationResultAdapter":
         return cls(DaemonInvocationTransport.from_runtime_client(runtime))
 
     @classmethod
@@ -202,7 +200,7 @@ class EasyRemoteTransportAdapter:
         control_path: str = "",
         library_path: str | None = None,
         options: ConnectOptions = ConnectOptions(),
-    ) -> "EasyRemoteTransportAdapter":
+    ) -> "InvocationResultAdapter":
         return cls(
             DaemonInvocationTransport.connect(
                 control_path=control_path,
@@ -211,10 +209,12 @@ class EasyRemoteTransportAdapter:
             )
         )
 
-    def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> dict[str, object]:
-        """Submit one complete Invocation and return EasyRemote's result shape."""
+    def invoke(
+        self, invocation: Mapping[str, object] | InvocationDraft
+    ) -> dict[str, object]:
+        """Submit one complete Invocation and return runtime result adapter shape."""
 
-        return _easyremote_response_dict(self.transport.invoke(invocation))
+        return _result_response_dict(self.transport.invoke(invocation))
 
     def invoke_signed(
         self,
@@ -223,9 +223,9 @@ class EasyRemoteTransportAdapter:
         signer: Signer | None,
         options: PrepareOptions = PrepareOptions(require_user_sig=True),
     ) -> dict[str, object]:
-        """Submit a signed Invocation and return EasyRemote's result shape."""
+        """Submit a signed Invocation and return runtime result adapter shape."""
 
-        return _easyremote_response_dict(
+        return _result_response_dict(
             self.transport.invoke_signed(invocation, signer=signer, options=options)
         )
 
@@ -244,7 +244,7 @@ class EasyRemoteTransportAdapter:
     def close(self) -> None:
         self.transport.close()
 
-    def __enter__(self) -> "EasyRemoteTransportAdapter":
+    def __enter__(self) -> "InvocationResultAdapter":
         self.transport._require_open()
         return self
 
@@ -252,11 +252,13 @@ class EasyRemoteTransportAdapter:
         self.close()
 
 
-class EasyRemoteUnaryTransport(Protocol):
+class UnaryInvocationTransport(Protocol):
     """Minimal unary transport contract owned by the SDK dispatch pool."""
 
-    def invoke(self, invocation: Mapping[str, object] | InvocationDraft) -> Mapping[str, object]:
-        """Submit one EasyRemote-shaped unary Invocation."""
+    def invoke(
+        self, invocation: Mapping[str, object] | InvocationDraft
+    ) -> Mapping[str, object]:
+        """Submit one runtime-shaped unary Invocation."""
 
     def invoke_signed(
         self,
@@ -265,13 +267,13 @@ class EasyRemoteUnaryTransport(Protocol):
         signer: Signer | None,
         options: PrepareOptions = PrepareOptions(require_user_sig=True),
     ) -> Mapping[str, object]:
-        """Submit one EasyRemote-shaped signed unary Invocation."""
+        """Submit one runtime-shaped signed unary Invocation."""
 
     def close(self) -> None:
         """Release the underlying daemon transport."""
 
 
-class EasyRemoteUnaryDispatchPool:
+class UnaryDispatchPool:
     """SDK-owned single-flight unary wait/retire state machine.
 
     Product facades may impose a client-side wait budget, but they must not own
@@ -283,7 +285,7 @@ class EasyRemoteUnaryDispatchPool:
 
     def __init__(
         self,
-        transport_factory: Callable[[], EasyRemoteUnaryTransport],
+        transport_factory: Callable[[], UnaryInvocationTransport],
         *,
         owned: bool = True,
     ) -> None:
@@ -291,13 +293,11 @@ class EasyRemoteUnaryDispatchPool:
         self._owned = owned
         self._lock = threading.Lock()
         self._flight_lock = threading.Lock()
-        self._transport: EasyRemoteUnaryTransport | None = None
+        self._transport: UnaryInvocationTransport | None = None
         self._retired: set[int] = set()
 
     @classmethod
-    def from_transport(
-        cls, transport: EasyRemoteUnaryTransport
-    ) -> "EasyRemoteUnaryDispatchPool":
+    def from_transport(cls, transport: UnaryInvocationTransport) -> "UnaryDispatchPool":
         """Wrap an externally-owned transport without closing or retiring it."""
 
         return cls(lambda: transport, owned=False)
@@ -332,7 +332,7 @@ class EasyRemoteUnaryDispatchPool:
 
     def _invoke_with_transport(
         self,
-        operation: Callable[[EasyRemoteUnaryTransport], Mapping[str, object]],
+        operation: Callable[[UnaryInvocationTransport], Mapping[str, object]],
         *,
         timeout: float | None,
     ) -> dict[str, object]:
@@ -340,10 +340,10 @@ class EasyRemoteUnaryDispatchPool:
             queue.Queue(maxsize=1)
         )
         timed_out = threading.Event()
-        active_transport: list[EasyRemoteUnaryTransport | None] = [None]
+        active_transport: list[UnaryInvocationTransport | None] = [None]
 
         def invoke_on_transport() -> None:
-            transport: EasyRemoteUnaryTransport | None = None
+            transport: UnaryInvocationTransport | None = None
             try:
                 with self._flight_lock:
                     if timed_out.is_set():
@@ -366,7 +366,7 @@ class EasyRemoteUnaryDispatchPool:
 
         threading.Thread(
             target=invoke_on_transport,
-            name="easynet-sdk-easyremote-unary",
+            name="easynet-sdk-unary",
             daemon=True,
         ).start()
         try:
@@ -378,7 +378,7 @@ class EasyRemoteUnaryDispatchPool:
                 self._retire(transport)
             raise SDKError(
                 code=ErrorCode.TIMEOUT,
-                stage="easyremote_transport",
+                stage="runtime_transport",
                 retry=RetryHint.SAFE,
                 retryable=True,
                 message=(
@@ -407,18 +407,18 @@ class EasyRemoteUnaryDispatchPool:
         self._retire_active()
 
     @property
-    def current_transport(self) -> EasyRemoteUnaryTransport | None:
+    def current_transport(self) -> UnaryInvocationTransport | None:
         """Return the current reusable transport for tests/diagnostics."""
 
         with self._lock:
             return self._transport
 
-    def connected_transport(self) -> EasyRemoteUnaryTransport:
+    def connected_transport(self) -> UnaryInvocationTransport:
         """Return the current reusable transport, opening one if needed."""
 
         return self._connected()
 
-    def _connected(self) -> EasyRemoteUnaryTransport:
+    def _connected(self) -> UnaryInvocationTransport:
         if not self._owned:
             return self._transport_factory()
         with self._lock:
@@ -439,7 +439,7 @@ class EasyRemoteUnaryDispatchPool:
                 self._retired.add(id(self._transport))
                 self._transport = None
 
-    def _retire(self, transport: EasyRemoteUnaryTransport) -> None:
+    def _retire(self, transport: UnaryInvocationTransport) -> None:
         if not self._owned:
             return
         with self._lock:
@@ -447,7 +447,7 @@ class EasyRemoteUnaryDispatchPool:
                 self._transport = None
             self._retired.add(id(transport))
 
-    def _take_retired(self, transport: EasyRemoteUnaryTransport) -> bool:
+    def _take_retired(self, transport: UnaryInvocationTransport) -> bool:
         with self._lock:
             transport_id = id(transport)
             if transport_id not in self._retired:
@@ -457,38 +457,38 @@ class EasyRemoteUnaryDispatchPool:
 
 
 @dataclass(frozen=True)
-class EasyRemoteStreamItem:
-    """One SDK-projected EasyRemote stream item."""
+class StreamValue:
+    """One SDK-projected stream item."""
 
     value: Any
 
 
-class EasyRemoteStreamAdapter:
-    """SDK-owned EasyRemote stream frame projection.
+class StreamValueAdapter:
+    """SDK-owned stream frame projection.
 
-    The adapter consumes EasyRemote-compatible daemon stream frames and yields
+    The adapter consumes generic daemon stream frames and yields
     ability values. It keeps terminal-frame, timeout, wire-error, and payload
     projection rules out of product facades.
     """
 
     _NO_VALUE = object()
 
-    def __init__(self, frames: "EasyRemoteFrameStream", *, timeout: float | None = None) -> None:
+    def __init__(self, frames: "FrameStream", *, timeout: float | None = None) -> None:
         self._frames = frames
         self._timeout = timeout
 
-    def __iter__(self) -> Iterator[EasyRemoteStreamItem]:
+    def __iter__(self) -> Iterator[StreamValue]:
         try:
             for frame in self._raw_frames():
                 error = frame.get("error")
                 if error:
-                    raise _easyremote_wire_error(error)
+                    raise _remote_wire_error(error)
                 value = self._frame_value(frame)
-                stream_error = _easyremote_stream_error_payload(value)
+                stream_error = _stream_error_payload(value)
                 if stream_error is not None:
-                    raise _easyremote_wire_error(stream_error)
+                    raise _remote_wire_error(stream_error)
                 if value is not self._NO_VALUE:
-                    yield EasyRemoteStreamItem(value)
+                    yield StreamValue(value)
                 if frame.get("terminal") is True:
                     return
         finally:
@@ -508,7 +508,7 @@ class EasyRemoteStreamAdapter:
             except TimeoutError:
                 raise SDKError(
                     code=ErrorCode.TIMEOUT,
-                    stage="easyremote_stream",
+                    stage="stream",
                     retry=RetryHint.SAFE,
                     retryable=True,
                     message=(
@@ -543,7 +543,7 @@ class EasyRemoteStreamAdapter:
             except Exception as exc:
                 raise SDKError(
                     code=ErrorCode.INVALID_ARGUMENT,
-                    stage="easyremote_stream",
+                    stage="stream",
                     retry=RetryHint.NEVER,
                     retryable=False,
                     message=f"decode stream payload_base64: {exc}",
@@ -552,39 +552,32 @@ class EasyRemoteStreamAdapter:
         return self._NO_VALUE
 
 
-class EasyRemoteFrameStream(Protocol):
-    """Frame stream shape consumed by `EasyRemoteStreamAdapter`."""
+class FrameStream(Protocol):
+    """Frame stream shape consumed by `StreamValueAdapter`."""
 
-    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None:
-        ...
+    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
-    def __iter__(self) -> Iterator[Mapping[str, object]]:
-        ...
+    def __iter__(self) -> Iterator[Mapping[str, object]]: ...
 
 
-class EasyRemoteBidiChannel(Protocol):
-    """Bidi channel shape consumed by `EasyRemoteBidiSessionAdapter`."""
+class BidiChannel(Protocol):
+    """Bidi channel shape consumed by `BidiSessionAdapter`."""
 
-    def send(self, frame: Mapping[str, object]) -> object:
-        ...
+    def send(self, frame: Mapping[str, object]) -> object: ...
 
-    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None:
-        ...
+    def recv(self, timeout: float | None = None) -> Mapping[str, object] | None: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
-    def cancel(self, reason: str = "") -> object:
-        ...
+    def cancel(self, reason: str = "") -> object: ...
 
 
-class EasyRemoteBidiSessionAdapter:
-    """SDK-owned EasyRemote bidi session facade.
+class BidiSessionAdapter:
+    """SDK-owned bidi session facade.
 
-    EasyRemote's public session API is intentionally small, but the lifecycle
+    Public session API is intentionally small, but the lifecycle
     rules are Runtime Core concerns: an open session cannot be simply dropped,
     timeout is a typed client wait expiry, and remote wire errors must not leak
     as ordinary frames.
@@ -592,7 +585,7 @@ class EasyRemoteBidiSessionAdapter:
 
     def __init__(
         self,
-        channel: EasyRemoteBidiChannel,
+        channel: BidiChannel,
         *,
         close_reason: str = "client close",
     ) -> None:
@@ -615,7 +608,7 @@ class EasyRemoteBidiSessionAdapter:
         except TimeoutError:
             raise SDKError(
                 code=ErrorCode.TIMEOUT,
-                stage="easyremote_bidi",
+                stage="bidi",
                 retry=RetryHint.SAFE,
                 retryable=True,
                 message=(
@@ -633,7 +626,7 @@ class EasyRemoteBidiSessionAdapter:
         projected = dict(frame)
         error = projected.get("error")
         if error:
-            raise _easyremote_wire_error(error, stage="easyremote_bidi")
+            raise _remote_wire_error(error, stage="bidi")
         if projected.get("terminal") is True:
             self._terminal = True
         return projected
@@ -657,7 +650,7 @@ class EasyRemoteBidiSessionAdapter:
             self._channel.close()
         self._closed = True
 
-    def __enter__(self) -> "EasyRemoteBidiSessionAdapter":
+    def __enter__(self) -> "BidiSessionAdapter":
         self._require_not_closed()
         return self
 
@@ -668,7 +661,7 @@ class EasyRemoteBidiSessionAdapter:
         if self._closed:
             raise SDKError(
                 code=ErrorCode.CANCELLED,
-                stage="easyremote_bidi",
+                stage="bidi",
                 retry=RetryHint.NEVER,
                 retryable=False,
                 message="bidi session is closed",
@@ -742,7 +735,9 @@ class DaemonBidiChannel:
         self.close()
 
 
-def _coerce_draft(invocation: Mapping[str, object] | InvocationDraft) -> InvocationDraft:
+def _coerce_draft(
+    invocation: Mapping[str, object] | InvocationDraft
+) -> InvocationDraft:
     if isinstance(invocation, InvocationDraft):
         return invocation
     if not isinstance(invocation, Mapping):
@@ -798,7 +793,7 @@ def _invocation_result_dict(result: InvocationResult) -> dict[str, object]:
     return value
 
 
-def _easyremote_response_dict(result: Mapping[str, object]) -> dict[str, object]:
+def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
     if result.get("ok") is not True:
         error = result.get("error")
         message = "daemon invocation failed"
@@ -816,7 +811,7 @@ def _easyremote_response_dict(result: Mapping[str, object]) -> dict[str, object]
     terminal_state = _terminal_state_name(result.get("terminal_state"))
     response: dict[str, object] = {
         "ok": result.get("ok") is True,
-        "state": _easyremote_state_code(terminal_state),
+        "state": _terminal_state_code(terminal_state),
         "terminal_state": terminal_state,
         "result_content_type": _string_or_empty(result.get("output_content_type")),
         "result_base64": _string_or_empty(result.get("output_base64")),
@@ -838,7 +833,7 @@ def _terminal_state_name(value: object) -> str:
     return "Unspecified"
 
 
-_EASYREMOTE_STATE_CODES = {
+_TERMINAL_STATE_CODES = {
     "unspecified": 0,
     "accepted": 1,
     "admitted": 2,
@@ -853,9 +848,9 @@ _EASYREMOTE_STATE_CODES = {
 }
 
 
-def _easyremote_state_code(value: str) -> int:
+def _terminal_state_code(value: str) -> int:
     normalized = value.replace("-", "_").lower()
-    return _EASYREMOTE_STATE_CODES.get(normalized, 0)
+    return _TERMINAL_STATE_CODES.get(normalized, 0)
 
 
 def _runtime_receipt_dict(receipt) -> dict[str, object]:
@@ -922,7 +917,7 @@ def _bidi_outcome_dict(outcome: BidiOutcome) -> dict[str, object]:
     }
 
 
-def _easyremote_stream_error_payload(value: Any) -> Mapping[str, object] | None:
+def _stream_error_payload(value: Any) -> Mapping[str, object] | None:
     if (
         isinstance(value, Mapping)
         and set(value) == {"error"}
@@ -933,7 +928,7 @@ def _easyremote_stream_error_payload(value: Any) -> Mapping[str, object] | None:
     return None
 
 
-_EASYREMOTE_ERROR_CODES = {
+_REMOTE_ERROR_CODES = {
     "CANCELLED": ErrorCode.CANCELLED,
     "DEADLINE_EXCEEDED": ErrorCode.TIMEOUT,
     "UNAVAILABLE": ErrorCode.DAEMON_OFFLINE,
@@ -944,9 +939,7 @@ _EASYREMOTE_ERROR_CODES = {
 }
 
 
-def _easyremote_wire_error(
-    error: object, *, stage: str = "easyremote_stream"
-) -> SDKError:
+def _remote_wire_error(error: object, *, stage: str = "stream") -> SDKError:
     if not isinstance(error, Mapping):
         return SDKError(
             code=ErrorCode.ABILITY_FAILED,
@@ -962,7 +955,7 @@ def _easyremote_wire_error(
     kind_text = kind if isinstance(kind, str) else ""
     reason_text = reason if isinstance(reason, str) else ""
     message_text = message if isinstance(message, str) else ""
-    code = _EASYREMOTE_ERROR_CODES.get(kind_text, ErrorCode.ABILITY_FAILED)
+    code = _REMOTE_ERROR_CODES.get(kind_text, ErrorCode.ABILITY_FAILED)
     return SDKError(
         code=code,
         stage=stage,
@@ -1022,15 +1015,13 @@ def _invalid_transport(message: str) -> SDKError:
     )
 
 
-def _missing_easyremote_signer() -> SDKError:
+def _missing_required_signer() -> SDKError:
     return SDKError(
         code=ErrorCode.NOT_IMPLEMENTED,
-        stage="easyremote_signing",
+        stage="runtime_signing",
         retry=RetryHint.NEVER,
         retryable=False,
-        message=(
-            "EasyRemote signed invocation requires a daemon-authorized SDK Signer"
-        ),
+        message=("Signed invocation requires a daemon-authorized SDK Signer"),
         details={"reason": "signing_path_pending"},
     )
 

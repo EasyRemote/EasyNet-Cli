@@ -237,9 +237,11 @@ method spelling.
   transport protocols with timeout-aware stream/bidi receive; public `DaemonInvocationTransport` dict/JSON unary,
   stream, bidi, and signed unary prepare/sign/submit/await/free-handle facade
   with RuntimeConnection-owned session lifecycle over C ABI v4, plus
-  SDK-owned EasyRemote signed unary signer-boundary errors and unary wait/timeout/retire/close transport-pool state and
-  EasyRemote stream value projection for terminal/timeout/error/payload frames plus
-  EasyRemote bidi session close/cancel/timeout/wire-error lifecycle projection;
+  SDK-owned signed unary signer-boundary errors plus product-neutral
+  `InvocationResultAdapter`, `UnaryDispatchPool`, `StreamValueAdapter`, and
+  `BidiSessionAdapter` helpers for unary wait/timeout/retire/close transport-pool state,
+  stream terminal/timeout/error/payload value projection, and bidi session
+  close/cancel/timeout/wire-error lifecycle projection;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   EasyRemote-style descriptor-ref and target-dispatch cutover tests, stable
@@ -318,10 +320,9 @@ method spelling.
   manifest checks for raw Axon/ABI package dependencies, with shared conformance
   cases for no-raw-FFI, no-raw-invocation-codec, addressing-helper ownership,
   host-stream-codec ownership, receipt-continuity ownership, context-causal
-  gates, and admin/mission carrier gates; EasyRemote transport, unary
-  wait/retire lifecycle, stream value projection, invocation,
-  bidi session lifecycle,
-  addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
+  gates, and admin/mission carrier gates; Runtime transport adapter,
+  unary wait/retire lifecycle, stream value projection, invocation,
+  bidi session lifecycle, addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission EasyRemote profile bridge, and page-based
   Pipeline event access/live-tail plus publication product catalogue extraction and

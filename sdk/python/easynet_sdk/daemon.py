@@ -13,7 +13,7 @@ from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
 
 if TYPE_CHECKING:
-    from .transport import EasyRemoteTransportAdapter
+    from .transport import InvocationResultAdapter
 
 
 class DaemonMode(StrEnum):
@@ -482,10 +482,10 @@ class EasyRemoteDaemonHandleFacade:
     def invocation_endpoint(self) -> str:
         return self.handle.invocation_endpoint()
 
-    def open_transport_adapter(self) -> "EasyRemoteTransportAdapter":
-        from .transport import EasyRemoteTransportAdapter
+    def open_transport_adapter(self) -> "InvocationResultAdapter":
+        from .transport import InvocationResultAdapter
 
-        return EasyRemoteTransportAdapter.from_runtime_client(self.handle.open_runtime())
+        return InvocationResultAdapter.from_runtime_client(self.handle.open_runtime())
 
     def stop(self) -> None:
         self.handle.stop()
