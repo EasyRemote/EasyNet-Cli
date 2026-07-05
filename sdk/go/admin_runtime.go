@@ -8,14 +8,20 @@ import (
 )
 
 const (
-	adminAbilityAgentList     = "agent.list"
-	adminAbilityAgentStart    = "agent.start"
-	adminAbilityAgentStop     = "agent.stop"
-	adminAbilityAgentRefresh  = "agent.refresh"
-	adminAbilitySessionList   = "session.list"
-	adminAbilitySessionCreate = "session.create"
-	adminAbilitySessionDelete = "session.delete"
-	adminAbilityRevokeDevice  = "federation.revoke"
+	adminAbilityAgentList        = "agent.list"
+	adminAbilityAgentStart       = "agent.start"
+	adminAbilityAgentStop        = "agent.stop"
+	adminAbilityAgentRefresh     = "agent.refresh"
+	adminAbilitySessionList      = "session.list"
+	adminAbilitySessionCreate    = "session.create"
+	adminAbilitySessionDelete    = "session.delete"
+	adminAbilityHubJoin          = "hub.join"
+	adminAbilityHubLeave         = "hub.leave"
+	adminAbilityPairingPreflight = "pairing.preflight"
+	adminAbilityPairingValidate  = "pairing.validate"
+	adminAbilityCredentialVerify = "credential.verify"
+	adminAbilityPairingCreate    = "pairing.create"
+	adminAbilityRevokeDevice     = "federation.revoke"
 )
 
 // AdminRuntimeTransport lowers Admin + Gateway requests into Runtime Core
@@ -175,28 +181,76 @@ func (t *AdminRuntimeTransport) ListDeviceSessions(ctx context.Context, requestJ
 	return projectAdminDeviceSessionPage(output)
 }
 
-func (t *AdminRuntimeTransport) JoinHub(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "join hub runtime transport is not implemented")
+func (t *AdminRuntimeTransport) JoinHub(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[AdminJoinHubRequest](requestJSON, validateAdminJoinHubRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilityHubJoin, hubJoinArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectAdminLifecycleResult(output, adminAbilityHubJoin, &request.DeviceURA)
 }
 
-func (t *AdminRuntimeTransport) LeaveHub(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "leave hub runtime transport is not implemented")
+func (t *AdminRuntimeTransport) LeaveHub(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[AdminLeaveHubRequest](requestJSON, validateAdminLeaveHubRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilityHubLeave, hubLeaveArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectAdminLifecycleResult(output, adminAbilityHubLeave, nil)
 }
 
-func (t *AdminRuntimeTransport) PairingPreflight(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "pairing preflight runtime transport is not implemented")
+func (t *AdminRuntimeTransport) PairingPreflight(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[PairingPreflightRequest](requestJSON, validatePairingPreflightRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilityPairingPreflight, pairingPreflightArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectPairingPreflight(output, request)
 }
 
-func (t *AdminRuntimeTransport) ValidatePairing(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "validate pairing runtime transport is not implemented")
+func (t *AdminRuntimeTransport) ValidatePairing(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[ValidatePairingRequest](requestJSON, validatePairingValidationRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilityPairingValidate, pairingValidateArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectDeviceCredential(output, request)
 }
 
-func (t *AdminRuntimeTransport) VerifyDeviceCredential(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "verify device credential runtime transport is not implemented")
+func (t *AdminRuntimeTransport) VerifyDeviceCredential(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[VerifyDeviceCredentialRequest](requestJSON, validateDeviceCredentialVerificationRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilityCredentialVerify, credentialVerifyArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectDeviceCredentialVerification(output, request)
 }
 
-func (t *AdminRuntimeTransport) CreatePairing(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "create pairing runtime transport is not implemented")
+func (t *AdminRuntimeTransport) CreatePairing(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	request, err := decodeAdminRuntimeRequest[CreatePairingRequest](requestJSON, validateCreatePairingRequest)
+	if err != nil {
+		return nil, err
+	}
+	output, err := t.invoke(ctx, request.AdminCarrierBase, adminAbilityPairingCreate, pairingCreateArgs(request))
+	if err != nil {
+		return nil, err
+	}
+	return projectPairingToken(output, request)
 }
 
 func (t *AdminRuntimeTransport) RevokeDevice(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -382,6 +436,61 @@ func deviceSessionDeleteArgs(request DeleteDeviceSessionRequest) map[string]any 
 	return args
 }
 
+func hubJoinArgs(request AdminJoinHubRequest) map[string]any {
+	return map[string]any{
+		"hub_ura":    strings.TrimSpace(request.HubURA),
+		"device_ura": strings.TrimSpace(request.DeviceURA),
+	}
+}
+
+func hubLeaveArgs(request AdminLeaveHubRequest) map[string]any {
+	args := map[string]any{
+		"hub_ura": strings.TrimSpace(request.HubURA),
+	}
+	if strings.TrimSpace(request.Reason) != "" {
+		args["reason"] = strings.TrimSpace(request.Reason)
+	}
+	return args
+}
+
+func pairingPreflightArgs(request PairingPreflightRequest) map[string]any {
+	args := map[string]any{
+		"hub_ura":    strings.TrimSpace(request.HubURA),
+		"device_ura": strings.TrimSpace(request.DeviceURA),
+	}
+	if len(request.RequestedScopes) > 0 {
+		args["requested_scopes"] = request.RequestedScopes
+	}
+	return args
+}
+
+func pairingValidateArgs(request ValidatePairingRequest) map[string]any {
+	return map[string]any{
+		"token":      strings.TrimSpace(request.Token),
+		"device_ura": strings.TrimSpace(request.DeviceURA),
+	}
+}
+
+func credentialVerifyArgs(request VerifyDeviceCredentialRequest) map[string]any {
+	return map[string]any{
+		"credential_id": strings.TrimSpace(request.CredentialID),
+		"device_ura":    strings.TrimSpace(request.DeviceURA),
+		"hub_ura":       strings.TrimSpace(request.HubURA),
+	}
+}
+
+func pairingCreateArgs(request CreatePairingRequest) map[string]any {
+	args := map[string]any{
+		"hub_ura":         strings.TrimSpace(request.HubURA),
+		"device_ura":      strings.TrimSpace(request.DeviceURA),
+		"expires_unix_ms": request.ExpiresUnixMS,
+	}
+	if len(request.Scopes) > 0 {
+		args["scopes"] = request.Scopes
+	}
+	return args
+}
+
 func adminRuntimeMetadata(input map[string]any, abilityName string) map[string]any {
 	metadata := map[string]any{}
 	for key, value := range input {
@@ -493,6 +602,111 @@ func projectAdminDeviceSession(raw []byte, request CreateDeviceSessionRequest) (
 	return rawSession, nil
 }
 
+func projectPairingPreflight(raw []byte, request PairingPreflightRequest) ([]byte, error) {
+	payload, err := adminOutputObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload["profile"] == adminGatewayProfile && payload["kind"] == "pairing_preflight" {
+		return validatedPairingPreflightJSON(payload)
+	}
+	preflight := map[string]any{
+		"profile":          adminGatewayProfile,
+		"kind":             "pairing_preflight",
+		"state":            firstNonEmpty(firstStringFromMap(payload, "state", "status"), "unknown"),
+		"hub_ura":          firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
+		"device_ura":       firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
+		"pairing_required": boolArg(payload, "pairing_required"),
+		"trust_ready":      boolArg(payload, "trust_ready"),
+		"scopes":           adminRequiredStringArray(payload, "scopes", "requested_scopes", "granted_scopes"),
+		"metadata": map[string]any{
+			"profile":    adminGatewayProfile,
+			"source":     adminAbilityPairingPreflight,
+			"raw_result": payload,
+		},
+	}
+	return validatedPairingPreflightJSON(preflight)
+}
+
+func projectPairingToken(raw []byte, request CreatePairingRequest) ([]byte, error) {
+	payload, err := adminOutputObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload["profile"] == adminGatewayProfile && payload["kind"] == "pairing_token" {
+		return validatedPairingTokenJSON(payload)
+	}
+	token := map[string]any{
+		"profile":         adminGatewayProfile,
+		"kind":            "pairing_token",
+		"token_id":        firstStringFromMap(payload, "token_id", "tokenId", "id"),
+		"token":           firstStringFromMap(payload, "token", "pairing_token", "pairingToken"),
+		"hub_ura":         firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
+		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
+		"state":           firstNonEmpty(firstStringFromMap(payload, "state", "status"), "issued"),
+		"expires_unix_ms": firstAdminNumericInt64(payload, "expires_unix_ms", "expiresUnixMs", "expires_at_ms"),
+		"scopes":          adminRequiredStringArray(payload, "scopes", "granted_scopes"),
+		"metadata": map[string]any{
+			"profile":    adminGatewayProfile,
+			"source":     adminAbilityPairingCreate,
+			"raw_result": payload,
+		},
+	}
+	return validatedPairingTokenJSON(token)
+}
+
+func projectDeviceCredential(raw []byte, request ValidatePairingRequest) ([]byte, error) {
+	payload, err := adminOutputObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload["profile"] == adminGatewayProfile && payload["kind"] == "device_credential" {
+		return validatedDeviceCredentialJSON(payload)
+	}
+	credential := map[string]any{
+		"profile":         adminGatewayProfile,
+		"kind":            "device_credential",
+		"credential_id":   firstStringFromMap(payload, "credential_id", "credentialId", "id"),
+		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
+		"hub_ura":         firstStringFromMap(payload, "hub_ura", "hubUra"),
+		"state":           firstNonEmpty(firstStringFromMap(payload, "state", "status"), "active"),
+		"issued_unix_ms":  firstAdminNumericInt64(payload, "issued_unix_ms", "issuedUnixMs", "created_unix_ms"),
+		"expires_unix_ms": firstAdminNumericInt64(payload, "expires_unix_ms", "expiresUnixMs", "expires_at_ms"),
+		"scopes":          adminRequiredStringArray(payload, "scopes", "granted_scopes"),
+		"metadata": map[string]any{
+			"profile":    adminGatewayProfile,
+			"source":     adminAbilityPairingValidate,
+			"raw_result": payload,
+		},
+	}
+	return validatedDeviceCredentialJSON(credential)
+}
+
+func projectDeviceCredentialVerification(raw []byte, request VerifyDeviceCredentialRequest) ([]byte, error) {
+	payload, err := adminOutputObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload["profile"] == adminGatewayProfile && payload["kind"] == "device_credential_verification" {
+		return validatedDeviceCredentialVerificationJSON(payload)
+	}
+	verification := map[string]any{
+		"profile":       adminGatewayProfile,
+		"kind":          "device_credential_verification",
+		"verified":      boolArg(payload, "verified"),
+		"credential_id": firstNonEmpty(firstStringFromMap(payload, "credential_id", "credentialId", "id"), strings.TrimSpace(request.CredentialID)),
+		"device_ura":    firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
+		"hub_ura":       firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
+		"method":        firstStringFromMap(payload, "method", "verification_method", "verificationMethod"),
+		"metadata": map[string]any{
+			"profile":    adminGatewayProfile,
+			"source":     adminAbilityCredentialVerify,
+			"raw_result": payload,
+		},
+	}
+	return validatedDeviceCredentialVerificationJSON(verification)
+}
+
 func projectAdminLifecycleResult(raw []byte, operation string, deviceURA *string) ([]byte, error) {
 	payload, err := adminOutputObject(raw)
 	if err != nil {
@@ -547,6 +761,50 @@ func adminOutputObject(raw []byte) (map[string]any, error) {
 	return payload, nil
 }
 
+func validatedPairingPreflightJSON(value map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode pairing preflight projection: %v", err), err)
+	}
+	if _, err := NewPairingPreflightFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func validatedPairingTokenJSON(value map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode pairing token projection: %v", err), err)
+	}
+	if _, err := NewPairingTokenFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func validatedDeviceCredentialJSON(value map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode device credential projection: %v", err), err)
+	}
+	if _, err := NewDeviceCredentialFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func validatedDeviceCredentialVerificationJSON(value map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, invalidProfilePayload(adminGatewayProfile, fmt.Sprintf("encode device credential verification projection: %v", err), err)
+	}
+	if _, err := NewDeviceCredentialVerificationFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 func firstAdminNumericInt64(values map[string]any, keys ...string) int64 {
 	for _, key := range keys {
 		if value, ok := values[key]; ok {
@@ -586,6 +844,29 @@ func firstNonZeroAdminInt64(values ...int64) int64 {
 		}
 	}
 	return 0
+}
+
+func adminRequiredStringArray(values map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		raw, ok := values[key]
+		if !ok || raw == nil {
+			continue
+		}
+		items, ok := raw.([]any)
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			text, ok := item.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return nil
+			}
+			out = append(out, strings.TrimSpace(text))
+		}
+		return out
+	}
+	return nil
 }
 
 func adminMetadataWithSource(row map[string]any, source string) map[string]any {

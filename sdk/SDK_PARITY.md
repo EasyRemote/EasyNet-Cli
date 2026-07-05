@@ -169,13 +169,14 @@ method spelling.
   concrete live-tail adapters, child Invocation behavior conformance,
   scheduler/retry policy, and backend automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
-  session-list, device-session create/delete, and device-revoke Runtime
-  Core-backed execution plus
+  session-list, hub join/leave, pairing preflight/create/validate, credential
+  verification, device-session create/delete, and device-revoke Runtime
+  Core-backed execution, plus
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
   credential, credential verification, typed device-session projection seams,
   C ABI-backed device-admin result projection, and close state seams;
-  certificate policy, concrete daemon trust/pairing carriers, C ABI
-  device-session lifecycle exports, and backend route cutover remain incomplete.
+  certificate policy, C ABI trust/pairing/session lifecycle exports, and
+  backend route cutover remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, with session subscriptions requiring
   explicit daemon `session_id` rather than product `session_ura`, Runtime

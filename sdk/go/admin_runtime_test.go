@@ -166,17 +166,152 @@ func TestAdminRuntimeTransportCreatesAndDeletesDeviceSessionThroughRuntime(t *te
 	}
 }
 
+func TestAdminRuntimeTransportRunsHubAndPairingLifecycleThroughRuntime(t *testing.T) {
+	identityTransport := newAdminRuntimeIdentityTransport()
+	identity, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: adminRuntimeJoinHubRawJSON}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAdminClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeAdminClient: %v", err)
+	}
+
+	join, err := client.JoinHub(context.Background(), AdminJoinHubRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("JoinHub: %v", err)
+	}
+	if join.Operation != adminAbilityHubJoin || join.DeviceURA == nil || *join.DeviceURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("join result = %#v", join)
+	}
+	joinArgs := runtimeTransport.seenDraft["args"].(map[string]any)
+	if joinArgs["hub_ura"] != "easynet:///r/example/hub/main" || joinArgs["device_ura"] != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("hub.join args = %#v", joinArgs)
+	}
+
+	runtimeTransport.outputJSON = adminRuntimePairingPreflightRawJSON
+	preflight, err := client.PairingPreflight(context.Background(), PairingPreflightRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		RequestedScopes:  []string{"invoke", "events"},
+	})
+	if err != nil {
+		t.Fatalf("PairingPreflight: %v", err)
+	}
+	if !preflight.PairingRequired || preflight.TrustReady || len(preflight.Scopes) != 2 {
+		t.Fatalf("preflight = %#v", preflight)
+	}
+	preflightArgs := runtimeTransport.seenDraft["args"].(map[string]any)
+	if preflightArgs["hub_ura"] != "easynet:///r/example/hub/main" ||
+		preflightArgs["device_ura"] != "easynet:///r/example/device/dev-a" ||
+		len(preflightArgs["requested_scopes"].([]any)) != 2 {
+		t.Fatalf("pairing.preflight args = %#v", preflightArgs)
+	}
+
+	runtimeTransport.outputJSON = adminRuntimeCreatePairingRawJSON
+	token, err := client.CreatePairing(context.Background(), CreatePairingRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		ExpiresUnixMS:    1893456000000,
+		Scopes:           []string{"invoke", "events"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePairing: %v", err)
+	}
+	if token.TokenID != "pair-token-1" || token.Token != "pair-token-value" || len(token.Scopes) != 2 {
+		t.Fatalf("pairing token = %#v", token)
+	}
+
+	runtimeTransport.outputJSON = adminRuntimeValidatePairingRawJSON
+	credential, err := client.ValidatePairing(context.Background(), ValidatePairingRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		Token:            "pair-token-value",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("ValidatePairing: %v", err)
+	}
+	if credential.CredentialID != "cred-dev-a" || credential.HubURA != "easynet:///r/example/hub/main" {
+		t.Fatalf("credential = %#v", credential)
+	}
+
+	runtimeTransport.outputJSON = adminRuntimeVerifyCredentialRawJSON
+	verification, err := client.VerifyDeviceCredential(context.Background(), VerifyDeviceCredentialRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		CredentialID:     "cred-dev-a",
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+	})
+	if err != nil {
+		t.Fatalf("VerifyDeviceCredential: %v", err)
+	}
+	if !verification.Verified || verification.Method != "daemon-trust-store" {
+		t.Fatalf("verification = %#v", verification)
+	}
+
+	runtimeTransport.outputJSON = adminRuntimeLeaveHubRawJSON
+	leave, err := client.LeaveHub(context.Background(), AdminLeaveHubRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		HubURA:           "easynet:///r/example/hub/main",
+		Reason:           "operator rotation",
+	})
+	if err != nil {
+		t.Fatalf("LeaveHub: %v", err)
+	}
+	if leave.Operation != adminAbilityHubLeave || leave.DeviceURA == nil || *leave.DeviceURA != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("leave result = %#v", leave)
+	}
+	leaveArgs := runtimeTransport.seenDraft["args"].(map[string]any)
+	if leaveArgs["hub_ura"] != "easynet:///r/example/hub/main" || leaveArgs["reason"] != "operator rotation" {
+		t.Fatalf("hub.leave args = %#v", leaveArgs)
+	}
+
+	wantAbilities := []string{
+		adminAbilityHubJoin,
+		adminAbilityPairingPreflight,
+		adminAbilityPairingCreate,
+		adminAbilityPairingValidate,
+		adminAbilityCredentialVerify,
+		adminAbilityHubLeave,
+	}
+	if len(identityTransport.seenBuildURA) != len(wantAbilities) {
+		t.Fatalf("identity lookups = %#v", identityTransport.seenBuildURA)
+	}
+	for index, ability := range wantAbilities {
+		if identityTransport.seenBuildURA[index]["ability_name"] != ability {
+			t.Fatalf("identity lookup %d = %#v, want %s", index, identityTransport.seenBuildURA[index], ability)
+		}
+	}
+}
+
 func newAdminRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 	return &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
-			adminAbilityAgentList:     "easynet:///r/example/ability/device.dev-a.agent.list",
-			adminAbilityAgentStart:    "easynet:///r/example/ability/device.dev-a.agent.start",
-			adminAbilityAgentStop:     "easynet:///r/example/ability/device.dev-a.agent.stop",
-			adminAbilityAgentRefresh:  "easynet:///r/example/ability/device.dev-a.agent.refresh",
-			adminAbilitySessionList:   "easynet:///r/example/ability/device.dev-a.session.list",
-			adminAbilitySessionCreate: "easynet:///r/example/ability/device.dev-a.session.create",
-			adminAbilitySessionDelete: "easynet:///r/example/ability/device.dev-a.session.delete",
-			adminAbilityRevokeDevice:  "easynet:///r/example/ability/device.dev-a.federation.revoke",
+			adminAbilityAgentList:        "easynet:///r/example/ability/device.dev-a.agent.list",
+			adminAbilityAgentStart:       "easynet:///r/example/ability/device.dev-a.agent.start",
+			adminAbilityAgentStop:        "easynet:///r/example/ability/device.dev-a.agent.stop",
+			adminAbilityAgentRefresh:     "easynet:///r/example/ability/device.dev-a.agent.refresh",
+			adminAbilitySessionList:      "easynet:///r/example/ability/device.dev-a.session.list",
+			adminAbilitySessionCreate:    "easynet:///r/example/ability/device.dev-a.session.create",
+			adminAbilitySessionDelete:    "easynet:///r/example/ability/device.dev-a.session.delete",
+			adminAbilityHubJoin:          "easynet:///r/example/ability/device.dev-a.hub.join",
+			adminAbilityHubLeave:         "easynet:///r/example/ability/device.dev-a.hub.leave",
+			adminAbilityPairingPreflight: "easynet:///r/example/ability/device.dev-a.pairing.preflight",
+			adminAbilityPairingValidate:  "easynet:///r/example/ability/device.dev-a.pairing.validate",
+			adminAbilityCredentialVerify: "easynet:///r/example/ability/device.dev-a.credential.verify",
+			adminAbilityPairingCreate:    "easynet:///r/example/ability/device.dev-a.pairing.create",
+			adminAbilityRevokeDevice:     "easynet:///r/example/ability/device.dev-a.federation.revoke",
 		},
 		descriptorByAbility: map[string]string{
 			"easynet:///r/example/ability/device.dev-a.agent.list":        "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0",
@@ -186,6 +321,12 @@ func newAdminRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 			"easynet:///r/example/ability/device.dev-a.session.list":      "easynet:///r/example/ability/device.dev-a.session.list@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.session.create":    "easynet:///r/example/ability/device.dev-a.session.create@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.session.delete":    "easynet:///r/example/ability/device.dev-a.session.delete@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.hub.join":          "easynet:///r/example/ability/device.dev-a.hub.join@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.hub.leave":         "easynet:///r/example/ability/device.dev-a.hub.leave@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.pairing.preflight": "easynet:///r/example/ability/device.dev-a.pairing.preflight@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.pairing.validate":  "easynet:///r/example/ability/device.dev-a.pairing.validate@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.credential.verify": "easynet:///r/example/ability/device.dev-a.credential.verify@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.pairing.create":    "easynet:///r/example/ability/device.dev-a.pairing.create@1.0.0",
 			"easynet:///r/example/ability/device.dev-a.federation.revoke": "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0",
 		},
 		descriptorProjection: identityDescriptorProjectionJSON,
@@ -216,4 +357,51 @@ const adminRuntimeCreateSessionRawJSON = `{
 const adminRuntimeDeleteSessionRawJSON = `{
 	"ack": true,
 	"device_ura": "easynet:///r/example/device/dev-a"
+}`
+
+const adminRuntimeJoinHubRawJSON = `{
+	"ack": true,
+	"device_ura": "easynet:///r/example/device/dev-a"
+}`
+
+const adminRuntimeLeaveHubRawJSON = `{
+	"ack": true,
+	"device_ura": "easynet:///r/example/device/dev-a"
+}`
+
+const adminRuntimePairingPreflightRawJSON = `{
+	"state": "requires_pairing",
+	"hub_ura": "easynet:///r/example/hub/main",
+	"device_ura": "easynet:///r/example/device/dev-a",
+	"pairing_required": true,
+	"trust_ready": false,
+	"scopes": ["invoke", "events"]
+}`
+
+const adminRuntimeCreatePairingRawJSON = `{
+	"token_id": "pair-token-1",
+	"token": "pair-token-value",
+	"hub_ura": "easynet:///r/example/hub/main",
+	"device_ura": "easynet:///r/example/device/dev-a",
+	"state": "issued",
+	"expires_unix_ms": 1893456000000,
+	"scopes": ["invoke", "events"]
+}`
+
+const adminRuntimeValidatePairingRawJSON = `{
+	"credential_id": "cred-dev-a",
+	"device_ura": "easynet:///r/example/device/dev-a",
+	"hub_ura": "easynet:///r/example/hub/main",
+	"state": "active",
+	"issued_unix_ms": 1767225600000,
+	"expires_unix_ms": 1893456000000,
+	"scopes": ["invoke", "events"]
+}`
+
+const adminRuntimeVerifyCredentialRawJSON = `{
+	"verified": true,
+	"credential_id": "cred-dev-a",
+	"device_ura": "easynet:///r/example/device/dev-a",
+	"hub_ura": "easynet:///r/example/hub/main",
+	"method": "daemon-trust-store"
 }`
