@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -95,6 +96,61 @@ func TestAdminRuntimeTransportRevokesDeviceThroughRuntime(t *testing.T) {
 	}
 	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.federation.revoke@1.0.0" {
 		t.Fatalf("descriptor_ref = %#v", runtimeTransport.seenDraft["descriptor_ref"])
+	}
+}
+
+func TestAdminRuntimeTransportGatewayStatusUsesExplicitProvider(t *testing.T) {
+	identity, err := NewIdentityClient(newAdminRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: adminRuntimeAgentStartRawJSON})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	var seen map[string]any
+	client, err := NewRuntimeAdminClientWithGatewayStatus(runtime, identity, AdminGatewayStatusProviderFunc(func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+		if err := json.Unmarshal(requestJSON, &seen); err != nil {
+			return nil, err
+		}
+		return []byte(adminGatewayStatusJSON), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewRuntimeAdminClientWithGatewayStatus: %v", err)
+	}
+
+	requirePublic := false
+	status, err := client.GatewayStatus(context.Background(), AdminGatewayStatusRequest{
+		RequirePublicListener: &requirePublic,
+		Metadata:              map[string]any{"caller": "test"},
+	})
+	if err != nil {
+		t.Fatalf("GatewayStatus: %v", err)
+	}
+	if !status.ControlReady || !status.RuntimeReady || status.Metadata["source"] != "daemon_lifecycle_status" {
+		t.Fatalf("gateway status = %#v", status)
+	}
+	if seen["require_public_listener"] != false || seen["metadata"].(map[string]any)["caller"] != "test" {
+		t.Fatalf("provider request = %#v", seen)
+	}
+}
+
+func TestAdminRuntimeTransportGatewayStatusFailsClosedWithoutProvider(t *testing.T) {
+	identity, err := NewIdentityClient(newAdminRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: adminRuntimeAgentStartRawJSON})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAdminClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeAdminClient: %v", err)
+	}
+
+	if _, err := client.GatewayStatus(context.Background(), AdminGatewayStatusRequest{}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("GatewayStatus error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

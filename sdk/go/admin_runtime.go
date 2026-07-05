@@ -27,22 +27,51 @@ const (
 // AdminRuntimeTransport lowers Admin + Gateway requests into Runtime Core
 // invocations and projects daemon lifecycle facts into Admin DTOs.
 type AdminRuntimeTransport struct {
-	runtime  *RuntimeClient
-	identity *IdentityClient
+	runtime        *RuntimeClient
+	identity       *IdentityClient
+	statusProvider AdminGatewayStatusProvider
+}
+
+// AdminGatewayStatusProvider supplies daemon-owned GatewayStatus projections to
+// the runtime Admin facade. Ability-backed admin operations still go through
+// Runtime Core; lifecycle/status facts must come from an explicit status seam.
+type AdminGatewayStatusProvider interface {
+	GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error)
+}
+
+type AdminGatewayStatusProviderFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+
+func (f AdminGatewayStatusProviderFunc) GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f == nil {
+		return nil, invalidProfileClient(adminGatewayProfile, "admin gateway-status provider function is required")
+	}
+	return f(ctx, requestJSON)
 }
 
 func NewAdminRuntimeTransport(runtime *RuntimeClient, identity *IdentityClient) (*AdminRuntimeTransport, error) {
+	return NewAdminRuntimeTransportWithGatewayStatus(runtime, identity, nil)
+}
+
+func NewAdminRuntimeTransportWithGatewayStatus(runtime *RuntimeClient, identity *IdentityClient, statusProvider AdminGatewayStatusProvider) (*AdminRuntimeTransport, error) {
 	if runtime == nil {
 		return nil, invalidProfileClient(adminGatewayProfile, "runtime client is required")
 	}
 	if identity == nil {
 		return nil, invalidProfileClient(adminGatewayProfile, "identity client is required")
 	}
-	return &AdminRuntimeTransport{runtime: runtime, identity: identity}, nil
+	return &AdminRuntimeTransport{
+		runtime:        runtime,
+		identity:       identity,
+		statusProvider: statusProvider,
+	}, nil
 }
 
 func NewRuntimeAdminClient(runtime *RuntimeClient, identity *IdentityClient) (*AdminClient, error) {
-	transport, err := NewAdminRuntimeTransport(runtime, identity)
+	return NewRuntimeAdminClientWithGatewayStatus(runtime, identity, nil)
+}
+
+func NewRuntimeAdminClientWithGatewayStatus(runtime *RuntimeClient, identity *IdentityClient, statusProvider AdminGatewayStatusProvider) (*AdminClient, error) {
+	transport, err := NewAdminRuntimeTransportWithGatewayStatus(runtime, identity, statusProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +138,21 @@ func (t *AdminRuntimeTransport) BuildRevokeDeviceInvocation(ctx context.Context,
 	return t.buildInvocationJSON(ctx, request.AdminCarrierBase, adminAbilityRevokeDevice, args)
 }
 
-func (t *AdminRuntimeTransport) GatewayStatus(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(adminGatewayProfile, "gateway status runtime projection is daemon-status owned")
+func (t *AdminRuntimeTransport) GatewayStatus(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if ctx == nil {
+		return nil, invalidProfileClient(adminGatewayProfile, "context is required")
+	}
+	if t == nil || t.statusProvider == nil {
+		return nil, invalidProfileClient(adminGatewayProfile, "admin runtime gateway status provider is required")
+	}
+	raw, err := t.statusProvider.GatewayStatus(ctx, requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewGatewayStatusFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func (t *AdminRuntimeTransport) ListAgents(ctx context.Context, requestJSON []byte) ([]byte, error) {
