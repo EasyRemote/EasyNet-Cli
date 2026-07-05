@@ -10,21 +10,27 @@ facades over the same object model, DTO schemas, and conformance cases.
 
 ## Current Status
 
-| Area | Status |
-| --- | --- |
-| Rust Runtime Core | partial: lifecycle attach, runtime client DTOs, draft/prepare/sign/submit objects |
-| C ABI | partial ABI v4 Runtime Core projection |
-| Schemas | scaffold: public DTO names and required files exist |
-| Conformance | scaffold: shared case and fixture format exists |
-| Go facade | placeholder |
-| Python facade | placeholder |
-| Node facade | placeholder |
-| Java facade | placeholder |
-| Swift facade | placeholder |
+The authoritative capability state is `sdk/conformance/sdk-parity-matrix.json`
+and the human-readable summary is `SDK_PARITY.md`. This README is only the
+workspace entrypoint; it must not drift into a second status ledger.
 
-No language package should claim stable Daemon SDK support until its declared
-profiles pass `sdk/conformance` cases and expose no raw Axon/proto/runtime
-types.
+| Area | Current state |
+| --- | --- |
+| Rust Runtime Core | source-of-truth implementation substrate for daemon SDK semantics and C ABI projection |
+| C ABI | ABI v4 projection with opaque handles, feature discovery, runtime core, and shipped profile carrier/projection entry points |
+| Schemas | shared DTO schema set for Runtime Core, profile clients, stream/bidi terminal projections, and conformance fixtures |
+| Conformance | shared cases, fixtures, manifest runner, and Go/Python action-adapter reports |
+| Go facade | provider-backed for the shipped P0 Hub/backend profiles listed in `SDK_PARITY.md` |
+| Python facade | provider-backed for the shipped P0 EasyRemote/local automation profiles listed in `SDK_PARITY.md` |
+| Node / TypeScript facade | unsupported |
+| Java / JVM facade | unsupported |
+| Swift facade | unsupported |
+
+No language package should claim `cutover-ready` or complete Daemon SDK support
+until its declared profiles pass shared conformance and the corresponding
+consumer repository has removed lower-layer imports such as raw Axon/proto,
+direct daemon transports, direct C ABI usage, CLI subprocess calls, or
+product-local daemon ability shims.
 
 ## Files
 
