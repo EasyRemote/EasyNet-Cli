@@ -473,8 +473,8 @@ class PluginInstallResult:
 
 
 @dataclass(frozen=True)
-class EasyRemotePublishedAbilityRecord:
-    """EasyRemote-facing projection of one daemon catalogue row."""
+class PublicationCatalogRecord:
+    """Publication profile projection of one daemon catalogue row."""
 
     name: str
     ability_ura: str
@@ -486,7 +486,7 @@ class EasyRemotePublishedAbilityRecord:
     raw: Mapping[str, object] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_wire(cls, value: Mapping[str, object]) -> "EasyRemotePublishedAbilityRecord":
+    def from_wire(cls, value: Mapping[str, object]) -> "PublicationCatalogRecord":
         return cls(
             name=str(value.get("name") or value.get("ability") or ""),
             ability_ura=str(
@@ -505,8 +505,8 @@ class EasyRemotePublishedAbilityRecord:
 
 
 @dataclass(frozen=True)
-class EasyRemoteAbilityInstallProjection:
-    """EasyRemote-facing projection of daemon `ability.deploy`."""
+class AbilityInstallProjection:
+    """Publication profile projection of daemon `ability.deploy`."""
 
     install_id: str
     ability_ura: str
@@ -517,7 +517,7 @@ class EasyRemoteAbilityInstallProjection:
     @classmethod
     def from_wire(
         cls, value: Mapping[str, object], *, node_id: str
-    ) -> "EasyRemoteAbilityInstallProjection":
+    ) -> "AbilityInstallProjection":
         return cls(
             install_id=str(value.get("install_id") or ""),
             ability_ura=str(value.get("ability_ura") or ""),
@@ -527,8 +527,8 @@ class EasyRemoteAbilityInstallProjection:
         )
 
 
-class EasyRemotePublicationAdapter:
-    """SDK-owned publication cutover adapter for EasyRemote-like clients."""
+class PublicationHostAdapter:
+    """SDK-owned publication host adapter over daemon publication calls."""
 
     def __init__(self, client: object, *, addressing: object | None = None) -> None:
         self._client = client
@@ -536,7 +536,7 @@ class EasyRemotePublicationAdapter:
 
     def install_ability(
         self, path: str | Path, *, node_id: str = "local"
-    ) -> EasyRemoteAbilityInstallProjection:
+    ) -> AbilityInstallProjection:
         node = _required_clean_string(node_id, "node_id", reason="empty_node")
         package = Path(path)
         if not package.is_dir():
@@ -544,7 +544,7 @@ class EasyRemotePublicationAdapter:
                 f"ability package path is not a directory: {package}",
                 reason="ability_package_not_directory",
             )
-        ref = _EasyRemoteLocalFilesystemResourceRefs(
+        ref = _LocalFilesystemResourceRefs(
             self._identity(),
             addressing=self._addressing,
         ).for_path(
@@ -556,7 +556,7 @@ class EasyRemotePublicationAdapter:
             resource_ref=ref,
             node_id=node,
         )
-        return EasyRemoteAbilityInstallProjection.from_wire(response, node_id=node)
+        return AbilityInstallProjection.from_wire(response, node_id=node)
 
     def list_abilities(
         self,
@@ -565,7 +565,7 @@ class EasyRemotePublicationAdapter:
         owner_ura: str = "",
         subject_ura: str = "",
         scope: str = "local",
-    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
+    ) -> tuple[PublicationCatalogRecord, ...]:
         if scope not in {"local", "realm"}:
             raise _invalid_publication(
                 f"unsupported ability list scope {scope!r}",
@@ -593,7 +593,7 @@ class EasyRemotePublicationAdapter:
                 "meta.list_abilities response field 'abilities' is not a list"
             )
         return tuple(
-            EasyRemotePublishedAbilityRecord.from_wire(_mapping(row, "ability row"))
+            PublicationCatalogRecord.from_wire(_mapping(row, "ability row"))
             for row in abilities
         )
 
@@ -617,7 +617,7 @@ class EasyRemotePublicationAdapter:
         )
 
     def record_belongs_to_user(
-        self, record: EasyRemotePublishedAbilityRecord, user_id: str
+        self, record: PublicationCatalogRecord, user_id: str
     ) -> bool:
         return _record_belongs_to_user(record, user_id, addressing=self._addressing)
 
@@ -641,18 +641,18 @@ class EasyRemotePublicationAdapter:
         return _call_method(self._client, name, *args, **kwargs)
 
 
-class EasyRemotePublicationCatalogFacade:
-    """EasyRemote product catalogue facade over SDK-owned publication calls."""
+class PublicationCatalogFacade:
+    """Publication catalogue facade over SDK-owned publication calls."""
 
     def __init__(self, client: object, *, addressing: object | None = None) -> None:
-        self._publication = EasyRemotePublicationAdapter(
+        self._publication = PublicationHostAdapter(
             client,
             addressing=addressing,
         )
 
     def install(
         self, path: str | Path, *, node: str = "local"
-    ) -> EasyRemoteAbilityInstallProjection:
+    ) -> AbilityInstallProjection:
         node_id = _required_clean_string(node, "node_id", reason="empty_node")
         return self._publication.install_ability(path, node_id=node_id)
 
@@ -664,8 +664,8 @@ class EasyRemotePublicationCatalogFacade:
         user_id: str = "",
         subject_ura: str = "",
         scope: str = "local",
-    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
-        _validate_easyremote_catalog_scope(scope)
+    ) -> tuple[PublicationCatalogRecord, ...]:
+        _validate_catalog_scope(scope)
         user = user_id.strip()
         if user_id and not user:
             raise _invalid_publication(
@@ -688,7 +688,7 @@ class EasyRemotePublicationCatalogFacade:
 
     def list_device(
         self, device: str | None = None
-    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
+    ) -> tuple[PublicationCatalogRecord, ...]:
         owner = (
             self._publication.local_device_owner_ura()
             if device is None
@@ -698,8 +698,8 @@ class EasyRemotePublicationCatalogFacade:
 
     def list_user(
         self, user_id: str | None = None, *, scope: str = "realm"
-    ) -> tuple[EasyRemotePublishedAbilityRecord, ...]:
-        _validate_easyremote_catalog_scope(scope)
+    ) -> tuple[PublicationCatalogRecord, ...]:
+        _validate_catalog_scope(scope)
         user = user_id if user_id is not None else self._publication.local_username()
         if user_id is not None and not user.strip():
             raise _invalid_publication(
@@ -720,7 +720,7 @@ class EasyRemotePublicationCatalogFacade:
         *,
         node: str | None = None,
         scope: str = "local",
-    ) -> EasyRemotePublishedAbilityRecord:
+    ) -> PublicationCatalogRecord:
         target = self._publication.validate_ability_ura(
             ability_ura,
             reason="empty_ability_ura",
@@ -738,8 +738,8 @@ class EasyRemotePublicationCatalogFacade:
         )
 
 
-class _EasyRemoteLocalFilesystemResourceRefs:
-    """Build daemon-local filesystem ResourceRefs for EasyRemote publication."""
+class _LocalFilesystemResourceRefs:
+    """Build daemon-local filesystem ResourceRefs for publication host."""
 
     def __init__(self, identity: object, *, addressing: object | None) -> None:
         self._identity = identity
@@ -1419,7 +1419,7 @@ def _resource_ura_for_addressing(
         raise _invalid_publication(f"build Resource URA: {exc}", exc) from exc
 
 
-def _validate_easyremote_catalog_scope(scope: str) -> None:
+def _validate_catalog_scope(scope: str) -> None:
     if scope not in {"local", "realm"}:
         raise _invalid_publication(
             f"unsupported ability list scope {scope!r}",
@@ -1428,7 +1428,7 @@ def _validate_easyremote_catalog_scope(scope: str) -> None:
 
 
 def _record_belongs_to_user(
-    record: EasyRemotePublishedAbilityRecord,
+    record: PublicationCatalogRecord,
     user_id: str,
     *,
     addressing: object | None,
@@ -1491,13 +1491,13 @@ def _call_method(
 ) -> object:
     method = getattr(target, name, None)
     if not callable(method):
-        raise _invalid_publication(f"EasyRemote client is missing {name}()")
+        raise _invalid_publication(f"publication host client is missing {name}()")
     try:
         return method(*args, **kwargs)
     except SDKError:
         raise
     except Exception as exc:
-        raise _transport_error(f"EasyRemote publication {name} failed", exc) from exc
+        raise _transport_error(f"publication host {name} failed", exc) from exc
 
 
 def _exception_cause(value: object) -> BaseException | None:

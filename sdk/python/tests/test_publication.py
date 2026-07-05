@@ -7,8 +7,8 @@ from easynet_sdk import (
     AbilityDeployRequest,
     AbilityImplID,
     AbilityImplLifecycleRequest,
-    EasyRemotePublicationAdapter,
-    EasyRemotePublicationCatalogFacade,
+    PublicationHostAdapter,
+    PublicationCatalogFacade,
     ErrorCode,
     LocalResourceRefRequest,
     PublicationClient,
@@ -314,18 +314,18 @@ class MemoryPublicationTransport:
         self.close_calls += 1
 
 
-class _EasyRemoteIdentity:
+class _PublicationHostIdentity:
     realm = "example"
     node_id = "dev-a"
     device_ura = "easynet:///r/example/device/dev-a"
 
 
-class _EasyRemoteDevice:
+class _PublicationHostDevice:
     def __init__(self, node_id: str) -> None:
         self.owner_ura = f"easynet:///r/example/device/{node_id}"
 
 
-class _EasyRemoteInvocation:
+class _PublicationHostInvocation:
     def __init__(self, response: dict[str, object]) -> None:
         self._response = response
 
@@ -333,42 +333,42 @@ class _EasyRemoteInvocation:
         return self._response
 
 
-class _EasyRemoteClient:
+class _PublicationHostClient:
     def __init__(self, *responses: dict[str, object]) -> None:
         self.responses = list(responses)
         self.invocations: list[dict[str, object]] = []
 
-    def _who(self) -> _EasyRemoteIdentity:
-        return _EasyRemoteIdentity()
+    def _who(self) -> _PublicationHostIdentity:
+        return _PublicationHostIdentity()
 
     def target(self, ability: str, **kwargs: object) -> dict[str, object]:
         return {"ability": ability, **kwargs}
 
-    def device(self, node_id: str) -> _EasyRemoteDevice:
-        return _EasyRemoteDevice(node_id)
+    def device(self, node_id: str) -> _PublicationHostDevice:
+        return _PublicationHostDevice(node_id)
 
-    def invoke(self, target: object, **kwargs: object) -> _EasyRemoteInvocation:
+    def invoke(self, target: object, **kwargs: object) -> _PublicationHostInvocation:
         self.invocations.append({"target": target, "args": dict(kwargs)})
-        return _EasyRemoteInvocation(self.responses.pop(0))
+        return _PublicationHostInvocation(self.responses.pop(0))
 
 
-class _EasyRemoteUraProjection:
+class _PublicationUraProjection:
     def __init__(self, kind: str) -> None:
         self.kind = kind
 
 
-class _EasyRemoteAddressing:
-    def parse_ura(self, value: str) -> _EasyRemoteUraProjection:
+class _PublicationAddressing:
+    def parse_ura(self, value: str) -> _PublicationUraProjection:
         if "/ability/" in value:
-            return _EasyRemoteUraProjection("ability")
+            return _PublicationUraProjection("ability")
         if "/device/" in value:
-            return _EasyRemoteUraProjection("device")
+            return _PublicationUraProjection("device")
         if "/agent/" in value:
-            return _EasyRemoteUraProjection("agent")
+            return _PublicationUraProjection("agent")
         if "/hub" in value:
-            return _EasyRemoteUraProjection("hub")
+            return _PublicationUraProjection("hub")
         if "/user/" in value:
-            return _EasyRemoteUraProjection("user")
+            return _PublicationUraProjection("user")
         raise ValueError(f"invalid URA {value!r}")
 
     def resource_ura(self, realm: str, owner_id: str, path: str) -> str:
@@ -479,11 +479,11 @@ def impl_lifecycle_request() -> AbilityImplLifecycleRequest:
 
 
 class PublicationTests(unittest.TestCase):
-    def test_easyremote_adapter_installs_with_sdk_resource_ref(self) -> None:
+    def test_publication_host_adapter_installs_with_sdk_resource_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             package = Path(tmp) / "pkg"
             package.mkdir()
-            client = _EasyRemoteClient(
+            client = _PublicationHostClient(
                 {
                     "install_id": "inst-1",
                     "ability_ura": "easynet:///r/example/ability/device.dev-a.er.fn",
@@ -491,9 +491,9 @@ class PublicationTests(unittest.TestCase):
                 }
             )
 
-            result = EasyRemotePublicationAdapter(
+            result = PublicationHostAdapter(
                 client,
-                addressing=_EasyRemoteAddressing(),
+                addressing=_PublicationAddressing(),
             ).install_ability(package)
 
         self.assertEqual(result.install_id, "inst-1")
@@ -507,18 +507,18 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(invocation["target"]["subject"], ref["resource_ura"])
         self.assertEqual(invocation["args"]["node_id"], "local")
 
-    def test_easyremote_adapter_lists_against_remote_device_owner(self) -> None:
+    def test_publication_host_adapter_lists_against_remote_device_owner(self) -> None:
         row = {
             "name": "er.fn",
             "ability_ura": "easynet:///r/example/ability/device.gpu-2.er.fn",
             "owner_ura": "easynet:///r/example/device/gpu-2",
             "state": "ACTIVE",
         }
-        client = _EasyRemoteClient({"abilities": [row]})
+        client = _PublicationHostClient({"abilities": [row]})
 
-        records = EasyRemotePublicationAdapter(
+        records = PublicationHostAdapter(
             client,
-            addressing=_EasyRemoteAddressing(),
+            addressing=_PublicationAddressing(),
         ).list_abilities(
             node="gpu-2",
             owner_ura="easynet:///r/example/device/gpu-2",
@@ -539,7 +539,7 @@ class PublicationTests(unittest.TestCase):
             },
         )
 
-    def test_easyremote_catalog_facade_filters_user_catalogue_rows(self) -> None:
+    def test_publication_catalog_facade_filters_user_catalogue_rows(self) -> None:
         rows = [
             {
                 "ability_ura": "easynet:///r/example/ability/alice.caesura.chat",
@@ -555,11 +555,11 @@ class PublicationTests(unittest.TestCase):
                 "metadata": {"owner_user": "alice"},
             },
         ]
-        client = _EasyRemoteClient({"abilities": rows})
+        client = _PublicationHostClient({"abilities": rows})
 
-        records = EasyRemotePublicationCatalogFacade(
+        records = PublicationCatalogFacade(
             client,
-            addressing=_EasyRemoteAddressing(),
+            addressing=_PublicationAddressing(),
         ).list_user("alice")
 
         self.assertEqual(
@@ -571,11 +571,11 @@ class PublicationTests(unittest.TestCase):
         )
         self.assertEqual(client.invocations[0]["args"], {"scope": "realm"})
 
-    def test_easyremote_catalog_facade_show_projects_not_found(self) -> None:
-        client = _EasyRemoteClient({"abilities": []})
-        facade = EasyRemotePublicationCatalogFacade(
+    def test_publication_catalog_facade_show_projects_not_found(self) -> None:
+        client = _PublicationHostClient({"abilities": []})
+        facade = PublicationCatalogFacade(
             client,
-            addressing=_EasyRemoteAddressing(),
+            addressing=_PublicationAddressing(),
         )
 
         with self.assertRaises(SDKError) as raised:
@@ -584,17 +584,17 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(is_code(raised.exception, ErrorCode.ABILITY_NOT_FOUND))
         self.assertEqual(raised.exception.details["reason"], "ability_not_found")
 
-    def test_easyremote_catalog_facade_lists_device_owner(self) -> None:
+    def test_publication_catalog_facade_lists_device_owner(self) -> None:
         row = {
             "name": "er.fn",
             "ability_ura": "easynet:///r/example/ability/device.gpu-2.er.fn",
             "owner_ura": "easynet:///r/example/device/gpu-2",
         }
-        client = _EasyRemoteClient({"abilities": [row]})
+        client = _PublicationHostClient({"abilities": [row]})
 
-        records = EasyRemotePublicationCatalogFacade(
+        records = PublicationCatalogFacade(
             client,
-            addressing=_EasyRemoteAddressing(),
+            addressing=_PublicationAddressing(),
         ).list_device("gpu-2")
 
         self.assertEqual(records[0].ability_ura, row["ability_ura"])

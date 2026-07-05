@@ -60,7 +60,7 @@ AddressingClient and package-level Axon-delegated `parse_ura`, `device_ura`,
 `device_ability_ura`, `owner_ability_ura`, `owner_ura_for_ability`,
 `ability_ura_from_descriptor_ref`, `owner_ability_descriptor_ref`, and
 `canonical_ability_descriptor_ref` helpers plus an
-`AbilityAddress` projection for EasyRemote-style callee/subject ownership facts,
+`AbilityAddress` projection for generic host callee/subject ownership facts,
 IdentityClient descriptor/resource projection, C ABI-backed signing-key
 register/list/revoke execution through daemon identity abilities, and
 C ABI-backed signer-handle projection from daemon key inventory plus
@@ -68,7 +68,7 @@ C ABI-backed signer-handle projection from daemon key inventory plus
 canonical signing material.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
-child-context helpers for EasyRemote-style nested calls, C ABI-backed fetch plus
+child-context helpers for generic host nested calls, C ABI-backed fetch plus
 invocation-history list/get/trace read-model execution through Runtime Core
 invoke, and close state seams over opaque receipt refs plus typed
 ReceiptRef/ReceiptChain facades that
@@ -86,7 +86,7 @@ complete unpublish execution through Runtime Core invoke,
 deploy/show/enable-impl/disable-impl/unpublish Invocation carrier,
 deploy/show/enable-impl/disable-impl/unpublish result, plugin
 install projection, published-ability read-model seams, SDK-owned
-`EasyRemotePublicationCatalogFacade` product catalogue install/list/list-device/
+`PublicationCatalogFacade` publication host catalogue install/list/list-device/
 list-user/show projection, and close state seams. HostBindingClient
 exposes binding DTO, typed cleanup/readiness/lifecycle ownership DTOs, envelope
 decode, item/error/terminal frame encoding, output-hash folding seams, and a

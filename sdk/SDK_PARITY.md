@@ -262,7 +262,7 @@ method spelling.
   `ability_ura_from_descriptor_ref`, `owner_ability_descriptor_ref`, and
   `canonical_ability_descriptor_ref` helper
   facades plus an `AbilityAddress` projection for owner/subject facts consumed
-  by EasyRemote-style addressing, `IdentityClient` descriptor, identity, ResourceRef,
+  by generic host addressing, `IdentityClient` descriptor, identity, ResourceRef,
   signing-key lifecycle and signer-handle projection seams, and close state
   seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
@@ -276,7 +276,7 @@ method spelling.
   projection, `invocation.history.get` fetch Invocation carrier construction,
   invocation-history list/get/trace read-model methods,
   receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
-  child-context helpers for EasyRemote-style nested calls, typed `ReceiptRef` and
+  child-context helpers for generic host nested calls, typed `ReceiptRef` and
   `ReceiptChain` wrappers that delegate causal-context and continuity projection
   through the client, `ReceiptVerification` cryptographic-assurance guardrails
   that reject summary-only projections as verifier evidence, local SDK
@@ -298,7 +298,7 @@ method spelling.
   carriers and Runtime Core invoke, complete unpublish execution through Runtime Core invoke,
   deploy/show/enable-impl/disable-impl/unpublish Invocation carrier,
   deploy/show/enable-impl/disable-impl/unpublish result, published-ability read-model seams,
-  SDK-owned EasyRemote publication catalogue install/list/list-device/list-user/
+  SDK-owned publication host catalogue install/list/list-device/list-user/
   show projection, and close state seams; host binding bridge, EasyRemote
   decorator/package extraction, and broader plugin/skill lifecycle policy
   remain incomplete.
@@ -325,7 +325,7 @@ method spelling.
   bidi session lifecycle, addressing helpers, warm host frame/hash substrate, receipt summary/continuity,
   hosted-agent admin, Context child dispatch, Mission transport/event-page
   extraction, SDK-owned Admin/Mission Daemon profile bridge, and page-based
-  Pipeline event access/live-tail plus publication product catalogue extraction and
+  Pipeline event access/live-tail plus publication catalogue extraction and
   Server/Gateway hub-config/lifecycle/fingerprint projection plus Pipeline step
   planning/EAL rendering/child Invocation fact conformance projection, plus
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
