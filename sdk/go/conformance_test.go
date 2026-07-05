@@ -4072,17 +4072,12 @@ func sharedCompatibilityStreamRequestJSON(t *testing.T, requestJSON []byte) []by
 
 func sharedFeatureDiscoveryJSON(t *testing.T, abiVersion uint32) []byte {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{
-		"abi_version": abiVersion,
-		"sdk_version": "0.91.30",
-		"profiles": map[string]string{
-			"runtime_core": "partial",
-		},
-		"symbols": map[string]bool{
-			"runtime_health": true,
-		},
-		"axon_pb": false,
-	})
+	featureDiscovery := map[string]any{}
+	if err := json.Unmarshal(sharedFixture(t, repositoryRoot(t), "feature-discovery.v4.json"), &featureDiscovery); err != nil {
+		t.Fatalf("decode shared feature discovery fixture: %v", err)
+	}
+	featureDiscovery["abi_version"] = abiVersion
+	raw, err := json.Marshal(featureDiscovery)
 	if err != nil {
 		t.Fatalf("encode shared feature discovery: %v", err)
 	}

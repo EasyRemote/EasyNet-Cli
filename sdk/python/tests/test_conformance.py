@@ -4670,14 +4670,10 @@ def shared_compatibility_stream_request_json() -> bytes:
 
 
 def shared_feature_discovery_json(abi_version: int) -> bytes:
+    payload = json.loads(shared_fixture("feature-discovery.v4.json"))
+    payload["abi_version"] = abi_version
     return json.dumps(
-        {
-            "abi_version": abi_version,
-            "sdk_version": "0.91.30",
-            "profiles": {"runtime_core": "partial"},
-            "symbols": {"runtime_health": True},
-            "axon_pb": False,
-        },
+        payload,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")

@@ -100,6 +100,7 @@ pub mod daemon;
 pub mod directory;
 pub mod errors;
 pub mod events;
+pub mod features;
 pub mod host_binding;
 pub mod identity;
 pub mod invocation;
@@ -162,59 +163,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
         return ERR_NULL_POINTER;
     }
     unsafe { *out_features_json = std::ptr::null_mut() };
-    let features = serde_json::json!({
-        "abi_version": EASYNET_ABI_VERSION,
-        "sdk_version": env!("CARGO_PKG_VERSION"),
-        "profiles": {
-            "runtime_core": "partial",
-            "receipt": "fetch_projection_partial",
-            "directory_identity": "read_model_projection_partial",
-            "publication": "carrier_partial",
-            "host_binding": "codec_partial",
-            "mission": "carrier_status_partial",
-            "events": "directory_session_stream_partial",
-            "admin_gateway": "carrier_status_partial",
-            "surface": "carrier_projection_partial",
-            "compatibility": "carrier_projection_partial",
-            "wrappers": "carrier_record_projection_partial"
-        },
-        "symbols": {
-            "daemon_lifecycle": true,
-            "invocation_dispatch_v3": true,
-            "typed_error_json": true,
-            "receipt_fetch": true,
-            "receipt_projection": true,
-            "directory_identity_projection": true,
-            "identity_signing_key_lifecycle": true,
-            "directory_read_model": true,
-            "directory_resolve": true,
-            "host_binding_codec": true,
-            "publication_carriers": true,
-            "mission_carriers": true,
-            "mission_status_projection": true,
-            "events_directory_stream": true,
-            "events_session_stream": true,
-            "admin_gateway_carriers": true,
-            "admin_gateway_status_projection": true,
-            "admin_device_session_projection": true,
-            "admin_device_admin_projection": true,
-            "surface_carriers": true,
-            "surface_projection": true,
-            "surface_health": true,
-            "compatibility_carriers": true,
-            "compatibility_projection": true,
-            "compatibility_file_adapters": true,
-            "wrapper_carriers": true,
-            "wrapper_record_projection": true,
-            "invocation_builder_handles": cfg!(feature = "axon-pb"),
-            "invocation_handle_observation": cfg!(feature = "axon-pb"),
-            "stream_bidi_lifecycle": cfg!(feature = "axon-pb"),
-            "runtime_health": cfg!(feature = "axon-pb"),
-            "prepare_sign_submit": cfg!(feature = "axon-pb")
-        },
-        "axon_pb": cfg!(feature = "axon-pb")
-    });
-    let ptr = alloc_output_cstring(features.to_string());
+    let ptr = alloc_output_cstring(&features::feature_discovery_json());
     if ptr.is_null() {
         set_last_error("easynet_feature_discovery: out-of-memory allocating features string");
         return ERR_GENERIC;
@@ -375,53 +324,12 @@ mod tests {
         };
         unsafe { strings::easynet_string_free(out) };
         assert_eq!(json["abi_version"], EASYNET_ABI_VERSION);
-        assert_eq!(json["symbols"]["typed_error_json"], true);
-        assert_eq!(json["symbols"]["receipt_fetch"], true);
-        assert_eq!(json["symbols"]["receipt_projection"], true);
-        assert_eq!(json["symbols"]["directory_identity_projection"], true);
-        assert_eq!(json["symbols"]["identity_signing_key_lifecycle"], true);
-        assert_eq!(json["symbols"]["directory_read_model"], true);
-        assert_eq!(json["symbols"]["directory_resolve"], true);
-        assert_eq!(json["symbols"]["host_binding_codec"], true);
-        assert_eq!(json["symbols"]["publication_carriers"], true);
-        assert_eq!(json["symbols"]["mission_carriers"], true);
-        assert_eq!(json["symbols"]["mission_status_projection"], true);
-        assert_eq!(json["symbols"]["events_directory_stream"], true);
-        assert_eq!(json["symbols"]["events_session_stream"], true);
-        assert_eq!(json["symbols"]["admin_gateway_carriers"], true);
-        assert_eq!(json["symbols"]["admin_gateway_status_projection"], true);
-        assert_eq!(json["symbols"]["admin_device_session_projection"], true);
-        assert_eq!(json["symbols"]["admin_device_admin_projection"], true);
-        assert_eq!(json["symbols"]["surface_carriers"], true);
-        assert_eq!(json["symbols"]["surface_projection"], true);
-        assert_eq!(json["symbols"]["surface_health"], true);
-        assert_eq!(json["symbols"]["compatibility_carriers"], true);
-        assert_eq!(json["symbols"]["compatibility_projection"], true);
-        assert_eq!(json["symbols"]["compatibility_file_adapters"], true);
-        assert_eq!(json["symbols"]["wrapper_carriers"], true);
-        assert_eq!(json["symbols"]["wrapper_record_projection"], true);
-        assert_eq!(json["profiles"]["receipt"], "fetch_projection_partial");
-        assert_eq!(
-            json["profiles"]["directory_identity"],
-            "read_model_projection_partial"
-        );
-        assert_eq!(json["profiles"]["host_binding"], "codec_partial");
-        assert_eq!(json["profiles"]["publication"], "carrier_partial");
-        assert_eq!(json["profiles"]["mission"], "carrier_status_partial");
-        assert_eq!(
-            json["profiles"]["events"],
-            "directory_session_stream_partial"
-        );
-        assert_eq!(json["profiles"]["admin_gateway"], "carrier_status_partial");
-        assert_eq!(json["profiles"]["surface"], "carrier_projection_partial");
-        assert_eq!(
-            json["profiles"]["compatibility"],
-            "carrier_projection_partial"
-        );
-        assert_eq!(
-            json["profiles"]["wrappers"],
-            "carrier_record_projection_partial"
-        );
+        for (profile, status) in features::PROFILES {
+            assert_eq!(json["profiles"][*profile], *status);
+        }
+        for symbol in features::ALWAYS_ON_SYMBOLS {
+            assert_eq!(json["symbols"][*symbol], true);
+        }
         assert_eq!(
             json["symbols"]["stream_bidi_lifecycle"],
             serde_json::json!(cfg!(feature = "axon-pb"))

@@ -272,6 +272,7 @@ schema_files=(
   receipt.schema.json
   receipt-fetch-request.schema.json
   error.schema.json
+  feature-discovery.schema.json
   health.schema.json
   events.schema.json
   events-directory-subscription-request.schema.json
@@ -377,6 +378,7 @@ fixture_files=(
   events-session-subscription-invocation.v4.json
   events-invocation-subscription-request.v4.json
   events-invocation-subscription-invocation.v4.json
+  feature-discovery.v4.json
   directory-list-devices-request.v4.json
   directory-list-agents-request.v4.json
   directory-list-abilities-request.v4.json

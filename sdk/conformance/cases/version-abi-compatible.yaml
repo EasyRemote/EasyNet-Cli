@@ -7,6 +7,8 @@ required_for:
   - python
 description: SDK detects a compatible daemon and ABI version before runtime traffic.
 steps:
+  - action: load_fixture
+    fixture: feature-discovery.v4.json
   - action: feature_discovery
 expect:
   result: ok

@@ -218,6 +218,10 @@
       "schema": "events-session-subscription-request.schema.json"
     },
     {
+      "fixture": "feature-discovery.v4.json",
+      "schema": "feature-discovery.schema.json"
+    },
+    {
       "fixture": "gateway-status.v4.json",
       "schema": "gateway.schema.json"
     },

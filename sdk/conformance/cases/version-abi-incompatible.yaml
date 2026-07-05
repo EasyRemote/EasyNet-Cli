@@ -7,6 +7,8 @@ required_for:
   - python
 description: SDK returns a typed version mismatch before opening invocation traffic.
 steps:
+  - action: load_fixture
+    fixture: feature-discovery.v4.json
   - action: feature_discovery
     override:
       abi_version: 0
