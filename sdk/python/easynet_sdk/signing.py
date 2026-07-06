@@ -60,10 +60,11 @@ class PreparedInvocation:
             raise _invalid_prepared("PreparedInvocation must not be submit-ready")
 
         draft = InvocationDraft.from_json(json.dumps(_required_object(decoded, "tuple")))
-        material = _signing_material(
-            _required_object(decoded, "signing_material"),
-            draft.descriptor_ref,
-        )
+        material = _signing_material(_required_object(decoded, "signing_material"))
+        if material.descriptor_ref != draft.descriptor_ref:
+            raise _invalid_prepared(
+                "signing_material.descriptor_ref must match tuple descriptor_ref"
+            )
         prepared_id = _optional_string(decoded.get("prepared_id"), "prepared_id") or ""
         request_id = _optional_string(decoded.get("request_id"), "request_id") or ""
         if prepared_id == "" and request_id == "":
@@ -320,17 +321,12 @@ class SignedInvocation:
         )
 
 
-def _signing_material(
-    decoded: Mapping[str, object], fallback_descriptor_ref: str
-) -> SigningMaterial:
+def _signing_material(decoded: Mapping[str, object]) -> SigningMaterial:
     canonical_bytes = _required_string(decoded, "canonical_bytes_base64")
     _decode_base64_field(canonical_bytes, "canonical_bytes_base64")
     args_digest = _required_string(decoded, "args_digest_hex")
     expires = _required_int(decoded, "expires_at_unix_ms")
-    descriptor_ref = (
-        _optional_string(decoded.get("descriptor_ref"), "descriptor_ref")
-        or fallback_descriptor_ref
-    )
+    descriptor_ref = _required_string(decoded, "descriptor_ref")
     signed_fields = decoded.get("signed_fields", [])
     if not isinstance(signed_fields, list) or any(
         not isinstance(item, str) for item in signed_fields

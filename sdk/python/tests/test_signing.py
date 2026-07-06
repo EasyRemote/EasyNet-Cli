@@ -106,6 +106,7 @@ class SigningTests(unittest.TestCase):
                 "signing_material": {
                     "canonical_bytes_base64": "ZXhhbXBsZQ==",
                     "args_digest_hex": "00",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "signed_fields": ["caller_ura", "callee_ura"],
                     "signer_policy": {
@@ -123,6 +124,57 @@ class SigningTests(unittest.TestCase):
         self.assertIsNotNone(prepared.signing_material.signer_policy)
         assert prepared.signing_material.signer_policy is not None
         self.assertEqual(prepared.signing_material.signer_policy.signer_id, "browser-key")
+
+    def test_prepared_invocation_rejects_missing_signing_material_descriptor_ref(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            PreparedInvocation.from_json(
+                b"""{
+                    "prepared_id": "prepared-example-1",
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "args": {},
+                        "content_type": "application/json"
+                    },
+                    "signing_material": {
+                        "canonical_bytes_base64": "ZXhhbXBsZQ==",
+                        "args_digest_hex": "00",
+                        "expires_at_unix_ms": 1783000000000
+                    }
+                }"""
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_prepared_invocation_rejects_signing_material_descriptor_mismatch(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            PreparedInvocation.from_json(
+                b"""{
+                    "prepared_id": "prepared-example-1",
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "args": {},
+                        "content_type": "application/json"
+                    },
+                    "signing_material": {
+                        "canonical_bytes_base64": "ZXhhbXBsZQ==",
+                        "args_digest_hex": "00",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.status@1.0.0",
+                        "expires_at_unix_ms": 1783000000000
+                    }
+                }"""
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_prepared_invocation_rejects_canonical_hash_mismatch(self) -> None:
         with self.assertRaises(SDKError) as caught:
@@ -168,6 +220,7 @@ class SigningTests(unittest.TestCase):
                     "signing_material": {
                         "canonical_bytes_base64": "not valid base64",
                         "args_digest_hex": "00",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                         "expires_at_unix_ms": 1783000000000
                     }
                 }"""
@@ -193,6 +246,7 @@ class SigningTests(unittest.TestCase):
                     "signing_material": {
                         "canonical_bytes_base64": "ZXhhbXBsZQ==",
                         "args_digest_hex": "00",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                         "expires_at_unix_ms": 1783000000000
                     },
                     "submit_ready": true
@@ -395,6 +449,7 @@ class SigningTests(unittest.TestCase):
                 "signing_material": {
                     "canonical_bytes_base64": "ZXhhbXBsZQ==",
                     "args_digest_hex": "00",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                     "expires_at_unix_ms": 1783000000000,
                     "signer_policy": {
                         "mode": "local_daemon_signing",

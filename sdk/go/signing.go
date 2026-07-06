@@ -109,9 +109,12 @@ func NewPreparedInvocationFromJSON(raw []byte) (PreparedInvocation, error) {
 	if err != nil {
 		return PreparedInvocation{}, err
 	}
-	material, err := requiredSigningMaterial(fields, "signing_material", tuple.DescriptorRef())
+	material, err := requiredSigningMaterial(fields, "signing_material")
 	if err != nil {
 		return PreparedInvocation{}, err
+	}
+	if material.DescriptorRef() != tuple.DescriptorRef() {
+		return PreparedInvocation{}, invalidInvocation("signing_material.descriptor_ref must match tuple descriptor_ref", nil)
 	}
 	prepared := PreparedInvocation{
 		preparedID:       optionalPreparedString(fields, "prepared_id"),
@@ -449,7 +452,7 @@ func requiredDraft(fields map[string]json.RawMessage, name string) (InvocationDr
 	return NewInvocationDraftFromJSON(raw)
 }
 
-func requiredSigningMaterial(fields map[string]json.RawMessage, name string, fallbackDescriptorRef string) (SigningMaterial, error) {
+func requiredSigningMaterial(fields map[string]json.RawMessage, name string) (SigningMaterial, error) {
 	raw, ok := fields[name]
 	if !ok {
 		return SigningMaterial{}, invalidInvocation(fmt.Sprintf("%s is required", name), nil)
@@ -468,9 +471,6 @@ func requiredSigningMaterial(fields map[string]json.RawMessage, name string, fal
 		expiresAtUnixMS:      optionalPreparedInt64(materialFields, "expires_at_unix_ms"),
 		signerPolicy:         optionalSignerPolicy(materialFields, "signer_policy"),
 	}
-	if material.descriptorRef == "" {
-		material.descriptorRef = fallbackDescriptorRef
-	}
 	if strings.TrimSpace(material.canonicalBytesBase64) == "" {
 		return SigningMaterial{}, invalidInvocation("signing_material.canonical_bytes_base64 is required", nil)
 	}
@@ -479,6 +479,9 @@ func requiredSigningMaterial(fields map[string]json.RawMessage, name string, fal
 	}
 	if strings.TrimSpace(material.argsDigestHex) == "" {
 		return SigningMaterial{}, invalidInvocation("signing_material.args_digest_hex is required", nil)
+	}
+	if strings.TrimSpace(material.descriptorRef) == "" {
+		return SigningMaterial{}, invalidInvocation("signing_material.descriptor_ref is required", nil)
 	}
 	if material.expiresAtUnixMS == 0 {
 		return SigningMaterial{}, invalidInvocation("signing_material.expires_at_unix_ms is required", nil)

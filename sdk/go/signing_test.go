@@ -96,6 +96,7 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"signed_fields": ["caller_ura", "callee_ura"],
 			"signer_policy": {
@@ -115,6 +116,61 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 	}
 	if policy := prepared.SigningMaterial().SignerPolicy(); policy == nil || policy.SignerID() != "browser-key" {
 		t.Fatalf("signer policy not preserved: %#v", policy)
+	}
+}
+
+func TestPreparedInvocationRejectsMissingSigningMaterialDescriptorRef(t *testing.T) {
+	_, err := NewPreparedInvocationFromJSON([]byte(`{
+		"prepared_id": "prepared-example-1",
+		"tuple": {
+			"caller_ura": "easynet:///r/example/agent/alice.sdk",
+			"callee_ura": "easynet:///r/example/device/dev-a",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"subject_ura": "easynet:///r/example/device/dev-a",
+			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+			"causal_context": {"form": "none"},
+			"args": {},
+			"content_type": "application/json"
+		},
+		"signing_material": {
+			"canonical_bytes_base64": "ZXhhbXBsZQ==",
+			"args_digest_hex": "00",
+			"expires_at_unix_ms": 1783000000000
+		}
+	}`))
+	if err == nil {
+		t.Fatalf("NewPreparedInvocationFromJSON succeeded, want invalid argument")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestPreparedInvocationRejectsSigningMaterialDescriptorMismatch(t *testing.T) {
+	_, err := NewPreparedInvocationFromJSON([]byte(`{
+		"prepared_id": "prepared-example-1",
+		"tuple": {
+			"caller_ura": "easynet:///r/example/agent/alice.sdk",
+			"callee_ura": "easynet:///r/example/device/dev-a",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"subject_ura": "easynet:///r/example/device/dev-a",
+			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+			"causal_context": {"form": "none"},
+			"args": {},
+			"content_type": "application/json"
+		},
+		"signing_material": {
+			"canonical_bytes_base64": "ZXhhbXBsZQ==",
+			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.status@1.0.0",
+			"expires_at_unix_ms": 1783000000000
+		}
+	}`))
+	if err == nil {
+		t.Fatalf("NewPreparedInvocationFromJSON succeeded, want invalid argument")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -162,6 +218,7 @@ func TestPreparedInvocationRejectsInvalidCanonicalBase64(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "not valid base64",
 			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -189,6 +246,7 @@ func TestPreparedInvocationRejectsSubmitReadyPreparedPayload(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
 			"expires_at_unix_ms": 1783000000000
 		},
 		"submit_ready": true

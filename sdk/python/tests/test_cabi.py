@@ -2674,6 +2674,7 @@ CURRENT_ABI_PREPARED = b"""{
   "signing_material": {
     "canonical_bytes_base64": "ZXhhbXBsZQ==",
     "args_digest_hex": "00",
+    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
     "signed_fields": ["caller_ura", "callee_ura"],
     "signer_policy": {
