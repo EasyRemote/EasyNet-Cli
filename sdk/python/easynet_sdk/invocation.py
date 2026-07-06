@@ -276,6 +276,7 @@ class InvocationBuilder:
             raise _invalid_invocation("exactly one of args or arguments_base64 is required")
         if self._has_arguments:
             _required_builder_string(self._arguments_base64, "arguments_base64")
+            _validate_base64_field(self._arguments_base64 or "", "arguments_base64")
         validate_authority_metadata(self._metadata)
         if self._caller_signature is not None:
             _required_builder_string(
@@ -304,12 +305,17 @@ class InvocationBuilder:
 
 
 def _validate_nonce_base64(value: str) -> None:
+    raw = _validate_base64_field(value, "nonce_base64")
+    if len(raw) != 16:
+        raise _invalid_invocation("nonce_base64 must decode to 16 bytes")
+
+
+def _validate_base64_field(value: str, field_name: str) -> bytes:
     try:
         raw = base64.b64decode(value, validate=True)
     except binascii.Error as exc:
-        raise _invalid_invocation("nonce_base64 must be base64", exc) from exc
-    if len(raw) != 16:
-        raise _invalid_invocation("nonce_base64 must decode to 16 bytes")
+        raise _invalid_invocation(f"{field_name} must be base64", exc) from exc
+    return raw
 
 
 def _required_builder_string(value: Optional[str], field_name: str) -> str:

@@ -332,8 +332,13 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 	if b.hasArgs == b.hasArguments {
 		return InvocationDraft{}, invalidInvocation("exactly one of args or arguments_base64 is required", nil)
 	}
-	if b.hasArguments && strings.TrimSpace(b.argumentsBase64) == "" {
-		return InvocationDraft{}, invalidInvocation("arguments_base64 must be non-empty", nil)
+	if b.hasArguments {
+		if strings.TrimSpace(b.argumentsBase64) == "" {
+			return InvocationDraft{}, invalidInvocation("arguments_base64 must be non-empty", nil)
+		}
+		if err := validateInvocationArgumentsBase64(b.argumentsBase64); err != nil {
+			return InvocationDraft{}, err
+		}
 	}
 	if err := validateAuthorityMetadata(b.metadata); err != nil {
 		return InvocationDraft{}, err
@@ -369,6 +374,13 @@ func validateInvocationNonceBase64(value string) error {
 	}
 	if len(raw) != 16 {
 		return invalidInvocation("nonce_base64 must decode to 16 bytes", nil)
+	}
+	return nil
+}
+
+func validateInvocationArgumentsBase64(value string) error {
+	if _, err := decodeBase64Field(value, "arguments_base64"); err != nil {
+		return err
 	}
 	return nil
 }

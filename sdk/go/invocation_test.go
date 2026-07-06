@@ -162,6 +162,25 @@ func TestInvocationBuilderRejectsMalformedNonce(t *testing.T) {
 	}
 }
 
+func TestInvocationBuilderRejectsMalformedRawPayload(t *testing.T) {
+	_, err := NewInvocationBuilder().
+		WithCallerURA("easynet:///r/example/agent/alice.sdk").
+		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithSubjectURA("easynet:///r/example/device/dev-a").
+		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+		WithCausalContext(map[string]any{"form": "none"}).
+		WithArgumentsBase64("not base64").
+		WithContentType("application/octet-stream").
+		Build()
+	if err == nil {
+		t.Fatal("Build succeeded for malformed raw payload, want invalid argument")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestInvocationDraftFromJSONRejectsUnknownField(t *testing.T) {
 	_, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/agent/alice.sdk",

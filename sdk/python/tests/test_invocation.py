@@ -144,6 +144,25 @@ class InvocationTests(unittest.TestCase):
 
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+    def test_builder_rejects_malformed_raw_payload(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            (
+                InvocationBuilder()
+                .with_caller_ura("easynet:///r/example/agent/alice.sdk")
+                .with_callee_ura("easynet:///r/example/device/dev-a")
+                .with_descriptor_ref(
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                )
+                .with_subject_ura("easynet:///r/example/device/dev-a")
+                .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
+                .with_causal_context({"form": "none"})
+                .with_arguments_base64("not base64")
+                .with_content_type("application/octet-stream")
+                .build()
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_draft_from_json_rejects_unknown_field(self) -> None:
         with self.assertRaises(SDKError) as caught:
             InvocationDraft.from_json(
