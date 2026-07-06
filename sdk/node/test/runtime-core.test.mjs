@@ -17,6 +17,8 @@ import {
   IdentityClient,
   InvocationBuilder,
   LocalHostBindingTransport,
+  MAX_BIDI_BUFFERED_FRAMES,
+  MAX_STREAM_BUFFERED_EVENTS,
   PreparedInvocation,
   PublicationClient,
   ReceiptChain,
@@ -620,6 +622,42 @@ test("StreamHandle exposes async iteration with terminal close", async () => {
   );
 });
 
+test("StreamHandle keeps retained event history bounded with typed overflow", async () => {
+  const events = [
+    { frame_type: "data", value: 1 },
+    { frame_type: "data", value: 2 },
+  ];
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    openStream: () => ({
+      open: JSON.stringify({
+        stream_id: "stream-bounded",
+        state: "Open",
+        max_buffered_events: 1,
+      }),
+      transport: {
+        receive: () => JSON.stringify(events.shift()),
+      },
+    }),
+  });
+
+  const stream = await runtime.invokeStream(completeDraft().build());
+  const first = await stream.receive();
+  const overflow = await stream.receive();
+
+  assert.equal(MAX_STREAM_BUFFERED_EVENTS, 1024);
+  assert.equal(stream.maxBufferedEvents, 1);
+  assert.deepEqual(stream.retainedEvents, [first]);
+  assert.equal(stream.retainedEvents.length, 1);
+  assert.equal(overflow.terminal, true);
+  assert.equal(overflow.error.code, ErrorCode.ADMISSION_DENIED);
+  assert.equal(overflow.error.retry, "after_backoff");
+  assert.equal(overflow.error.details.reason, "callback_queue_overflow");
+  assert.equal(overflow.error.details.wire_code, "RESOURCE_EXHAUSTED");
+  assert.equal(stream.terminal, true);
+  assert.deepEqual(stream.terminalEvent(), overflow);
+});
+
 test("StreamHandle AbortSignal cancellation calls transport cancel", async () => {
   const cancelled = [];
   const controller = new AbortController();
@@ -690,6 +728,55 @@ test("BidiSession exposes async iteration and AbortSignal cancellation", async (
     (error) => error instanceof SDKError && error.code === ErrorCode.CANCELLED,
   );
   assert.deepEqual(cancelled, ["stop bidi"]);
+});
+
+test("BidiSession keeps retained frame history bounded with typed overflow", async () => {
+  const receiveFrames = [
+    { frame_type: "data", payload: { one: true } },
+    { frame_type: "data", payload: { two: true } },
+  ];
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    openBidi: () => ({
+      open: JSON.stringify({
+        session_id: "bidi-bounded",
+        state: "Open",
+        max_buffered_frames: 1,
+      }),
+      transport: {
+        send: () => {},
+        receive: () => JSON.stringify(receiveFrames.shift()),
+      },
+    }),
+  });
+
+  const receiveBounded = await runtime.openBidi(completeDraft().build());
+  const first = await receiveBounded.receive();
+  const overflow = await receiveBounded.receive();
+
+  assert.equal(MAX_BIDI_BUFFERED_FRAMES, 1024);
+  assert.equal(receiveBounded.maxBufferedFrames, 1);
+  assert.deepEqual(receiveBounded.receivedFrames, [first]);
+  assert.equal(overflow.terminal, true);
+  assert.equal(overflow.error.code, ErrorCode.ADMISSION_DENIED);
+  assert.equal(overflow.error.retry, "after_backoff");
+  assert.equal(overflow.error.details.reason, "callback_queue_overflow");
+  assert.equal(overflow.error.details.wire_code, "RESOURCE_EXHAUSTED");
+  assert.deepEqual(receiveBounded.terminalFrame(), overflow);
+
+  const sendBounded = await runtime.openBidi(completeDraft().build());
+  await sendBounded.send({ frame_type: "data", payload: { one: true } });
+  await assert.rejects(
+    () => sendBounded.send({ frame_type: "data", payload: { two: true } }),
+    (error) =>
+      error instanceof SDKError &&
+      error.code === ErrorCode.ADMISSION_DENIED &&
+      error.retry === "after_backoff" &&
+      error.details.reason === "callback_queue_overflow",
+  );
+  assert.equal(sendBounded.sentFrames.length, 1);
+  assert.equal(sendBounded.terminal, true);
+  assert.equal(sendBounded.overflow.error.details.direction, "send");
 });
 
 test("IdentityClient delegates DescriptorRef and URA projections without local grammar", async () => {

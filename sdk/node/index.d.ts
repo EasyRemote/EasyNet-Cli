@@ -16,6 +16,8 @@ export declare const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: 50;
 export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
+export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
+export declare const MAX_BIDI_BUFFERED_FRAMES: 1024;
 export declare const HOST_STREAM_FRAME_SCHEMA: "host-stream-frame.schema.json";
 export declare const HOST_STREAM_HASH_ALGORITHM: "sha256(prev_hash || seq_be || canonical_json(value))";
 export declare const HOST_STREAM_EMPTY_OUTPUT_HASH: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -843,21 +845,34 @@ export class InvocationCancel {
 
 export class StreamHandle {
   terminal: boolean;
+  closed: boolean;
+  open: Record<string, unknown>;
+  maxBufferedEvents: number;
+  retainedEvents: Array<Record<string, unknown>>;
+  overflow: Record<string, unknown> | null;
   constructor(transport: StreamTransport, open: Record<string, unknown>);
   receive(options?: ReceiveOptions): Promise<Record<string, unknown>>;
   events(options?: AsyncIterationOptions): AsyncIterableIterator<Record<string, unknown>>;
   [Symbol.asyncIterator](): AsyncIterableIterator<Record<string, unknown>>;
+  terminalEvent(): Record<string, unknown> | null;
   cancel(reason?: string): Promise<void>;
   close(): Promise<void>;
 }
 
 export class BidiSession {
   terminal: boolean;
+  closed: boolean;
+  open: Record<string, unknown>;
+  maxBufferedFrames: number;
+  sentFrames: Array<Record<string, unknown>>;
+  receivedFrames: Array<Record<string, unknown>>;
+  overflow: Record<string, unknown> | null;
   constructor(transport: BidiTransport, open: Record<string, unknown>);
   send(frame: Record<string, unknown>, options?: ReceiveOptions): Promise<void>;
   receive(options?: ReceiveOptions): Promise<Record<string, unknown>>;
   frames(options?: AsyncIterationOptions): AsyncIterableIterator<Record<string, unknown>>;
   [Symbol.asyncIterator](): AsyncIterableIterator<Record<string, unknown>>;
+  terminalFrame(): Record<string, unknown> | null;
   closeSend(): Promise<void>;
   cancel(reason?: string): Promise<void>;
   close(): Promise<void>;

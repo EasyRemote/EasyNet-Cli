@@ -503,9 +503,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   a scaffold-backed test gate plus a shared Node action-adapter report for
   Runtime Core, Health, Directory + Identity, MEMC, Receipt, Publication, and Host Binding seam
   cases. It is not provider-backed: daemon transports, remaining profile
-  clients, prepare/sign conformance, backpressure overflow, plugin
-  policy, host binding bridge, Axon-backed receipt verification, and package
-  stability remain incomplete.
+  clients, C ABI-style callback overflow, plugin policy, host binding bridge,
+  Axon-backed receipt verification, and package stability remain incomplete.
 
 ## Capability States
 

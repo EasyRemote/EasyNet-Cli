@@ -10,8 +10,9 @@ Publication, and Host Binding seams.
 `index.js` and `index.d.ts` expose feature discovery, typed errors, Invocation
 draft construction, RuntimeClient dispatch seams, PreparedInvocation,
 SigningMaterial, InvocationSignature, SignedInvocation, stream/bidi lifecycle
-handles, async iteration, `AbortSignal` cancellation, HealthClient runtime
-health/diagnostics seams, InvocationHandle await/cancel/events/free seams,
+handles, bounded retained stream/bidi history, async iteration, `AbortSignal`
+cancellation, HealthClient runtime health/diagnostics seams,
+InvocationHandle await/cancel/events/free seams,
 DirectoryClient read-model resolve/list/subscribe seams, IdentityClient URA/DescriptorRef projection seams,
 ReceiptClient fetch/projection/verification/causal-ref seams,
 PublicationClient resource/package/deploy/unpublish/read-model/lifecycle seams,
@@ -28,4 +29,6 @@ This package has no daemon transport provider, C ABI bridge, local daemon
 signing provider, or package-stability claim yet. Its shared conformance
 adapter report covers only declared Runtime Core, Health, Directory + Identity,
 MEMC, Receipt, Publication, and Host Binding seam cases; it must not claim
-provider-backed or cutover-ready status.
+provider-backed or cutover-ready status. Node also does not claim the shared
+C ABI callback-queue overflow case because daemon wire backpressure mapping is
+not implemented in this package.

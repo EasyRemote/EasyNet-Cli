@@ -47,6 +47,8 @@ export const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50;
 export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
+export const MAX_STREAM_BUFFERED_EVENTS = 1024;
+export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 export const HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json";
 export const HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value))";
 export const HOST_STREAM_EMPTY_OUTPUT_HASH =
@@ -1792,6 +1794,13 @@ export class StreamHandle {
     }
     this.transport = transport;
     this.open = objectValue(open, "stream open");
+    this.maxBufferedEvents = boundedRuntimeLimit(
+      this.open.max_buffered_events,
+      "max_buffered_events",
+      MAX_STREAM_BUFFERED_EVENTS,
+    );
+    this.retainedEvents = [];
+    this.overflow = null;
     this.closed = false;
     this.terminal = false;
   }
@@ -1812,7 +1821,7 @@ export class StreamHandle {
     if (isTerminalFrame(event)) {
       this.terminal = true;
     }
-    return event;
+    return this.recordEvent(event);
   }
 
   async *events(options = {}) {
@@ -1847,6 +1856,23 @@ export class StreamHandle {
     this.terminal = true;
     this.closed = true;
   }
+
+  terminalEvent() {
+    if (this.overflow) {
+      return this.overflow;
+    }
+    return this.retainedEvents.findLast((event) => event.terminal === true) ?? null;
+  }
+
+  recordEvent(event) {
+    if (this.retainedEvents.length >= this.maxBufferedEvents) {
+      this.overflow = streamBackpressureTerminal(this.maxBufferedEvents, this.retainedEvents.length);
+      this.terminal = true;
+      return this.overflow;
+    }
+    this.retainedEvents.push(event);
+    return event;
+  }
 }
 
 export class BidiSession {
@@ -1856,6 +1882,14 @@ export class BidiSession {
     }
     this.transport = transport;
     this.open = objectValue(open, "bidi open");
+    this.maxBufferedFrames = boundedRuntimeLimit(
+      this.open.max_buffered_frames,
+      "max_buffered_frames",
+      MAX_BIDI_BUFFERED_FRAMES,
+    );
+    this.sentFrames = [];
+    this.receivedFrames = [];
+    this.overflow = null;
     this.closed = false;
     this.terminal = false;
   }
@@ -1867,11 +1901,14 @@ export class BidiSession {
     if (this.terminal) {
       throw invalidSDK("bidi session is terminal");
     }
+    const normalizedFrame = objectValue(frame, "bidi send frame");
+    this.ensureSentFrameCapacity();
     await withAbortSignal(
-      this.transport.send(Buffer.from(JSON.stringify(frame))),
+      this.transport.send(Buffer.from(JSON.stringify(normalizedFrame))),
       options.signal,
       () => this.cancel(options.cancelReason ?? abortReason(options.signal)),
     );
+    this.sentFrames.push(normalizedFrame);
   }
 
   async receive(options = {}) {
@@ -1890,7 +1927,7 @@ export class BidiSession {
     if (isTerminalFrame(frame)) {
       this.terminal = true;
     }
-    return frame;
+    return this.recordReceivedFrame(frame);
   }
 
   async *frames(options = {}) {
@@ -1930,6 +1967,35 @@ export class BidiSession {
     }
     this.terminal = true;
     this.closed = true;
+  }
+
+  terminalFrame() {
+    if (this.overflow) {
+      return this.overflow;
+    }
+    return this.receivedFrames.findLast((frame) => frame.terminal === true) ?? null;
+  }
+
+  ensureSentFrameCapacity() {
+    if (this.sentFrames.length >= this.maxBufferedFrames) {
+      this.overflow = bidiBackpressureTerminal("send", this.maxBufferedFrames, this.sentFrames.length);
+      this.terminal = true;
+      throw backpressureSDK("bidi send buffer limit exceeded", {
+        direction: "send",
+        max_buffered_frames: this.maxBufferedFrames,
+        buffered_frames: this.sentFrames.length,
+      });
+    }
+  }
+
+  recordReceivedFrame(frame) {
+    if (this.receivedFrames.length >= this.maxBufferedFrames) {
+      this.overflow = bidiBackpressureTerminal("receive", this.maxBufferedFrames, this.receivedFrames.length);
+      this.terminal = true;
+      return this.overflow;
+    }
+    this.receivedFrames.push(frame);
+    return frame;
   }
 }
 
@@ -2742,6 +2808,70 @@ function validateInvocationHandleMonotonicity(handle) {
   if (handle.result !== null && !handle.terminal) {
     throw invalidRuntime("result requires terminal handle state");
   }
+}
+
+function boundedRuntimeLimit(value, field, defaultValue) {
+  const limit = optionalRuntimeNonNegativeInteger(value, field);
+  if (limit === null || limit === 0) {
+    return defaultValue;
+  }
+  return limit;
+}
+
+function streamBackpressureTerminal(maxBufferedEvents, bufferedEvents) {
+  return {
+    kind: "backpressure",
+    frame_type: "terminal",
+    state: "Failed",
+    terminal: true,
+    error: backpressureErrorJSON("stream callback queue limit exceeded", {
+      max_buffered_events: maxBufferedEvents,
+      buffered_events: bufferedEvents,
+    }),
+  };
+}
+
+function bidiBackpressureTerminal(direction, maxBufferedFrames, bufferedFrames) {
+  return {
+    kind: "backpressure",
+    frame_type: "terminal",
+    direction,
+    state: "Failed",
+    terminal: true,
+    error: backpressureErrorJSON("bidi callback queue limit exceeded", {
+      direction,
+      max_buffered_frames: maxBufferedFrames,
+      buffered_frames: bufferedFrames,
+    }),
+  };
+}
+
+function backpressureErrorJSON(message, details = {}) {
+  return {
+    code: ErrorCode.ADMISSION_DENIED,
+    stage: "runtime",
+    retry: RetryHint.AFTER_BACKOFF,
+    message,
+    details: {
+      reason: "callback_queue_overflow",
+      wire_code: "RESOURCE_EXHAUSTED",
+      ...details,
+    },
+  };
+}
+
+function backpressureSDK(message, details = {}) {
+  return new SDKError({
+    code: ErrorCode.ADMISSION_DENIED,
+    stage: "runtime",
+    retry: RetryHint.AFTER_BACKOFF,
+    message,
+    details: {
+      reason: "callback_queue_overflow",
+      wire_code: "RESOURCE_EXHAUSTED",
+      ...details,
+    },
+  });
 }
 
 function validateRuntimeBase64(value, field) {
