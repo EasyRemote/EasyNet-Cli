@@ -71,10 +71,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Axon-backed full verification and broader language-facade cutovers remain
   incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
-  carrier/resolved-ref projection guardrails, Identity URA/DescriptorRef
-  projection guardrails, and identity signing-key register/list/revoke
-  builder/projection guardrails exist for Rust/C ABI; subscribe convenience
-  wrappers, signer construction, and language facades remain incomplete.
+  carrier/resolved-ref projection guardrails, Directory subscribe stream
+  guardrails for Go/Python, Identity URA/DescriptorRef projection guardrails,
+  and identity signing-key register/list/revoke builder/projection guardrails
+  exist; C ABI subscribe projection, signer construction, and broader external
+  language-facade cutovers remain incomplete.
 - Publication ResourceRef/package validation/plugin install/deploy-unpublish
   carrier and lifecycle guardrails exist for Rust/C ABI; Go now executes
   list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
@@ -119,7 +120,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   quota/rate limits, billing, backend HTTP route shaping, multipart
   upload/storage policy, SSE/WebSocket fanout, and product cutovers remain
   incomplete.
-- Directory subscribe convenience methods and Axon-backed receipt verification
+- C ABI Directory subscribe projection and Axon-backed receipt verification
   remain schema/conformance declarations only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
   file, terminal, remote desktop, browser, and media session DTOs; Go/Python

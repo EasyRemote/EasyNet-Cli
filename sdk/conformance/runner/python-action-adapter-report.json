@@ -76,6 +76,18 @@
       "message": null
     },
     {
+      "case_id": "directory/subscription_stream",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "error/profile_source_refs",
       "profile": "errors",
       "status": "passed",

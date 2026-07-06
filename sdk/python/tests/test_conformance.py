@@ -40,6 +40,9 @@ from easynet_sdk import (
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
+    DirectorySubscription,
+    DirectorySubscriptionCursor,
+    DirectorySubscriptionRequest,
     InvocationObjectAdapter,
     ErrorCode,
     EventClient,
@@ -237,6 +240,9 @@ class SharedDirectoryTransport:
             "directory-list-abilities-request.v4.json"
         )
         self.expected_resolve_request = shared_fixture("directory-resolve-request.v4.json")
+        self.expected_subscription_request = shared_fixture(
+            "directory-subscription-request.v4.json"
+        )
         self.device_invocation_json = shared_fixture(
             "directory-list-devices-invocation.v4.json"
         )
@@ -249,18 +255,18 @@ class SharedDirectoryTransport:
         self.resolve_invocation_json = shared_fixture(
             "directory-resolve-invocation.v4.json"
         )
+        self.subscription_invocation_json = shared_fixture(
+            "directory-subscription-invocation.v4.json"
+        )
         self.devices_json = shared_fixture("directory-device-page.v4.json")
         self.agents_json = shared_fixture("directory-agent-page.v4.json")
         self.abilities_json = shared_fixture("directory-ability-page.v4.json")
         self.resolve_json = shared_fixture("directory-resolved-ref.v4.json")
+        self.subscription_json = shared_fixture("directory-subscription.v4.json")
 
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared directory conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_subscription_request)
+        return self.subscription_invocation_json
 
     def build_list_devices_invocation(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_devices_request)
@@ -311,12 +317,8 @@ class SharedDirectoryTransport:
         return self.abilities_json
 
     def subscribe_directory(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared directory conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_subscription_request)
+        return self.subscription_json
 
     def close(self) -> None:
         return None
@@ -2195,6 +2197,54 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             shared_fixture("directory-resolved-ref.v4.json")
         )
         self.assertEqual(projected_resolved.kind, "resolved_ref")
+
+        subscription_case = shared_case("directory-subscription-stream.yaml")
+        self._require_case_id(subscription_case, "directory/subscription_stream")
+        for action in (
+            "build_directory_subscription_invocation",
+            "subscribe_directory",
+            "project_directory_subscription",
+        ):
+            self._require_case_action(subscription_case, action)
+        for fixture in (
+            "directory-subscription-request.v4.json",
+            "directory-subscription-invocation.v4.json",
+            "directory-subscription.v4.json",
+        ):
+            self._require_case_fixture(subscription_case, fixture)
+        self._require_case_expectation(
+            subscription_case, "stream_system_ability: directory.subscribe"
+        )
+        self._require_case_expectation(subscription_case, "max_buffered_events: 1024")
+        self._require_case_expectation(
+            subscription_case, "live_requires_snapshot_complete: true"
+        )
+        self._require_case_expectation(subscription_case, "facade_fanout: none")
+
+        subscription_invocation = directory.build_directory_subscription_invocation(
+            shared_directory_subscription_request()
+        )
+        self.assertEqual(
+            subscription_invocation.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0",
+        )
+        self.assertEqual(
+            subscription_invocation.metadata["system_ability"], "directory.subscribe"
+        )
+        subscription = directory.subscribe_directory(
+            shared_directory_subscription_request()
+        )
+        self.assertEqual(subscription.state, "Live")
+        self.assertEqual(subscription.resume_token, "directory:3")
+        self.assertEqual(len(subscription.events), 3)
+        self.assertEqual(subscription.events[2].phase, "live")
+        projected_subscription = DirectorySubscription.from_json(
+            shared_fixture("directory-subscription.v4.json")
+        )
+        self.assertEqual(projected_subscription.cursor.sequence, 3)
+        self.assertEqual(
+            projected_subscription.events[1].phase, "snapshot_complete"
+        )
 
         identity_case = shared_case("identity-ura-descriptor-projection.yaml")
         self._require_case_id(identity_case, "identity/ura_descriptor_projection")
@@ -4955,6 +5005,29 @@ def shared_resolve_query() -> ResolveQuery:
         query_name=decoded["query_name"],
         ability_name=decoded["ability_name"],
         qtype=decoded["qtype"],
+    )
+
+
+def shared_directory_subscription_request() -> DirectorySubscriptionRequest:
+    decoded = json.loads(shared_fixture("directory-subscription-request.v4.json"))
+    resume_cursor = decoded.get("resume_cursor")
+    return DirectorySubscriptionRequest(
+        base=shared_directory_query_base("directory-subscription-request.v4.json"),
+        stream=decoded.get("stream", ""),
+        realm=decoded.get("realm", ""),
+        owner_ura=decoded.get("owner_ura", ""),
+        device_ura=decoded.get("device_ura", ""),
+        agent_ura=decoded.get("agent_ura", ""),
+        ability_ura=decoded.get("ability_ura", ""),
+        item_kind=decoded.get("item_kind", ""),
+        resume_cursor=DirectorySubscriptionCursor(
+            stream=resume_cursor["stream"],
+            sequence=resume_cursor["sequence"],
+            token=resume_cursor.get("token", ""),
+        )
+        if isinstance(resume_cursor, dict)
+        else None,
+        heartbeat_interval_ms=decoded.get("heartbeat_interval_ms", 0),
     )
 
 

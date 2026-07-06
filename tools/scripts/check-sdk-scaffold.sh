@@ -285,8 +285,10 @@ schema_files=(
   directory-list-agents-request.schema.json
   directory-list-abilities-request.schema.json
   directory-resolve-request.schema.json
+  directory-subscription-request.schema.json
   directory-page.schema.json
   directory-resolved-ref.schema.json
+  directory-subscription.schema.json
   diagnostics.schema.json
   local-resource-ref-request.schema.json
   publication.schema.json
@@ -394,6 +396,9 @@ fixture_files=(
   directory-list-abilities-invocation.v4.json
   directory-resolve-request.v4.json
   directory-resolve-invocation.v4.json
+  directory-subscription-request.v4.json
+  directory-subscription-invocation.v4.json
+  directory-subscription.v4.json
   directory-device-page.v4.json
   directory-agent-page.v4.json
   directory-ability-page.v4.json
@@ -533,6 +538,7 @@ case_files=(
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml
   directory-resolve.yaml
+  directory-subscription-stream.yaml
   memc-profile-exclusivity.yaml
   memc-consumer-coverage.yaml
   memc-no-core-bloat.yaml

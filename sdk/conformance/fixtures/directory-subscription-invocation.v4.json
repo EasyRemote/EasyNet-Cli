@@ -1,0 +1,21 @@
+{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {
+    "form": "none"
+  },
+  "args": {
+    "stream": "directory",
+    "item_kind": "ability"
+  },
+  "content_type": "application/json",
+  "metadata": {
+    "request_id": "directory-subscribe",
+    "profile": "directory_identity",
+    "system_ability": "directory.subscribe",
+    "carrier_owner": "daemon_sdk"
+  }
+}

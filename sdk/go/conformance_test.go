@@ -976,15 +976,18 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	requireCaseExpectation(t, listCase, "error_code: InvalidArgument")
 
 	directory, err := NewDirectoryClient(&sharedDirectoryTransport{
-		t:                      t,
-		expectedDevicesRequest: sharedFixture(t, root, "directory-list-devices-request.v4.json"),
-		expectedAgentsRequest:  sharedFixture(t, root, "directory-list-agents-request.v4.json"),
-		expectedAbilityRequest: sharedFixture(t, root, "directory-list-abilities-request.v4.json"),
-		expectedResolveRequest: sharedFixture(t, root, "directory-resolve-request.v4.json"),
-		devicesJSON:            sharedFixture(t, root, "directory-device-page.v4.json"),
-		agentsJSON:             sharedFixture(t, root, "directory-agent-page.v4.json"),
-		abilitiesJSON:          sharedFixture(t, root, "directory-ability-page.v4.json"),
-		resolveJSON:            sharedFixture(t, root, "directory-resolved-ref.v4.json"),
+		t:                           t,
+		expectedDevicesRequest:      sharedFixture(t, root, "directory-list-devices-request.v4.json"),
+		expectedAgentsRequest:       sharedFixture(t, root, "directory-list-agents-request.v4.json"),
+		expectedAbilityRequest:      sharedFixture(t, root, "directory-list-abilities-request.v4.json"),
+		expectedResolveRequest:      sharedFixture(t, root, "directory-resolve-request.v4.json"),
+		expectedSubscriptionRequest: sharedFixture(t, root, "directory-subscription-request.v4.json"),
+		devicesJSON:                 sharedFixture(t, root, "directory-device-page.v4.json"),
+		agentsJSON:                  sharedFixture(t, root, "directory-agent-page.v4.json"),
+		abilitiesJSON:               sharedFixture(t, root, "directory-ability-page.v4.json"),
+		resolveJSON:                 sharedFixture(t, root, "directory-resolved-ref.v4.json"),
+		subscriptionInvocationJSON:  sharedFixture(t, root, "directory-subscription-invocation.v4.json"),
+		subscriptionJSON:            sharedFixture(t, root, "directory-subscription.v4.json"),
 	})
 	if err != nil {
 		t.Fatalf("NewDirectoryClient: %v", err)
@@ -1047,6 +1050,56 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	}
 	if resolved.Kind != "resolved_ref" || resolved.AbilityURA == nil || *resolved.AbilityURA != "easynet:///r/example/ability/device.dev-a.agent.list" {
 		t.Fatalf("unexpected shared resolved ref: %#v", resolved)
+	}
+
+	subscriptionCase := sharedCase(t, root, "directory-subscription-stream.yaml")
+	requireCaseID(t, subscriptionCase, "directory/subscription_stream")
+	for _, action := range []string{
+		"build_directory_subscription_invocation",
+		"subscribe_directory",
+		"project_directory_subscription",
+	} {
+		requireCaseAction(t, subscriptionCase, action)
+	}
+	for _, fixture := range []string{
+		"directory-subscription-request.v4.json",
+		"directory-subscription-invocation.v4.json",
+		"directory-subscription.v4.json",
+	} {
+		requireCaseFixture(t, subscriptionCase, fixture)
+	}
+	requireCaseExpectation(t, subscriptionCase, "stream_system_ability: directory.subscribe")
+	requireCaseExpectation(t, subscriptionCase, "max_buffered_events: 1024")
+	requireCaseExpectation(t, subscriptionCase, "live_requires_snapshot_complete: true")
+	requireCaseExpectation(t, subscriptionCase, "facade_fanout: none")
+
+	subscriptionDraft, err := directory.BuildDirectorySubscriptionInvocation(context.Background(), sharedDirectorySubscriptionRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildDirectorySubscriptionInvocation(shared fixture): %v", err)
+	}
+	if subscriptionDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0" ||
+		subscriptionDraft.Metadata()["system_ability"] != "directory.subscribe" {
+		t.Fatalf("unexpected shared subscription invocation: %#v", subscriptionDraft)
+	}
+
+	subscription, err := directory.SubscribeDirectory(context.Background(), sharedDirectorySubscriptionRequest(t, root))
+	if err != nil {
+		t.Fatalf("SubscribeDirectory(shared fixture): %v", err)
+	}
+	if subscription.State != DirectorySubscriptionLive ||
+		subscription.ResumeToken != "directory:3" ||
+		len(subscription.Events) != 3 ||
+		subscription.Events[2].Phase != "live" {
+		t.Fatalf("unexpected shared directory subscription: %#v", subscription)
+	}
+
+	projectedSubscription, err := NewDirectorySubscriptionFromJSON(sharedFixture(t, root, "directory-subscription.v4.json"))
+	if err != nil {
+		t.Fatalf("NewDirectorySubscriptionFromJSON(shared fixture): %v", err)
+	}
+	if projectedSubscription.Cursor.Sequence != 3 ||
+		projectedSubscription.Events[1].Phase != "snapshot_complete" {
+		t.Fatalf("unexpected projected directory subscription: %#v", projectedSubscription)
 	}
 
 	identityCase := sharedCase(t, root, "identity-ura-descriptor-projection.yaml")
@@ -3438,20 +3491,24 @@ func (t *sharedPublicationTransport) Close(context.Context) error {
 }
 
 type sharedDirectoryTransport struct {
-	t                      *testing.T
-	expectedDevicesRequest []byte
-	expectedAgentsRequest  []byte
-	expectedAbilityRequest []byte
-	expectedResolveRequest []byte
-	devicesJSON            []byte
-	peerDevicesJSON        []byte
-	agentsJSON             []byte
-	abilitiesJSON          []byte
-	resolveJSON            []byte
+	t                           *testing.T
+	expectedDevicesRequest      []byte
+	expectedAgentsRequest       []byte
+	expectedAbilityRequest      []byte
+	expectedResolveRequest      []byte
+	expectedSubscriptionRequest []byte
+	devicesJSON                 []byte
+	peerDevicesJSON             []byte
+	agentsJSON                  []byte
+	abilitiesJSON               []byte
+	resolveJSON                 []byte
+	subscriptionInvocationJSON  []byte
+	subscriptionJSON            []byte
 }
 
-func (t *sharedDirectoryTransport) BuildDirectorySubscriptionInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedDirectoryTransport) BuildDirectorySubscriptionInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedSubscriptionRequest)
+	return t.subscriptionInvocationJSON, nil
 }
 
 func (t *sharedDirectoryTransport) Resolve(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -3478,8 +3535,9 @@ func (t *sharedDirectoryTransport) ListAbilities(_ context.Context, requestJSON 
 	return t.abilitiesJSON, nil
 }
 
-func (t *sharedDirectoryTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedDirectoryTransport) SubscribeDirectory(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedSubscriptionRequest)
+	return t.subscriptionJSON, nil
 }
 
 func (t *sharedDirectoryTransport) Close(context.Context) error {
@@ -4374,6 +4432,15 @@ func sharedResolveQuery(t *testing.T, root string) ResolveQuery {
 		t.Fatalf("decode shared resolve query fixture: %v", err)
 	}
 	return query
+}
+
+func sharedDirectorySubscriptionRequest(t *testing.T, root string) DirectorySubscriptionRequest {
+	t.Helper()
+	var request DirectorySubscriptionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "directory-subscription-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared directory subscription request fixture: %v", err)
+	}
+	return request
 }
 
 func sharedDirectoryQueryBase(t *testing.T, root string, fixture string, overrideLimit int) DirectoryQueryBase {

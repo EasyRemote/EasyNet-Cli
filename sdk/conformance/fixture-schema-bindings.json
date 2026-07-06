@@ -206,6 +206,18 @@
       "schema": "directory-resolved-ref.schema.json"
     },
     {
+      "fixture": "directory-subscription-invocation.v4.json",
+      "schema": "invocation.schema.json"
+    },
+    {
+      "fixture": "directory-subscription-request.v4.json",
+      "schema": "directory-subscription-request.schema.json"
+    },
+    {
+      "fixture": "directory-subscription.v4.json",
+      "schema": "directory-subscription.schema.json"
+    },
+    {
       "fixture": "diagnostics.ready.v4.json",
       "schema": "diagnostics.schema.json"
     },

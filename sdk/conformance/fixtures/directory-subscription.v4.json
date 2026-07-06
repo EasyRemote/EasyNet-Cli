@@ -1,0 +1,73 @@
+{
+  "profile": "directory_identity",
+  "kind": "directory_subscription",
+  "stream": "directory",
+  "state": "Live",
+  "cursor": {
+    "stream": "directory",
+    "sequence": 3,
+    "token": "directory:3"
+  },
+  "resume_token": "directory:3",
+  "drop_count": 0,
+  "events": [
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "snapshot_start",
+      "event_id": "evt-1",
+      "phase": "snapshot_start",
+      "cursor": {
+        "stream": "directory",
+        "sequence": 1,
+        "token": "directory:1"
+      },
+      "resume_token": "directory:1",
+      "terminal": false,
+      "metadata": {
+        "source": "directory.subscribe"
+      }
+    },
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "snapshot_complete",
+      "event_id": "evt-2",
+      "phase": "snapshot_complete",
+      "cursor": {
+        "stream": "directory",
+        "sequence": 2,
+        "token": "directory:2"
+      },
+      "resume_token": "directory:2",
+      "terminal": false,
+      "metadata": {
+        "source": "directory.subscribe"
+      }
+    },
+    {
+      "profile": "directory_identity",
+      "stream": "directory",
+      "kind": "upsert",
+      "event_id": "evt-3",
+      "phase": "live",
+      "item_kind": "ability",
+      "item": {
+        "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list"
+      },
+      "cursor": {
+        "stream": "directory",
+        "sequence": 3,
+        "token": "directory:3"
+      },
+      "resume_token": "directory:3",
+      "terminal": false,
+      "metadata": {
+        "source": "directory.subscribe"
+      }
+    }
+  ],
+  "metadata": {
+    "source": "directory.subscribe"
+  }
+}

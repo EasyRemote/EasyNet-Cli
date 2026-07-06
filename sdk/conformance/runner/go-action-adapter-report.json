@@ -100,6 +100,18 @@
       "message": null
     },
     {
+      "case_id": "directory/subscription_stream",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "environment/process_root",
       "profile": "runtime_core",
       "status": "passed",
