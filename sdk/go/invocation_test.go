@@ -181,6 +181,31 @@ func TestInvocationBuilderRejectsMalformedRawPayload(t *testing.T) {
 	}
 }
 
+func TestInvocationBuilderRejectsMalformedDescriptorRef(t *testing.T) {
+	for _, descriptorRef := range []string{
+		"easynet:///r/example/ability/device.dev-a.observe.health",
+		"easynet:///r/example/device/dev-a@1.0.0",
+		"easynet:///r/example/ability/device.dev-a.observe.health@",
+	} {
+		_, err := NewInvocationBuilder().
+			WithCallerURA("easynet:///r/example/agent/alice.sdk").
+			WithCalleeURA("easynet:///r/example/device/dev-a").
+			WithDescriptorRef(descriptorRef).
+			WithSubjectURA("easynet:///r/example/device/dev-a").
+			WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+			WithCausalContext(map[string]any{"form": "none"}).
+			WithJSONArgs(map[string]any{}).
+			WithContentType("application/json").
+			Build()
+		if err == nil {
+			t.Fatalf("Build succeeded for descriptor_ref %q, want invalid argument", descriptorRef)
+		}
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("error code for descriptor_ref %q = %v, want %s", descriptorRef, err, ErrInvalidArgument)
+		}
+	}
+}
+
 func TestInvocationDraftFromJSONRejectsUnknownField(t *testing.T) {
 	_, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/agent/alice.sdk",

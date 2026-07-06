@@ -209,6 +209,7 @@ from .health import (
     HealthTransport,
     RuntimeHealth,
 )
+from .ability_descriptor import AbilityDescriptorRef, parse_ability_descriptor_ref
 from .identity import (
     AddressingClient,
     AddressingTransport,
@@ -557,6 +558,7 @@ __all__ = [
     "DEFAULT_EVENT_PAGE_SIZE",
     "DEFAULT_SIGNING_KEY_PAGE_SIZE",
     "DEFAULT_SURFACE_PAGE_SIZE",
+    "AbilityDescriptorRef",
     "DescriptorRefRequest",
     "DiscoverOptions",
     "DiscoveryTransport",
@@ -847,6 +849,7 @@ __all__ = [
     "owner_ability_descriptor_ref",
     "owner_ability_ura",
     "owner_ura_for_ability",
+    "parse_ability_descriptor_ref",
     "parse_ura",
     "project_descriptor_ref",
     "read_control_discovery",
