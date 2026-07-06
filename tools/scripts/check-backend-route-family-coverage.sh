@@ -25,58 +25,72 @@ REQUIRED = {
     "health_readiness_liveness": {
         "route_family": "/health, daemon readiness, runtime liveness",
         "sdk_clients": ["HealthClient", "DaemonHandle", "RuntimeClient"],
+        "sdk_profile_refs": ["health", "daemon_lifecycle", "runtime_core"],
     },
     "identity_prepare_submit": {
         "route_family": "User signing keys, local identity, prepare/submit handoff",
         "sdk_clients": ["IdentityClient", "RuntimeClient", "PreparedInvocation", "SignedInvocation"],
+        "sdk_profile_refs": ["identity", "runtime_core", "signing"],
     },
     "pairing_credentials_revoke": {
         "route_family": "Device pairing preflight/validate, credential verification, device revoke",
         "sdk_clients": ["AdminClient", "IdentityClient", "DirectoryClient"],
+        "sdk_profile_refs": ["admin_gateway", "identity", "directory"],
     },
     "device_agent_ability_catalog": {
         "route_family": "Device, agent, and ability catalog routes",
         "sdk_clients": ["DirectoryClient", "PublicationClient"],
+        "sdk_profile_refs": ["directory", "publication"],
     },
     "device_sessions_gateway_lifecycle": {
         "route_family": "Device sessions and gateway/agent lifecycle",
         "sdk_clients": ["AdminClient", "RuntimeClient", "BidiSession"],
+        "sdk_profile_refs": ["admin_gateway", "runtime_core", "bidi"],
     },
     "ability_invoke_stream_bidi": {
         "route_family": "Ability invoke, signed invoke, stream, signed bidi bridge",
         "sdk_clients": ["RuntimeClient", "InvocationBuilder", "StreamHandle", "BidiSession", "ReceiptClient"],
+        "sdk_profile_refs": ["runtime_core", "stream", "bidi", "receipt"],
     },
     "directory_session_invocation_events": {
         "route_family": "Directory, device, session, invocation, and SSE events",
         "sdk_clients": ["EventClient", "DirectoryClient.subscribe"],
+        "sdk_profile_refs": ["events", "directory"],
     },
     "file_transfer_context_upload": {
         "route_family": "File transfer and context-file upload",
         "sdk_clients": ["Convenience file wrappers", "RuntimeClient", "ReceiptClient"],
+        "sdk_profile_refs": ["wrappers", "runtime_core", "receipt"],
     },
     "interactive_media_bridges": {
         "route_family": "Terminal, remote desktop, browser session, voice/media bridges",
         "sdk_clients": ["Convenience wrappers over BidiSession/StreamHandle"],
+        "sdk_profile_refs": ["wrappers", "stream", "bidi"],
     },
     "pages_surface_manifests": {
         "route_family": "Page create/list/delete, public pages, surface manifests",
         "sdk_clients": ["SurfaceClient", "DirectoryClient", "HealthClient"],
+        "sdk_profile_refs": ["surface", "directory", "health"],
     },
     "skill_plugin_lifecycle": {
         "route_family": "Skill/plugin install/list/remove/upgrade/file tree",
         "sdk_clients": ["PublicationClient", "DirectoryClient"],
+        "sdk_profile_refs": ["publication", "directory"],
     },
     "openai_compatibility": {
         "route_family": "OpenAI-compatible models/chat/files",
         "sdk_clients": ["CompatibilityClient", "file wrappers", "RuntimeClient", "DirectoryClient"],
+        "sdk_profile_refs": ["compatibility", "wrappers", "runtime_core", "directory"],
     },
     "receipts_history_metrics": {
         "route_family": "Call history, receipts, failure location, metrics",
         "sdk_clients": ["ReceiptClient", "EventClient", "HealthClient"],
+        "sdk_profile_refs": ["receipt", "events", "health"],
     },
     "federation_peer_hubs_remote_devices": {
         "route_family": "Federation, peer hubs, remote devices",
         "sdk_clients": ["AdminClient", "DirectoryClient", "RuntimeClient"],
+        "sdk_profile_refs": ["admin_gateway", "directory", "runtime_core"],
     },
 }
 
@@ -173,7 +187,9 @@ for family in families:
     if sdk_clients != required["sdk_clients"]:
         fail(f"sdk_clients_mismatch:{family_id}")
 
-    require_string_list(family.get("sdk_profile_refs"), f"{family_id}.sdk_profile_refs")
+    sdk_profile_refs = require_string_list(family.get("sdk_profile_refs"), f"{family_id}.sdk_profile_refs")
+    if sdk_profile_refs != required["sdk_profile_refs"]:
+        fail(f"sdk_profile_refs_mismatch:{family_id}")
     responsibility = require_string(family.get("backend_responsibility"), f"{family_id}.backend_responsibility")
     lower_responsibility = responsibility.lower()
     for marker in FORBIDDEN_BACKEND_RESPONSIBILITY:
@@ -208,7 +224,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   cp "$DEFAULT_MANIFEST" "$tmp/good.json"
   run_validator "$tmp/good.json" >/dev/null
 
-  python3 - "$DEFAULT_MANIFEST" "$tmp/missing.json" "$tmp/duplicate.json" "$tmp/ownership.json" <<'PY'
+  python3 - "$DEFAULT_MANIFEST" "$tmp/missing.json" "$tmp/duplicate.json" "$tmp/ownership.json" "$tmp/profile_refs.json" <<'PY'
 from __future__ import annotations
 
 import json
@@ -220,6 +236,7 @@ source = Path(sys.argv[1])
 missing = Path(sys.argv[2])
 duplicate = Path(sys.argv[3])
 ownership = Path(sys.argv[4])
+profile_refs = Path(sys.argv[5])
 
 manifest = json.loads(source.read_text(encoding="utf-8"))
 
@@ -234,6 +251,10 @@ duplicate.write_text(json.dumps(with_duplicate), encoding="utf-8")
 with_ownership = json.loads(json.dumps(manifest))
 with_ownership["families"][0]["backend_responsibility"] = "Own direct daemon transport for health."
 ownership.write_text(json.dumps(with_ownership), encoding="utf-8")
+
+with_profile_ref_mismatch = json.loads(json.dumps(manifest))
+with_profile_ref_mismatch["families"][0]["sdk_profile_refs"] = ["runtime_core"]
+profile_refs.write_text(json.dumps(with_profile_ref_mismatch), encoding="utf-8")
 PY
 
   if run_validator "$tmp/missing.json" >"$tmp/missing.out" 2>&1; then
@@ -253,6 +274,12 @@ PY
     exit 1
   fi
   grep -Fq "backend_local_runtime_ownership" "$tmp/ownership.out"
+
+  if run_validator "$tmp/profile_refs.json" >"$tmp/profile_refs.out" 2>&1; then
+    echo "self-test expected profile-ref fixture to fail" >&2
+    exit 1
+  fi
+  grep -Fq "sdk_profile_refs_mismatch" "$tmp/profile_refs.out"
 
   echo "check-backend-route-family-coverage self-test ok"
   exit 0

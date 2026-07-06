@@ -15,4 +15,5 @@ expect:
   route_family_count: 14
   missing_route_family: false
   duplicate_route_family: false
+  sdk_profile_refs_exact: true
   backend_local_runtime_ownership: false

@@ -321,6 +321,7 @@ func TestGoBackendCutoverExecutesSharedRouteFamilyCoverageConformanceCase(t *tes
 	requireCaseExpectation(t, coverageCase, "route_family_count: 14")
 	requireCaseExpectation(t, coverageCase, "missing_route_family: false")
 	requireCaseExpectation(t, coverageCase, "duplicate_route_family: false")
+	requireCaseExpectation(t, coverageCase, "sdk_profile_refs_exact: true")
 	requireCaseExpectation(t, coverageCase, "backend_local_runtime_ownership: false")
 
 	cmd := exec.Command(filepath.Join(root, "tools/scripts/check-backend-route-family-coverage.sh"), "--self-test")
