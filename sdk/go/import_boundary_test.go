@@ -63,7 +63,8 @@ func allowedConcreteDirectRuntimeProvider(path, text string) bool {
 	if base != "direct_runtime.go" {
 		return false
 	}
-	return strings.Contains(text, "type DirectDaemonRuntimeTransport struct")
+	return strings.Contains(text, "//go:build easynet_direct_runtime") &&
+		strings.Contains(text, "type DirectDaemonRuntimeTransport struct")
 }
 
 func allowedPrivateAxonAdapter(path string) bool {
