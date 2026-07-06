@@ -436,6 +436,18 @@
       "message": null
     },
     {
+      "case_id": "stream/backpressure_bound",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "surface/page_carriers",
       "profile": "surface",
       "status": "passed",

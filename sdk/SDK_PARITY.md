@@ -32,7 +32,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | Daemon-owned signer acquisition and keyring policy cutover remain incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
-| stream | Runtime Core | provider-backed | provider-backed | C ABI terminal projection adapters and bounded backpressure conformance remain incomplete. |
+| stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | bidi | Runtime Core | provider-backed | provider-backed | Concrete product wrapper stream adapters remain incomplete. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
 | receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus single-invocation chain signature and parent-receipt closure verification exist for full Axon audit bundles; cross-invocation causal DAG verification and RFC-007 receipt URA construction remain incomplete. |
@@ -421,10 +421,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   bridges, storage policy, concrete stream/bidi adapters, and product wrapper
   cutovers remain incomplete.
 - Go and Python stream/bidi facades now expose schema-shaped Runtime Core
-  terminal projections backed by shared conformance expectations; C ABI required
-  cases are now closed by an action-adapter report, while bounded backpressure
-  conformance, P1 language facades, and strict Go/Python parity remain
-  incomplete.
+  terminal projections backed by shared conformance expectations; C ABI stream
+  and bidi readers now project callback-queue overflow as typed terminal
+  backpressure DTOs backed by shared conformance expectations, while P1
+  language facades and product stream cutovers remain incomplete.
 - Go/Python SDK parity now has a shared machine-checked matrix gate at
   `sdk/conformance/sdk-parity-matrix.json` with status values limited to
   `unsupported`, `seam`, `provider-backed`, and `cutover-ready`; the gate

@@ -681,6 +681,32 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 	}
 }
 
+func TestGoRuntimeCoreExecutesSharedStreamBackpressureConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	backpressureCase := sharedCase(t, root, "stream-backpressure-bound.yaml")
+	requireCaseID(t, backpressureCase, "stream/backpressure_bound")
+	for _, action := range []string{
+		"overflow_stream_callback_queue",
+		"project_stream_backpressure_terminal",
+		"overflow_bidi_callback_queue",
+		"project_bidi_backpressure_terminal",
+	} {
+		requireCaseAction(t, backpressureCase, action)
+	}
+	requireCaseFixture(t, backpressureCase, "invocation.complete.v4.json")
+	for _, expected := range []string{
+		"stream_error_code: ADMISSION_DENIED",
+		"bidi_error_code: ADMISSION_DENIED",
+		"wire_code: RESOURCE_EXHAUSTED",
+		"retry: after_backoff",
+		"reason: callback_queue_overflow",
+		"terminal: true",
+		"bounded_queue: true",
+	} {
+		requireCaseExpectation(t, backpressureCase, expected)
+	}
+}
+
 func TestGoHostBindingFacadeExecutesSharedConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	hostBindingCase := sharedCase(t, root, "host-binding-codec-hash.yaml")

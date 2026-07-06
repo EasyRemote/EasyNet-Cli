@@ -36,6 +36,7 @@ pub mod identity_contract;
 pub mod mission_contract;
 pub mod publication_contract;
 pub mod receipt_contract;
+pub mod runtime_stream_contract;
 pub mod sdk_contract;
 pub mod surface_contract;
 pub mod wrapper_contract;

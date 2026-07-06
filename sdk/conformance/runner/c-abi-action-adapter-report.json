@@ -214,6 +214,13 @@
       "message": null
     },
     {
+      "case_id": "stream/backpressure_bound",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "c_abi_test", "ref_path": "src/ffi/invocation/mod.rs"}],
+      "message": null
+    },
+    {
       "case_id": "surface/page_carriers",
       "profile": "surface",
       "status": "passed",

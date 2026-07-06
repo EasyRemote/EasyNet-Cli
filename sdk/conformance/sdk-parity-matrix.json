@@ -126,7 +126,7 @@
     {
       "capability_id": "stream",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/stream-bidi-lifecycle-state.yaml"],
+      "shared_cases": ["sdk/conformance/cases/stream-bidi-lifecycle-state.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/stream_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -135,7 +135,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_stream.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "C ABI terminal projection adapters and bounded backpressure conformance remain incomplete."
+      "remaining": "P1 language facades and product stream cutovers remain incomplete outside the daemon SDK."
     },
     {
       "capability_id": "bidi",

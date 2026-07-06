@@ -1732,6 +1732,28 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             unknown_bidi.close_send()
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_HANDLE)
 
+    def test_python_runtime_core_executes_shared_stream_backpressure_conformance_case(self) -> None:
+        backpressure_case = shared_case("stream-backpressure-bound.yaml")
+        self._require_case_id(backpressure_case, "stream/backpressure_bound")
+        for action in (
+            "overflow_stream_callback_queue",
+            "project_stream_backpressure_terminal",
+            "overflow_bidi_callback_queue",
+            "project_bidi_backpressure_terminal",
+        ):
+            self._require_case_action(backpressure_case, action)
+        self._require_case_fixture(backpressure_case, "invocation.complete.v4.json")
+        for expectation in (
+            "stream_error_code: ADMISSION_DENIED",
+            "bidi_error_code: ADMISSION_DENIED",
+            "wire_code: RESOURCE_EXHAUSTED",
+            "retry: after_backoff",
+            "reason: callback_queue_overflow",
+            "terminal: true",
+            "bounded_queue: true",
+        ):
+            self._require_case_expectation(backpressure_case, expectation)
+
     def test_python_host_binding_executes_shared_conformance_case(self) -> None:
         host_binding_case = shared_case("host-binding-codec-hash.yaml")
         self._require_case_id(host_binding_case, "host_binding/codec_hash")

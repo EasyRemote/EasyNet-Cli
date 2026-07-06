@@ -47,6 +47,10 @@ use crate::ffi::errors::{
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
 use crate::ffi::strings::{read_cstr, StringError};
+#[cfg(feature = "axon-pb")]
+use crate::protocol::runtime_stream_contract::{
+    bidi_callback_backpressure_frame, stream_callback_backpressure_event,
+};
 
 /// Opaque id for a server-stream opened through
 /// `easynet_invocation_stream_open`.
@@ -3447,8 +3451,15 @@ async fn run_stream_reader(
             message = stream.message() => match message {
                 Ok(Some(chunk)) => {
                     let terminal = chunk.terminal;
+                    let sequence = chunk.sequence;
                     let bytes = stream_chunk_json(chunk).to_string().into_bytes();
-                    if tx.send(bytes).await.is_err() || terminal {
+                    let sent = send_callback_frame_or_backpressure(
+                        &tx,
+                        bytes,
+                        stream_callback_backpressure_event(sequence, STREAM_CALLBACK_QUEUE_CAPACITY),
+                    )
+                    .await;
+                    if !sent || terminal {
                         break;
                     }
                 }
@@ -3477,8 +3488,15 @@ async fn run_bidi_down_reader(
             message = down.message() => match message {
                 Ok(Some(frame)) => {
                     let terminal = bidi_down_frame_is_terminal(&frame);
+                    let sequence = frame.sequence;
                     let bytes = bidi_down_frame_json(frame).to_string().into_bytes();
-                    if tx.send(bytes).await.is_err() || terminal {
+                    let sent = send_callback_frame_or_backpressure(
+                        &tx,
+                        bytes,
+                        bidi_callback_backpressure_frame(sequence, BIDI_CALLBACK_QUEUE_CAPACITY),
+                    )
+                    .await;
+                    if !sent || terminal {
                         break;
                     }
                 }
@@ -3492,6 +3510,22 @@ async fn run_bidi_down_reader(
         }
     }
     let _ = remove_bidi(bidi_id);
+}
+
+#[cfg(feature = "axon-pb")]
+async fn send_callback_frame_or_backpressure(
+    tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    bytes: Vec<u8>,
+    backpressure: serde_json::Value,
+) -> bool {
+    match tx.try_send(bytes) {
+        Ok(()) => true,
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            let _ = tx.send(backpressure.to_string().into_bytes()).await;
+            false
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6529,6 +6563,46 @@ mod tests {
         assert_eq!(value["terminal"], true);
         assert_eq!(value["payload_json"]["ready"], true);
         assert_eq!(value["payload_base64"], "eyJyZWFkeSI6dHJ1ZX0=");
+    }
+
+    #[test]
+    fn bounded_callback_enqueue_reports_terminal_backpressure_when_full() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+            tx.try_send(br#"{"sequence":1,"event":"chunk"}"#.to_vec())
+                .unwrap();
+
+            let sender = tokio::spawn(async move {
+                send_callback_frame_or_backpressure(
+                    &tx,
+                    br#"{"sequence":2,"event":"chunk"}"#.to_vec(),
+                    stream_callback_backpressure_event(2, 1),
+                )
+                .await
+            });
+            tokio::task::yield_now().await;
+
+            assert_eq!(
+                rx.recv().await.unwrap(),
+                br#"{"sequence":1,"event":"chunk"}"#.to_vec()
+            );
+            assert!(!sender.await.unwrap());
+            let value =
+                serde_json::from_slice::<serde_json::Value>(&rx.recv().await.unwrap()).unwrap();
+            assert_eq!(value["event"], "error");
+            assert_eq!(value["sequence"], 2);
+            assert_eq!(value["terminal"], true);
+            assert_eq!(
+                value["error"]["details"]["reason"],
+                "callback_queue_overflow"
+            );
+            assert_eq!(value["error"]["details"]["queue_capacity"], 1);
+        });
     }
 
     #[test]

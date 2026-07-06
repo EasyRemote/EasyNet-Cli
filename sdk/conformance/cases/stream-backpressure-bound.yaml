@@ -1,0 +1,26 @@
+id: stream/backpressure_bound
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Runtime Core stream and bidi adapters keep callback/history queues bounded and project overflow as typed terminal backpressure rather than allowing unbounded buffering.
+steps:
+  - action: overflow_stream_callback_queue
+    fixture: invocation.complete.v4.json
+  - action: project_stream_backpressure_terminal
+    schema: stream-event.schema.json
+  - action: overflow_bidi_callback_queue
+    fixture: invocation.complete.v4.json
+  - action: project_bidi_backpressure_terminal
+    schema: bidi-frame.schema.json
+expect:
+  result: backpressure_terminal_observed
+  stream_error_code: ADMISSION_DENIED
+  bidi_error_code: ADMISSION_DENIED
+  wire_code: RESOURCE_EXHAUSTED
+  retry: after_backoff
+  reason: callback_queue_overflow
+  terminal: true
+  bounded_queue: true
