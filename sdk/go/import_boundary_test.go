@@ -11,7 +11,9 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	forbidden := []string{
 		`import "C"`,
 		`easynet.run/axon`,
+		`easynet.run/cli/sdk/go/internal/axonpb`,
 		`github.com/easynet/axon`,
+		`google.golang.org/grpc`,
 		`google.golang.org/protobuf`,
 		`src/daemon`,
 		`src/ffi`,
@@ -33,7 +35,14 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 				if needle == `import "C"` && allowedPrivateCABIAdapter(path, text) {
 					continue
 				}
+				if (needle == `easynet.run/cli/sdk/go/internal/axonpb` || needle == `google.golang.org/grpc`) &&
+					allowedTaggedDirectRuntimeProvider(path, text) {
+					continue
+				}
 				if needle == `easynet.run/axon` && allowedDelegatedAxonFacade(path) {
+					continue
+				}
+				if needle == `google.golang.org/grpc` && allowedPrivateAxonAdapter(path) {
 					continue
 				}
 				if needle == `google.golang.org/protobuf` && allowedPrivateAxonAdapter(path) {
@@ -47,6 +56,14 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk SDK package: %v", err)
 	}
+}
+
+func allowedTaggedDirectRuntimeProvider(path, text string) bool {
+	base := filepath.Base(path)
+	if base != "direct_runtime.go" {
+		return false
+	}
+	return strings.Contains(text, "//go:build easynet_direct_runtime")
 }
 
 func allowedPrivateAxonAdapter(path string) bool {

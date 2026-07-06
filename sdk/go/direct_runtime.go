@@ -1,3 +1,5 @@
+//go:build easynet_direct_runtime
+
 package easynet
 
 import (
@@ -843,7 +845,7 @@ func directInvokeFields(draft InvocationDraft) (directInvokeFieldSet, error) {
 	if err != nil {
 		return directInvokeFieldSet{}, err
 	}
-	args, err := directArguments(draft)
+	args, err := invocationDraftArgumentBytes(draft)
 	if err != nil {
 		return directInvokeFieldSet{}, err
 	}
@@ -932,21 +934,6 @@ func directCallerSignature(draft InvocationDraft) (*axonpb.CallerSignature, erro
 		Signature: decoded,
 		KeyIdHint: signature.KeyIDHint,
 	}, nil
-}
-
-func directArguments(draft InvocationDraft) ([]byte, error) {
-	if draft.ArgumentsBase64() != "" {
-		decoded, err := base64.StdEncoding.DecodeString(draft.ArgumentsBase64())
-		if err != nil {
-			return nil, invalidRuntimePayload(fmt.Sprintf("decode arguments_base64: %v", err), err)
-		}
-		return decoded, nil
-	}
-	raw, err := json.Marshal(draft.JSONArgs())
-	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode args JSON: %v", err), err)
-	}
-	return raw, nil
 }
 
 func directMetadata(metadata map[string]any) (map[string]string, error) {
