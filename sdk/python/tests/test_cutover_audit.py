@@ -282,12 +282,14 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
                         owner_ability_ura,
                         owner_ura_for_ability,
                         parse_ura,
+                        project_descriptor_ref,
                     )
 
                     def build(identity, owner, ability_name):
                         ability = owner_ability_ura(owner, ability_name)
                         descriptor = canonical_ability_descriptor_ref(ability, "1.0.0")
-                        return parse_ura(owner_ura_for_ability(ability)), descriptor
+                        projection = project_descriptor_ref(descriptor)
+                        return parse_ura(owner_ura_for_ability(ability)), projection
                     """
                 ),
                 encoding="utf-8",
@@ -318,6 +320,9 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
                         def canonical_ability_descriptor_ref(self, value, version=""):
                             raise NotImplementedError
 
+                        def project_descriptor_ref(self, value):
+                            raise NotImplementedError
+
                     class SdkIdentityFacade:
                         def parse_ura(self, value):
                             return easynet_sdk.parse_ura(value)
@@ -330,6 +335,9 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
 
                         def canonical_ability_descriptor_ref(self, value, version=""):
                             return easynet_sdk.canonical_ability_descriptor_ref(value, version)
+
+                        def project_descriptor_ref(self, value):
+                            return easynet_sdk.project_descriptor_ref(value)
                     """
                 ),
                 encoding="utf-8",
@@ -375,6 +383,10 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
 
                     def ability_ura_from_descriptor_ref(descriptor_ref):
                         return descriptor_ref.split("@", 1)[0]
+
+                    def project_descriptor_ref(descriptor_ref):
+                        ability, _, version = descriptor_ref.partition("@")
+                        return {"ability_ura": ability, "descriptor_version": version}
                     '''
                 ),
                 encoding="utf-8",

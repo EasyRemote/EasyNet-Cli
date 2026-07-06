@@ -539,6 +539,7 @@ _RAW_ADDRESSING_HELPER_NAMES = {
     "owner_ura_for_ability",
     "canonical_ability_descriptor_ref",
     "ability_ura_from_descriptor_ref",
+    "project_descriptor_ref",
 }
 
 

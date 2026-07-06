@@ -231,6 +231,7 @@ from .identity import (
     owner_ability_ura,
     owner_ura_for_ability,
     parse_ura,
+    project_descriptor_ref,
     resource_ura,
 )
 from .host_binding import (
@@ -812,6 +813,7 @@ __all__ = [
     "owner_ability_ura",
     "owner_ura_for_ability",
     "parse_ura",
+    "project_descriptor_ref",
     "read_control_discovery",
     "resource_ura",
     "start_daemon",

@@ -1131,6 +1131,23 @@ def ability_ura_from_descriptor_ref(
     )
 
 
+def project_descriptor_ref(
+    descriptor_ref: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> IdentityProjection:
+    """Project an AbilityDescriptorRef through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.project_descriptor_ref(
+            DescriptorRefRequest(descriptor_ref)
+        ),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
 def ability_address(
     ability_ura: str,
     *,

@@ -65,6 +65,7 @@ from easynet_sdk import (
     owner_ability_ura,
     owner_ura_for_ability,
     parse_ura,
+    project_descriptor_ref,
 )
 from easynet_sdk._cabi import CLILibrary
 
@@ -272,6 +273,10 @@ class SdkEnvironmentTests(unittest.TestCase):
                 descriptor,
                 control_path="/tmp/control.json",
             )
+            projection = project_descriptor_ref(
+                descriptor,
+                control_path="/tmp/control.json",
+            )
             owner_descriptor = owner_ability_descriptor_ref(
                 "easynet:///r/example/device/dev-a",
                 "observe.health",
@@ -290,9 +295,12 @@ class SdkEnvironmentTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
         self.assertEqual(ability_from_ref, ability)
+        self.assertEqual(projection.descriptor_ref, descriptor)
+        self.assertEqual(projection.ability_ura, ability)
+        self.assertEqual(projection.descriptor_version, "1.0.0")
         self.assertEqual(owner_descriptor, descriptor)
-        self.assertEqual(raw.init_paths, ["/tmp/control.json"] * 6)
-        self.assertEqual(raw.shutdown_handles, [42] * 6)
+        self.assertEqual(raw.init_paths, ["/tmp/control.json"] * 7)
+        self.assertEqual(raw.shutdown_handles, [42] * 7)
         self.assertEqual(
             [entry[0] for entry in raw.identity_requests],
             [
@@ -301,6 +309,7 @@ class SdkEnvironmentTests(unittest.TestCase):
                 "project_ura",
                 "project_ura",
                 "build_descriptor_ref",
+                "project_descriptor_ref",
                 "project_descriptor_ref",
                 "build_ura",
                 "project_ura",
