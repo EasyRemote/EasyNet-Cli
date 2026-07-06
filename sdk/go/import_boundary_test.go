@@ -84,6 +84,32 @@ func TestPublicGoSDKDoesNotHandParseDescriptorRefs(t *testing.T) {
 	}
 }
 
+func TestPublicGoSDKDoesNotOwnURAGrammar(t *testing.T) {
+	body, err := os.ReadFile("ura.go")
+	if err != nil {
+		t.Fatalf("read ura.go: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, `axonsdk "easynet.run/axon/sdk/go/easynet"`) {
+		t.Fatalf("ura.go must delegate URA grammar to the Axon Go SDK")
+	}
+	for _, needle := range []string{
+		`fmt.Sprintf("%s%s/user/`,
+		`fmt.Sprintf("%s%s/device/`,
+		`fmt.Sprintf("%s%s/agent/`,
+		`fmt.Sprintf("%s%s/ability/`,
+		`fmt.Sprintf("%s%s/resource/`,
+		`strings.Cut(`,
+		`strings.CutPrefix(`,
+		`strings.Split(`,
+		`url.PathEscape(`,
+	} {
+		if strings.Contains(text, needle) {
+			t.Fatalf("ura.go contains SDK-owned URA grammar fragment %q; delegate to Axon/Identity", needle)
+		}
+	}
+}
+
 func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	base := filepath.Base(path)
 	if base != "direct_runtime.go" {

@@ -1,12 +1,19 @@
 package easynet
 
 import (
-	"fmt"
-	"net/url"
 	"strings"
+
+	axonsdk "easynet.run/axon/sdk/go/easynet"
 )
 
-const URAScheme = "easynet:///r/"
+// URA helpers are Go SDK facades over Axon-owned grammar.
+//
+// Product code should prefer IdentityClient/C ABI identity projection when a
+// daemon boundary is available. These package-level helpers keep existing pure
+// value-object ergonomics, but parse/build semantics are delegated to Axon
+// rather than maintained as a second grammar here.
+
+const URAScheme = axonsdk.URAScheme
 
 type URAKind string
 
@@ -30,20 +37,6 @@ const (
 	ResourceNamespaceHTTP    ResourceNamespace = "http"
 )
 
-var validResourceNamespaces = map[ResourceNamespace]struct{}{
-	ResourceNamespaceFS:      {},
-	ResourceNamespaceProcess: {},
-	ResourceNamespacePTY:     {},
-	ResourceNamespaceShell:   {},
-	ResourceNamespaceHTTP:    {},
-}
-
-func IsResourceNamespace(namespace string) bool {
-	_, ok := validResourceNamespaces[ResourceNamespace(namespace)]
-	return ok
-}
-
-// Ura is the Go SDK value object for canonical runtime URAs.
 type Ura struct {
 	raw string
 }
@@ -64,11 +57,37 @@ type ParsedURA struct {
 	Path              string
 }
 
+type AbilityOwnerKind string
+
+type AbilityOwner struct {
+	Kind     AbilityOwnerKind
+	UserID   string
+	AgentID  string
+	DeviceID string
+}
+
+type ParsedAbility struct {
+	Owner     AbilityOwner
+	Namespace string
+	LocalName string
+}
+
+const (
+	AbilityOwnerHub    AbilityOwnerKind = "hub"
+	AbilityOwnerAgent  AbilityOwnerKind = "agent"
+	AbilityOwnerDevice AbilityOwnerKind = "device"
+)
+
+func IsResourceNamespace(namespace string) bool {
+	return axonsdk.IsResourceNamespace(namespace)
+}
+
 func ParseURA(raw string) (Ura, error) {
-	if _, err := ParseURAParts(raw); err != nil {
+	parsed, err := axonsdk.ParseURA(raw)
+	if err != nil {
 		return Ura{}, err
 	}
-	return Ura{raw: raw}, nil
+	return Ura{raw: parsed.String()}, nil
 }
 
 func (u Ura) String() string { return u.raw }
@@ -108,413 +127,156 @@ func (u Ura) PublicAbilityNameForOwner(ownerURA string) string {
 }
 
 func AbilityNameFromURA(raw string) string {
-	u, err := ParseURA(raw)
-	if err != nil {
-		return ""
-	}
-	return u.AbilityName()
+	return axonsdk.AbilityNameFromURA(raw)
 }
 
 func PublicAbilityNameForOwner(ownerURA, registeredName string) string {
-	if _, err := ParseURA(ownerURA); err != nil {
-		return ""
-	}
-	return Ura{}.PublicAbilityName(registeredName)
+	return axonsdk.PublicAbilityNameForOwner(ownerURA, registeredName)
 }
 
 func OwnerAbilityURA(ownerURA, abilityName string) string {
-	ownerURA = strings.TrimSpace(ownerURA)
-	abilityName = strings.TrimSpace(abilityName)
-	if ownerURA == "" || abilityName == "" {
-		return ""
-	}
-	owner, err := ParseURAParts(ownerURA)
-	if err != nil {
-		return ""
-	}
-	switch owner.Kind {
-	case URAKindAgent:
-		if owner.UserID == "" || owner.AgentID == "" {
-			return ""
-		}
-		return AbilityURA(owner.Realm, owner.UserID, owner.AgentID, abilityName)
-	case URAKindHub:
-		if !strings.Contains(abilityName, ".") || strings.HasPrefix(abilityName, "01HUB.") {
-			return ""
-		}
-		return fmt.Sprintf("%s%s/ability/hub.%s", URAScheme, owner.Realm, abilityName)
-	case URAKindDevice:
-		if owner.DeviceID == "" {
-			return ""
-		}
-		return fmt.Sprintf("%s%s/ability/device.%s.%s", URAScheme, owner.Realm, owner.DeviceID, abilityName)
-	default:
-		return ""
-	}
+	return axonsdk.OwnerAbilityURA(ownerURA, abilityName)
 }
 
 func PublicAbilityNameFromAbilityURA(ownerURA, abilityURA string) (string, bool) {
-	owner, ownerErr := ParseURA(ownerURA)
-	ability, abilityErr := ParseURA(abilityURA)
-	if ownerErr != nil || abilityErr != nil {
-		return "", false
-	}
-	ownerParts := owner.Parts()
-	abilityParts := ability.Parts()
-	if abilityParts.Kind != URAKindAbility {
-		return "", false
-	}
-	switch ownerParts.Kind {
-	case URAKindAgent:
-		if ownerParts.Realm == abilityParts.Realm &&
-			abilityParts.AbilityOwner.Kind == AbilityOwnerAgent &&
-			ownerParts.UserID == abilityParts.AbilityOwner.UserID &&
-			ownerParts.AgentID == abilityParts.AbilityOwner.AgentID {
-			return abilityParts.AbilityID, true
-		}
-	case URAKindHub:
-		if ownerParts.Realm == abilityParts.Realm &&
-			abilityParts.AbilityOwner.Kind == AbilityOwnerHub {
-			return ability.AbilityName(), true
-		}
-	case URAKindDevice:
-		if ownerParts.Realm == abilityParts.Realm &&
-			abilityParts.AbilityOwner.Kind == AbilityOwnerDevice &&
-			ownerParts.DeviceID == abilityParts.AbilityOwner.DeviceID {
-			return abilityParts.AbilityID, true
-		}
-	}
-	return "", false
+	return axonsdk.PublicAbilityNameFromAbilityURA(ownerURA, abilityURA)
 }
 
 func UserURA(realm, userID string) string {
-	return Ura{raw: fmt.Sprintf("%s%s/user/%s", URAScheme, realm, userID)}.String()
+	return axonsdk.UserURA(realm, userID)
 }
 
 func DeviceURA(realm, deviceID string) string {
-	return Ura{raw: fmt.Sprintf("%s%s/device/%s", URAScheme, realm, deviceID)}.String()
+	return axonsdk.DeviceURA(realm, deviceID)
 }
 
 func AgentURA(realm, userID, agentID string) string {
-	return Ura{raw: fmt.Sprintf("%s%s/agent/%s.%s", URAScheme, realm, userID, agentID)}.String()
+	return axonsdk.AgentURA(realm, userID, agentID)
 }
 
 func AbilityURA(realm, userID, agentID, abilityID string) string {
-	return Ura{raw: fmt.Sprintf("%s%s/ability/%s.%s.%s", URAScheme, realm, userID, agentID, abilityID)}.String()
+	return axonsdk.AbilityURA(realm, userID, agentID, abilityID)
 }
 
 func HubURA(realm string) string {
-	return Ura{raw: fmt.Sprintf("%s%s/hub", URAScheme, realm)}.String()
+	return axonsdk.HubURA(realm)
 }
 
 func HubAbilityURA(realm, abilityName string) string {
-	if realm == "" || abilityName == "" {
-		return ""
-	}
-	tail := abilityName
-	if strings.HasPrefix(tail, "01HUB.") {
-		return ""
-	}
-	if !strings.HasPrefix(tail, "hub.") {
-		if !strings.Contains(tail, ".") {
-			return ""
-		}
-		tail = "hub." + tail
-	}
-	raw := fmt.Sprintf("%s%s/ability/%s", URAScheme, realm, tail)
-	if _, err := ParseURA(raw); err != nil {
-		return ""
-	}
-	return raw
+	return axonsdk.HubAbilityURA(realm, abilityName)
 }
 
 func ResourceDotURA(realm, ownerID, path string) string {
-	clean := strings.TrimPrefix(path, "/")
-	if clean == "" {
-		return fmt.Sprintf("%s%s/resource/%s", URAScheme, realm, ownerID)
-	}
-	return fmt.Sprintf("%s%s/resource/%s/%s", URAScheme, realm, ownerID, clean)
+	return axonsdk.ResourceDotURA(realm, ownerID, path)
 }
 
 func ResourceURA(realm, userID, namespace, path string) string {
-	if !IsResourceNamespace(namespace) {
-		return ""
-	}
-	clean := strings.TrimPrefix(path, "/")
-	return fmt.Sprintf("%s%s/resource/%s/%s/%s", URAScheme, realm, userID, namespace, clean)
+	return axonsdk.ResourceURA(realm, userID, namespace, path)
 }
 
 func FilesResourceURA(realm, username, sha256Hex string) string {
-	return ResourceDotURA(realm, username+".files", sha256Hex)
+	return axonsdk.FilesResourceURA(realm, username, sha256Hex)
 }
 
 func APIKeyResourceURA(realm, token string) string {
-	return fmt.Sprintf("%s%s/resource/api_key.%s", URAScheme, realm, token)
+	return axonsdk.APIKeyResourceURA(realm, token)
 }
 
 func PagesResourceURA(realm, username, project, path string) string {
-	if path != "" && !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return fmt.Sprintf("%s%s/resource/%s.%s%s", URAScheme, realm, username, project, path)
+	return axonsdk.PagesResourceURA(realm, username, project, path)
 }
 
 func AgentSkillResourceURA(realm, username, agentID, skillName string) string {
-	if realm == "" || username == "" || agentID == "" || skillName == "" {
-		return ""
-	}
-	raw := ResourceDotURA(
-		url.PathEscape(realm),
-		"agent."+url.PathEscape(username)+"."+url.PathEscape(agentID),
-		"skill/"+url.PathEscape(skillName),
-	)
-	if _, err := ParseURA(raw); err != nil {
-		return ""
-	}
-	return raw
+	return axonsdk.AgentSkillResourceURA(realm, username, agentID, skillName)
 }
 
 func AgentSkillFileResourceURA(realm, username, agentID, skillName, relPath string) string {
-	base := AgentSkillResourceURA(realm, username, agentID, skillName)
-	if base == "" {
-		return ""
-	}
-	relPath = strings.TrimPrefix(relPath, "/")
-	if relPath == "" {
-		return base
-	}
-	parts := strings.Split(relPath, "/")
-	for i := range parts {
-		parts[i] = url.PathEscape(parts[i])
-	}
-	raw := base + "/file/" + strings.Join(parts, "/")
-	if _, err := ParseURA(raw); err != nil {
-		return ""
-	}
-	return raw
+	return axonsdk.AgentSkillFileResourceURA(realm, username, agentID, skillName, relPath)
 }
 
-func RealmUserPrefix(realm string) string   { return fmt.Sprintf("%s%s/user/", URAScheme, realm) }
-func RealmDevicePrefix(realm string) string { return fmt.Sprintf("%s%s/device/", URAScheme, realm) }
-func RealmAgentPrefix(realm string) string  { return fmt.Sprintf("%s%s/agent/", URAScheme, realm) }
+func RealmUserPrefix(realm string) string {
+	return axonsdk.RealmUserPrefix(realm)
+}
+
+func RealmDevicePrefix(realm string) string {
+	return axonsdk.RealmDevicePrefix(realm)
+}
+
+func RealmAgentPrefix(realm string) string {
+	return axonsdk.RealmAgentPrefix(realm)
+}
 
 func UserAgentPrefix(realm, userID string) string {
-	return fmt.Sprintf("%s%s/agent/%s.", URAScheme, realm, userID)
+	return axonsdk.UserAgentPrefix(realm, userID)
 }
 
-func RealmAbilityPrefix(realm string) string  { return fmt.Sprintf("%s%s/ability/", URAScheme, realm) }
-func RealmResourcePrefix(realm string) string { return fmt.Sprintf("%s%s/resource/", URAScheme, realm) }
+func RealmAbilityPrefix(realm string) string {
+	return axonsdk.RealmAbilityPrefix(realm)
+}
+
+func RealmResourcePrefix(realm string) string {
+	return axonsdk.RealmResourcePrefix(realm)
+}
 
 func DeviceNodeIDInRealm(raw, realm string) (string, bool) {
-	if raw == "" || realm == "" {
-		return "", false
-	}
-	parts, err := ParseURAParts(raw)
-	if err != nil || parts.Kind != URAKindDevice || parts.Realm != realm || parts.DeviceID == "" {
-		return "", false
-	}
-	return parts.DeviceID, true
+	return axonsdk.DeviceNodeIDInRealm(raw, realm)
 }
 
 func DisplayID(raw string) string {
-	parts, err := ParseURAParts(raw)
-	if err != nil {
-		return raw
-	}
-	switch parts.Kind {
-	case URAKindDevice:
-		return parts.DeviceID
-	case URAKindUser:
-		return parts.UserID
-	case URAKindAgent:
-		return parts.UserID + "." + parts.AgentID
-	case URAKindAbility:
-		switch parts.AbilityOwner.Kind {
-		case AbilityOwnerHub:
-			return "hub." + parts.AbilityID
-		case AbilityOwnerDevice:
-			return "device." + parts.AbilityOwner.DeviceID + "." + parts.AbilityID
-		case AbilityOwnerAgent:
-			return parts.AbilityOwner.UserID + "." + parts.AbilityOwner.AgentID + "." + parts.AbilityID
-		default:
-			return parts.UserID + "." + parts.AgentID + "." + parts.AbilityID
-		}
-	case URAKindHub:
-		return "hub"
-	case URAKindResource:
-		if parts.ResourceNamespace == "" {
-			if parts.Path == "" {
-				return parts.UserID
-			}
-			return parts.UserID + "/" + parts.Path
-		}
-		return parts.UserID + "/" + string(parts.ResourceNamespace) + "/" + parts.Path
-	default:
-		return raw
-	}
-}
-
-type AbilityOwnerKind string
-
-const (
-	AbilityOwnerHub    AbilityOwnerKind = "hub"
-	AbilityOwnerAgent  AbilityOwnerKind = "agent"
-	AbilityOwnerDevice AbilityOwnerKind = "device"
-)
-
-type AbilityOwner struct {
-	Kind     AbilityOwnerKind
-	UserID   string
-	AgentID  string
-	DeviceID string
-}
-
-type ParsedAbility struct {
-	Owner     AbilityOwner
-	Namespace string
-	LocalName string
+	return axonsdk.DisplayID(raw)
 }
 
 func ParseAbilityTail(tail string) (ParsedAbility, error) {
-	if tail == "" || strings.Contains(tail, "/") {
-		return ParsedAbility{}, fmt.Errorf("ability tail must be a single non-empty path segment")
+	ability, err := axonsdk.ParseAbilityTail(tail)
+	if err != nil {
+		return ParsedAbility{}, err
 	}
-	var owner AbilityOwner
-	var rest string
-	switch {
-	case strings.HasPrefix(tail, "hub."):
-		owner = AbilityOwner{Kind: AbilityOwnerHub}
-		rest = strings.TrimPrefix(tail, "hub.")
-	case strings.HasPrefix(tail, "device."):
-		after := strings.TrimPrefix(tail, "device.")
-		deviceID, r, ok := strings.Cut(after, ".")
-		if !ok {
-			deviceID, r = after, ""
-		}
-		if deviceID == "" {
-			return ParsedAbility{}, fmt.Errorf("device owner requires a <device-id> segment")
-		}
-		owner = AbilityOwner{Kind: AbilityOwnerDevice, DeviceID: deviceID}
-		rest = r
-	default:
-		userID, afterUser, ok := strings.Cut(tail, ".")
-		if !ok {
-			return ParsedAbility{}, fmt.Errorf("agent ability tail must be <user-id>.<agent-id>.<rest>")
-		}
-		agentID, r, ok := strings.Cut(afterUser, ".")
-		if !ok {
-			agentID, r = afterUser, ""
-		}
-		if userID == "" || agentID == "" {
-			return ParsedAbility{}, fmt.Errorf("agent ability tail must be <user-id>.<agent-id>.<rest>")
-		}
-		if userID == "hub" || userID == "device" {
-			return ParsedAbility{}, fmt.Errorf("agent owner token %q is reserved", userID)
-		}
-		owner = AbilityOwner{Kind: AbilityOwnerAgent, UserID: userID, AgentID: agentID}
-		rest = r
-	}
-	namespace, localName, ok := strings.Cut(rest, ".")
-	if !ok {
-		namespace, localName = "", rest
-	}
-	if localName == "" {
-		return ParsedAbility{}, fmt.Errorf("ability tail missing local name")
-	}
-	return ParsedAbility{Owner: owner, Namespace: namespace, LocalName: localName}, nil
+	return parsedAbilityFromAxon(ability), nil
 }
 
 func DeviceAbilityURA(realm, deviceID, namespace, localName string) string {
-	tail := "device." + deviceID
-	if namespace != "" {
-		tail += "." + namespace
-	}
-	tail += "." + localName
-	return fmt.Sprintf("%s%s/ability/%s", URAScheme, realm, tail)
+	return axonsdk.DeviceAbilityURA(realm, deviceID, namespace, localName)
 }
 
 func ParseURAParts(raw string) (ParsedURA, error) {
-	rest, ok := strings.CutPrefix(raw, URAScheme)
-	if !ok {
-		return ParsedURA{}, fmt.Errorf("URA must start with %s", URAScheme)
+	parts, err := axonsdk.ParseURAParts(raw)
+	if err != nil {
+		return ParsedURA{}, err
 	}
-	realm, afterRealm, ok := strings.Cut(rest, "/")
-	if !ok || realm == "" {
-		return ParsedURA{}, fmt.Errorf("URA missing realm segment")
+	return parsedURAFromAxon(parts), nil
+}
+
+func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
+	return ParsedURA{
+		Raw:               parts.Raw,
+		Realm:             parts.Realm,
+		Kind:              URAKind(string(parts.Kind)),
+		UserID:            parts.UserID,
+		DeviceID:          parts.DeviceID,
+		AgentID:           parts.AgentID,
+		AbilityID:         parts.AbilityID,
+		AbilityOwner:      abilityOwnerFromAxon(parts.AbilityOwner),
+		AbilityNamespace:  parts.AbilityNamespace,
+		AbilityLocalName:  parts.AbilityLocalName,
+		OwnerID:           parts.OwnerID,
+		ResourceNamespace: ResourceNamespace(string(parts.ResourceNamespace)),
+		Path:              parts.Path,
 	}
-	role, tail, ok := strings.Cut(afterRealm, "/")
-	if !ok {
-		role, tail = afterRealm, ""
+}
+
+func parsedAbilityFromAxon(ability axonsdk.ParsedAbility) ParsedAbility {
+	return ParsedAbility{
+		Owner:     abilityOwnerFromAxon(ability.Owner),
+		Namespace: ability.Namespace,
+		LocalName: ability.LocalName,
 	}
-	out := ParsedURA{Raw: raw, Realm: realm, Kind: URAKind(role)}
-	switch role {
-	case "user":
-		if tail == "" || strings.Contains(tail, "/") || strings.Contains(tail, ".") {
-			return ParsedURA{}, fmt.Errorf("user URA requires one user-id segment")
-		}
-		out.UserID = tail
-	case "device":
-		if tail == "" || strings.Contains(tail, "/") || strings.Contains(tail, ".") {
-			return ParsedURA{}, fmt.Errorf("device URA requires one device-id segment")
-		}
-		out.DeviceID = tail
-	case "agent":
-		userID, agentID, ok := strings.Cut(tail, ".")
-		if !ok || userID == "" || agentID == "" || strings.Contains(agentID, ".") || strings.Contains(tail, "/") {
-			return ParsedURA{}, fmt.Errorf("agent URA tail must be <user-id>.<agent-id>")
-		}
-		out.UserID, out.AgentID = userID, agentID
-	case "ability":
-		ability, err := ParseAbilityTail(tail)
-		if err != nil {
-			return ParsedURA{}, fmt.Errorf("ability URA tail invalid: %w", err)
-		}
-		out.AbilityOwner = ability.Owner
-		out.AbilityNamespace = ability.Namespace
-		out.AbilityLocalName = ability.LocalName
-		abilityID := ability.LocalName
-		if ability.Namespace != "" {
-			abilityID = ability.Namespace + "." + ability.LocalName
-		}
-		out.AbilityID = abilityID
-		switch ability.Owner.Kind {
-		case AbilityOwnerHub:
-			out.UserID = "hub"
-			out.AgentID = ability.Namespace
-		case AbilityOwnerDevice:
-			out.UserID = "device"
-			out.DeviceID = ability.Owner.DeviceID
-			out.AgentID = ability.Owner.DeviceID
-		case AbilityOwnerAgent:
-			out.UserID = ability.Owner.UserID
-			out.AgentID = ability.Owner.AgentID
-		default:
-			return ParsedURA{}, fmt.Errorf("ability URA owner kind %q is unknown", ability.Owner.Kind)
-		}
-	case "hub":
-		if tail != "" {
-			return ParsedURA{}, fmt.Errorf("hub URA must use /hub without a tail")
-		}
-		out.Kind = URAKindHub
-	case "resource":
-		owner, path, _ := strings.Cut(tail, "/")
-		if owner == "" {
-			return ParsedURA{}, fmt.Errorf("resource URA requires owner segment")
-		}
-		out.OwnerID, out.UserID, out.Path = owner, owner, path
-		if !strings.ContainsRune(owner, '.') {
-			namespace, resourcePath, ok := strings.Cut(path, "/")
-			if !ok || namespace == "" {
-				return ParsedURA{}, fmt.Errorf("resource URA requires <namespace>/<path> for user-owned resources")
-			}
-			if !IsResourceNamespace(namespace) {
-				return ParsedURA{}, fmt.Errorf("resource URA namespace %q is unknown", namespace)
-			}
-			out.ResourceNamespace = ResourceNamespace(namespace)
-			out.Path = resourcePath
-		}
-	default:
-		return ParsedURA{}, fmt.Errorf("unknown URA role %q", role)
+}
+
+func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
+	return AbilityOwner{
+		Kind:     AbilityOwnerKind(string(owner.Kind)),
+		UserID:   owner.UserID,
+		AgentID:  owner.AgentID,
+		DeviceID: owner.DeviceID,
 	}
-	return out, nil
 }
