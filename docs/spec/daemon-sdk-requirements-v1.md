@@ -2761,9 +2761,12 @@ The SDK repo MUST provide these gates before backend cutover:
    and Axon/daemon-obtained canonical signing material.
 2. Rust, C ABI, Go, and Python parity tests for the same Invocation fixture.
 3. ABI v3 header/export/version checks.
-4. Go SDK import ban: Go SDK packages must not import Axon. Axon dependency is
+4. SDK URA naming gate: public SDK docs, C ABI headers, FFI surfaces, and
+   Go/Python SDK facades must not reintroduce retired address-era identifiers
+   or aliases.
+5. Go SDK import ban: Go SDK packages must not import Axon. Axon dependency is
    contained in the native Rust daemon SDK core and daemon runtime adapter.
-5. EasyNet backend SDK-only ban after cutover, using section 29.1 as the single
+6. EasyNet backend SDK-only ban after cutover, using section 29.1 as the single
    normative forbidden-dependency list:
    - no `easynet.run/axon/*`;
    - no generated `axon.v1` protobuf imports;
@@ -2772,51 +2775,51 @@ The SDK repo MUST provide these gates before backend cutover:
    - no direct daemon UDS/TCP/gRPC/protobuf clients outside the CLI Go SDK;
    - no `easynet`/`easynet-daemon` subprocess calls for product runtime paths;
    - no EasyRemote or non-Go language SDK runtime dependency.
-6. Backend runtime allowlist: production runtime packages may depend only on the
+7. Backend runtime allowlist: production runtime packages may depend only on the
    public CLI Go SDK module path plus backend-owned product interfaces/fakes.
-7. Backend Hub route-family coverage gate: every row in section 29.2 has a
+8. Backend Hub route-family coverage gate: every row in section 29.2 has a
    route-family smoke or static check proving the route uses the assigned SDK
    profile/client.
-8. Backend Events gate: SSE, directory events, device events, session events,
+9. Backend Events gate: SSE, directory events, device events, session events,
    and invocation events use SDK `EventClient` DTOs/cursors.
-9. Backend Surface and Compatibility gates: page/public-surface routes use SDK
+10. Backend Surface and Compatibility gates: page/public-surface routes use SDK
    `SurfaceClient`, and OpenAI-compatible models/chat/files routes use SDK
    `CompatibilityClient`.
-10. Backend wrapper gate: file/context upload, terminal, remote desktop,
+11. Backend wrapper gate: file/context upload, terminal, remote desktop,
     browser session, and media/voice bridges use SDK wrappers or Runtime Core
     stream/bidi clients with shared terminal-state fixtures.
-11. Backend Admin gate: pairing, credential verification, gateway status,
+12. Backend Admin gate: pairing, credential verification, gateway status,
     device sessions, and agent lifecycle use SDK `AdminClient`,
     `DirectoryClient`, and `IdentityClient` DTOs.
-12. `control.sock` product-call ban: no `Invoke`, `Subscribe`, or `OpenBidi`
+13. `control.sock` product-call ban: no `Invoke`, `Subscribe`, or `OpenBidi`
     product dispatch over JSON control frames.
-13. Facade fan-out ban: ordinary SDK list methods do not run per-target
+14. Facade fan-out ban: ordinary SDK list methods do not run per-target
     governed calls.
-14. Live daemon smoke covering unary, stream, bidi, file transfer, and typed
+15. Live daemon smoke covering unary, stream, bidi, file transfer, and typed
     terminal failure.
-15. Health smoke covering daemon down, UDS permission denied, public listener
+16. Health smoke covering daemon down, UDS permission denied, public listener
     down, control-only, version mismatch, and trust not ready.
-16. Python SDK extraction ban: EasyRemote production code must not import
+17. Python SDK extraction ban: EasyRemote production code must not import
     `ctypes`, open `libeasynet_cli`, call `easynet_*` ABI symbols, encode daemon
     Invocation JSON, own host-stream frame/hash semantics, call gateway/agent
     admin system abilities directly, or own raw daemon handle/session lifecycle
     after cutover.
-17. Publication profile smoke: deploy an EasyRemote-generated host-stream
+18. Publication profile smoke: deploy an EasyRemote-generated host-stream
     package through SDK Publication APIs, list/show it through SDK directory or
     publication pages, then invoke it through SDK Runtime APIs.
-18. Host Binding profile smoke: serve one EasyRemote-hosted unary function and
+19. Host Binding profile smoke: serve one EasyRemote-hosted unary function and
     one streaming function through SDK Host Binding DTOs/codecs, verifying item,
     error, terminal, and output-hash fixture parity with the daemon.
-19. Mission profile smoke: run, track, cancel, and observe terminal status for
+20. Mission profile smoke: run, track, cancel, and observe terminal status for
     an EAL mission through SDK Mission APIs, with child receipt refs when the
     daemon provides them.
-20. Admin + Gateway profile smoke: start or attach a hub/device daemon, read
+21. Admin + Gateway profile smoke: start or attach a hub/device daemon, read
     gateway status, list/refresh/start an agent through SDK `AdminClient`, and
     verify product facades do not call daemon admin abilities directly.
-21. Events/Surface/Compatibility profile smoke: subscribe to directory/device
+22. Events/Surface/Compatibility profile smoke: subscribe to directory/device
     events, create/list/delete a page or fetch a surface manifest, and execute
     one OpenAI-compatible model/chat/files flow through SDK profile clients.
-22. Receipt profile smoke: fetch/project a terminal receipt, expose a receipt
+23. Receipt profile smoke: fetch/project a terminal receipt, expose a receipt
     URA usable as causal context, and distinguish summary-only continuity checks
     from full cryptographic verification.
 
