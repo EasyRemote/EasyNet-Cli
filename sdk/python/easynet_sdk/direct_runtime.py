@@ -50,6 +50,7 @@ class DirectDaemonRuntimeConnector:
     control_path: str = ""
     discovery_reader: Any = read_control_discovery
     handle_transport: RuntimeTransport | None = None
+    close_handle_transport: bool = False
     _transports: list["DirectDaemonRuntimeTransport"] = field(default_factory=list)
     _closed: bool = False
 
@@ -113,6 +114,7 @@ class DirectDaemonRuntimeConnector:
             invoke_timeout_seconds=invoke_timeout,
             max_message_bytes=max_message_bytes,
             handle_transport=self.handle_transport,
+            close_handle_transport=False,
         )
         self._transports.append(transport)
         handle_supported = self.handle_transport is not None
@@ -128,12 +130,47 @@ class DirectDaemonRuntimeConnector:
         }
         return transport, _json_bytes(facts)
 
+    def with_handle_transport(
+        self,
+        handle_transport: RuntimeTransport | None,
+        *,
+        close_on_connector_close: bool = False,
+    ) -> "DirectDaemonRuntimeConnector":
+        self._require_open()
+        self.handle_transport = handle_transport
+        self.close_handle_transport = (
+            close_on_connector_close and handle_transport is not None
+        )
+        return self
+
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        while self._transports:
-            self._transports.pop().close()
+        transports = list(reversed(self._transports))
+        self._transports.clear()
+        handle_transport = (
+            self.handle_transport if self.close_handle_transport else None
+        )
+        self.handle_transport = None
+        self.close_handle_transport = False
+        first_error: SDKError | None = None
+        for transport in transports:
+            close_error = _close_runtime_transport(
+                transport,
+                message="close direct runtime transport failed",
+            )
+            if first_error is None:
+                first_error = close_error
+        if handle_transport is not None:
+            close_error = _close_runtime_transport(
+                handle_transport,
+                message="close direct runtime handle transport failed",
+            )
+            if first_error is None:
+                first_error = close_error
+        if first_error is not None:
+            raise first_error
 
     def _require_open(self) -> None:
         if self._closed:
@@ -150,12 +187,16 @@ class DirectDaemonRuntimeTransport:
         endpoint: str,
         invoke_timeout_seconds: float,
         handle_transport: RuntimeTransport | None = None,
+        close_handle_transport: bool = False,
     ) -> None:
         self._channel = channel
         self._stub = _invoke_pb2_grpc.InvocationStub(channel)
         self._endpoint = endpoint
         self._invoke_timeout_seconds = invoke_timeout_seconds
         self._handle_transport = handle_transport
+        self._close_handle_transport = (
+            close_handle_transport and handle_transport is not None
+        )
         self._closed = False
 
     @classmethod
@@ -167,6 +208,7 @@ class DirectDaemonRuntimeTransport:
         invoke_timeout_seconds: float = DEFAULT_INVOKE_TIMEOUT_SECONDS,
         max_message_bytes: int = 0,
         handle_transport: RuntimeTransport | None = None,
+        close_handle_transport: bool = False,
     ) -> "DirectDaemonRuntimeTransport":
         target = _grpc_uds_target(endpoint)
         options: list[tuple[str, int]] = []
@@ -205,6 +247,7 @@ class DirectDaemonRuntimeTransport:
             endpoint=endpoint,
             invoke_timeout_seconds=invoke_timeout_seconds,
             handle_transport=handle_transport,
+            close_handle_transport=close_handle_transport,
         )
 
     def invoke(self, draft_json: bytes) -> bytes:
@@ -320,7 +363,34 @@ class DirectDaemonRuntimeTransport:
         if self._closed:
             return
         self._closed = True
-        _close_channel(self._channel)
+        handle_transport = (
+            self._handle_transport if self._close_handle_transport else None
+        )
+        self._handle_transport = None
+        self._close_handle_transport = False
+        first_error: SDKError | None = None
+        try:
+            _close_channel(self._channel)
+        except SDKError as exc:
+            first_error = exc
+        except Exception as exc:
+            first_error = _direct_error(
+                f"close daemon invocation endpoint failed: {exc}",
+                code=ErrorCode.ROUTE_UNAVAILABLE,
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                details={"endpoint": self._endpoint},
+                cause=exc,
+            )
+        if handle_transport is not None:
+            close_error = _close_runtime_transport(
+                handle_transport,
+                message="close direct runtime handle transport failed",
+            )
+            if first_error is None:
+                first_error = close_error
+        if first_error is not None:
+            raise first_error
 
     def _require_open(self) -> None:
         if self._closed:
@@ -1179,6 +1249,26 @@ def _close_channel(channel: grpc.Channel) -> None:
     close = getattr(channel, "close", None)
     if close is not None:
         close()
+
+
+def _close_runtime_transport(
+    transport: RuntimeTransport,
+    *,
+    message: str,
+) -> SDKError | None:
+    try:
+        transport.close()
+        return None
+    except SDKError as exc:
+        return exc
+    except Exception as exc:
+        return _direct_error(
+            f"{message}: {exc}",
+            code=ErrorCode.ROUTE_UNAVAILABLE,
+            retry=RetryHint.UNKNOWN,
+            retryable=False,
+            cause=exc,
+        )
 
 
 def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:

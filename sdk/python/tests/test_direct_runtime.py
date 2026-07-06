@@ -258,6 +258,49 @@ class DirectRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(handle_transport.close_count, 0)
 
+    def test_direct_connector_closes_owned_handle_transport_once(self) -> None:
+        servicer = RecordingInvocationServicer()
+        handle_transport = _RecordingHandleTransport()
+        with _fake_daemon(servicer) as endpoint:
+            connector = DirectDaemonRuntimeConnector().with_handle_transport(
+                handle_transport,
+                close_on_connector_close=True,
+            )
+            transport, facts_json = connector.handshake(
+                json.dumps(
+                    {
+                        "endpoint": endpoint,
+                        "dial_timeout_ms": 1000,
+                        "invoke_timeout_ms": 1000,
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            facts = json.loads(facts_json.decode("utf-8"))
+            transport.close()
+            connector.close()
+            connector.close()
+
+        self.assertEqual(facts["prepare"], True)
+        self.assertEqual(facts["submit_signed"], True)
+        self.assertEqual(handle_transport.close_count, 1)
+
+    def test_direct_transport_closes_owned_handle_transport_once(self) -> None:
+        servicer = RecordingInvocationServicer()
+        handle_transport = _RecordingHandleTransport()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectDaemonRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                handle_transport=handle_transport,
+                close_handle_transport=True,
+            )
+            transport.close()
+            transport.close()
+
+        self.assertEqual(handle_transport.close_count, 1)
+
     def test_direct_transport_invokes_daemon_over_axon_grpc_uds(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
