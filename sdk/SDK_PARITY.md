@@ -35,7 +35,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; concrete product wrapper stream adapters remain incomplete outside the daemon SDK. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
-| receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus single-invocation chain signature and parent-receipt closure verification exist for full Axon audit bundles; cross-invocation causal DAG verification and RFC-007 receipt URA construction remain incomplete. |
+| receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus cross-invocation chain signature and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
 | mission | Mission | provider-backed | provider-backed | SDK plan rendering and child Invocation fact conformance exist; daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete outside the SDK plan/fact facade. |
@@ -49,8 +49,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 ## Known Gaps
 
 - C ABI now exposes invocation builder handles and submitted InvocationHandle
-  await/cancel/events/free handles for unary submit; live event streaming and
-  cross-invocation Axon receipt DAG verification remain incomplete.
+  await/cancel/events/free handles for unary submit; live event streaming
+  remains incomplete.
 - C ABI now exposes schema-shaped typed error JSON for ABI return codes; Python
   and Go profile facades now attach stable `profile`/`source_ref` details and
   execute the shared `error/profile_source_refs` conformance case, while broader
@@ -65,13 +65,12 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   route source cutover and per-family smokes remain incomplete before cutover
   can be claimed.
 - Receipt fetch carrier, projection, causal-ref guardrails,
-  single-receipt and single-invocation chain Axon signature verification over
+  single-receipt and cross-invocation chain Axon signature verification over
   full audit-bundle receipts, and invocation-history list/get/trace carrier
   builders exist for Rust/C ABI over daemon `invocation.history.*` and
   `invocation.trace.get`; Python now exposes the same read models through the
-  Receipt facade and C ABI Runtime Core invoke. Axon-backed
-  cross-invocation DAG verification, RFC-007 receipt URA construction, and
-  broader language-facade cutovers remain incomplete.
+  Receipt facade and C ABI Runtime Core invoke. RFC-007 receipt URA
+  construction and broader language-facade cutovers remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, Directory subscribe stream
   guardrails for Go/Python, C ABI `directory.subscribe` carrier/projection
@@ -122,8 +121,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   quota/rate limits, billing, backend HTTP route shaping, multipart
   upload/storage policy, SSE/WebSocket fanout, and product cutovers remain
   incomplete.
-- Axon-backed cross-invocation receipt DAG verification and RFC-007 receipt
-  URA construction remain schema/conformance declarations only.
+- RFC-007 receipt URA construction remains schema/conformance declaration only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
   file, terminal, remote desktop, browser, and media session DTOs; Go/Python
   facades now expose Runtime-backed record-returning helper execution. Backend
@@ -164,10 +162,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   concrete transport for fetch/list/get/trace/project/verify/verify-chain/
   causal-ref over Runtime Core invoke, explicit daemon/Axon projection provider
   seams for Runtime-backed project/verify/verify-chain/causal-ref,
-  Axon-backed single-invocation parent-receipt closure projection, and close
-  state seams over opaque receipt refs; cross-invocation DAG cryptographic
-  verification, receipt URA construction after RFC-007, and backend
-  history/metrics cutover remain incomplete.
+  Axon-backed cross-invocation parent-receipt DAG closure projection, and close
+  state seams over opaque receipt refs; receipt URA construction after RFC-007
+  and backend history/metrics cutover remain incomplete.
 - Go Publication facade exposes `PublicationClient` resource-ref,
   package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
   install projection, explicit daemon-local provider seams for Runtime-backed
@@ -304,9 +301,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   EasyRemote receipt summary verification, hash-chain continuity, and
   parent-receipt-anchored Context child dispatch now delegate to SDK Receipt.
   Axon-backed full-receipt verification now covers single receipts,
-  single-invocation signature chains, and receipt-level parent closure for full
-  Axon audit bundles; cross-invocation causal DAG verification and receipt URA
-  construction after RFC-007 remain incomplete.
+  cross-invocation signature chains, and receipt-level parent DAG closure for
+  full Axon audit bundles; receipt URA construction after RFC-007 remains
+  incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   C ABI-backed plugin install through the daemon plugin installer,
@@ -353,8 +350,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   explicit direct-runtime prepare/submit/handle delegation is available through
   the SDK facade, while daemon-owned signer acquisition/keyring policy, daemon-backed
   MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
-  pairing/hub lifecycle cutover, cross-invocation receipt DAG verification, and
-  RFC-007 receipt URA construction remain incomplete.
+  pairing/hub lifecycle cutover and RFC-007 receipt URA construction remain
+  incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel/events
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, C ABI-backed mission events execution through

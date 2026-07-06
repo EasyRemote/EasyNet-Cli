@@ -992,9 +992,9 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	} {
 		requireCaseAction(t, chainCase, action)
 	}
-	requireCaseExpectation(t, chainCase, "chain_projection: single_invocation_signature_chain_with_parent_closure")
+	requireCaseExpectation(t, chainCase, "chain_projection: cross_invocation_signature_dag_with_parent_closure")
 	requireCaseExpectation(t, chainCase, "parent_dag_closed: true")
-	requireCaseExpectation(t, chainCase, "cross_invocation_causal_dag: incomplete_until_axon_library_api")
+	requireCaseExpectation(t, chainCase, "cross_invocation_causal_dag: provider_backed")
 }
 
 func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *testing.T) {

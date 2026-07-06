@@ -2074,9 +2074,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         ):
             self._require_case_action(chain_case, action)
         for expectation in (
-            "chain_projection: single_invocation_signature_chain_with_parent_closure",
+            "chain_projection: cross_invocation_signature_dag_with_parent_closure",
             "parent_dag_closed: true",
-            "cross_invocation_causal_dag: incomplete_until_axon_library_api",
+            "cross_invocation_causal_dag: provider_backed",
         ):
             self._require_case_expectation(chain_case, expectation)
 

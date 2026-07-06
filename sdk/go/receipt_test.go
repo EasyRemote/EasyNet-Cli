@@ -293,7 +293,7 @@ func TestReceiptVerifyAndCausalRefDecodeDaemonProjections(t *testing.T) {
 
 func TestReceiptVerifyChainPreservesReceiptBodiesAndDecodesContinuity(t *testing.T) {
 	transport := &memoryReceiptTransport{
-		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"single_invocation_signature_chain_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
+		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -314,7 +314,7 @@ func TestReceiptVerifyChainPreservesReceiptBodiesAndDecodesContinuity(t *testing
 	if !result.Verified || !result.Continuous || result.Method != "axon_receipt_chain_signature" {
 		t.Fatalf("unexpected chain verification: %#v", result)
 	}
-	if result.Metadata["chain_projection"] != "single_invocation_signature_chain_with_parent_closure" || result.Metadata["parent_dag_closed"] != true {
+	if result.Metadata["chain_projection"] != "cross_invocation_signature_dag_with_parent_closure" || result.Metadata["parent_dag_closed"] != true {
 		t.Fatalf("unexpected chain metadata: %#v", result.Metadata)
 	}
 	receipts, ok := transport.seenChainRequest["receipts"].([]any)

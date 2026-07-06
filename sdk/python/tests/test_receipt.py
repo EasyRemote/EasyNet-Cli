@@ -70,7 +70,7 @@ class MemoryReceiptTransport:
             b'"receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
             b'"prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
             b'"continuous":true,"metadata":{"parent_receipt_count":1}}],'
-            b'"metadata":{"chain_projection":"single_invocation_signature_chain_with_parent_closure",'
+            b'"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure",'
             b'"parent_dag_closed":true,"assurance":"cryptographic"}}'
         )
         self.causal_ref_json = (
@@ -559,7 +559,7 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(result.receipt_count, 2)
         self.assertEqual(
             result.metadata["chain_projection"],
-            "single_invocation_signature_chain_with_parent_closure",
+            "cross_invocation_signature_dag_with_parent_closure",
         )
         self.assertTrue(result.metadata["parent_dag_closed"])
         assert transport.seen_chain_request is not None

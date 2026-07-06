@@ -333,8 +333,7 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
     let mut verified = true;
     let mut continuous = true;
     let mut reason = String::new();
-    let mut invocation_id: Option<String> = None;
-    let mut previous_hash_hex: Option<String> = None;
+    let mut chain_entries = Vec::with_capacity(receipts.len());
     let mut verified_hashes = Vec::with_capacity(receipts.len());
     let mut parent_edges = Vec::new();
 
@@ -364,62 +363,18 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
             }
         };
 
-        if receipt.index != position as u64 {
-            verified = false;
-            continuous = false;
-            item_continuous = false;
-            if item_reason.is_empty() {
-                item_reason = format!(
-                    "receipt_index_gap:expected_{position}_got_{}",
-                    receipt.index
-                );
-            }
-            if reason.is_empty() {
-                reason = item_reason.clone();
-            }
-        }
-        match invocation_id.as_deref() {
-            None => invocation_id = Some(receipt.invocation_id.clone()),
-            Some(expected) if expected == receipt.invocation_id => {}
-            Some(expected) => {
-                verified = false;
-                continuous = false;
-                item_continuous = false;
-                if item_reason.is_empty() {
-                    item_reason = format!(
-                        "receipt_invocation_id_mismatch:expected_{expected}_got_{}",
-                        receipt.invocation_id
-                    );
-                }
-                if reason.is_empty() {
-                    reason = item_reason.clone();
-                }
-            }
-        }
-
         let prev_hash_hex = receipt.prev_receipt_hash_hex.to_ascii_lowercase();
-        let expected_prev = previous_hash_hex
-            .as_deref()
-            .unwrap_or("0000000000000000000000000000000000000000000000000000000000000000");
-        if prev_hash_hex != expected_prev {
-            verified = false;
-            continuous = false;
-            item_continuous = false;
-            if item_reason.is_empty() {
-                item_reason = format!("receipt_prev_hash_mismatch:index_{position}");
-            }
-            if reason.is_empty() {
-                reason = item_reason.clone();
-            }
-        }
-
-        if item_verified {
-            previous_hash_hex = Some(verification.self_hash_hex.clone());
-        }
         let parent_hashes = receipt_parent_hashes(&receipt)?;
         for parent_hash in &parent_hashes {
             parent_edges.push((position, parent_hash.clone()));
         }
+        chain_entries.push(AxonReceiptChainEntry {
+            position,
+            invocation_id: receipt.invocation_id.clone(),
+            receipt_index: receipt.index,
+            prev_hash_hex: prev_hash_hex.clone(),
+            receipt_hash_hex: item_verified.then_some(verification.self_hash_hex.clone()),
+        });
         verified_hashes.push(item_verified.then_some(verification.self_hash_hex.clone()));
         items.push(json!({
             "index": position,
@@ -444,6 +399,27 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
                 "parent_receipt_count": parent_hashes.len(),
             },
         }));
+    }
+    let chain_continuity = verify_per_invocation_chain_continuity(&chain_entries);
+    if !chain_continuity.ok {
+        verified = false;
+        continuous = false;
+        if reason.is_empty() {
+            reason = chain_continuity.reason.clone();
+        }
+        for (position, failure_reason) in &chain_continuity.failures {
+            if let Some(item) = items.get_mut(*position).and_then(Value::as_object_mut) {
+                item.insert("continuous".to_string(), Value::Bool(false));
+                if item
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .is_empty()
+                {
+                    item.insert("reason".to_string(), Value::String(failure_reason.clone()));
+                }
+            }
+        }
     }
     let parent_dag = verify_parent_receipt_closure(&verified_hashes, &parent_edges);
     if !parent_dag.ok {
@@ -496,7 +472,7 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
             "source": "axon",
             "assurance": "cryptographic",
             "verifier": "easynet_axon::invocation::verify_receipt_signature_with_hosted",
-            "chain_projection": "single_invocation_signature_chain_with_parent_closure",
+            "chain_projection": "cross_invocation_signature_dag_with_parent_closure",
             "parent_dag_closed": parent_dag.ok,
         },
     })))
@@ -670,6 +646,98 @@ fn dfs_parent_receipt_graph(
 struct AxonReceiptVerification {
     self_hash_hex: String,
     signature_algorithm: String,
+}
+
+#[derive(Debug, Clone)]
+struct AxonReceiptChainEntry {
+    position: usize,
+    invocation_id: String,
+    receipt_index: u64,
+    prev_hash_hex: String,
+    receipt_hash_hex: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ChainContinuityCheck {
+    ok: bool,
+    reason: String,
+    failures: Vec<(usize, String)>,
+}
+
+fn verify_per_invocation_chain_continuity(
+    entries: &[AxonReceiptChainEntry],
+) -> ChainContinuityCheck {
+    let mut by_invocation = BTreeMap::<&str, Vec<&AxonReceiptChainEntry>>::new();
+    let mut failures = Vec::new();
+
+    for entry in entries {
+        if entry.receipt_hash_hex.is_none() {
+            failures.push((
+                entry.position,
+                format!("receipt_unverified:index_{}", entry.position),
+            ));
+            continue;
+        }
+        by_invocation
+            .entry(entry.invocation_id.as_str())
+            .or_default()
+            .push(entry);
+    }
+
+    for (invocation_id, mut chain) in by_invocation {
+        chain.sort_by_key(|entry| (entry.receipt_index, entry.position));
+        let mut previous_index: Option<u64> = None;
+        let mut previous_hash =
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        for entry in chain {
+            if previous_index == Some(entry.receipt_index) {
+                failures.push((
+                    entry.position,
+                    format!(
+                        "receipt_index_duplicate:invocation_{invocation_id}:index_{}",
+                        entry.receipt_index
+                    ),
+                ));
+            }
+            let expected_index = previous_index.map_or(0, |index| index + 1);
+            if entry.receipt_index != expected_index {
+                failures.push((
+                    entry.position,
+                    format!(
+                        "receipt_index_gap:invocation_{invocation_id}:expected_{expected_index}_got_{}",
+                        entry.receipt_index
+                    ),
+                ));
+            }
+            if entry.prev_hash_hex != previous_hash {
+                failures.push((
+                    entry.position,
+                    format!(
+                        "receipt_prev_hash_mismatch:invocation_{invocation_id}:index_{}",
+                        entry.receipt_index
+                    ),
+                ));
+            }
+            if let Some(hash) = entry.receipt_hash_hex.as_ref() {
+                previous_hash = hash.clone();
+            }
+            previous_index = Some(entry.receipt_index);
+        }
+    }
+
+    if let Some((_, reason)) = failures.first() {
+        ChainContinuityCheck {
+            ok: false,
+            reason: reason.clone(),
+            failures,
+        }
+    } else {
+        ChainContinuityCheck {
+            ok: true,
+            reason: String::new(),
+            failures,
+        }
+    }
 }
 
 struct AxonReceiptChainItem {
@@ -1281,9 +1349,135 @@ mod tests {
         assert_eq!(verification["metadata"]["assurance"], "cryptographic");
         assert_eq!(
             verification["metadata"]["chain_projection"],
-            "single_invocation_signature_chain_with_parent_closure"
+            "cross_invocation_signature_dag_with_parent_closure"
         );
         assert_eq!(verification["metadata"]["parent_dag_closed"], true);
+    }
+
+    #[test]
+    fn receipt_cross_invocation_dag_verification_accepts_closed_parent_edge() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let parent = signed_axon_receipt_value_for_invocation(
+            &signing_key,
+            "inv-parent",
+            0,
+            [0u8; 32],
+            "terminal",
+            "completed",
+        );
+        let parent_hash = axon_receipt_hash(&parent);
+        let child = signed_axon_receipt_value_with_invocation_and_parents(
+            &signing_key,
+            "inv-child",
+            0,
+            [0u8; 32],
+            "terminal",
+            "completed",
+            vec![easynet_axon::invocation::ReceiptRef {
+                receipt_hash: parent_hash,
+                receipt_ura: "easynet:///r/example/receipt/inv-parent/0".to_string(),
+            }],
+        );
+
+        let verification = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-parent/0",
+                    "receipt": parent
+                },
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-child/0",
+                    "receipt": child
+                }
+            ],
+            "public_keys": {
+                "easynet:///r/example/agent/alice.worker": hex::encode(signing_key.verifying_key().to_bytes())
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], true);
+        assert_eq!(verification["continuous"], true);
+        assert_eq!(verification["receipt_count"], 2);
+        assert_eq!(verification["items"][0]["metadata"]["receipt_index"], 0);
+        assert_eq!(verification["items"][1]["metadata"]["receipt_index"], 0);
+        assert_eq!(
+            verification["items"][1]["metadata"]["parent_receipt_count"],
+            1
+        );
+        assert_eq!(
+            verification["metadata"]["chain_projection"],
+            "cross_invocation_signature_dag_with_parent_closure"
+        );
+        assert_eq!(verification["metadata"]["parent_dag_closed"], true);
+    }
+
+    #[test]
+    fn receipt_cross_invocation_chain_rejects_valid_signed_index_gap() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let first = signed_axon_receipt_value(&signing_key, 0, [0u8; 32], "accepted", "accepted");
+        let first_hash = axon_receipt_hash(&first);
+        let skipped =
+            signed_axon_receipt_value(&signing_key, 2, first_hash, "terminal", "completed");
+
+        let verification = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt": first
+                },
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/2",
+                    "receipt": skipped
+                }
+            ],
+            "public_keys": {
+                "easynet:///r/example/agent/alice.worker": hex::encode(signing_key.verifying_key().to_bytes())
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], false);
+        assert_eq!(verification["continuous"], false);
+        assert_eq!(verification["items"][1]["verified"], true);
+        assert_eq!(verification["items"][1]["continuous"], false);
+        assert!(verification["reason"]
+            .as_str()
+            .unwrap()
+            .contains("receipt_index_gap"));
+    }
+
+    #[test]
+    fn receipt_cross_invocation_chain_rejects_valid_signed_prev_hash_break() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let first = signed_axon_receipt_value(&signing_key, 0, [0u8; 32], "accepted", "accepted");
+        let broken = signed_axon_receipt_value(&signing_key, 1, [0u8; 32], "terminal", "completed");
+
+        let verification = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt": first
+                },
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/1",
+                    "receipt": broken
+                }
+            ],
+            "public_keys": {
+                "easynet:///r/example/agent/alice.worker": hex::encode(signing_key.verifying_key().to_bytes())
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], false);
+        assert_eq!(verification["continuous"], false);
+        assert_eq!(verification["items"][1]["verified"], true);
+        assert_eq!(verification["items"][1]["continuous"], false);
+        assert!(verification["reason"]
+            .as_str()
+            .unwrap()
+            .contains("receipt_prev_hash_mismatch"));
     }
 
     #[test]
@@ -1507,8 +1701,27 @@ mod tests {
         receipt_type: &str,
         state: &str,
     ) -> Value {
-        signed_axon_receipt_value_with_parents(
+        signed_axon_receipt_value_for_invocation(
             signing_key,
+            "inv-axon",
+            index,
+            prev_receipt_hash,
+            receipt_type,
+            state,
+        )
+    }
+
+    fn signed_axon_receipt_value_for_invocation(
+        signing_key: &ed25519_dalek::SigningKey,
+        invocation_id: &str,
+        index: u64,
+        prev_receipt_hash: [u8; 32],
+        receipt_type: &str,
+        state: &str,
+    ) -> Value {
+        signed_axon_receipt_value_with_invocation_and_parents(
+            signing_key,
+            invocation_id,
             index,
             prev_receipt_hash,
             receipt_type,
@@ -1519,6 +1732,26 @@ mod tests {
 
     fn signed_axon_receipt_value_with_parents(
         signing_key: &ed25519_dalek::SigningKey,
+        index: u64,
+        prev_receipt_hash: [u8; 32],
+        receipt_type: &str,
+        state: &str,
+        parent_receipts: Vec<easynet_axon::invocation::ReceiptRef>,
+    ) -> Value {
+        signed_axon_receipt_value_with_invocation_and_parents(
+            signing_key,
+            "inv-axon",
+            index,
+            prev_receipt_hash,
+            receipt_type,
+            state,
+            parent_receipts,
+        )
+    }
+
+    fn signed_axon_receipt_value_with_invocation_and_parents(
+        signing_key: &ed25519_dalek::SigningKey,
+        invocation_id: &str,
         index: u64,
         prev_receipt_hash: [u8; 32],
         receipt_type: &str,
@@ -1568,7 +1801,7 @@ mod tests {
         };
         let body = ReceiptBody {
             index,
-            invocation_id: "inv-axon".to_string(),
+            invocation_id: invocation_id.to_string(),
             receipt_type: receipt_type.to_string(),
             state: state.to_string(),
             timestamp_unix_ms: 1783100000123,
