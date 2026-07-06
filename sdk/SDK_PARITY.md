@@ -493,7 +493,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Receipt, Publication, and Host Binding seams with feature discovery, typed errors, Invocation draft construction,
   RuntimeClient transport delegation, stream/bidi lifecycle handles, async
   iteration, `AbortSignal` cancellation, HealthClient runtime health and
-  diagnostics DTOs, DirectoryClient read-model
+  diagnostics DTOs, InvocationHandle await/cancel/events/free observation
+  seams, DirectoryClient read-model
   resolve/list/subscribe methods, IdentityClient URA/DescriptorRef projection
   methods, ReceiptClient fetch/projection/verification/causal-ref/history
   methods, opaque ReceiptRef/ReceiptChain helpers, PublicationClient resource,
@@ -502,7 +503,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   a scaffold-backed test gate plus a shared Node action-adapter report for
   Runtime Core, Health, Directory + Identity, MEMC, Receipt, Publication, and Host Binding seam
   cases. It is not provider-backed: daemon transports, remaining profile
-  clients, prepare/sign/submit, InvocationHandle, backpressure overflow, plugin
+  clients, prepare/sign conformance, backpressure overflow, plugin
   policy, host binding bridge, Axon-backed receipt verification, and package
   stability remain incomplete.
 

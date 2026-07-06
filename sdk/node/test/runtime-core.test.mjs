@@ -12,6 +12,7 @@ import {
   HostBindingClient,
   HostStreamHashState,
   HealthClient,
+  InvocationHandle,
   IdentityClient,
   InvocationBuilder,
   LocalHostBindingTransport,
@@ -89,6 +90,16 @@ const hostBindingRequest = () => ({
   frame_schema: HOST_STREAM_FRAME_SCHEMA,
   cleanup: { mode: "unlink_socket" },
   timeout_ms: 30000,
+});
+
+const signedInvocation = () => ({
+  prepared: {
+    tuple: completeDraft().build().toJSON(),
+    canonical_hash_hex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  },
+  signer_id: "signer-alice-key-1",
+  signature: { signature_base64: "c2lnbmF0dXJl" },
+  policy: { mode: "caller_signing" },
 });
 
 test("feature discovery decodes canonical Runtime Core facts", async () => {
@@ -300,6 +311,123 @@ test("RuntimeClient delegates through injected transport and rejects closed use"
   assert.deepEqual(seen.at(-1), { closed: true });
   await assert.rejects(
     () => runtime.invoke(completeDraft().build()),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("RuntimeClient submits signed envelopes and observes invocation handles", async () => {
+  const seen = [];
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    submitSigned: (signedJSON) => {
+      seen.push(["submit", JSON.parse(Buffer.from(signedJSON).toString("utf8"))]);
+      return JSON.stringify({
+        handle_id: 7,
+        state: "Submitted",
+        terminal: false,
+        events: [{ sequence: 1, kind: "submitted", state: "Submitted", terminal: false }],
+        result: null,
+      });
+    },
+    awaitHandle: (handleId) => {
+      seen.push(["await", handleId]);
+      return JSON.stringify({
+        ok: true,
+        terminal_state: "Completed",
+        output_json: {},
+        receipt: null,
+        error: null,
+      });
+    },
+    cancelHandle: (handleId, reason) => {
+      seen.push(["cancel", handleId, reason]);
+      return JSON.stringify({
+        handle_id: 7,
+        cancelled: false,
+        state: "Completed",
+        terminal: true,
+      });
+    },
+    handleEvents: (handleId) => {
+      seen.push(["events", handleId]);
+      return JSON.stringify({
+        handle_id: 7,
+        state: "Completed",
+        terminal: true,
+        events: [
+          {
+            sequence: 2,
+            kind: "terminal",
+            state: "Completed",
+            terminal: true,
+            result: { ok: true },
+          },
+        ],
+        result: { ok: true },
+      });
+    },
+    freeHandle: (handleId) => {
+      seen.push(["free", handleId]);
+    },
+  });
+
+  const signed = signedInvocation();
+  const handle = await runtime.submitSigned(signed);
+  const result = await handle.awaitResult();
+  const cancel = await handle.cancel("after terminal");
+  const refreshed = await handle.refreshEvents();
+  await handle.close();
+
+  assert.equal(handle.handleId, 7);
+  assert.equal(handle.state, "Submitted");
+  assert.equal(handle.events[0].sequence, 1);
+  assert.equal(result.terminal_state, "Completed");
+  assert.equal(cancel.state, "Completed");
+  assert.equal(cancel.cancelled, false);
+  assert.equal(refreshed.terminal, true);
+  assert.equal(refreshed.events.length, 1);
+  assert.equal(refreshed.events[0].terminal, true);
+  assert.equal(seen[0][0], "submit");
+  assert.equal(seen[0][1].signature.signature_base64, "c2lnbmF0dXJl");
+  assert.deepEqual(seen.slice(1), [
+    ["await", 7],
+    ["cancel", 7, "after terminal"],
+    ["events", 7],
+    ["free", 7],
+  ]);
+});
+
+test("InvocationHandle rejects legacy aliases and terminal drift", () => {
+  assert.throws(
+    () =>
+      new InvocationHandle({
+        handleId: 7,
+        state: "Submitted",
+        terminal: false,
+      }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  assert.throws(
+    () =>
+      new InvocationHandle({
+        handle_id: 7,
+        state: "Completed",
+        terminal: true,
+        events: [
+          { sequence: 1, kind: "terminal", state: "Completed", terminal: true },
+          { sequence: 2, kind: "cancelled", state: "Cancelled", terminal: true },
+        ],
+      }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  assert.throws(
+    () =>
+      new InvocationHandle({
+        handle_id: 7,
+        state: "Submitted",
+        terminal: false,
+        events: [{ sequence: 1, kind: "terminal", state: "Completed", terminal: true }],
+      }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });

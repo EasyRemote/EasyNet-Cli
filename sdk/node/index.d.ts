@@ -627,6 +627,10 @@ export interface RuntimeTransport {
   invoke(draftJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   prepare?(draftJSON: Uint8Array, optionsJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   submitSigned?(signedJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  awaitHandle?(handleId: number): Promise<Uint8Array | string> | Uint8Array | string;
+  cancelHandle?(handleId: number, reason: string): Promise<Uint8Array | string> | Uint8Array | string;
+  handleEvents?(handleId: number): Promise<Uint8Array | string> | Uint8Array | string;
+  freeHandle?(handleId: number): Promise<void> | void;
   openStream?(draftJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
   openBidi?(draftJSON: Uint8Array, streamsJSON: Uint8Array): Promise<{ transport: BidiTransport; open: Uint8Array | string }> | { transport: BidiTransport; open: Uint8Array | string };
   close?(): Promise<void> | void;
@@ -660,10 +664,75 @@ export class RuntimeClient {
   newInvocation(): InvocationBuilder;
   invoke(draft: InvocationDraft): Promise<Record<string, unknown>>;
   prepare(draft: InvocationDraft, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  submitSigned(signed: Record<string, unknown>): Promise<Record<string, unknown>>;
+  submitSigned(signed: Record<string, unknown>): Promise<InvocationHandle>;
+  awaitResult(handle: InvocationHandle): Promise<Record<string, unknown>>;
+  cancel(handle: InvocationHandle, reason?: string): Promise<InvocationCancel>;
+  events(handle: InvocationHandle): Promise<InvocationHandle>;
+  closeHandle(handle: InvocationHandle): Promise<void>;
   invokeStream(draft: InvocationDraft): Promise<StreamHandle>;
   openBidi(draft: InvocationDraft, streams?: Array<Record<string, unknown>>): Promise<BidiSession>;
   close(): Promise<void>;
+}
+
+export interface InvocationHandleEventFields {
+  sequence: number;
+  kind: string;
+  state: string;
+  terminal: boolean;
+  reason?: string | null;
+  result?: Record<string, unknown> | null;
+}
+
+export class InvocationHandleEvent {
+  sequence: number;
+  kind: string;
+  state: string;
+  terminal: boolean;
+  reason: string | null;
+  result: Record<string, unknown> | null;
+  constructor(fields: InvocationHandleEventFields);
+  toJSON(): InvocationHandleEventFields;
+}
+
+export interface InvocationHandleFields {
+  handle_id: number;
+  state: string;
+  terminal: boolean;
+  events?: InvocationHandleEventFields[];
+  result?: Record<string, unknown> | null;
+}
+
+export class InvocationHandle {
+  handleId: number;
+  state: string;
+  terminal: boolean;
+  events: InvocationHandleEvent[];
+  result: Record<string, unknown> | null;
+  constructor(fields: InvocationHandleFields);
+  static fromJSON(raw: Uint8Array | string): InvocationHandle;
+  bindRuntime(runtime: RuntimeClient): this;
+  awaitResult(): Promise<Record<string, unknown>>;
+  cancel(reason?: string): Promise<InvocationCancel>;
+  refreshEvents(): Promise<InvocationHandle>;
+  close(): Promise<void>;
+  toJSON(): InvocationHandleFields;
+}
+
+export interface InvocationCancelFields {
+  handle_id: number;
+  cancelled: boolean;
+  state: string;
+  terminal: boolean;
+}
+
+export class InvocationCancel {
+  handleId: number;
+  cancelled: boolean;
+  state: string;
+  terminal: boolean;
+  constructor(fields: InvocationCancelFields);
+  static fromJSON(raw: Uint8Array | string): InvocationCancel;
+  toJSON(): InvocationCancelFields;
 }
 
 export class StreamHandle {

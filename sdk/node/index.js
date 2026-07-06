@@ -1335,7 +1335,43 @@ export class RuntimeClient {
       throw invalidInvocation("signed invocation is required");
     }
     const raw = await transport.submitSigned(Buffer.from(JSON.stringify(signed)));
-    return parseJSON(raw, "invocation handle");
+    return InvocationHandle.fromJSON(raw).bindRuntime(this);
+  }
+
+  async awaitResult(handle) {
+    const transport = this.requireOpen();
+    if (typeof transport.awaitHandle !== "function") {
+      throw invalidSDK("runtime await-handle transport function is required");
+    }
+    return parseJSON(await transport.awaitHandle(assertHandle(handle).handleId), "invocation result");
+  }
+
+  async cancel(handle, reason = "") {
+    const transport = this.requireOpen();
+    if (typeof transport.cancelHandle !== "function") {
+      throw invalidSDK("runtime cancel-handle transport function is required");
+    }
+    if (typeof reason !== "string") {
+      throw invalidRuntime("cancel reason must be a string");
+    }
+    return InvocationCancel.fromJSON(await transport.cancelHandle(assertHandle(handle).handleId, reason));
+  }
+
+  async events(handle) {
+    const transport = this.requireOpen();
+    if (typeof transport.handleEvents !== "function") {
+      throw invalidSDK("runtime handle-events transport function is required");
+    }
+    return InvocationHandle.fromJSON(await transport.handleEvents(assertHandle(handle).handleId))
+      .bindRuntime(this);
+  }
+
+  async closeHandle(handle) {
+    const transport = this.requireOpen();
+    if (typeof transport.freeHandle !== "function") {
+      throw invalidSDK("runtime free-handle transport function is required");
+    }
+    await transport.freeHandle(assertHandle(handle).handleId);
   }
 
   async invokeStream(draft) {
@@ -1376,6 +1412,112 @@ export class RuntimeClient {
       throw invalidSDK("runtime client is closed");
     }
     return this.transport;
+  }
+}
+
+export class InvocationHandleEvent {
+  constructor(fields) {
+    const value = objectValue(fields, "invocation handle event");
+    rejectRuntimeFields(value, ["sequence", "kind", "state", "terminal", "reason", "result"]);
+    this.sequence = positiveRuntimeInteger(value.sequence, "sequence");
+    this.kind = requiredRuntimeString(value.kind, "kind");
+    this.state = requiredRuntimeString(value.state, "state");
+    this.terminal = runtimeBoolean(value.terminal, "terminal");
+    this.reason = optionalRuntimeString(value.reason, "reason");
+    this.result = optionalRuntimeObject(value.result, "result");
+  }
+
+  toJSON() {
+    const value = {
+      sequence: this.sequence,
+      kind: this.kind,
+      state: this.state,
+      terminal: this.terminal,
+    };
+    if (this.reason !== null) {
+      value.reason = this.reason;
+    }
+    if (this.result !== null) {
+      value.result = this.result;
+    }
+    return value;
+  }
+}
+
+export class InvocationHandle {
+  constructor(fields) {
+    const value = objectValue(fields, "invocation handle");
+    rejectRuntimeFields(value, ["handle_id", "state", "terminal", "events", "result"]);
+    this.handleId = positiveRuntimeInteger(value.handle_id, "handle_id");
+    this.state = requiredRuntimeString(value.state, "state");
+    this.terminal = runtimeBoolean(value.terminal, "terminal");
+    const events = value.events ?? [];
+    if (!Array.isArray(events)) {
+      throw invalidRuntime("events must be an array");
+    }
+    this.events = events.map((event) => new InvocationHandleEvent(event));
+    this.result = optionalRuntimeObject(value.result, "result");
+    this.runtime = null;
+    validateInvocationHandleMonotonicity(this);
+  }
+
+  static fromJSON(raw) {
+    return new InvocationHandle(parseJSON(raw, "invocation handle"));
+  }
+
+  bindRuntime(runtime) {
+    this.runtime = runtime;
+    return this;
+  }
+
+  async awaitResult() {
+    return requireBoundRuntime(this.runtime).awaitResult(this);
+  }
+
+  async cancel(reason = "") {
+    return requireBoundRuntime(this.runtime).cancel(this, reason);
+  }
+
+  async refreshEvents() {
+    return requireBoundRuntime(this.runtime).events(this);
+  }
+
+  async close() {
+    return requireBoundRuntime(this.runtime).closeHandle(this);
+  }
+
+  toJSON() {
+    return {
+      handle_id: this.handleId,
+      state: this.state,
+      terminal: this.terminal,
+      events: this.events.map((event) => event.toJSON()),
+      result: this.result,
+    };
+  }
+}
+
+export class InvocationCancel {
+  constructor(fields) {
+    const value = objectValue(fields, "invocation cancel");
+    rejectRuntimeFields(value, ["handle_id", "cancelled", "state", "terminal"]);
+    this.handleId = positiveRuntimeInteger(value.handle_id, "handle_id");
+    this.cancelled = runtimeBoolean(value.cancelled, "cancelled");
+    this.state = requiredRuntimeString(value.state, "state");
+    this.terminal = runtimeBoolean(value.terminal, "terminal");
+  }
+
+  static fromJSON(raw) {
+    return new InvocationCancel(parseJSON(raw, "invocation cancel"));
+  }
+
+  toJSON() {
+    return {
+      handle_id: this.handleId,
+      cancelled: this.cancelled,
+      state: this.state,
+      terminal: this.terminal,
+    };
   }
 }
 
@@ -2241,6 +2383,93 @@ function assertDraft(value) {
   return value;
 }
 
+function assertHandle(value) {
+  if (!(value instanceof InvocationHandle)) {
+    throw invalidRuntime("invocation handle is required");
+  }
+  return value;
+}
+
+function requireBoundRuntime(runtime) {
+  if (!runtime || typeof runtime.awaitResult !== "function") {
+    throw invalidRuntime("invocation handle is not bound to a runtime client");
+  }
+  return runtime;
+}
+
+function rejectRuntimeFields(value, allowed) {
+  const set = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!set.has(key)) {
+      throw invalidRuntime(`${key} is not a runtime field`);
+    }
+  }
+}
+
+function positiveRuntimeInteger(value, field) {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw invalidRuntime(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function requiredRuntimeString(value, field) {
+  if (typeof value !== "string" || value === "") {
+    throw invalidRuntime(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalRuntimeString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw invalidRuntime(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function runtimeBoolean(value, field) {
+  if (typeof value !== "boolean") {
+    throw invalidRuntime(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalRuntimeObject(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    return objectValue(value, field);
+  } catch (error) {
+    if (error instanceof SDKError) {
+      throw invalidRuntime(`${field} must be an object or null`);
+    }
+    throw error;
+  }
+}
+
+function validateInvocationHandleMonotonicity(handle) {
+  const terminalEvents = handle.events.filter((event) => event.terminal);
+  if (terminalEvents.length > 1) {
+    throw invalidRuntime("invocation handle can contain at most one terminal event");
+  }
+  if (terminalEvents.length === 1) {
+    const terminalEvent = terminalEvents[0];
+    if (!handle.terminal) {
+      throw invalidRuntime("terminal event requires terminal handle state");
+    }
+    if (terminalEvent.state !== handle.state) {
+      throw invalidRuntime("terminal event state must match handle state");
+    }
+  }
+  if (handle.result !== null && !handle.terminal) {
+    throw invalidRuntime("result requires terminal handle state");
+  }
+}
+
 function normalizeErrorCode(code) {
   const text = requiredWireString(code, "code");
   if (!ERROR_CODES.has(text)) {
@@ -2514,6 +2743,15 @@ function invalidInvocation(message) {
   return new SDKError({
     code: ErrorCode.INVALID_ARGUMENT,
     stage: "build",
+    retry: RetryHint.NEVER,
+    message,
+  });
+}
+
+function invalidRuntime(message) {
+  return new SDKError({
+    code: ErrorCode.INVALID_ARGUMENT,
+    stage: "runtime",
     retry: RetryHint.NEVER,
     message,
   });

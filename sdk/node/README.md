@@ -10,8 +10,8 @@ Publication, and Host Binding seams.
 `index.js` and `index.d.ts` expose feature discovery, typed errors, Invocation
 draft construction, RuntimeClient dispatch seams, stream/bidi lifecycle handles,
 async iteration, `AbortSignal` cancellation, HealthClient runtime
-health/diagnostics seams, DirectoryClient read-model resolve/list/subscribe
-seams, IdentityClient URA/DescriptorRef projection seams,
+health/diagnostics seams, InvocationHandle await/cancel/events/free seams,
+DirectoryClient read-model resolve/list/subscribe seams, IdentityClient URA/DescriptorRef projection seams,
 ReceiptClient fetch/projection/verification/causal-ref seams,
 PublicationClient resource/package/deploy/unpublish/read-model/lifecycle seams,
 and HostBindingClient host-stream codec/hash/lifecycle seams over injected
