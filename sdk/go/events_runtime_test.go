@@ -205,6 +205,77 @@ func TestRuntimeEventsMapsStreamAbilitiesAndOpensRuntimeStream(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventsProjectsRawDirectoryStreamPayload(t *testing.T) {
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{
+		streamTransport: StreamTransportFunc{
+			RecvFunc: func(ctx context.Context) ([]byte, error) {
+				return []byte(`{
+					"sequence": 3,
+					"kind": "data",
+					"state": "Open",
+					"terminal": false,
+					"payload_content_type": "application/json",
+					"payload_json": {
+						"type": "agent_advertised",
+						"agent_ura": "easynet:///r/example/agent/alice.main",
+						"signing_authority": "self_signed",
+						"replaced_prior": false,
+						"unix_ms": 1783100000123
+					}
+				}`), nil
+			},
+		},
+	}
+	runtimeClient, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	identityTransport := &compatibilityRuntimeIdentityTransport{
+		abilityByName: map[string]string{
+			eventsAbilitySubscribeDirectory: "easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2",
+		},
+		descriptorByAbility: map[string]string{
+			"easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2": "easynet:///r/example/ability/device.dev-a.federation.subscribe_directory_v2@1.0.0",
+		},
+	}
+	identityClient, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	var seenProjection map[string]any
+	provider := EventTransportFunc{
+		ProjectDirectoryEventFunc: func(ctx context.Context, eventJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(eventJSON, &seenProjection); err != nil {
+				return nil, err
+			}
+			return []byte(eventsRuntimeDirectoryFrameJSON), nil
+		},
+	}
+	client, err := NewRuntimeEventClientWithProjectionProvider(runtimeClient, identityClient, provider)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClientWithProjectionProvider: %v", err)
+	}
+
+	stream, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	if err != nil {
+		t.Fatalf("SubscribeDirectory: %v", err)
+	}
+	frame, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("EventStream.Next raw DirectoryEvent: %v", err)
+	}
+
+	if frame.EventID != "evt-directory-runtime" {
+		t.Fatalf("projected frame = %#v", frame)
+	}
+	cursor := seenProjection["cursor"].(map[string]any)
+	event := seenProjection["event"].(map[string]any)
+	if cursor["stream"] != "directory" || cursor["sequence"].(float64) != 3 ||
+		event["type"] != "agent_advertised" {
+		t.Fatalf("projection input = %#v", seenProjection)
+	}
+}
+
 func TestRuntimeEventsListsDeviceHistoryThroughRuntime(t *testing.T) {
 	identityTransport := &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{

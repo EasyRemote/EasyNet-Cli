@@ -10,7 +10,9 @@ from easynet_sdk.events import (
     EventCursor,
     EventDropReportInput,
     EventFilter,
+    EventFrame,
     EventProjectionInput,
+    EventStream,
     EventTerminalInput,
     EventsCarrierBase,
     EventsDeviceEventListRequest,
@@ -19,6 +21,7 @@ from easynet_sdk.events import (
     EventsInvocationSubscriptionRequest,
     EventsSessionSubscriptionRequest,
 )
+from easynet_sdk.stream import StreamHandle
 
 
 EVENTS_DIRECTORY_SUBSCRIPTION_INVOCATION = b"""{
@@ -258,6 +261,20 @@ class MemoryEventTransport:
         self.close_calls += 1
 
 
+class MemoryStreamTransport:
+    def __init__(self, raw: bytes) -> None:
+        self.raw = raw
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        return self.raw
+
+    def cancel(self, reason: str) -> bytes:
+        return b'{"stream_id":"events-raw","cancelled":true,"state":"Cancelled","terminal":true}'
+
+    def close(self) -> None:
+        return None
+
+
 def events_base() -> EventsCarrierBase:
     return EventsCarrierBase(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -375,6 +392,39 @@ class EventClientTests(unittest.TestCase):
         )
         self.assertTrue(terminal.terminal)
         self.assertEqual(terminal.kind, "directory.terminal")
+
+    def test_event_stream_projects_raw_directory_payload(self) -> None:
+        seen: list[EventProjectionInput] = []
+        runtime_stream = StreamHandle.from_json(
+            MemoryStreamTransport(
+                b"""{
+                  "sequence": 3,
+                  "kind": "data",
+                  "state": "Open",
+                  "terminal": false,
+                  "payload_json": {
+                    "type": "agent_advertised",
+                    "agent_ura": "easynet:///r/example/agent/alice.main",
+                    "signing_authority": "self_signed",
+                    "replaced_prior": false,
+                    "unix_ms": 1783100000123
+                  }
+                }"""
+            ),
+            b'{"stream_id":"events-raw","state":"Open"}',
+        )
+        stream = EventStream.from_runtime_stream(
+            "directory",
+            runtime_stream,
+            directory_projector=lambda input: seen.append(input)
+            or EventFrame.from_json(EVENTS_DIRECTORY_EVENT),
+        )
+
+        frame = stream.next()
+
+        self.assertEqual(frame.kind, "directory.agent_advertised")
+        self.assertEqual(seen[0].cursor.sequence, 3)
+        self.assertEqual(seen[0].event["type"], "agent_advertised")
 
     def test_directory_projectors_reject_session_cursor(self) -> None:
         client = EventClient(MemoryEventTransport())

@@ -18,7 +18,7 @@ from typing import Any
 
 from .directory import DirectorySubscription, DirectorySubscriptionCursor
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
-from .events import EventStream
+from .events import EventFrame, EventStream
 from .stream import StreamHandle
 
 EXPECTED_ABI_VERSION = 4
@@ -1701,6 +1701,9 @@ class CABIEventTransport(_CABIProfileTransport):
                 "stream_ability": "federation.subscribe_directory_v2",
                 "carrier_owner": "daemon_sdk",
             },
+            directory_projector=lambda input: EventFrame.from_json(
+                self.project_directory_event(input.to_json_bytes())
+            ),
         )
         self._event_streams.append(stream)
         return stream

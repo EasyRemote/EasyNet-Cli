@@ -1968,6 +1968,7 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 	for _, action := range []string{
 		"build_directory_subscription_invocation",
 		"project_directory_event",
+		"project_raw_directory_stream_payload",
 		"project_drop_report",
 		"project_terminal",
 	} {
@@ -1984,6 +1985,7 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 	requireCaseExpectation(t, eventsCase, "subscription_invocation_fixture: events-directory-subscription-invocation.v4.json")
 	requireCaseExpectation(t, eventsCase, "stream_system_ability: federation.subscribe_directory_v2")
 	requireCaseExpectation(t, eventsCase, "cursor_required: true")
+	requireCaseExpectation(t, eventsCase, "raw_directory_stream_projection: provider_backed")
 	requireCaseExpectation(t, eventsCase, "dropped_events_are_first_class: true")
 	requireCaseExpectation(t, eventsCase, "terminal_frame_explicit: true")
 	requireCaseExpectation(t, eventsCase, "related_event_streams_case: events-device-invocation-history.yaml")

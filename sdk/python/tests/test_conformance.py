@@ -3224,6 +3224,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         for action in (
             "build_directory_subscription_invocation",
             "project_directory_event",
+            "project_raw_directory_stream_payload",
             "project_drop_report",
             "project_terminal",
         ):
@@ -3243,6 +3244,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             events_case, "stream_system_ability: federation.subscribe_directory_v2"
         )
         self._require_case_expectation(events_case, "cursor_required: true")
+        self._require_case_expectation(
+            events_case, "raw_directory_stream_projection: provider_backed"
+        )
         self._require_case_expectation(
             events_case, "dropped_events_are_first_class: true"
         )

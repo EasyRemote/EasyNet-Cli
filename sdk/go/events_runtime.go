@@ -285,6 +285,19 @@ func (t *EventsRuntimeTransport) bindEventStreamHandle(stream EventStream) Event
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	stream.handle = t.streams[stream.StreamID]
+	if stream.Stream == string(EventStreamDirectory) && t.projectionProvider != nil {
+		stream.projectDirectory = func(ctx context.Context, input EventProjectionInput) (DirectoryEvent, error) {
+			requestJSON, err := json.Marshal(input)
+			if err != nil {
+				return EventFrame{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events projection input: %v", err), err)
+			}
+			raw, err := t.ProjectDirectoryEvent(ctx, requestJSON)
+			if err != nil {
+				return EventFrame{}, err
+			}
+			return NewEventFrameFromJSON(raw)
+		}
+	}
 	stream.release = t.releaseEventStreamHandle
 	return stream
 }

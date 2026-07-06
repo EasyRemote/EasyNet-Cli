@@ -143,13 +143,14 @@ type EventTerminalInput struct {
 
 // EventStream is the Events profile subscription state seam.
 type EventStream struct {
-	Stream      string         `json:"stream"`
-	StreamID    string         `json:"stream_id,omitempty"`
-	State       string         `json:"state"`
-	ResumeToken string         `json:"resume_token,omitempty"`
-	Metadata    map[string]any `json:"metadata"`
-	handle      *StreamHandle  `json:"-"`
-	release     func(string)   `json:"-"`
+	Stream           string         `json:"stream"`
+	StreamID         string         `json:"stream_id,omitempty"`
+	State            string         `json:"state"`
+	ResumeToken      string         `json:"resume_token,omitempty"`
+	Metadata         map[string]any `json:"metadata"`
+	handle           *StreamHandle  `json:"-"`
+	projectDirectory func(context.Context, EventProjectionInput) (DirectoryEvent, error)
+	release          func(string) `json:"-"`
 }
 
 type EventFrame struct {
@@ -503,7 +504,24 @@ func (s EventStream) Next(ctx context.Context) (EventFrame, error) {
 	if len(payload) == 0 || string(payload) == "null" {
 		return EventFrame{}, invalidProfilePayload(eventsProfile, "event stream frame payload_json is required", nil)
 	}
-	return NewEventFrameFromJSON(payload)
+	frame, err := NewEventFrameFromJSON(payload)
+	if err == nil {
+		return frame, nil
+	}
+	if s.Stream != string(EventStreamDirectory) || s.projectDirectory == nil {
+		return EventFrame{}, err
+	}
+	var rawEvent map[string]any
+	if decodeErr := json.Unmarshal(payload, &rawEvent); decodeErr != nil {
+		return EventFrame{}, err
+	}
+	return s.projectDirectory(ctx, EventProjectionInput{
+		Cursor: EventCursor{
+			Stream:   string(EventStreamDirectory),
+			Sequence: event.Sequence(),
+		},
+		Event: rawEvent,
+	})
 }
 
 func (s EventStream) Cancel(ctx context.Context, reason string) (StreamCancel, error) {

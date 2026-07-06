@@ -9,7 +9,7 @@ from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .invocation import InvocationDraft
-from .stream import StreamHandle
+from .stream import StreamEvent, StreamHandle
 
 
 _PROFILE = "events"
@@ -324,6 +324,9 @@ class EventStream:
     _runtime_stream: Optional[StreamHandle] = field(
         default=None, repr=False, compare=False
     )
+    _directory_projector: Optional[Callable[[EventProjectionInput], "DirectoryEvent"]] = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "EventStream":
@@ -346,6 +349,7 @@ class EventStream:
         *,
         resume_token: str = "",
         metadata: Mapping[str, object] | None = None,
+        directory_projector: Callable[[EventProjectionInput], "DirectoryEvent"] | None = None,
     ) -> "EventStream":
         if stream not in _SUPPORTED_STREAMS:
             raise _invalid_events("invalid event stream projection")
@@ -359,7 +363,16 @@ class EventStream:
             resume_token=resume_token,
             metadata=dict(metadata or {"profile": _PROFILE}),
             _runtime_stream=runtime_stream,
+            _directory_projector=directory_projector,
         )
+
+    def next(self, timeout: float | None = None) -> "EventFrame":
+        if self._runtime_stream is None:
+            raise _invalid_events("event stream is not backed by a runtime stream handle")
+        event = self._runtime_stream.next(timeout)
+        state = getattr(self._runtime_stream.state, "value", str(self._runtime_stream.state))
+        object.__setattr__(self, "state", state)
+        return self._frame_from_stream_event(event)
 
     def close(self) -> None:
         if self._runtime_stream is None:
@@ -367,6 +380,21 @@ class EventStream:
         self._runtime_stream.close()
         state = getattr(self._runtime_stream.state, "value", str(self._runtime_stream.state))
         object.__setattr__(self, "state", state)
+
+    def _frame_from_stream_event(self, event: StreamEvent) -> "EventFrame":
+        if event.payload_json is None:
+            raise _invalid_events("event stream frame payload_json is required")
+        try:
+            return EventFrame.from_mapping(_payload_mapping(event.payload_json))
+        except SDKError as exc:
+            if self.stream != _DIRECTORY_STREAM or self._directory_projector is None:
+                raise exc
+        return self._directory_projector(
+            EventProjectionInput(
+                cursor=EventCursor(_DIRECTORY_STREAM, event.sequence),
+                event=_payload_mapping(event.payload_json),
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -777,6 +805,21 @@ def _json_object(raw: bytes | str, label: str) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise _invalid_events(f"{label} JSON must be an object")
     return decoded
+
+
+def _payload_mapping(raw: object) -> Mapping[str, object]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except Exception as exc:
+            raise _invalid_events(f"decode event stream payload_json: {exc}", exc) from exc
+        if isinstance(decoded, dict):
+            return decoded
+    raise _invalid_events("event stream frame payload_json must be an object")
 
 
 def _required_string(decoded: Mapping[str, object], field_name: str) -> str:

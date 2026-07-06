@@ -11,6 +11,8 @@ steps:
     fixture: events-directory-subscription-request.v4.json
   - action: project_directory_event
     fixture: event.directory.v4.json
+  - action: project_raw_directory_stream_payload
+    fixture: event.directory.v4.json
   - action: project_drop_report
     fixture: event.directory-drop-report.v4.json
   - action: project_terminal
@@ -26,6 +28,7 @@ expect:
   terminal_fixture: event.directory-terminal.v4.json
   stream_system_ability: federation.subscribe_directory_v2
   cursor_required: true
+  raw_directory_stream_projection: provider_backed
   dropped_events_are_first_class: true
   terminal_frame_explicit: true
   related_event_streams_case: events-device-invocation-history.yaml
