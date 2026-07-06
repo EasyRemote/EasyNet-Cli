@@ -177,7 +177,7 @@ impl ScopeRule {
             ScopeRule::None => false,
             ScopeRule::OnlyMatching(allowed) => allowed
                 .iter()
-                .any(|allow| uri_matches_with_path_boundary(allow, candidate_ura)),
+                .any(|allow| ura_matches_with_path_boundary(allow, candidate_ura)),
         }
     }
 }
@@ -187,7 +187,7 @@ impl ScopeRule {
 /// be `/` or end-of-string. This blocks the
 /// `dev-1` → `dev-1-attacker` confusion class without forcing
 /// every caller to remember the trailing-slash convention.
-fn uri_matches_with_path_boundary(allow: &str, candidate: &str) -> bool {
+fn ura_matches_with_path_boundary(allow: &str, candidate: &str) -> bool {
     if allow == candidate {
         return true;
     }

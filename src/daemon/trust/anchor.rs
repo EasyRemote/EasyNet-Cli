@@ -552,7 +552,7 @@ impl RealmTrustAnchor {
     }
 
     /// PR-N1 commit 2/N: cross-hub dialer peer lookup. Returns the
-    /// `TrustedAgent` whose `hub_endpoint == target_hub` AND whose
+    /// `TrustedAgent` whose `hub_endpoint == target_hub_endpoint` AND whose
     /// `role == Hub` AND whose `origin_realm.is_some()`. The
     /// triple gate is the federation peer trust contract from
     /// DEC-N1 schema-B + PR-N1 spec §commit 2/N: the dialer never
@@ -564,11 +564,11 @@ impl RealmTrustAnchor {
     /// thousands), so a secondary index would be over-engineering.
     /// Re-evaluate if the scan ever shows up in admission profiles.
     #[must_use]
-    pub fn lookup_peer_hub(&self, target_hub: &str) -> Option<&TrustedAgent> {
+    pub fn lookup_peer_hub(&self, target_hub_endpoint: &str) -> Option<&TrustedAgent> {
         self.by_ura.values().find(|a| {
             a.role == TrustedAgentRole::Hub
                 && a.origin_realm.is_some()
-                && a.hub_endpoint.as_deref() == Some(target_hub)
+                && a.hub_endpoint.as_deref() == Some(target_hub_endpoint)
         })
     }
 
@@ -1302,45 +1302,47 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
 
     #[test]
     fn lookup_peer_hub_finds_matching_federation_entry() {
-        let target_hub = "https://peer-hub.example:50443";
+        let target_hub_endpoint = "https://peer-hub.example:50443";
         let mut entry = entry("easynet:///r/peer-realm/hub");
         entry.role = TrustedAgentRole::Hub;
         entry.origin_realm = Some("peer-realm".to_string());
-        entry.hub_endpoint = Some(target_hub.to_string());
+        entry.hub_endpoint = Some(target_hub_endpoint.to_string());
         entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
 
         let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
-        let found = anchor.lookup_peer_hub(target_hub).expect("peer found");
+        let found = anchor
+            .lookup_peer_hub(target_hub_endpoint)
+            .expect("peer found");
         assert_eq!(found.role, TrustedAgentRole::Hub);
         assert_eq!(found.origin_realm.as_deref(), Some("peer-realm"));
     }
 
     #[test]
     fn lookup_peer_hub_skips_non_hub_role() {
-        let target_hub = "https://peer-hub.example:50443";
+        let target_hub_endpoint = "https://peer-hub.example:50443";
         let mut entry = entry("easynet:///r/peer-realm/hub");
         // Backend role with a hub_endpoint set — operator typo. Must
         // not be returned by `lookup_peer_hub`.
         entry.role = TrustedAgentRole::Backend;
         entry.origin_realm = Some("peer-realm".to_string());
-        entry.hub_endpoint = Some(target_hub.to_string());
+        entry.hub_endpoint = Some(target_hub_endpoint.to_string());
         entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
 
         let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
-        assert!(anchor.lookup_peer_hub(target_hub).is_none());
+        assert!(anchor.lookup_peer_hub(target_hub_endpoint).is_none());
     }
 
     #[test]
     fn lookup_peer_hub_skips_entry_missing_origin_realm() {
-        let target_hub = "https://peer-hub.example:50443";
+        let target_hub_endpoint = "https://peer-hub.example:50443";
         let mut entry = entry("easynet:///r/peer-realm/hub");
         entry.role = TrustedAgentRole::Hub;
         entry.origin_realm = None;
-        entry.hub_endpoint = Some(target_hub.to_string());
+        entry.hub_endpoint = Some(target_hub_endpoint.to_string());
         entry.tls_ca_pem_path = Some(PathBuf::from("/tmp/peer-ca.pem"));
 
         let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
-        assert!(anchor.lookup_peer_hub(target_hub).is_none());
+        assert!(anchor.lookup_peer_hub(target_hub_endpoint).is_none());
     }
 
     #[test]

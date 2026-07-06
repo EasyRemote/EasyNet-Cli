@@ -2409,7 +2409,7 @@ mod tests {
     impl crate::daemon::federation::client::FederationClient for NoopFederationClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::daemon::federation::client::HubUri,
+            _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
@@ -2417,7 +2417,7 @@ mod tests {
         > {
             Err(
                 crate::daemon::federation::client::FederationClientError::DialFailed {
-                    hub: "https://noop.test:50443".to_string(),
+                    endpoint: "https://noop.test:50443".to_string(),
                     detail: "noop test client".to_string(),
                 },
             )

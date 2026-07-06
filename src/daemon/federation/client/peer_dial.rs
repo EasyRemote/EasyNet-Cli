@@ -58,7 +58,7 @@ use tonic::transport::{Certificate, ClientTlsConfig};
 
 /// Typed failure variants for [`pinned_tls_config`]. Callers wrap
 /// these into their own error families (e.g.
-/// `FederationClientError::DialFailed { hub, detail }` or
+/// `FederationClientError::DialFailed { endpoint, detail }` or
 /// `SessionError::TlsCaRead { path, source }`) so each call site's
 /// upstream error contract stays intact.
 #[derive(Debug)]

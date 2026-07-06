@@ -1212,7 +1212,7 @@ struct ForwardingPeerClient {
 impl FederationClient for ForwardingPeerClient {
     async fn forward_invoke(
         &self,
-        _target_hub: &crate::daemon::federation::client::HubUri,
+        _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, crate::daemon::federation::client::FederationClientError> {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.signing_seed);
@@ -1230,7 +1230,7 @@ impl FederationClient for ForwardingPeerClient {
             .await
             .map_err(|status| {
                 crate::daemon::federation::client::FederationClientError::InnerInvokeFailed {
-                    hub: "in-process-peer".to_string(),
+                    endpoint: "in-process-peer".to_string(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
                 }
             })?;

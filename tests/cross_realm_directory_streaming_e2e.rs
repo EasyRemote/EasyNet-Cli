@@ -49,7 +49,7 @@ use futures::StreamExt;
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 use easynet_cli::daemon::federation::client::{
-    DirectoryEventStream, FederationClient, FederationClientError, HubUri,
+    DirectoryEventStream, FederationClient, FederationClientError, HubEndpoint,
 };
 use easynet_cli::daemon::federation::directory::{
     run_per_peer_supervisor, DirectoryEvent, SharedFederatedDirectoryView,
@@ -73,7 +73,7 @@ struct InProcessStreamingForwarder {
 impl FederationClient for InProcessStreamingForwarder {
     async fn forward_invoke(
         &self,
-        _target_hub: &HubUri,
+        _target_hub_endpoint: &HubEndpoint,
         _request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
         Err(FederationClientError::Unimplemented(
@@ -83,7 +83,7 @@ impl FederationClient for InProcessStreamingForwarder {
 
     async fn subscribe_directory_v2(
         &self,
-        _target_hub: &HubUri,
+        _target_hub_endpoint: &HubEndpoint,
         _request: InvokeServerStreamRequest,
     ) -> Result<DirectoryEventStream, FederationClientError> {
         // Build a request stamped with the peer's loopback URI
@@ -104,7 +104,7 @@ impl FederationClient for InProcessStreamingForwarder {
             .invoke_stream(tonic::Request::new(request))
             .await
             .map_err(|status| FederationClientError::InnerInvokeFailed {
-                hub: "in-process".to_string(),
+                endpoint: "in-process".to_string(),
                 status: format!("code={:?} message={}", status.code(), status.message()),
             })?;
         let inner = response.into_inner();

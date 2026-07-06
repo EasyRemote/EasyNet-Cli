@@ -77,7 +77,9 @@ use easynet_axon::pb::axon::v1::{
     InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
 };
 use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
-use easynet_cli::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
+use easynet_cli::daemon::federation::client::{
+    FederationClient, FederationClientError, HubEndpoint,
+};
 use easynet_cli::daemon::federation::peers::SharedFederatedPeers;
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
@@ -114,7 +116,7 @@ struct InProcessForwarder {
 impl FederationClient for InProcessForwarder {
     async fn forward_invoke(
         &self,
-        _target_hub: &HubUri,
+        _target_hub_endpoint: &HubEndpoint,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
         // Stamp loopback: daemon A admits its own URA without
@@ -141,7 +143,7 @@ impl FederationClient for InProcessForwarder {
             .invoke(tonic::Request::new(request))
             .await
             .map_err(|status| FederationClientError::InnerInvokeFailed {
-                hub: "in-process-A".to_string(),
+                endpoint: "in-process-A".to_string(),
                 status: format!("code={:?} message={}", status.code(), status.message()),
             })?;
         Ok(response.into_inner())
@@ -360,11 +362,11 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     impl FederationClient for DialFailedClient {
         async fn forward_invoke(
             &self,
-            target_hub: &HubUri,
+            target_hub_endpoint: &HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<InvokeResponse, FederationClientError> {
             Err(FederationClientError::DialFailed {
-                hub: target_hub.clone(),
+                endpoint: target_hub_endpoint.clone(),
                 detail: "test must not dial".to_string(),
             })
         }

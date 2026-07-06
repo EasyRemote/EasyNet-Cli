@@ -80,7 +80,7 @@ struct DaemonHarness {
     /// under here.
     home: tempfile::TempDir,
     child: Child,
-    /// `https://127.0.0.1:<port>` — the TCP+TLS hub URI peers dial.
+    /// `https://127.0.0.1:<port>` — the TCP+TLS hub endpoint peers dial.
     hub_endpoint: String,
     /// Path to the leaf cert PEM. Used by the OTHER daemon's
     /// `realm-trust.toml` as the pinned CA the cross-hub dialer

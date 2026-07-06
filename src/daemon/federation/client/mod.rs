@@ -21,14 +21,14 @@
 //   call sites.
 // - `CrossHubDialer` — the concrete tonic-backed implementation.
 //   commit 1/N (this commit) lands the skeleton: channel cache
-//   (`Arc<DashMap<HubUri, Channel>>`), constructors, typed errors,
+//   (`Arc<DashMap<HubEndpoint, Channel>>`), constructors, typed errors,
 //   and a `forward_invoke` body that returns
 //   `FederationClientError::DialFailed("not implemented in PR-N1
 //   commit 1/N")`. Real TLS pinning + dial lands in commit 2/N;
 //   real `handle_forward_invoke` integration lands in commit 3/N;
 //   timeout / circuit-breaker lands in commit 4/N.
 // - `MockFederationClient` — `#[cfg(test)]`-only fixture that
-//   returns canned `InvokeResponse` per `(target_hub, ability)`
+//   returns canned `InvokeResponse` per `(target_hub_endpoint, ability)`
 //   pair. Lets PR-N1 commit 3/N's `handle_forward_invoke` rewrite
 //   land its tests against a known-good `FederationClient` impl
 //   without spawning a peer daemon.
@@ -45,7 +45,7 @@
 // - No `DaemonConfig::federated_peers` map. Per PR-N1 spec
 //   §commit 3/N the operator-configured `tenant → hub_endpoint` mapping
 //   lands when the real handler rewrite needs it. PR-N1 commit 1/N
-//   exposes the trait against a hub URI provided directly by the
+//   exposes the trait against a hub endpoint provided directly by the
 //   caller; mapping resolution belongs upstream.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
@@ -59,7 +59,7 @@ pub mod peer_dial;
 
 #[cfg(feature = "axon-pb")]
 pub use cross_hub_dial::{
-    CrossHubDialer, DirectoryEventStream, FederationClient, FederationClientError, HubUri,
+    CrossHubDialer, DirectoryEventStream, FederationClient, FederationClientError, HubEndpoint,
 };
 #[cfg(feature = "axon-pb")]
 pub use peer_dial::{pinned_tls_config, PinnedTlsError};

@@ -449,11 +449,14 @@ impl FederatedKeyResolver {
         })?;
 
         // Bridge sync trait → async tonic call.
-        let target_hub = peer_hub_endpoint.clone();
+        let target_hub_endpoint = peer_hub_endpoint.clone();
         let client_clone = Arc::clone(client);
         let response = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async move { client_clone.forward_invoke(&target_hub, request).await })
+            tokio::runtime::Handle::current().block_on(async move {
+                client_clone
+                    .forward_invoke(&target_hub_endpoint, request)
+                    .await
+            })
         })
         .map_err(|err| caller_key_not_found(agent_ura, &format!("dial_failed:{err}")))?;
 
@@ -581,7 +584,7 @@ mod tests {
     impl FederationClient for CannedFederationClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::daemon::federation::client::HubUri,
+            _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
@@ -602,7 +605,7 @@ mod tests {
     impl FederationClient for DialFailedClient {
         async fn forward_invoke(
             &self,
-            target_hub: &crate::daemon::federation::client::HubUri,
+            target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
@@ -610,7 +613,7 @@ mod tests {
         > {
             Err(
                 crate::daemon::federation::client::FederationClientError::DialFailed {
-                    hub: target_hub.clone(),
+                    endpoint: target_hub_endpoint.clone(),
                     detail: "test-injected failure".to_string(),
                 },
             )
@@ -780,7 +783,7 @@ mod tests {
     impl FederationClient for CountingFederationClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::daemon::federation::client::HubUri,
+            _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,
@@ -821,7 +824,7 @@ mod tests {
     impl FederationClient for EchoPresentedPubkeyClient {
         async fn forward_invoke(
             &self,
-            _target_hub: &crate::daemon::federation::client::HubUri,
+            _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             request: InvokeRequest,
         ) -> Result<
             easynet_axon::pb::axon::v1::InvokeResponse,

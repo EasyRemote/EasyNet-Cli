@@ -13,17 +13,17 @@
 //
 // Forward-invoke shape after this commit:
 //
-//   forward_invoke(target_hub, req)
-//     ├─ trust_anchor.lookup_peer_hub(target_hub)?  ← schema-B gate
-//     ├─ check_breaker_open(target_hub)?            ← commit 4/N
-//     ├─ resolve_peer_channel(target_hub) → cached or new
+//   forward_invoke(target_hub_endpoint, req)
+//     ├─ trust_anchor.lookup_peer_hub(target_hub_endpoint)?  ← schema-B gate
+//     ├─ check_breaker_open(target_hub_endpoint)?            ← commit 4/N
+//     ├─ resolve_peer_channel(target_hub_endpoint) → cached or new
 //     │     TLS-pinned tonic Channel
 //     ├─ tokio::time::timeout(forward_invoke_timeout,
 //     │     InvocationClient::new(channel).invoke(req)).await
-//     └─ on success → record_breaker_success(target_hub)
-//        on failure → record_breaker_failure(target_hub) + return
+//     └─ on success → record_breaker_success(target_hub_endpoint)
+//        on failure → record_breaker_failure(target_hub_endpoint) + return
 //
-// Breaker state machine (per peer, `Arc<DashMap<HubUri, BreakerState>>`):
+// Breaker state machine (per peer, `Arc<DashMap<HubEndpoint, BreakerState>>`):
 //
 //   Closed:                   normal operation; failures count toward
 //                             threshold; success resets counter.
@@ -191,17 +191,17 @@ enum BreakerScope {
     SubscribeDirectoryV2,
 }
 
-/// Canonical hub URI string used as the federation peer key. We
+/// Canonical hub endpoint string used as the federation peer key. We
 /// intentionally do not introduce a newtype wrapper around
-/// `String` for v1 — the URI is parsed by `tonic::transport::
+/// `String` for v1 — the endpoint is parsed by `tonic::transport::
 /// Endpoint::from_shared` at dial time, and additional structure
-/// at the type level would foreclose future URI-shape evolution
-/// (DEC-N3 §"hub URI carrier").
+/// at the type level would foreclose future endpoint-shape evolution
+/// (DEC-N3 §"hub endpoint carrier").
 ///
 /// Examples:
 ///   "https://hub-a.example.com:50443"
 ///   "https://10.0.0.7:50443"
-pub type HubUri = String;
+pub type HubEndpoint = String;
 
 /// Outcome of a cross-hub `forward_invoke` attempt.
 ///
@@ -210,27 +210,30 @@ pub type HubUri = String;
 /// protocol-level change that requires an RFC amendment.
 #[derive(Debug, thiserror::Error)]
 pub enum FederationClientError {
-    /// The peer hub URI is not present in the local
+    /// The peer hub endpoint is not present in the local
     /// `RealmTrustAnchor` with the federation role + non-empty
     /// origin realm id (DEC-N1 schema-B). Fail-closed:
     /// admission's federated trust set is the only authority on
     /// which peers we may dial.
     #[error("federation peer `{0}` is not in the realm trust anchor; cross-hub dial refused")]
-    PeerNotTrusted(HubUri),
+    PeerNotTrusted(HubEndpoint),
 
     /// `tonic::transport::Channel::connect` failed (TCP, TLS,
     /// HTTP/2 handshake — anything below the gRPC layer). The
     /// message carries the underlying tonic error verbatim so
     /// operators can grep without losing diagnostic detail.
-    #[error("federation dial to `{hub}` failed: {detail}")]
-    DialFailed { hub: HubUri, detail: String },
+    #[error("federation dial to `{endpoint}` failed: {detail}")]
+    DialFailed {
+        endpoint: HubEndpoint,
+        detail: String,
+    },
 
     /// The cross-hub channel exceeded the configured timeout
     /// (PR-N1 spec INV-4: 30s for `forward_invoke`, 10s for
     /// dial). Maps onto `target_offline` in the wire response so
     /// callers fall back to local cache / retry policy.
     #[error("federation channel to `{0}` timed out")]
-    ChannelTimeout(HubUri),
+    ChannelTimeout(HubEndpoint),
 
     /// The peer hub returned a `tonic::Status` from the inner
     /// `Invoke`. Wrapping rather than collapsing preserves the
@@ -238,8 +241,11 @@ pub enum FederationClientError {
     /// peer's reject reason verbatim (e.g.
     /// `AXON_CALLER_SIGNATURE_INVALID` from cross-realm
     /// admission).
-    #[error("federation peer `{hub}` returned: {status}")]
-    InnerInvokeFailed { hub: HubUri, status: String },
+    #[error("federation peer `{endpoint}` returned: {status}")]
+    InnerInvokeFailed {
+        endpoint: HubEndpoint,
+        status: String,
+    },
 
     /// Circuit-breaker open — the peer has had ≥ 3 consecutive
     /// failures within the breaker window and we refuse new
@@ -247,7 +253,7 @@ pub enum FederationClientError {
     /// unreachable peer. Implementation lands in PR-N1 commit
     /// 4/N; commit 1/N reserves the variant.
     #[error("federation circuit-breaker open for `{0}`")]
-    CircuitOpen(HubUri),
+    CircuitOpen(HubEndpoint),
 
     /// **PR-N3 N3-streaming-3**. The trait method is defined
     /// but the implementer (typically a test mock) did not
@@ -264,10 +270,10 @@ pub enum FederationClientError {
 /// swap in mocks without touching call sites.
 #[async_trait]
 pub trait FederationClient: Send + Sync {
-    /// Forward an `InvokeRequest` to `target_hub` and return its
+    /// Forward an `InvokeRequest` to `target_hub_endpoint` and return its
     /// response. Implementations MUST:
     ///
-    /// 1. Look up `target_hub` in the trust anchor. Reject with
+    /// 1. Look up `target_hub_endpoint` in the trust anchor. Reject with
     ///    `PeerNotTrusted` if the entry is missing or its
     ///    `origin_realm` is `None` (DEC-N1).
     /// 2. Re-use a cached `tonic::transport::Channel` per peer
@@ -278,12 +284,12 @@ pub trait FederationClient: Send + Sync {
     ///    transient failures are retried (PR-N1 commit 4/N).
     async fn forward_invoke(
         &self,
-        target_hub: &HubUri,
+        target_hub_endpoint: &HubEndpoint,
         request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError>;
 
     /// **PR-N3 N3-streaming-3**. Open a server-stream against
-    /// `target_hub`'s `federation.subscribe_directory_v2`
+    /// `target_hub_endpoint`'s `federation.subscribe_directory_v2`
     /// ability. Returns a boxed stream of `DirectoryEvent`
     /// frames; each frame is the JSON-decoded payload of one
     /// inbound `InvokeStreamChunk`. The stream ends when the
@@ -298,10 +304,10 @@ pub trait FederationClient: Send + Sync {
     /// the streaming path supply their own override.
     async fn subscribe_directory_v2(
         &self,
-        target_hub: &HubUri,
+        target_hub_endpoint: &HubEndpoint,
         request: InvokeServerStreamRequest,
     ) -> Result<DirectoryEventStream, FederationClientError> {
-        let _ = (target_hub, request);
+        let _ = (target_hub_endpoint, request);
         Err(FederationClientError::Unimplemented(
             "subscribe_directory_v2 not implemented by this FederationClient",
         ))
@@ -325,7 +331,7 @@ pub type DirectoryEventStream = std::pin::Pin<
 ///   `trust_source.snapshot()` on every dial so a SIGHUP-driven
 ///   reload of `realm-trust.toml` is visible to the next
 ///   federation dispatch without requiring a daemon restart.
-/// - `channels` — `Arc<DashMap<HubUri, Channel>>` peer-channel
+/// - `channels` — `Arc<DashMap<HubEndpoint, Channel>>` peer-channel
 ///   cache (PR-N1 spec INV-5). Lock-free — the hot path reads the
 ///   map on every cross-hub call so `RwLock<HashMap>` would be a
 ///   regression vs. `PresenceRegistry`'s existing pattern.
@@ -345,14 +351,14 @@ pub struct CrossHubDialer {
     /// futures drop their `Channel` clones, the cache entry's
     /// reference count goes to one (the map's own) and lazy
     /// eviction (next §5.2 cleanup pass) reclaims it.
-    channels: Arc<DashMap<(HubUri, u64), Channel>>,
+    channels: Arc<DashMap<(HubEndpoint, u64), Channel>>,
     /// **PR-N1 commit 4/N**. Per-peer breaker state, keyed by
     /// `(hub_endpoint, scope)`. Lock-free `DashMap` matches the channel
     /// cache shape so admission + breaker contention stay
     /// symmetric on the hot path. Scope separation keeps the
     /// long-stream supervisor's reconnect failures from draining
     /// the per-call `forward_invoke` budget on the same peer.
-    breaker_state: Arc<DashMap<(HubUri, BreakerScope), BreakerState>>,
+    breaker_state: Arc<DashMap<(HubEndpoint, BreakerScope), BreakerState>>,
     /// **PR-N1 commit 4/N**. Per-call timeout for the inner
     /// `InvocationClient::invoke`. Wraps with
     /// `tokio::time::timeout`; expiration surfaces as
@@ -472,8 +478,8 @@ impl CrossHubDialer {
     /// has never been dialed (no breaker entry tracked yet,
     /// semantically equivalent to `Closed { 0 }`).
     #[cfg(test)]
-    fn breaker_is_closed(&self, target_hub: &HubUri, scope: BreakerScope) -> bool {
-        let key = (target_hub.clone(), scope);
+    fn breaker_is_closed(&self, target_hub_endpoint: &HubEndpoint, scope: BreakerScope) -> bool {
+        let key = (target_hub_endpoint.clone(), scope);
         match self.breaker_state.get(&key).map(|e| e.value().clone()) {
             None => true,
             Some(BreakerState::Closed { .. }) => true,
@@ -490,14 +496,14 @@ impl CrossHubDialer {
     /// consistent across concurrent callers.
     fn check_and_advance_breaker(
         &self,
-        target_hub: &HubUri,
+        target_hub_endpoint: &HubEndpoint,
         scope: BreakerScope,
     ) -> Result<(), FederationClientError> {
         // `entry()` ensures we get exclusive access for the
         // read-modify-write transition. `or_default()` materialises
         // a `Closed { 0 }` entry on first dial — saves a
         // separate `insert` later.
-        let key = (target_hub.clone(), scope);
+        let key = (target_hub_endpoint.clone(), scope);
         let mut entry = self.breaker_state.entry(key).or_default();
         match &*entry {
             BreakerState::Closed { .. } | BreakerState::HalfOpen => Ok(()),
@@ -506,7 +512,9 @@ impl CrossHubDialer {
                     *entry = BreakerState::HalfOpen;
                     Ok(())
                 } else {
-                    Err(FederationClientError::CircuitOpen(target_hub.clone()))
+                    Err(FederationClientError::CircuitOpen(
+                        target_hub_endpoint.clone(),
+                    ))
                 }
             }
         }
@@ -515,8 +523,8 @@ impl CrossHubDialer {
     /// **PR-N1 commit 4/N**. Record a successful dial outcome for
     /// the named scope. Closed → reset the failure counter;
     /// HalfOpen → Closed.
-    fn record_breaker_success(&self, target_hub: &HubUri, scope: BreakerScope) {
-        let key = (target_hub.clone(), scope);
+    fn record_breaker_success(&self, target_hub_endpoint: &HubEndpoint, scope: BreakerScope) {
+        let key = (target_hub_endpoint.clone(), scope);
         let mut entry = self.breaker_state.entry(key).or_default();
         *entry = BreakerState::Closed {
             consecutive_failures: 0,
@@ -527,8 +535,8 @@ impl CrossHubDialer {
     /// Closed: bump the counter, transitioning to Open if the
     /// threshold is met. HalfOpen → Open (the trial dial failed).
     /// Open: idempotent.
-    fn record_breaker_failure(&self, target_hub: &HubUri, scope: BreakerScope) {
-        let key = (target_hub.clone(), scope);
+    fn record_breaker_failure(&self, target_hub_endpoint: &HubEndpoint, scope: BreakerScope) {
+        let key = (target_hub_endpoint.clone(), scope);
         let mut entry = self.breaker_state.entry(key).or_default();
         let next = match &*entry {
             BreakerState::Closed {
@@ -555,7 +563,7 @@ impl CrossHubDialer {
         *entry = next;
     }
 
-    /// Resolve a `tonic::transport::Channel` for `target_hub`,
+    /// Resolve a `tonic::transport::Channel` for `target_hub_endpoint`,
     /// reusing a cached channel when the peer has been dialed
     /// before. The trust-anchor entry the caller already verified
     /// supplies the operator-pinned CA path; the channel is built
@@ -573,11 +581,11 @@ impl CrossHubDialer {
     /// at boot).
     fn resolve_peer_channel(
         &self,
-        target_hub: &HubUri,
+        target_hub_endpoint: &HubEndpoint,
         ca_pem_path: &std::path::Path,
         generation: u64,
     ) -> Result<Channel, FederationClientError> {
-        let cache_key = (target_hub.clone(), generation);
+        let cache_key = (target_hub_endpoint.clone(), generation);
         if let Some(cached) = self.channels.get(&cache_key) {
             return Ok(cached.clone());
         }
@@ -588,19 +596,19 @@ impl CrossHubDialer {
         // PEM-read + Certificate::from_pem + ClientTlsConfig path.
         let tls = super::peer_dial::pinned_tls_config(ca_pem_path).map_err(|err| {
             FederationClientError::DialFailed {
-                hub: target_hub.clone(),
+                endpoint: target_hub_endpoint.clone(),
                 detail: err.to_string(),
             }
         })?;
 
-        let endpoint = Endpoint::from_shared(target_hub.clone())
+        let endpoint = Endpoint::from_shared(target_hub_endpoint.clone())
             .map_err(|err| FederationClientError::DialFailed {
-                hub: target_hub.clone(),
-                detail: format!("invalid hub_endpoint `{target_hub}`: {err}"),
+                endpoint: target_hub_endpoint.clone(),
+                detail: format!("invalid hub_endpoint `{target_hub_endpoint}`: {err}"),
             })?
             .tls_config(tls)
             .map_err(|err| FederationClientError::DialFailed {
-                hub: target_hub.clone(),
+                endpoint: target_hub_endpoint.clone(),
                 detail: format!("apply tls_config: {err}"),
             })?
             // Production-WAN h2 hardening on the peer-hub bidi.
@@ -636,7 +644,7 @@ impl CrossHubDialer {
         // entries already hold their own `Channel` clone; the
         // map removal does not interrupt them.
         self.channels
-            .retain(|(hub, gen), _| hub != target_hub || *gen == generation);
+            .retain(|(hub, gen), _| hub != target_hub_endpoint || *gen == generation);
         self.channels.insert(cache_key, channel.clone());
         Ok(channel)
     }
@@ -646,13 +654,13 @@ impl CrossHubDialer {
 impl FederationClient for CrossHubDialer {
     async fn forward_invoke(
         &self,
-        target_hub: &HubUri,
+        target_hub_endpoint: &HubEndpoint,
         request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
         // ── 1. Trust gate ────────────────────────────────────
         // `lookup_peer_hub` enforces the schema-B contract:
         // role == Hub AND origin_realm.is_some() AND
-        // hub_endpoint == target_hub. A peer that fails any of those
+        // hub_endpoint == target_hub_endpoint. A peer that fails any of those
         // is `PeerNotTrusted`. We additionally require
         // `tls_ca_pem_path.is_some()` since DEC-N1 forbids the
         // dialer from falling back to system CAs.
@@ -667,12 +675,12 @@ impl FederationClient for CrossHubDialer {
         // ratified by the perf review.
         let trust_snapshot = self.trust_source.snapshot();
         let entry = trust_snapshot
-            .lookup_peer_hub(target_hub)
-            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+            .lookup_peer_hub(target_hub_endpoint)
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub_endpoint.clone()))?;
         let ca_path = entry
             .tls_ca_pem_path
             .as_deref()
-            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub_endpoint.clone()))?;
 
         // ── 2. Breaker gate (PR-N1 commit 4/N) ───────────────
         // Open + within reset window → fail-fast `CircuitOpen`.
@@ -680,7 +688,7 @@ impl FederationClient for CrossHubDialer {
         // this call is the trial dial. Closed → proceed normally.
         // Scope = ForwardInvoke so this path's failure budget is
         // independent of the long-stream supervisor's.
-        self.check_and_advance_breaker(target_hub, BreakerScope::ForwardInvoke)?;
+        self.check_and_advance_breaker(target_hub_endpoint, BreakerScope::ForwardInvoke)?;
 
         // ── 3. Resolve channel (cached or fresh TLS-pinned) ──
         // DEC-N5 §5: key the cache by `(hub_endpoint, generation)` so a
@@ -689,16 +697,16 @@ impl FederationClient for CrossHubDialer {
         // The generation snapshot is per-call — the call sees a
         // consistent (anchor, generation) pair.
         let generation = self.trust_source.cert_anchor_generation();
-        let channel = match self.resolve_peer_channel(target_hub, ca_path, generation) {
+        let channel = match self.resolve_peer_channel(target_hub_endpoint, ca_path, generation) {
             Ok(channel) => channel,
             Err(err) => {
                 // A channel-build failure is a peer-reachability
-                // event (cert read error, malformed hub URI). It
+                // event (cert read error, malformed hub endpoint). It
                 // counts toward the breaker so a typo'd
                 // `tls_ca_pem_path` can't pin the breaker open
                 // forever — the next operator save flushes the
                 // bad entry and the breaker auto-resets.
-                self.record_breaker_failure(target_hub, BreakerScope::ForwardInvoke);
+                self.record_breaker_failure(target_hub_endpoint, BreakerScope::ForwardInvoke);
                 return Err(err);
             }
         };
@@ -710,19 +718,21 @@ impl FederationClient for CrossHubDialer {
 
         match outcome {
             Ok(Ok(response)) => {
-                self.record_breaker_success(target_hub, BreakerScope::ForwardInvoke);
+                self.record_breaker_success(target_hub_endpoint, BreakerScope::ForwardInvoke);
                 Ok(response.into_inner())
             }
             Ok(Err(status)) => {
-                self.record_breaker_failure(target_hub, BreakerScope::ForwardInvoke);
+                self.record_breaker_failure(target_hub_endpoint, BreakerScope::ForwardInvoke);
                 Err(FederationClientError::InnerInvokeFailed {
-                    hub: target_hub.clone(),
+                    endpoint: target_hub_endpoint.clone(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
                 })
             }
             Err(_elapsed) => {
-                self.record_breaker_failure(target_hub, BreakerScope::ForwardInvoke);
-                Err(FederationClientError::ChannelTimeout(target_hub.clone()))
+                self.record_breaker_failure(target_hub_endpoint, BreakerScope::ForwardInvoke);
+                Err(FederationClientError::ChannelTimeout(
+                    target_hub_endpoint.clone(),
+                ))
             }
         }
     }
@@ -748,18 +758,18 @@ impl FederationClient for CrossHubDialer {
     /// stream gracefully — the per-peer supervisor reconnects.
     async fn subscribe_directory_v2(
         &self,
-        target_hub: &HubUri,
+        target_hub_endpoint: &HubEndpoint,
         request: InvokeServerStreamRequest,
     ) -> Result<DirectoryEventStream, FederationClientError> {
         // ── 1. Trust gate (same as forward_invoke). ─────────
         let trust_snapshot = self.trust_source.snapshot();
         let entry = trust_snapshot
-            .lookup_peer_hub(target_hub)
-            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+            .lookup_peer_hub(target_hub_endpoint)
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub_endpoint.clone()))?;
         let ca_path = entry
             .tls_ca_pem_path
             .as_deref()
-            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub.clone()))?;
+            .ok_or_else(|| FederationClientError::PeerNotTrusted(target_hub_endpoint.clone()))?;
 
         // ── 2. Breaker gate. ────────────────────────────────
         // Scope = SubscribeDirectoryV2 so reconnect-storm failures
@@ -767,26 +777,32 @@ impl FederationClient for CrossHubDialer {
         // own counter and do NOT open the breaker for ForwardInvoke
         // on the same peer. Both scopes share the trust gate +
         // channel cache; only the breaker counters are split.
-        self.check_and_advance_breaker(target_hub, BreakerScope::SubscribeDirectoryV2)?;
+        self.check_and_advance_breaker(target_hub_endpoint, BreakerScope::SubscribeDirectoryV2)?;
 
         // ── 3. Channel resolve (same cache as forward_invoke). ─
         let generation = self.trust_source.cert_anchor_generation();
-        let channel = match self.resolve_peer_channel(target_hub, ca_path, generation) {
+        let channel = match self.resolve_peer_channel(target_hub_endpoint, ca_path, generation) {
             Ok(channel) => channel,
             Err(err) => {
-                self.record_breaker_failure(target_hub, BreakerScope::SubscribeDirectoryV2);
+                self.record_breaker_failure(
+                    target_hub_endpoint,
+                    BreakerScope::SubscribeDirectoryV2,
+                );
                 return Err(err);
             }
         };
 
         // ── 4. Open the server-stream. ──────────────────────
         let mut client = InvocationClient::new(channel);
-        let target_hub_owned = target_hub.clone();
+        let target_hub_endpoint_owned = target_hub_endpoint.clone();
         let outcome =
             tokio::time::timeout(self.forward_invoke_timeout, client.invoke_stream(request)).await;
         match outcome {
             Ok(Ok(response)) => {
-                self.record_breaker_success(target_hub, BreakerScope::SubscribeDirectoryV2);
+                self.record_breaker_success(
+                    target_hub_endpoint,
+                    BreakerScope::SubscribeDirectoryV2,
+                );
                 let inner = response.into_inner();
                 // Wrap the tonic Streaming with a JSON-decode
                 // step so consumers see DirectoryEvent shapes.
@@ -794,19 +810,28 @@ impl FederationClient for CrossHubDialer {
                 // (logged once at debug-level by the wrapper
                 // — production deploys can grep the daemon
                 // log for `subscribe_directory_v2 decode`).
-                let stream = Self::stream_chunks_to_directory_events(inner, target_hub_owned);
+                let stream =
+                    Self::stream_chunks_to_directory_events(inner, target_hub_endpoint_owned);
                 Ok(Box::pin(stream))
             }
             Ok(Err(status)) => {
-                self.record_breaker_failure(target_hub, BreakerScope::SubscribeDirectoryV2);
+                self.record_breaker_failure(
+                    target_hub_endpoint,
+                    BreakerScope::SubscribeDirectoryV2,
+                );
                 Err(FederationClientError::InnerInvokeFailed {
-                    hub: target_hub.clone(),
+                    endpoint: target_hub_endpoint.clone(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
                 })
             }
             Err(_elapsed) => {
-                self.record_breaker_failure(target_hub, BreakerScope::SubscribeDirectoryV2);
-                Err(FederationClientError::ChannelTimeout(target_hub.clone()))
+                self.record_breaker_failure(
+                    target_hub_endpoint,
+                    BreakerScope::SubscribeDirectoryV2,
+                );
+                Err(FederationClientError::ChannelTimeout(
+                    target_hub_endpoint.clone(),
+                ))
             }
         }
     }
@@ -820,51 +845,54 @@ impl CrossHubDialer {
     /// the JSON-decode side of the wire.
     fn stream_chunks_to_directory_events(
         inner: tonic::Streaming<easynet_axon::pb::axon::v1::InvokeStreamChunk>,
-        target_hub: HubUri,
+        target_hub_endpoint: HubEndpoint,
     ) -> impl futures::Stream<Item = crate::daemon::federation::directory::DirectoryEvent> + Send
     {
-        futures::stream::unfold((inner, target_hub), |(mut inner, target_hub)| async move {
-            loop {
-                match inner.message().await {
-                    Ok(Some(chunk)) => match serde_json::from_slice::<
-                        crate::daemon::federation::directory::DirectoryEvent,
-                    >(&chunk.payload)
-                    {
-                        Ok(event) => return Some((event, (inner, target_hub))),
-                        Err(err) => {
-                            let err_msg = format!("{err}");
-                            let target_hub_log = target_hub.clone();
+        futures::stream::unfold(
+            (inner, target_hub_endpoint),
+            |(mut inner, target_hub_endpoint)| async move {
+                loop {
+                    match inner.message().await {
+                        Ok(Some(chunk)) => match serde_json::from_slice::<
+                            crate::daemon::federation::directory::DirectoryEvent,
+                        >(&chunk.payload)
+                        {
+                            Ok(event) => return Some((event, (inner, target_hub_endpoint))),
+                            Err(err) => {
+                                let err_msg = format!("{err}");
+                                let target_hub_endpoint_log = target_hub_endpoint.clone();
+                                crate::op_event!(
+                                    component = cross_hub_dial,
+                                    kind = subscribe_directory_v2_decode_failed,
+                                    target_hub_endpoint = target_hub_endpoint_log,
+                                    error = err_msg,
+                                    message = "dropping frame",
+                                );
+                                continue;
+                            }
+                        },
+                        Ok(None) => return None,
+                        Err(status) => {
+                            // `tonic::Code` has Display — bare PascalCase
+                            // variant name, grep-stable. `status.message()`
+                            // is a `&str` rendered by op_event!'s formatter
+                            // (single layer of quoting if it has whitespace).
+                            let code = status.code();
+                            let msg = status.message();
+                            let target_hub_endpoint_log = target_hub_endpoint.clone();
                             crate::op_event!(
                                 component = cross_hub_dial,
-                                kind = subscribe_directory_v2_decode_failed,
-                                target_hub = target_hub_log,
-                                error = err_msg,
-                                message = "dropping frame",
+                                kind = subscribe_directory_v2_stream_ended_with_error,
+                                target_hub_endpoint = target_hub_endpoint_log,
+                                code = code,
+                                error = msg,
                             );
-                            continue;
+                            return None;
                         }
-                    },
-                    Ok(None) => return None,
-                    Err(status) => {
-                        // `tonic::Code` has Display — bare PascalCase
-                        // variant name, grep-stable. `status.message()`
-                        // is a `&str` rendered by op_event!'s formatter
-                        // (single layer of quoting if it has whitespace).
-                        let code = status.code();
-                        let msg = status.message();
-                        let target_hub_log = target_hub.clone();
-                        crate::op_event!(
-                            component = cross_hub_dial,
-                            kind = subscribe_directory_v2_stream_ended_with_error,
-                            target_hub = target_hub_log,
-                            code = code,
-                            error = msg,
-                        );
-                        return None;
                     }
                 }
-            }
-        })
+            },
+        )
     }
 }
 
@@ -891,14 +919,14 @@ mod tests {
     use std::sync::Mutex;
 
     /// Test-only canned-response client. Lookup key is
-    /// `(target_hub, request.function_name)` so a single mock
+    /// `(target_hub_endpoint, request.function_name)` so a single mock
     /// can answer different abilities differently. Calls not in
     /// the canned set return `FederationClientError::DialFailed`
     /// — the same variant the real skeleton would return, so
     /// the dispatcher under test cannot tell apart "no canned
     /// response set" from "real dialer not yet wired".
     pub(super) struct MockFederationClient {
-        canned: Mutex<HashMap<(HubUri, String), InvokeResponse>>,
+        canned: Mutex<HashMap<(HubEndpoint, String), InvokeResponse>>,
     }
 
     impl MockFederationClient {
@@ -910,14 +938,14 @@ mod tests {
 
         pub(super) fn insert(
             &self,
-            target_hub: HubUri,
+            target_hub_endpoint: HubEndpoint,
             function_name: &str,
             response: InvokeResponse,
         ) {
             self.canned
                 .lock()
                 .expect("mock canned map poisoned")
-                .insert((target_hub, function_name.to_string()), response);
+                .insert((target_hub_endpoint, function_name.to_string()), response);
         }
     }
 
@@ -925,17 +953,17 @@ mod tests {
     impl FederationClient for MockFederationClient {
         async fn forward_invoke(
             &self,
-            target_hub: &HubUri,
+            target_hub_endpoint: &HubEndpoint,
             request: InvokeRequest,
         ) -> Result<InvokeResponse, FederationClientError> {
-            let key = (target_hub.clone(), request.function_name);
+            let key = (target_hub_endpoint.clone(), request.function_name);
             self.canned
                 .lock()
                 .expect("mock canned map poisoned")
                 .get(&key)
                 .cloned()
                 .ok_or_else(|| FederationClientError::DialFailed {
-                    hub: target_hub.clone(),
+                    endpoint: target_hub_endpoint.clone(),
                     detail: "MockFederationClient: no canned response".to_string(),
                 })
         }
@@ -965,14 +993,14 @@ mod tests {
 
     /// Build a fully-populated federation peer entry. Each test
     /// then mutates one field to exercise a specific reject reason.
-    fn fed_peer_entry(target_hub: &str, ca_path: PathBuf) -> TrustedAgent {
+    fn fed_peer_entry(target_hub_endpoint: &str, ca_path: PathBuf) -> TrustedAgent {
         TrustedAgent {
             agent_ura: crate::core::ura::hub_ura("peer-realm"),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some("peer-realm".to_string()),
-            hub_endpoint: Some(target_hub.to_string()),
+            hub_endpoint: Some(target_hub_endpoint.to_string()),
             tls_ca_pem_path: Some(ca_path),
         }
     }
@@ -996,7 +1024,7 @@ mod tests {
             .await
             .expect_err("empty anchor must reject");
         match err {
-            FederationClientError::PeerNotTrusted(hub) => assert_eq!(hub, target),
+            FederationClientError::PeerNotTrusted(endpoint) => assert_eq!(endpoint, target),
             other => panic!("expected PeerNotTrusted, got: {other:?}"),
         }
         assert_eq!(dialer.cached_peer_count(), 0);
@@ -1077,8 +1105,8 @@ mod tests {
             .await
             .expect_err("unreadable CA must surface as DialFailed");
         match err {
-            FederationClientError::DialFailed { hub, detail } => {
-                assert_eq!(hub, target);
+            FederationClientError::DialFailed { endpoint, detail } => {
+                assert_eq!(endpoint, target);
                 assert!(
                     detail.contains("read tls_ca_pem_path"),
                     "DialFailed.detail must cite the read step; got: {detail}"
@@ -1155,7 +1183,7 @@ mod tests {
             .await
             .expect_err("50ms budget against black-hole port must time out");
         match err {
-            FederationClientError::ChannelTimeout(hub) => assert_eq!(hub, target),
+            FederationClientError::ChannelTimeout(endpoint) => assert_eq!(endpoint, target),
             // tonic 0.12 may surface the failure as `DialFailed`
             // before the inner invoke timeout fires when the OS
             // refuses TCP synchronously (e.g. `ECONNREFUSED` on
@@ -1163,9 +1191,9 @@ mod tests {
             // expression of "peer not reachable inside the
             // budget"; the assertion that matters is "no panic +
             // not a `PeerNotTrusted` false-positive".
-            FederationClientError::DialFailed { hub, .. }
-            | FederationClientError::InnerInvokeFailed { hub, .. } => {
-                assert_eq!(hub, target);
+            FederationClientError::DialFailed { endpoint, .. }
+            | FederationClientError::InnerInvokeFailed { endpoint, .. } => {
+                assert_eq!(endpoint, target);
             }
             other => {
                 panic!("expected ChannelTimeout / DialFailed / InnerInvokeFailed, got: {other:?}")
@@ -1212,7 +1240,7 @@ mod tests {
             .expect_err("second call should be CircuitOpen");
         let elapsed = started.elapsed();
         match err {
-            FederationClientError::CircuitOpen(hub) => assert_eq!(hub, target),
+            FederationClientError::CircuitOpen(endpoint) => assert_eq!(endpoint, target),
             other => panic!("expected CircuitOpen, got: {other:?}"),
         }
         assert!(
@@ -1669,7 +1697,7 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
             .await
             .expect_err("missing canned response must surface as DialFailed");
         match err {
-            FederationClientError::DialFailed { hub, .. } => assert_eq!(hub, target),
+            FederationClientError::DialFailed { endpoint, .. } => assert_eq!(endpoint, target),
             other => panic!("expected DialFailed, got: {other:?}"),
         }
     }

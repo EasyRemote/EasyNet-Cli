@@ -41,7 +41,9 @@ use async_trait::async_trait;
 
 use easynet_axon::pb::axon::v1::invocation_server::Invocation;
 use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
-use easynet_cli::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
+use easynet_cli::daemon::federation::client::{
+    FederationClient, FederationClientError, HubEndpoint,
+};
 use easynet_cli::daemon::federation::directory::{
     poll_once, DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
 };
@@ -63,7 +65,7 @@ struct InProcessForwarder {
 impl FederationClient for InProcessForwarder {
     async fn forward_invoke(
         &self,
-        _target_hub: &HubUri,
+        _target_hub_endpoint: &HubEndpoint,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
         request.envelope = Some(easynet_axon::pb::axon::v1::Envelope {
@@ -78,7 +80,7 @@ impl FederationClient for InProcessForwarder {
             .invoke(tonic::Request::new(request))
             .await
             .map_err(|status| FederationClientError::InnerInvokeFailed {
-                hub: "in-process-A".to_string(),
+                endpoint: "in-process-A".to_string(),
                 status: format!("code={:?} message={}", status.code(), status.message()),
             })?;
         Ok(response.into_inner())

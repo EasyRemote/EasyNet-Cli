@@ -1873,7 +1873,7 @@ mod tests {
     mod supervisor_tests {
         use super::*;
         use crate::daemon::federation::client::{
-            DirectoryEventStream, FederationClient, FederationClientError, HubUri,
+            DirectoryEventStream, FederationClient, FederationClientError, HubEndpoint,
         };
         use async_trait::async_trait;
         use easynet_axon::pb::axon::v1::{
@@ -1894,7 +1894,7 @@ mod tests {
         impl FederationClient for OneShotStreamingClient {
             async fn forward_invoke(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::Unimplemented("not used in test"))
@@ -1902,7 +1902,7 @@ mod tests {
 
             async fn subscribe_directory_v2(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeServerStreamRequest,
             ) -> Result<DirectoryEventStream, FederationClientError> {
                 let payload = self.events.lock().unwrap().take();
@@ -1912,7 +1912,7 @@ mod tests {
                         Ok(Box::pin(futures::stream::iter(events)))
                     }
                     None => Err(FederationClientError::DialFailed {
-                        hub: "in-process".to_string(),
+                        endpoint: "in-process".to_string(),
                         detail: "test fixture: stream already served once".to_string(),
                     }),
                 }
@@ -1931,7 +1931,7 @@ mod tests {
         impl FederationClient for StalledStreamingClient {
             async fn forward_invoke(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::Unimplemented("not used in test"))
@@ -1939,7 +1939,7 @@ mod tests {
 
             async fn subscribe_directory_v2(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeServerStreamRequest,
             ) -> Result<DirectoryEventStream, FederationClientError> {
                 *self.dial_count.lock().unwrap() += 1;
@@ -1955,7 +1955,7 @@ mod tests {
         impl FederationClient for CaptureSubscribeRequestClient {
             async fn forward_invoke(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::Unimplemented("not used in test"))
@@ -1963,7 +1963,7 @@ mod tests {
 
             async fn subscribe_directory_v2(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 request: InvokeServerStreamRequest,
             ) -> Result<DirectoryEventStream, FederationClientError> {
                 self.function_names
@@ -2316,7 +2316,7 @@ mod tests {
             impl FederationClient for DelayedStreamingClient {
                 async fn forward_invoke(
                     &self,
-                    _target_hub: &HubUri,
+                    _target_hub_endpoint: &HubEndpoint,
                     _request: InvokeRequest,
                 ) -> Result<InvokeResponse, FederationClientError> {
                     Err(FederationClientError::Unimplemented("not used"))
@@ -2324,7 +2324,7 @@ mod tests {
 
                 async fn subscribe_directory_v2(
                     &self,
-                    _target_hub: &HubUri,
+                    _target_hub_endpoint: &HubEndpoint,
                     _request: InvokeServerStreamRequest,
                 ) -> Result<DirectoryEventStream, FederationClientError> {
                     if *self.served.lock().unwrap() {
@@ -2900,13 +2900,15 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     mod poll_tests {
         use super::*;
-        use crate::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
+        use crate::daemon::federation::client::{
+            FederationClient, FederationClientError, HubEndpoint,
+        };
         use async_trait::async_trait;
         use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
         use std::sync::Mutex;
 
         /// Mock FederationClient. Returns canned discover
-        /// responses keyed by target_hub endpoint.
+        /// responses keyed by target_hub_endpoint endpoint.
         struct CannedClient {
             responses: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
         }
@@ -2915,14 +2917,14 @@ mod tests {
         impl FederationClient for CannedClient {
             async fn forward_invoke(
                 &self,
-                target_hub: &HubUri,
+                target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 let bytes = self
                     .responses
                     .lock()
                     .unwrap()
-                    .get(target_hub)
+                    .get(target_hub_endpoint)
                     .cloned()
                     .unwrap_or_default();
                 Ok(InvokeResponse {
@@ -2937,11 +2939,11 @@ mod tests {
         impl FederationClient for DialFailedClient {
             async fn forward_invoke(
                 &self,
-                target_hub: &HubUri,
+                target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::DialFailed {
-                    hub: target_hub.clone(),
+                    endpoint: target_hub_endpoint.clone(),
                     detail: "test-injected".to_string(),
                 })
             }
