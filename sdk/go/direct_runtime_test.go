@@ -147,6 +147,43 @@ func TestDirectDaemonRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	}
 }
 
+func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughIdentity(t *testing.T) {
+	identityTransport := &memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON}
+	identity, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+		DialTimeoutMS: 3000,
+		Identity:      identity,
+	})
+	defer cleanup()
+
+	client, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	if _, err := client.Invoke(context.Background(), directRuntimeDraft(t)); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if identityTransport.seenRequest["descriptor_ref"] != directRuntimeDraft(t).DescriptorRef() {
+		t.Fatalf("descriptor projection request = %#v", identityTransport.seenRequest)
+	}
+	if daemon.seenInvoke == nil || daemon.seenInvoke.GetFunctionName() != "er.weather" {
+		t.Fatalf("daemon function name = %#v", daemon.seenInvoke)
+	}
+}
+
+func TestDirectDaemonRuntimeTransportRejectsDescriptorProjectionWithoutIdentity(t *testing.T) {
+	_, err := directLocalAbilityName(context.Background(), nil, directRuntimeDraft(t))
+	if err == nil {
+		t.Fatalf("directLocalAbilityName accepted descriptor_ref without identity projection")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestDirectDaemonRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
@@ -284,6 +321,7 @@ func TestDirectDaemonRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 			return ControlDiscovery{InvocationEndpoint: endpoint}, nil
 		}),
 		HandleTransport:      handle,
+		Identity:             directRuntimeIdentityClient(t),
 		CloseHandleTransport: true,
 	})
 	connection, err := NewRuntimeConnection(connector)
@@ -360,6 +398,9 @@ func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRunti
 	}()
 	if options.DialTimeoutMS == 0 {
 		options.DialTimeoutMS = 3000
+	}
+	if options.Identity == nil {
+		options.Identity = directRuntimeIdentityClient(t)
 	}
 	transport, err := OpenDirectDaemonRuntimeTransport(context.Background(), socket, options)
 	if err != nil {
@@ -456,3 +497,23 @@ func directRuntimeDraft(t *testing.T) InvocationDraft {
 	}
 	return draft
 }
+
+func directRuntimeIdentityClient(t *testing.T) *IdentityClient {
+	t.Helper()
+	identity, err := NewIdentityClient(&memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON})
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	return identity
+}
+
+const directRuntimeDescriptorProjectionJSON = `{
+  "kind":"descriptor_ref",
+  "valid":true,
+  "descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+  "ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",
+  "descriptor_version":"1.0.0",
+  "profile":"easynet-strict-v2",
+  "components":{"owner_ura":"easynet:///r/example/device/dev-a"},
+  "metadata":{"grammar_owner":"axon"}
+}`
