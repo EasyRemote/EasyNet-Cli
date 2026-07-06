@@ -43,11 +43,15 @@ bytes, and bidi protocol frame mapping.
   migration tests; not a default backend dependency.
 - Go native Runtime provider over Rust/C ABI core: Provider-backed when built
   with `easynet_cabi`; explicitly Unsupported otherwise.
+- Go native Runtime provider handle: exposes SDK Runtime and Health facades
+  from the same native provider, so backend service wiring does not need a
+  backend-owned daemon health adapter.
 
 ## Verification
 
 - `go test ./...` in `EasyNet-Cli/sdk/go`.
 - `go test -tags=easynet_cabi ./...` in `EasyNet-Cli/sdk/go`.
+- `go test -tags=easynet_direct_runtime ./...` in `EasyNet-Cli/sdk/go`.
 - Focused backend package tests for touched route/profile family.
 - `tools/scripts/check-backend-sdk-only-boundary.sh ../EasyNet/backend`.
 - Backend `go test ./...` when the slice touches shared service wiring.

@@ -6,6 +6,7 @@ import (
 )
 
 func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
+	health := nativeRuntimeTestHealth(t)
 	transportClosed := false
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		InvokeFunc: func(context.Context, []byte) ([]byte, error) {
@@ -20,7 +21,7 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
 	providerClosed := false
-	handle, err := newNativeRuntimeHandle(runtime, func(context.Context) error {
+	handle, err := newNativeRuntimeHandle(runtime, health, func(context.Context) error {
 		providerClosed = true
 		return nil
 	})
@@ -35,6 +36,13 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if client != runtime {
 		t.Fatalf("Client returned different runtime")
 	}
+	healthClient, err := handle.Health()
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if healthClient != health {
+		t.Fatalf("Health returned different client")
+	}
 	if err := handle.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -44,7 +52,35 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if _, err := handle.Client(); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("Client after close error = %v, want %s", err, ErrInvalidArgument)
 	}
+	if _, err := handle.Health(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Health after close error = %v, want %s", err, ErrInvalidArgument)
+	}
 	if err := handle.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+}
+
+func TestNativeRuntimeHandleRequiresHealthFacade(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(context.Context, []byte) ([]byte, error) {
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	if _, err := newNativeRuntimeHandle(runtime, nil, nil); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("newNativeRuntimeHandle missing health = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func nativeRuntimeTestHealth(t *testing.T) *HealthClient {
+	t.Helper()
+	health, err := NewHealthClient(HealthTransportFunc(func(context.Context) ([]byte, error) {
+		return []byte(`{"api_ready":true,"daemon_ready":true,"invocation_ready":true,"directory_ready":true,"trust_ready":true,"runtime_ready":true,"diagnostics":[]}`), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewHealthClient: %v", err)
+	}
+	return health
 }

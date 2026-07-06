@@ -17,23 +17,26 @@ type NativeRuntimeOptions struct {
 	MaxMessageBytes int
 }
 
-// NativeRuntimeHandle owns one SDK RuntimeClient plus its native provider
-// resources.
+// NativeRuntimeHandle owns SDK facades opened from one native daemon provider.
 type NativeRuntimeHandle struct {
 	mu      sync.Mutex
 	client  *RuntimeClient
+	health  *HealthClient
 	closeFn func(context.Context) error
 	closed  bool
 }
 
-func newNativeRuntimeHandle(client *RuntimeClient, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
+func newNativeRuntimeHandle(client *RuntimeClient, health *HealthClient, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
 	if client == nil {
 		return nil, invalidRuntimeClient("native runtime client is required")
+	}
+	if health == nil {
+		return nil, invalidRuntimeClient("native runtime health client is required")
 	}
 	if closeFn == nil {
 		closeFn = func(context.Context) error { return nil }
 	}
-	return &NativeRuntimeHandle{client: client, closeFn: closeFn}, nil
+	return &NativeRuntimeHandle{client: client, health: health, closeFn: closeFn}, nil
 }
 
 // Client returns the Runtime Core facade opened by this native provider.
@@ -50,6 +53,22 @@ func (h *NativeRuntimeHandle) Client() (*RuntimeClient, error) {
 		return nil, invalidRuntimeClient("native runtime client is not initialized")
 	}
 	return h.client, nil
+}
+
+// Health returns the Health facade opened from the same native provider.
+func (h *NativeRuntimeHandle) Health() (*HealthClient, error) {
+	if h == nil {
+		return nil, invalidRuntimeClient("native runtime handle is not initialized")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil, invalidRuntimeClient("native runtime handle is closed")
+	}
+	if h.health == nil {
+		return nil, invalidRuntimeClient("native runtime health client is not initialized")
+	}
+	return h.health, nil
 }
 
 // Close releases the RuntimeClient and native provider resources exactly once.
@@ -69,6 +88,7 @@ func (h *NativeRuntimeHandle) Close(ctx context.Context) error {
 	client := h.client
 	closeFn := h.closeFn
 	h.client = nil
+	h.health = nil
 	h.closeFn = nil
 	h.mu.Unlock()
 
