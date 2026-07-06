@@ -2575,6 +2575,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"ProjectDescriptorRef":          "directory_identity.identity.project_descriptor_ref",
 				"ProjectIdentity":               "directory_identity.identity.project_identity",
 				"RegisterSigningKey":            "directory_identity.identity.register_signing_key",
+				"ResourceURA":                   "directory_identity.identity.resource_ura",
 				"RevokeSigningKey":              "directory_identity.identity.revoke_signing_key",
 				"Signer":                        "directory_identity.identity.signer",
 			},

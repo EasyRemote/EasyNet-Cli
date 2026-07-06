@@ -617,6 +617,11 @@ class AddressingClient:
             expected_kind="resource",
         )
 
+    def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
+        """Build a descriptor-bound resource subject through the identity transport."""
+
+        return self.resource_ura(owner_ura, path)
+
     def device_ability_ura(
         self, realm: str, device_id: str, namespace: str, local_name: str
     ) -> str:
@@ -799,6 +804,12 @@ class IdentityClient:
 
         self._require_open()
         return self._addressing.resource_ura(owner_ura, path)
+
+    def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
+        """Build a descriptor-bound resource subject through the identity transport."""
+
+        self._require_open()
+        return self._addressing.descriptor_bound_resource_subject_ura(owner_ura, path)
 
     def device_ability_ura(
         self, realm: str, device_id: str, namespace: str, local_name: str
@@ -1075,6 +1086,25 @@ def resource_ura(
 
     return _with_default_addressing(
         lambda addressing: addressing.resource_ura(owner_ura, path),
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
+def descriptor_bound_resource_subject_ura(
+    owner_ura: str,
+    path: str,
+    *,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Build a descriptor-bound resource subject through the default SDK facade."""
+
+    return _with_default_addressing(
+        lambda addressing: addressing.descriptor_bound_resource_subject_ura(
+            owner_ura,
+            path,
+        ),
         library_path=library_path,
         control_path=control_path,
     )

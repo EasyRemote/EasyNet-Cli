@@ -31,6 +31,7 @@ type URABuildRequest struct {
 	Kind        string         `json:"kind"`
 	OwnerURA    string         `json:"owner_ura,omitempty"`
 	AbilityName string         `json:"ability_name,omitempty"`
+	Path        string         `json:"path,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
@@ -350,6 +351,21 @@ func (c *IdentityClient) OwnerAbilityURA(ctx context.Context, ownerURA string, a
 	}
 	if projection.Kind != "ability" || projection.URA == "" {
 		return "", invalidProfilePayload(directoryIdentityProfile, "invalid ability URA projection", nil)
+	}
+	return projection.URA, nil
+}
+
+func (c *IdentityClient) ResourceURA(ctx context.Context, ownerURA string, path string) (string, error) {
+	projection, err := c.BuildURA(ctx, URABuildRequest{
+		Kind:     "resource",
+		OwnerURA: ownerURA,
+		Path:     path,
+	})
+	if err != nil {
+		return "", err
+	}
+	if projection.Kind != "resource" || projection.URA == "" {
+		return "", invalidProfilePayload(directoryIdentityProfile, "invalid resource URA projection", nil)
 	}
 	return projection.URA, nil
 }

@@ -119,6 +119,35 @@ class MemoryIdentityTransport:
 
 
 class IdentityTests(unittest.TestCase):
+    def test_descriptor_bound_resource_subject_ura_delegates_to_identity_transport(
+        self,
+    ) -> None:
+        transport = MemoryIdentityTransport()
+        transport.identity_json = (
+            b'{"kind":"resource","valid":true,'
+            b'"ura":"easynet:///r/example/resource/user.alice/invoke/files.read",'
+            b'"profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/user/alice"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        client = AddressingClient(transport)
+
+        got = client.descriptor_bound_resource_subject_ura(
+            "easynet:///r/example/user/alice",
+            "invoke/files.read",
+        )
+        self.assertEqual(
+            got,
+            "easynet:///r/example/resource/user.alice/invoke/files.read",
+        )
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["kind"], "resource")
+        self.assertEqual(
+            transport.seen_request["owner_ura"],
+            "easynet:///r/example/user/alice",
+        )
+        self.assertEqual(transport.seen_request["path"], "invoke/files.read")
+
     def test_addressing_client_is_standalone_delegated_facade(self) -> None:
         transport = MemoryIdentityTransport()
         ability_projection = (
