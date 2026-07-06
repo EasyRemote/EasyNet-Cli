@@ -1,6 +1,8 @@
 from pathlib import Path
 import unittest
 
+import easynet_sdk
+
 
 class ImportBoundaryTests(unittest.TestCase):
     def test_public_python_sdk_does_not_import_forbidden_runtime_boundaries(self) -> None:
@@ -33,6 +35,13 @@ class ImportBoundaryTests(unittest.TestCase):
         body = private_cabi.read_text()
         self.assertIn("import ctypes", body)
         self.assertIn("easynet_abi_version", body)
+
+    def test_python_sdk_root_does_not_export_product_aliases(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "easynet_sdk"
+        self.assertFalse((root / "easyremote_profiles.py").exists())
+        exported = set(getattr(easynet_sdk, "__all__", ()))
+        leaked = sorted(name for name in exported if name.startswith("EasyRemote"))
+        self.assertEqual(leaked, [])
 
 
 if __name__ == "__main__":
