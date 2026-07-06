@@ -99,6 +99,25 @@ raw = json.dumps({
     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
     "causal_context": {"form": "none"},
 })
+
+class _RollingHash:
+    pass
+
+def carrier_leaks(client, owner_ura, ability_ura, descriptor_ref):
+    client.invoke("ability.deploy")
+    client.invoke("meta.list_abilities")
+    client.invoke("agent.start")
+    client.invoke("gateway.status")
+    client.invoke("mission.run")
+    marker = "host_stream hash frame"
+    if "/ability/" in ability_ura:
+        return descriptor_ref.rpartition("@")
+    return owner_ura.split("/device/", 1)
+EOF
+  cat >"$bad/easyremote/direct.py" <<'EOF'
+from easynet_sdk.direct_runtime import DirectDaemonRuntimeTransport
+
+transport = DirectDaemonRuntimeTransport
 EOF
   cat >"$bad/easyremote/_transport/abi.py" <<'EOF'
 class LegacyTransport:
@@ -114,6 +133,13 @@ EOF
   grep -Fq "raw_c_abi_symbol" "$tmp/bad.out"
   grep -Fq "raw_invocation_json_codec" "$tmp/bad.out"
   grep -Fq "raw_transport_module" "$tmp/bad.out"
+  grep -Fq "raw_publication_carrier" "$tmp/bad.out"
+  grep -Fq "raw_admin_carrier" "$tmp/bad.out"
+  grep -Fq "raw_mission_carrier" "$tmp/bad.out"
+  grep -Fq "raw_host_stream_codec" "$tmp/bad.out"
+  grep -Fq "raw_ura_shape_literal" "$tmp/bad.out"
+  grep -Fq "raw_descriptor_ref_assembly" "$tmp/bad.out"
+  grep -Fq "sdk_internal_runtime_transport" "$tmp/bad.out"
 
   echo "check-easyremote-sdk-boundary self-test ok"
   exit 0

@@ -412,6 +412,22 @@
       "message": null
     },
     {
+      "case_id": "python/easyremote_profile_extraction",
+      "profile": "sdk_parity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        },
+        {
+          "kind": "static_gate",
+          "ref_path": "tools/scripts/check-easyremote-sdk-boundary.sh"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "receipt/fetch_carrier",
       "profile": "receipt",
       "status": "passed",

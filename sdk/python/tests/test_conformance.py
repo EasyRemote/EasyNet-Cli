@@ -4570,6 +4570,42 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         ):
             self._require_case_literal(causal_case, f"- {required}")
 
+        profile_case = shared_case("python-easyremote-profile-extraction.yaml")
+        self._require_case_id(
+            profile_case, "python/easyremote_profile_extraction"
+        )
+        self._require_case_action(profile_case, "audit_consumer_source")
+        self._require_case_action(profile_case, "audit_consumer_manifest")
+        self._require_case_action(profile_case, "inspect_sdk_profile_facade_usage")
+        self._require_case_expectation(profile_case, "product_facade_only: true")
+        for required in (
+            "DaemonControl",
+            "RuntimeClient",
+            "InvocationObjectAdapter",
+            "AddressingClient",
+            "IdentityClient",
+            "ReceiptClient",
+            "PublicationClient",
+            "PublicationCatalogFacade",
+            "HostBindingClient",
+            "MissionClient",
+            "AdminClient",
+            "GatewayLifecycleFacade",
+        ):
+            self._require_case_literal(profile_case, f"- {required}")
+        for forbidden in (
+            "raw_transport_module",
+            "raw_publication_carrier",
+            "raw_host_stream_codec",
+            "raw_mission_carrier",
+            "raw_admin_carrier",
+            "raw_addressing_helper",
+            "raw_descriptor_ref_assembly",
+            "raw_ura_shape_literal",
+            "sdk_internal_runtime_transport",
+        ):
+            self._require_case_literal(profile_case, f"- {forbidden}")
+
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             (root / "client.py").write_text(

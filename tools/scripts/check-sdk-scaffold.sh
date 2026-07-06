@@ -545,6 +545,7 @@ case_files=(
   python-easyremote-no-invocation-codec.yaml
   python-easyremote-no-raw-receipt-continuity.yaml
   python-easyremote-context-causal.yaml
+  python-easyremote-profile-extraction.yaml
   health-api-vs-runtime.yaml
   directory-list-pagination.yaml
   directory-no-default-fanout.yaml
