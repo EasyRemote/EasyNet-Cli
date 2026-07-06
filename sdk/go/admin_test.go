@@ -226,6 +226,9 @@ func TestGatewayLifecycleFacadeMaterializesHubConfigOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := string(configBytes)
+	if runtime == second {
+		t.Fatal("start while running must return a fresh runtime snapshot")
+	}
 	if runtime.Endpoint != second.Endpoint || runtime.ConfigPath != second.ConfigPath || runtime.Fingerprint != second.Fingerprint || runtime.Daemon != second.Daemon {
 		t.Fatalf("start while running returned a different runtime: first=%#v second=%#v", runtime, second)
 	}
@@ -250,6 +253,45 @@ func TestGatewayLifecycleFacadeMaterializesHubConfigOnce(t *testing.T) {
 	expected := sha256.Sum256([]byte{0, 1, 2, 3, 4, 5, 6, 7})
 	if strings.ReplaceAll(runtime.Fingerprint, ":", "") != strings.ToUpper(hex.EncodeToString(expected[:])) {
 		t.Fatalf("fingerprint = %q", runtime.Fingerprint)
+	}
+}
+
+func TestGatewayLifecycleFacadeRuntimeReturnsSnapshot(t *testing.T) {
+	root := t.TempDir()
+	cert, key := writeGatewayPEM(t, root)
+	facade, err := NewGatewayLifecycleFacade(func(string) (GatewayDaemonHandle, error) {
+		return &fakeGatewayDaemon{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := facade.Runtime(); got != nil {
+		t.Fatalf("Runtime before start = %#v, want nil", got)
+	}
+	runtime, err := facade.Start(GatewayConfig{Port: 8443, Realm: "acme", HomeDir: root, TLSCertPath: cert, TLSKeyPath: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := facade.Runtime()
+	if snapshot == nil {
+		t.Fatal("Runtime after start returned nil")
+	}
+	if snapshot == runtime {
+		t.Fatal("Runtime must return a snapshot, not the Start pointer")
+	}
+	snapshot.Endpoint = "mutated.example:443"
+	again := facade.Runtime()
+	if again == nil {
+		t.Fatal("Runtime after mutation returned nil")
+	}
+	if again.Endpoint == "mutated.example:443" {
+		t.Fatal("mutating runtime snapshot changed facade state")
+	}
+	if err := facade.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if got := facade.Runtime(); got != nil {
+		t.Fatalf("Runtime after stop = %#v, want nil", got)
 	}
 }
 

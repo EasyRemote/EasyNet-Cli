@@ -118,47 +118,49 @@ func (f *GatewayLifecycleFacade) State() GatewayLifecycleState {
 	return f.state
 }
 
-// Runtime returns the current runtime projection snapshot, if the gateway is
-// running.
-func (f *GatewayLifecycleFacade) Runtime() (GatewayRuntime, bool) {
+// Runtime returns a current runtime projection snapshot, if the gateway is
+// running. Mutating the returned pointer cannot mutate facade state.
+func (f *GatewayLifecycleFacade) Runtime() *GatewayRuntime {
 	if f == nil {
-		return GatewayRuntime{}, false
+		return nil
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state != GatewayLifecycleRunning {
-		return GatewayRuntime{}, false
+		return nil
 	}
-	return f.runtime, true
+	runtime := f.runtime
+	return &runtime
 }
 
 // Start materializes daemon hub config once and starts the gateway daemon.
-func (f *GatewayLifecycleFacade) Start(config GatewayConfig) (GatewayRuntime, error) {
+func (f *GatewayLifecycleFacade) Start(config GatewayConfig) (*GatewayRuntime, error) {
 	if f == nil {
-		return GatewayRuntime{}, invalidProfileClient(adminGatewayProfile, "gateway lifecycle facade is not initialized")
+		return nil, invalidProfileClient(adminGatewayProfile, "gateway lifecycle facade is not initialized")
 	}
 	normalized, err := config.Normalize()
 	if err != nil {
-		return GatewayRuntime{}, err
+		return nil, err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state == GatewayLifecycleRunning {
 		if f.runtime.Daemon == nil {
-			return GatewayRuntime{}, invalidProfileClient(adminGatewayProfile, "gateway runtime state is inconsistent")
+			return nil, invalidProfileClient(adminGatewayProfile, "gateway runtime state is inconsistent")
 		}
-		return f.runtime, nil
+		runtime := f.runtime
+		return &runtime, nil
 	}
 	if err := ensureGatewayHubConfig(normalized); err != nil {
-		return GatewayRuntime{}, err
+		return nil, err
 	}
 	daemon, err := f.starter(normalized.Realm)
 	if err != nil {
-		return GatewayRuntime{}, transportProfileError(adminGatewayProfile, "gateway daemon start failed", err)
+		return nil, transportProfileError(adminGatewayProfile, "gateway daemon start failed", err)
 	}
 	fingerprint, err := CertificateFingerprint(normalized.TLSCertPath)
 	if err != nil {
-		return GatewayRuntime{}, err
+		return nil, err
 	}
 	runtime := GatewayRuntime{
 		State:       GatewayLifecycleRunning,
@@ -169,7 +171,7 @@ func (f *GatewayLifecycleFacade) Start(config GatewayConfig) (GatewayRuntime, er
 	}
 	f.runtime = runtime
 	f.state = GatewayLifecycleRunning
-	return runtime, nil
+	return &runtime, nil
 }
 
 // Stop stops the owned daemon handle and returns to idle. Stop is idempotent.
