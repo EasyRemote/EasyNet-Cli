@@ -1336,6 +1336,7 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 		"build_track_invocation",
 		"build_cancel_invocation",
 		"project_status",
+		"project_events",
 	} {
 		requireCaseAction(t, missionCase, action)
 	}
@@ -1345,6 +1346,8 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 		"mission-track-request.v4.json",
 		"mission-cancel-request.v4.json",
 		"mission-status.v4.json",
+		"mission-events-request.v4.json",
+		"mission-event-page.v4.json",
 	} {
 		requireCaseFixture(t, missionCase, fixture)
 	}
@@ -1357,7 +1360,10 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 	requireCaseExpectation(t, missionCase, "rejects_incomplete_invocation_tuple: true")
 	requireCaseExpectation(t, missionCase, "rejects_path_like_mission_id: true")
 	requireCaseExpectation(t, missionCase, "child_receipts_only_when_anchored: true")
+	requireCaseExpectation(t, missionCase, "events_system_ability: mission.events")
+	requireCaseExpectation(t, missionCase, "mission_events_page_projection: true")
 	requireCaseExpectation(t, missionCase, "mission_events_live_tail: bounded_page_state_machine")
+	requireCaseExpectation(t, missionCase, "mission_plan_child_invocation_conformance: true")
 
 	mission, err := NewMissionClient(&sharedMissionTransport{
 		t:                      t,
@@ -1365,10 +1371,12 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 		expectedRunFileRequest: sharedFixture(t, root, "mission-run-file-request.v4.json"),
 		expectedTrackRequest:   sharedFixture(t, root, "mission-track-request.v4.json"),
 		expectedCancelRequest:  sharedFixture(t, root, "mission-cancel-request.v4.json"),
+		expectedEventsRequest:  sharedFixture(t, root, "mission-events-request.v4.json"),
 		runInvocationJSON:      sharedFixture(t, root, "mission-run-invocation.v4.json"),
 		trackInvocationJSON:    sharedFixture(t, root, "mission-track-invocation.v4.json"),
 		cancelInvocationJSON:   sharedFixture(t, root, "mission-cancel-invocation.v4.json"),
 		statusJSON:             sharedFixture(t, root, "mission-status.v4.json"),
+		eventsJSON:             sharedFixture(t, root, "mission-event-page.v4.json"),
 	})
 	if err != nil {
 		t.Fatalf("NewMissionClient: %v", err)
@@ -1418,6 +1426,17 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 		t.Fatalf("unexpected shared mission status: %#v", status)
 	}
 
+	eventPage, err := mission.Events(context.Background(), sharedMissionEventsRequest(t, root))
+	if err != nil {
+		t.Fatalf("Events(shared fixture): %v", err)
+	}
+	if eventPage.Kind != "mission_event_page" || eventPage.CursorSequence != 4 ||
+		eventPage.NextCursorSequence != 7 || eventPage.HasMore ||
+		eventPage.DroppedCount != 0 || len(eventPage.Events) != 2 ||
+		!eventPage.Events[1].Terminal || eventPage.Events[1].Receipt["receipt_ura"] != "easynet:///r/example/receipt/parent" {
+		t.Fatalf("unexpected shared mission event page: %#v", eventPage)
+	}
+
 	badRun := sharedMissionRunRequest(t, root)
 	badRun.CallerURA = ""
 	if _, err := mission.BuildRunEALInvocation(context.Background(), badRun); !IsCode(err, ErrInvalidArgument) {
@@ -1431,6 +1450,99 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 	}
 	if _, err := NewMissionStatusFromJSON(sharedMissionStatusWithoutParentAnchor(t, root)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("unanchored mission child receipt did not produce InvalidArgument: %v", err)
+	}
+}
+
+func TestGoMissionFacadeExecutesSharedPlanChildInvocationConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	planCase := sharedCase(t, root, "mission-plan-child-invocation.yaml")
+	requireCaseID(t, planCase, "mission/plan_child_invocation")
+	for _, action := range []string{
+		"render_plan_eal",
+		"project_child_invocation_intents",
+		"validate_child_invocation_facts",
+		"reject_foreign_step_output",
+		"reject_structured_plan_field",
+	} {
+		requireCaseAction(t, planCase, action)
+	}
+	requireCaseFixture(t, planCase, "mission-status.v4.json")
+	for _, expected := range []string{
+		"plan_name: nightly",
+		"first_step: observe.health",
+		"second_step: notify.user",
+		"step_output_ref: health.output",
+		"mismatch_reason: mission_child_invocation_mismatch",
+		"rejects_foreign_step_output: true",
+		"rejects_structured_plan_field: true",
+		"receipt_backed_steps: true",
+		"sdk_executes_mission: false",
+	} {
+		requireCaseExpectation(t, planCase, expected)
+	}
+
+	plan, err := NewMissionPlan("nightly")
+	if err != nil {
+		t.Fatalf("NewMissionPlan(shared plan): %v", err)
+	}
+	health, err := plan.Step("observe.health", MissionPlanStepOptions{})
+	if err != nil {
+		t.Fatalf("health step(shared plan): %v", err)
+	}
+	if _, err := plan.Step("notify.user", MissionPlanStepOptions{Args: map[string]any{"source": health.Output()}}); err != nil {
+		t.Fatalf("notify step(shared plan): %v", err)
+	}
+	eal, err := plan.ToEAL()
+	if err != nil {
+		t.Fatalf("ToEAL(shared plan): %v", err)
+	}
+	if !strings.Contains(eal, `mission "nightly"`) ||
+		!strings.Contains(eal, `let health = call "observe.health"`) ||
+		!strings.Contains(eal, `let user = call "notify.user" with { source = health.output }`) {
+		t.Fatalf("shared plan EAL mismatch:\n%s", eal)
+	}
+	intents := plan.ChildInvocationIntents()
+	if len(intents) != 2 || intents[0].StepID != "health" || intents[1].Ability != "notify.user" {
+		t.Fatalf("shared plan intents mismatch: %#v", intents)
+	}
+
+	status, err := NewMissionStatusFromJSON(
+		[]byte(strings.ReplaceAll(string(sharedFixture(t, root, "mission-status.v4.json")), `"step_id": "s1"`, `"step_id": "health"`)),
+	)
+	if err != nil {
+		t.Fatalf("NewMissionStatusFromJSON(shared plan status): %v", err)
+	}
+	observedOnly, err := NewMissionPlan("nightly")
+	if err != nil {
+		t.Fatalf("NewMissionPlan(observed-only): %v", err)
+	}
+	if _, err := observedOnly.Step("observe.health", MissionPlanStepOptions{}); err != nil {
+		t.Fatalf("observed-only step: %v", err)
+	}
+	conformance, err := observedOnly.ValidateChildInvocations(status)
+	if err != nil {
+		t.Fatalf("ValidateChildInvocations(observed-only): %v", err)
+	}
+	if !conformance.Passed() || len(conformance.ReceiptBackedSteps) != 1 || conformance.ReceiptBackedSteps[0] != "health" {
+		t.Fatalf("shared plan conformance mismatch: %#v", conformance)
+	}
+	if _, err := plan.ValidateChildInvocations(status); !IsCode(err, ErrProtocol) {
+		t.Fatalf("missing child Invocation facts error = %v, want %s", err, ErrProtocol)
+	}
+
+	foreign, err := NewMissionPlan("foreign")
+	if err != nil {
+		t.Fatalf("NewMissionPlan(foreign): %v", err)
+	}
+	foreignStep, err := foreign.Step("er.src", MissionPlanStepOptions{})
+	if err != nil {
+		t.Fatalf("foreign step(shared plan): %v", err)
+	}
+	if _, err := observedOnly.Step("er.fn", MissionPlanStepOptions{Args: map[string]any{"data": foreignStep.Output()}}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("foreign step output error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := observedOnly.Step("er.fn", MissionPlanStepOptions{Args: map[string]any{"payload": map[string]any{"nested": 1}}}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("structured plan field error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -3034,10 +3146,12 @@ type sharedMissionTransport struct {
 	expectedRunFileRequest []byte
 	expectedTrackRequest   []byte
 	expectedCancelRequest  []byte
+	expectedEventsRequest  []byte
 	runInvocationJSON      []byte
 	trackInvocationJSON    []byte
 	cancelInvocationJSON   []byte
 	statusJSON             []byte
+	eventsJSON             []byte
 }
 
 func (t *sharedMissionTransport) BuildRunEALInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -3078,8 +3192,9 @@ func (t *sharedMissionTransport) Cancel(_ context.Context, requestJSON []byte) (
 	return t.statusJSON, nil
 }
 
-func (t *sharedMissionTransport) Events(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedMissionTransport) Events(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedEventsRequest)
+	return t.eventsJSON, nil
 }
 
 func (t *sharedMissionTransport) Close(context.Context) error {
@@ -3853,6 +3968,15 @@ func sharedMissionCancelRequest(t *testing.T, root string) MissionCancelRequest 
 	var request MissionCancelRequest
 	if err := json.Unmarshal(sharedFixture(t, root, "mission-cancel-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared mission cancel request: %v", err)
+	}
+	return request
+}
+
+func sharedMissionEventsRequest(t *testing.T, root string) MissionEventListRequest {
+	t.Helper()
+	var request MissionEventListRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "mission-events-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared mission events request: %v", err)
 	}
 	return request
 }

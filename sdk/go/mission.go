@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -162,6 +164,301 @@ type MissionEventTailer struct {
 	emptyPages     int
 	closed         bool
 	terminalSeen   bool
+}
+
+// MissionPlanStepOutput is a dataflow reference to one Mission plan step result.
+type MissionPlanStepOutput struct {
+	Alias string
+}
+
+func (o MissionPlanStepOutput) Render() string {
+	return o.Alias + ".output"
+}
+
+// MissionPlanStep is one SDK-owned Mission/EAL plan step.
+type MissionPlanStep struct {
+	Alias     string
+	Ref       string
+	Args      map[string]any
+	On        string
+	Timeout   *int
+	Retries   *int
+	OnFailure string
+	Optional  bool
+}
+
+func (s MissionPlanStep) Output() MissionPlanStepOutput {
+	return MissionPlanStepOutput{Alias: s.Alias}
+}
+
+func (s MissionPlanStep) Render() (string, error) {
+	if s.Alias == "" || s.Ref == "" {
+		return "", invalidMissionPlan("mission plan step alias and ref are required", "invalid_step")
+	}
+	parts := []string{"let " + s.Alias + " = call " + missionEALString(s.Ref)}
+	if s.On != "" {
+		parts = append(parts, "on "+missionEALString(s.On))
+	}
+	if len(s.Args) > 0 {
+		keys := make([]string, 0, len(s.Args))
+		for key := range s.Args {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		fields := make([]string, 0, len(keys))
+		for _, key := range keys {
+			rendered, err := missionEALField(s.Args[key])
+			if err != nil {
+				return "", err
+			}
+			fields = append(fields, key+" = "+rendered)
+		}
+		parts = append(parts, "with { "+strings.Join(fields, ", ")+" }")
+	}
+	if s.Timeout != nil {
+		parts = append(parts, fmt.Sprintf("timeout %d", *s.Timeout))
+	}
+	if s.Retries != nil {
+		parts = append(parts, fmt.Sprintf("retries %d", *s.Retries))
+	}
+	if s.OnFailure != "" {
+		parts = append(parts, "on_failure "+s.OnFailure)
+	}
+	if s.Optional {
+		parts = append(parts, "optional")
+	}
+	return strings.Join(parts, " "), nil
+}
+
+// MissionPlanStepOptions configures one MissionPlan step.
+type MissionPlanStepOptions struct {
+	On             string
+	TimeoutSeconds *float64
+	Retries        *int
+	OnFailure      string
+	Optional       bool
+	Args           map[string]any
+}
+
+// MissionChildInvocationIntent is the SDK projection of a child Invocation
+// expected from a Mission plan step.
+type MissionChildInvocationIntent struct {
+	StepID    string
+	Ability   string
+	On        string
+	Optional  bool
+	OnFailure string
+}
+
+// MissionChildInvocationConformance matches daemon MissionStatus child facts
+// against a Mission plan.
+type MissionChildInvocationConformance struct {
+	MissionID              string
+	ExpectedSteps          []string
+	ObservedSteps          []string
+	MissingSteps           []string
+	UnexpectedSteps        []string
+	AbilityMismatchedSteps []string
+	ReceiptBackedSteps     []string
+}
+
+func (c MissionChildInvocationConformance) Passed() bool {
+	return len(c.MissingSteps) == 0 &&
+		len(c.UnexpectedSteps) == 0 &&
+		len(c.AbilityMismatchedSteps) == 0
+}
+
+func (c MissionChildInvocationConformance) RequirePassed() error {
+	if c.Passed() {
+		return nil
+	}
+	return &SDKError{
+		Code:      ErrProtocol,
+		Stage:     missionProfile,
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "Mission plan child Invocation facts do not match planned steps",
+		Details: profileErrorDetails(missionProfile, map[string]any{
+			"reason":                   "mission_child_invocation_mismatch",
+			"mission_id":               c.MissionID,
+			"missing_steps":            append([]string(nil), c.MissingSteps...),
+			"unexpected_steps":         append([]string(nil), c.UnexpectedSteps...),
+			"ability_mismatched_steps": append([]string(nil), c.AbilityMismatchedSteps...),
+		}),
+	}
+}
+
+// MissionPlan is the SDK-owned Mission/EAL plan rendering facade.
+type MissionPlan struct {
+	Name      string
+	CreatedBy string
+	Version   string
+	steps     []MissionPlanStep
+	aliases   map[string]struct{}
+}
+
+func NewMissionPlan(name string) (*MissionPlan, error) {
+	return NewMissionPlanWithOptions(name, "", "")
+}
+
+func NewMissionPlanWithOptions(name string, createdBy string, version string) (*MissionPlan, error) {
+	cleanName, err := requiredCleanMissionString(name, "mission plan name")
+	if err != nil {
+		return nil, err
+	}
+	return &MissionPlan{
+		Name:      cleanName,
+		CreatedBy: strings.TrimSpace(createdBy),
+		Version:   strings.TrimSpace(version),
+		steps:     []MissionPlanStep{},
+		aliases:   map[string]struct{}{},
+	}, nil
+}
+
+func (p *MissionPlan) Steps() []MissionPlanStep {
+	if p == nil {
+		return nil
+	}
+	return append([]MissionPlanStep(nil), p.steps...)
+}
+
+func (p *MissionPlan) Step(ref string, options MissionPlanStepOptions) (MissionPlanStep, error) {
+	if p == nil {
+		return MissionPlanStep{}, invalidMissionPlan("mission plan is not initialized", "invalid_plan")
+	}
+	targetRef, err := requiredCleanMissionString(ref, "mission step target")
+	if err != nil {
+		return MissionPlanStep{}, err
+	}
+	if options.OnFailure != "" && !missionFailurePolicyAllowed(options.OnFailure) {
+		return MissionPlanStep{}, invalidMissionPlan(
+			fmt.Sprintf("on_failure must be one of %v, got %q", missionFailurePolicies(), options.OnFailure),
+			"invalid_failure_policy",
+		)
+	}
+	args := make(map[string]any, len(options.Args))
+	for key, value := range options.Args {
+		if err := validateMissionPlanField(key, value, p.aliases); err != nil {
+			return MissionPlanStep{}, err
+		}
+		args[key] = value
+	}
+	timeout, err := missionTimeoutSeconds(options.TimeoutSeconds)
+	if err != nil {
+		return MissionPlanStep{}, err
+	}
+	retries, err := missionRetriesCount(options.Retries)
+	if err != nil {
+		return MissionPlanStep{}, err
+	}
+	step := MissionPlanStep{
+		Alias:     p.freshAlias(targetRef),
+		Ref:       targetRef,
+		Args:      args,
+		On:        strings.TrimSpace(options.On),
+		Timeout:   timeout,
+		Retries:   retries,
+		OnFailure: options.OnFailure,
+		Optional:  options.Optional,
+	}
+	p.steps = append(p.steps, step)
+	p.aliases[step.Alias] = struct{}{}
+	return step, nil
+}
+
+func (p *MissionPlan) ToEAL() (string, error) {
+	if p == nil {
+		return "", invalidMissionPlan("mission plan is not initialized", "invalid_plan")
+	}
+	if len(p.steps) == 0 {
+		return "", invalidMissionPlan(
+			fmt.Sprintf("mission plan %q has no steps", p.Name),
+			"empty_mission_plan",
+		)
+	}
+	lines := []string{}
+	if p.Version != "" {
+		lines = append(lines, "// generated by easynet daemon sdk "+p.Version)
+	} else {
+		lines = append(lines, "// generated by easynet daemon sdk")
+	}
+	if p.CreatedBy != "" {
+		lines = append(lines, "// created_by: "+p.CreatedBy)
+	}
+	lines = append(lines, "mission "+missionEALString(p.Name)+" {")
+	for _, step := range p.steps {
+		rendered, err := step.Render()
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, "  "+rendered)
+	}
+	lines = append(lines, "}")
+	return strings.Join(lines, "\n") + "\n", nil
+}
+
+func (p *MissionPlan) ChildInvocationIntents() []MissionChildInvocationIntent {
+	if p == nil {
+		return nil
+	}
+	intents := make([]MissionChildInvocationIntent, 0, len(p.steps))
+	for _, step := range p.steps {
+		intents = append(intents, MissionChildInvocationIntent{
+			StepID:    step.Alias,
+			Ability:   step.Ref,
+			On:        step.On,
+			Optional:  step.Optional,
+			OnFailure: step.OnFailure,
+		})
+	}
+	return intents
+}
+
+func (p *MissionPlan) ValidateChildInvocations(status MissionStatus) (MissionChildInvocationConformance, error) {
+	intents := p.ChildInvocationIntents()
+	expectedByStep := map[string]MissionChildInvocationIntent{}
+	expected := map[string]struct{}{}
+	for _, intent := range intents {
+		expectedByStep[intent.StepID] = intent
+		expected[intent.StepID] = struct{}{}
+	}
+
+	observedByStep := map[string]MissionChildInvocation{}
+	observed := map[string]struct{}{}
+	receiptBacked := map[string]struct{}{}
+	for _, child := range status.ChildInvocations {
+		if child.StepID == nil || *child.StepID == "" {
+			continue
+		}
+		stepID := *child.StepID
+		observed[stepID] = struct{}{}
+		observedByStep[stepID] = child
+		if child.Receipt != nil {
+			receiptBacked[stepID] = struct{}{}
+		}
+	}
+
+	abilityMismatched := map[string]struct{}{}
+	for stepID, intent := range expectedByStep {
+		child, ok := observedByStep[stepID]
+		if !ok || child.Ability == nil || *child.Ability == "" {
+			continue
+		}
+		if *child.Ability != intent.Ability {
+			abilityMismatched[stepID] = struct{}{}
+		}
+	}
+
+	conformance := MissionChildInvocationConformance{
+		MissionID:              status.MissionID,
+		ExpectedSteps:          sortedSet(expected),
+		ObservedSteps:          sortedSet(observed),
+		MissingSteps:           sortedSet(setDifference(expected, observed)),
+		UnexpectedSteps:        sortedSet(setDifference(observed, expected)),
+		AbilityMismatchedSteps: sortedSet(abilityMismatched),
+		ReceiptBackedSteps:     sortedSet(setIntersection(receiptBacked, expected)),
+	}
+	return conformance, conformance.RequirePassed()
 }
 
 // MissionTransport supplies daemon Mission operations behind the facade.
@@ -765,6 +1062,227 @@ func missionEventTypeIsTerminal(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func requiredCleanMissionString(value string, field string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", invalidMissionPlan(field+" is required", "missing_mission_plan_field")
+	}
+	if strings.ContainsAny(trimmed, "\r\n\t") {
+		return "", invalidMissionPlan(field+" must be a single-line string", "invalid_mission_plan_field")
+	}
+	return trimmed, nil
+}
+
+func invalidMissionPlan(message string, reason string) error {
+	return &SDKError{
+		Code:      ErrInvalidArgument,
+		Stage:     missionProfile,
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   message,
+		Details: profileErrorDetails(missionProfile, map[string]any{
+			"reason": reason,
+		}),
+	}
+}
+
+func missionFailurePolicies() []string {
+	return []string{"abort", "continue", "retry", "skip"}
+}
+
+func missionFailurePolicyAllowed(policy string) bool {
+	for _, allowed := range missionFailurePolicies() {
+		if policy == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func missionTimeoutSeconds(value *float64) (*int, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if math.IsNaN(*value) || math.IsInf(*value, 0) || *value <= 0 {
+		return nil, invalidMissionPlan("timeout must be a positive finite number", "invalid_timeout")
+	}
+	seconds := int(math.Ceil(*value))
+	return &seconds, nil
+}
+
+func missionRetriesCount(value *int) (*int, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if *value < 0 {
+		return nil, invalidMissionPlan("retries must be non-negative", "invalid_retries")
+	}
+	return value, nil
+}
+
+func validateMissionPlanField(name string, value any, aliases map[string]struct{}) error {
+	if _, err := requiredCleanMissionString(name, "mission plan field name"); err != nil {
+		return err
+	}
+	switch typed := value.(type) {
+	case MissionPlanStepOutput:
+		return validateMissionPlanStepOutput(name, typed.Alias, aliases)
+	case *MissionPlanStepOutput:
+		if typed == nil {
+			return invalidMissionPlan(
+				fmt.Sprintf("argument %q is nil; EAL field values are scalars or step outputs", name),
+				"non_scalar_field",
+			)
+		}
+		return validateMissionPlanStepOutput(name, typed.Alias, aliases)
+	case bool, string, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return nil
+	case float32:
+		if math.IsNaN(float64(typed)) || math.IsInf(float64(typed), 0) {
+			return invalidMissionPlan(
+				fmt.Sprintf("argument %q is non-finite; EAL numbers must be finite", name),
+				"non_finite_field",
+			)
+		}
+		return nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return invalidMissionPlan(
+				fmt.Sprintf("argument %q is non-finite; EAL numbers must be finite", name),
+				"non_finite_field",
+			)
+		}
+		return nil
+	default:
+		return invalidMissionPlan(
+			fmt.Sprintf("argument %q is %T; EAL field values are scalars or step outputs", name, value),
+			"non_scalar_field",
+		)
+	}
+}
+
+func validateMissionPlanStepOutput(name string, alias string, aliases map[string]struct{}) error {
+	if _, ok := aliases[alias]; ok {
+		return nil
+	}
+	return invalidMissionPlan(
+		fmt.Sprintf("argument %q references step %q, which is not part of this mission plan", name, alias),
+		"foreign_step_output",
+	)
+}
+
+func missionEALString(value string) string {
+	bytes, _ := json.Marshal(value)
+	return string(bytes)
+}
+
+func missionEALField(value any) (string, error) {
+	switch typed := value.(type) {
+	case MissionPlanStepOutput:
+		return typed.Render(), nil
+	case *MissionPlanStepOutput:
+		if typed == nil {
+			return "", invalidMissionPlan("EAL field value must be scalar or step output, got nil", "non_scalar_field")
+		}
+		return typed.Render(), nil
+	case string:
+		return missionEALString(typed), nil
+	case bool:
+		if typed {
+			return "true", nil
+		}
+		return "false", nil
+	case nil:
+		return "", invalidMissionPlan("EAL field value must be scalar or step output, got nil", "non_scalar_field")
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		bytes, err := json.Marshal(typed)
+		if err != nil {
+			return "", invalidMissionPlan("mission plan numeric argument is invalid", "invalid_argument_value")
+		}
+		return string(bytes), nil
+	case float32:
+		if math.IsNaN(float64(typed)) || math.IsInf(float64(typed), 0) {
+			return "", invalidMissionPlan("EAL number must be finite", "non_finite_field")
+		}
+		bytes, err := json.Marshal(typed)
+		if err != nil {
+			return "", invalidMissionPlan("mission plan numeric argument is invalid", "invalid_argument_value")
+		}
+		return string(bytes), nil
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return "", invalidMissionPlan("EAL number must be finite", "non_finite_field")
+		}
+		bytes, err := json.Marshal(typed)
+		if err != nil {
+			return "", invalidMissionPlan("mission plan numeric argument is invalid", "invalid_argument_value")
+		}
+		return string(bytes), nil
+	default:
+		return "", invalidMissionPlan(
+			fmt.Sprintf("EAL field value must be scalar or step output, got %T", value),
+			"non_scalar_field",
+		)
+	}
+}
+
+func (p *MissionPlan) freshAlias(ref string) string {
+	base := missionIdentifier(ref)
+	alias := base
+	for counter := 2; ; counter++ {
+		if _, exists := p.aliases[alias]; !exists {
+			return alias
+		}
+		alias = fmt.Sprintf("%s_%d", base, counter)
+	}
+}
+
+func missionIdentifier(ref string) string {
+	parts := strings.Split(ref, ".")
+	base := parts[len(parts)-1]
+	var builder strings.Builder
+	for _, r := range base {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteByte('_')
+		}
+	}
+	if builder.Len() == 0 {
+		return "step"
+	}
+	return builder.String()
+}
+
+func sortedSet(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func setDifference(left map[string]struct{}, right map[string]struct{}) map[string]struct{} {
+	result := map[string]struct{}{}
+	for value := range left {
+		if _, ok := right[value]; !ok {
+			result[value] = struct{}{}
+		}
+	}
+	return result
+}
+
+func setIntersection(left map[string]struct{}, right map[string]struct{}) map[string]struct{} {
+	result := map[string]struct{}{}
+	for value := range left {
+		if _, ok := right[value]; ok {
+			result[value] = struct{}{}
+		}
+	}
+	return result
 }
 
 func wrapMissionTransportError(message string, cause error) error {

@@ -41,6 +41,7 @@ expect:
   rejects_incomplete_invocation_tuple: true
   rejects_path_like_mission_id: true
   child_receipts_only_when_anchored: true
+  mission_plan_child_invocation_conformance: true
   events_system_ability: mission.events
   mission_events_page_projection: true
   mission_events_live_tail: bounded_page_state_machine

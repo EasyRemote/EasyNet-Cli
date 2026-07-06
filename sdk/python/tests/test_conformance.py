@@ -85,6 +85,7 @@ from easynet_sdk import (
     MissionCarrierBase,
     MissionClient,
     MissionEventListRequest,
+    MissionPlan,
     MissionRunFileRequest,
     MissionRunRequest,
     MissionStatus,
@@ -2544,6 +2545,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             mission_case, "child_receipts_only_when_anchored: true"
         )
         self._require_case_expectation(
+            mission_case, "mission_plan_child_invocation_conformance: true"
+        )
+        self._require_case_expectation(
             mission_case, "mission_events_page_projection: true"
         )
         self._require_case_expectation(
@@ -2634,6 +2638,75 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             MissionStatus.from_json(shared_mission_status_without_parent_anchor())
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_python_mission_executes_shared_plan_child_invocation_conformance_case(
+        self,
+    ) -> None:
+        plan_case = shared_case("mission-plan-child-invocation.yaml")
+        self._require_case_id(plan_case, "mission/plan_child_invocation")
+        for action in (
+            "render_plan_eal",
+            "project_child_invocation_intents",
+            "validate_child_invocation_facts",
+            "reject_foreign_step_output",
+            "reject_structured_plan_field",
+        ):
+            self._require_case_action(plan_case, action)
+        self._require_case_fixture(plan_case, "mission-status.v4.json")
+        for expectation in (
+            "plan_name: nightly",
+            "first_step: observe.health",
+            "second_step: notify.user",
+            "step_output_ref: health.output",
+            "mismatch_reason: mission_child_invocation_mismatch",
+            "rejects_foreign_step_output: true",
+            "rejects_structured_plan_field: true",
+            "receipt_backed_steps: true",
+            "sdk_executes_mission: false",
+        ):
+            self._require_case_expectation(plan_case, expectation)
+
+        plan = MissionPlan("nightly")
+        health = plan.step("observe.health")
+        plan.step("notify.user", args={"source": health.output})
+        eal = plan.to_eal()
+        self.assertIn('mission "nightly"', eal)
+        self.assertIn('let health = call "observe.health"', eal)
+        self.assertIn(
+            'let user = call "notify.user" with { source = health.output }',
+            eal,
+        )
+        intents = plan.child_invocation_intents()
+        self.assertEqual([intent.step_id for intent in intents], ["health", "user"])
+        self.assertEqual(intents[1].ability, "notify.user")
+
+        status = MissionStatus.from_json(
+            shared_fixture("mission-status.v4.json").replace(
+                b'"step_id": "s1"', b'"step_id": "health"'
+            )
+        )
+        observed_only = MissionPlan("nightly")
+        observed_only.step("observe.health")
+        conformance = observed_only.validate_child_invocations(status)
+        self.assertTrue(conformance.passed)
+        self.assertEqual(conformance.receipt_backed_steps, ("health",))
+
+        with self.assertRaises(SDKError) as missing:
+            plan.validate_child_invocations(status)
+        self.assertEqual(missing.exception.code, ErrorCode.PROTOCOL)
+        self.assertEqual(
+            missing.exception.details["reason"],
+            "mission_child_invocation_mismatch",
+        )
+
+        foreign = MissionPlan("foreign").step("er.src")
+        with self.assertRaises(SDKError) as foreign_error:
+            observed_only.step("er.fn", args={"data": foreign.output})
+        self.assertEqual(foreign_error.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with self.assertRaises(SDKError) as structured_error:
+            observed_only.step("er.fn", args={"payload": {"nested": 1}})
+        self.assertEqual(structured_error.exception.code, ErrorCode.INVALID_ARGUMENT)
 
     def test_python_admin_gateway_executes_shared_carrier_status_conformance_case(self) -> None:
         admin_case = shared_case("admin-gateway-carrier-status.yaml")

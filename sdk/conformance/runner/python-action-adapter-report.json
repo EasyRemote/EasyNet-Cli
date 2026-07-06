@@ -328,6 +328,18 @@
       "message": null
     },
     {
+      "case_id": "mission/plan_child_invocation",
+      "profile": "mission",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "publication/resource_carriers",
       "profile": "publication",
       "status": "passed",

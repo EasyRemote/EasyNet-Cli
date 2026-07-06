@@ -364,6 +364,18 @@
       "message": null
     },
     {
+      "case_id": "mission/plan_child_invocation",
+      "profile": "mission",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "publication/resource_carriers",
       "profile": "publication",
       "status": "passed",

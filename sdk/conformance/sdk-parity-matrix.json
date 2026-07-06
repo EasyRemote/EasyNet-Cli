@@ -210,7 +210,7 @@
     {
       "capability_id": "mission",
       "profile": "mission",
-      "shared_cases": ["sdk/conformance/cases/mission-carrier-status.yaml"],
+      "shared_cases": ["sdk/conformance/cases/mission-carrier-status.yaml", "sdk/conformance/cases/mission-plan-child-invocation.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/mission_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -219,7 +219,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_mission.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete."
+      "remaining": "Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete outside the SDK plan/fact conformance facade."
     },
     {
       "capability_id": "admin_gateway",

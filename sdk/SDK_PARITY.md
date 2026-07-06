@@ -38,7 +38,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus single-invocation chain signature and parent-receipt closure verification exist for full Axon audit bundles; cross-invocation causal DAG verification and RFC-007 receipt URA construction remain incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
-| mission | Mission | provider-backed | provider-backed | Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete. |
+| mission | Mission | provider-backed | provider-backed | SDK plan rendering and child Invocation fact conformance exist; daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete outside the SDK plan/fact facade. |
 | admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
 | events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
