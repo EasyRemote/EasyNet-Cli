@@ -106,9 +106,9 @@ through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
 seams, an SDK-owned `MissionExecutionAdapter` over typed Mission profile
 requests, SDK-owned `DaemonProfileBridge` dispatch/projection glue,
 page-based Mission event access, SDK-owned bounded Mission event
-projection tailing, SDK-owned `MissionPlan`
-EAL rendering and complete child Invocation fact conformance projection, and
-close state seams. AdminClient
+projection tailing, Runtime Core-backed Mission event streams, SDK-owned
+`MissionPlan` EAL rendering and complete child Invocation fact conformance
+projection, and close state seams. AdminClient
 exposes agent list/start/stop/refresh, session-list, hub join/leave, pairing
 preflight/create/validate, credential verification, device-session
 create/delete, and device-revoke Invocation carrier builders, C ABI-backed
@@ -154,7 +154,7 @@ the SDK facade with signer policy-proof validation. Live daemon keyring signing
 execution policy, Axon-backed receipt verification, receipt URA
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
-and cleanup execution adapters, mission event live streams,
+and cleanup execution adapters,
 certificate policy, backend trust policy persistence, Events daemon filtering/live adapters,
 backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,

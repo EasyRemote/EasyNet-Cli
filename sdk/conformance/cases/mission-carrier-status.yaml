@@ -20,6 +20,8 @@ steps:
   - action: project_events
     fixture: mission-events-request.v4.json
     response_fixture: mission-event-page.v4.json
+  - action: open_event_stream
+    fixture: mission-events-request.v4.json
 expect:
   result: mission_carrier_status_observed
   run_request_schema: mission-run-request.schema.json
@@ -45,3 +47,4 @@ expect:
   events_system_ability: mission.events
   mission_events_page_projection: true
   mission_events_live_tail: bounded_page_state_machine
+  mission_events_runtime_stream_adapter: true

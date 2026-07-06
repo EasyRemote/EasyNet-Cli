@@ -44,8 +44,9 @@ exposes binding DTO, envelope decode, item/error/terminal frame encoding,
 output-hash folding seams, and hash cursor invariant guardrails plus close state
 seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders plus MissionStatus and MissionEventPage projection
-seams, bounded Mission event tailing, MissionPlan EAL rendering, complete child
-Invocation fact conformance, and close state seams. AdminClient
+seams, bounded Mission event tailing, Runtime Core-backed Mission event
+streams, MissionPlan EAL rendering, complete child Invocation fact conformance,
+and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, explicit daemon-owned GatewayStatus provider seams, GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
@@ -66,7 +67,7 @@ builders, Runtime Core stream/bidi session entry points, transport-backed helper
 close state seams, and record projections. Direct UDS transport,
 Axon-backed receipt verification,
 concrete publication/host-binding/mission
-carriers, daemon stream-backed mission event adapters, concrete Admin trust/session carriers,
+carriers, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,

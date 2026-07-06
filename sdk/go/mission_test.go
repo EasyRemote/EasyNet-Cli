@@ -205,6 +205,107 @@ func TestMissionEventsProjection(t *testing.T) {
 	}
 }
 
+func TestMissionClientOpensRuntimeEventStream(t *testing.T) {
+	var seenRequest map[string]any
+	cancelReason := ""
+	closeCalls := 0
+	client, err := NewMissionClient(MissionTransportFunc{
+		OpenEventStreamFunc: func(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+			_ = json.Unmarshal(requestJSON, &seenRequest)
+			return NewStreamHandleFromJSON(StreamTransportFunc{
+				RecvFunc: func(ctx context.Context) ([]byte, error) {
+					return []byte(`{
+						"sequence": 1,
+						"kind": "data",
+						"state": "Open",
+						"payload_json": {
+							"profile": "mission",
+							"kind": "mission_event",
+							"mission_id": "2026-07-04_010203_weather",
+							"sequence": 7,
+							"event_type": "progress",
+							"occurred_unix_ms": 1007,
+							"terminal": false,
+							"payload": {"delta": "stream"},
+							"receipt": {},
+							"metadata": {"step_id": "s1"}
+						}
+					}`), nil
+				},
+				CancelFunc: func(ctx context.Context, reason string) ([]byte, error) {
+					cancelReason = reason
+					return []byte(`{"stream_id":"mission-events-1","cancelled":true,"state":"Cancelled","terminal":true}`), nil
+				},
+				CloseFunc: func(ctx context.Context) error {
+					closeCalls++
+					return nil
+				},
+			}, []byte(`{"stream_id":"mission-events-1","state":"Open","max_buffered_events":8}`))
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+
+	stream, err := client.OpenEventStream(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+		CursorSequence:     7,
+		Limit:              10,
+	})
+	if err != nil {
+		t.Fatalf("OpenEventStream: %v", err)
+	}
+	event, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("stream.Next: %v", err)
+	}
+	if stream.StreamID() != "mission-events-1" || event.EventType != "progress" || event.Payload.(map[string]any)["delta"] != "stream" {
+		t.Fatalf("unexpected stream/event: stream_id=%q event=%#v", stream.StreamID(), event)
+	}
+	if seenRequest["mission_id"] != "2026-07-04_010203_weather" || seenRequest["cursor_sequence"] != float64(7) {
+		t.Fatalf("events stream request not forwarded: %#v", seenRequest)
+	}
+	cancel, err := stream.Cancel(context.Background(), "done")
+	if err != nil {
+		t.Fatalf("stream.Cancel: %v", err)
+	}
+	if !cancel.Cancelled() || cancelReason != "done" {
+		t.Fatalf("unexpected cancel: outcome=%#v reason=%q", cancel, cancelReason)
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("stream.Close: %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestMissionEventStreamRejectsMissingPayload(t *testing.T) {
+	client, err := NewMissionClient(MissionTransportFunc{
+		OpenEventStreamFunc: func(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+			return NewStreamHandleFromJSON(StreamTransportFunc{
+				RecvFunc: func(ctx context.Context) ([]byte, error) {
+					return []byte(`{"sequence":1,"kind":"data","state":"Open"}`), nil
+				},
+			}, []byte(`{"stream_id":"mission-events-1","state":"Open"}`))
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	stream, err := client.OpenEventStream(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	})
+	if err != nil {
+		t.Fatalf("OpenEventStream: %v", err)
+	}
+	if _, err := stream.Next(context.Background()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing payload error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestMissionEventTailerYieldsUntilTerminal(t *testing.T) {
 	transport := newMemoryMissionTransport()
 	transport.eventsJSONs = []string{

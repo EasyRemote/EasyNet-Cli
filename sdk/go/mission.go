@@ -140,6 +140,13 @@ type MissionEventPage struct {
 	Metadata           map[string]any `json:"metadata"`
 }
 
+// MissionEventStream is a typed Mission view over a Runtime Core stream.
+// Runtime owns ordering, cancellation, terminal stream state, and buffering;
+// Mission owns only payload projection into MissionEvent DTOs.
+type MissionEventStream struct {
+	handle *StreamHandle
+}
+
 // MissionEventTailSleep lets tests and integrations control bounded tail sleeps.
 type MissionEventTailSleep func(ctx context.Context, delay time.Duration) error
 
@@ -485,6 +492,11 @@ type MissionTransport interface {
 	Events(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
+// MissionEventStreamTransport optionally opens Runtime Core mission event streams.
+type MissionEventStreamTransport interface {
+	OpenEventStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error)
+}
+
 // MissionTransportFunc adapts functions into a MissionTransport.
 type MissionTransportFunc struct {
 	BuildRunEALInvocationFunc  func(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -496,6 +508,7 @@ type MissionTransportFunc struct {
 	TrackFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CancelFunc                 func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	EventsFunc                 func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	OpenEventStreamFunc        func(ctx context.Context, requestJSON []byte) (*StreamHandle, error)
 }
 
 func (f MissionTransportFunc) BuildRunEALInvocation(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -559,6 +572,13 @@ func (f MissionTransportFunc) Events(ctx context.Context, requestJSON []byte) ([
 		return nil, invalidProfileClient(missionProfile, "mission events transport function is required")
 	}
 	return f.EventsFunc(ctx, requestJSON)
+}
+
+func (f MissionTransportFunc) OpenEventStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+	if f.OpenEventStreamFunc == nil {
+		return nil, invalidProfileClient(missionProfile, "mission event stream transport function is required")
+	}
+	return f.OpenEventStreamFunc(ctx, requestJSON)
 }
 
 // MissionClient is the Mission profile facade.
@@ -649,6 +669,28 @@ func (c *MissionClient) TailEvents(ctx context.Context, req MissionEventListRequ
 		options:        options,
 		cursorSequence: options.CursorSequence,
 	}, nil
+}
+
+func (c *MissionClient) OpenEventStream(ctx context.Context, req MissionEventListRequest) (*MissionEventStream, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return nil, err
+	}
+	requestJSON, err := marshalMissionRequest(req, validateMissionEventListRequest)
+	if err != nil {
+		return nil, err
+	}
+	transport, ok := c.transport.(MissionEventStreamTransport)
+	if !ok {
+		return nil, invalidProfileClient(missionProfile, "mission event stream transport is required")
+	}
+	handle, err := transport.OpenEventStream(ctx, requestJSON)
+	if err != nil {
+		return nil, wrapMissionTransportError("mission event stream open failed", err)
+	}
+	if handle == nil {
+		return nil, invalidProfileClient(missionProfile, "mission event stream handle is required")
+	}
+	return &MissionEventStream{handle: handle}, nil
 }
 
 func (c *MissionClient) buildInvocation(ctx context.Context, req any, validate func(any) error, fn func(context.Context, []byte) ([]byte, error), label string) (InvocationDraft, error) {
@@ -797,6 +839,52 @@ func (t *MissionEventTailer) sleep(ctx context.Context) error {
 	}
 }
 
+func (s *MissionEventStream) StreamID() string {
+	if s == nil || s.handle == nil {
+		return ""
+	}
+	return s.handle.StreamID()
+}
+
+func (s *MissionEventStream) State() StreamState {
+	if s == nil || s.handle == nil {
+		return StreamFailed
+	}
+	return s.handle.State()
+}
+
+func (s *MissionEventStream) Next(ctx context.Context) (MissionEvent, error) {
+	if s == nil || s.handle == nil {
+		return MissionEvent{}, invalidProfileClient(missionProfile, "mission event stream is not initialized")
+	}
+	event, err := s.handle.Next(ctx)
+	if err != nil {
+		return MissionEvent{}, err
+	}
+	if len(event.ErrorJSON()) != 0 && string(event.ErrorJSON()) != "null" {
+		return MissionEvent{}, invalidProfilePayload(missionProfile, "mission event stream frame carried an error", nil)
+	}
+	payload := event.PayloadJSON()
+	if len(payload) == 0 || string(payload) == "null" {
+		return MissionEvent{}, invalidProfilePayload(missionProfile, "mission event stream frame payload_json is required", nil)
+	}
+	return NewMissionEventFromJSON(payload)
+}
+
+func (s *MissionEventStream) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
+	if s == nil || s.handle == nil {
+		return StreamCancel{}, invalidProfileClient(missionProfile, "mission event stream is not initialized")
+	}
+	return s.handle.Cancel(ctx, reason)
+}
+
+func (s *MissionEventStream) Close(ctx context.Context) error {
+	if s == nil || s.handle == nil {
+		return invalidProfileClient(missionProfile, "mission event stream is not initialized")
+	}
+	return s.handle.Close(ctx)
+}
+
 func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 	var dto struct {
 		Profile            string                   `json:"profile"`
@@ -928,6 +1016,17 @@ func validateMissionChildReceiptAnchors(parentReceiptURA *string, invocations []
 	return nil
 }
 
+func NewMissionEventFromJSON(raw []byte) (MissionEvent, error) {
+	var event MissionEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return MissionEvent{}, invalidProfilePayload(missionProfile, fmt.Sprintf("decode mission event JSON: %v", err), err)
+	}
+	if err := validateMissionEventProjection(&event, event.MissionID); err != nil {
+		return MissionEvent{}, err
+	}
+	return event, nil
+}
+
 func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {
 	var dto struct {
 		Profile            string         `json:"profile"`
@@ -952,21 +1051,14 @@ func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {
 	hasPrevious := false
 	for index := range dto.Events {
 		event := &dto.Events[index]
-		if event.Profile != missionProfile || event.Kind != "mission_event" || event.MissionID != dto.MissionID ||
-			event.Sequence < 0 || event.EventType == "" || event.OccurredUnixMS < 0 || event.Metadata == nil {
-			return MissionEventPage{}, invalidProfilePayload(missionProfile, "invalid mission event projection", nil)
+		if err := validateMissionEventProjection(event, dto.MissionID); err != nil {
+			return MissionEventPage{}, err
 		}
 		if hasPrevious && event.Sequence <= previousSequence {
 			return MissionEventPage{}, invalidProfilePayload(missionProfile, "mission events must be strictly ordered by sequence", nil)
 		}
-		if event.Terminal && !missionEventTypeIsTerminal(event.EventType) {
-			return MissionEventPage{}, invalidProfilePayload(missionProfile, "terminal mission event has non-terminal event_type", nil)
-		}
 		previousSequence = event.Sequence
 		hasPrevious = true
-		if event.Receipt == nil {
-			event.Receipt = map[string]any{}
-		}
 	}
 	return MissionEventPage{
 		Profile:            dto.Profile,
@@ -979,6 +1071,26 @@ func NewMissionEventPageFromJSON(raw []byte) (MissionEventPage, error) {
 		Events:             dto.Events,
 		Metadata:           dto.Metadata,
 	}, nil
+}
+
+func validateMissionEventProjection(event *MissionEvent, missionID string) error {
+	if event == nil {
+		return invalidProfilePayload(missionProfile, "mission event is required", nil)
+	}
+	if event.Profile != missionProfile || event.Kind != "mission_event" || event.MissionID == "" ||
+		event.Sequence < 0 || event.EventType == "" || event.OccurredUnixMS < 0 || event.Metadata == nil {
+		return invalidProfilePayload(missionProfile, "invalid mission event projection", nil)
+	}
+	if missionID != "" && event.MissionID != missionID {
+		return invalidProfilePayload(missionProfile, "mission event mission_id must match page", nil)
+	}
+	if event.Terminal && !missionEventTypeIsTerminal(event.EventType) {
+		return invalidProfilePayload(missionProfile, "terminal mission event has non-terminal event_type", nil)
+	}
+	if event.Receipt == nil {
+		event.Receipt = map[string]any{}
+	}
+	return nil
 }
 
 func marshalMissionRequest(req any, validate func(any) error) ([]byte, error) {

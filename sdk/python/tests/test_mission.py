@@ -2,7 +2,7 @@ import json
 import unittest
 from dataclasses import replace
 
-from easynet_sdk import MissionExecutionAdapter, ErrorCode, SDKError, is_code
+from easynet_sdk import MissionExecutionAdapter, ErrorCode, SDKError, StreamHandle, is_code
 from easynet_sdk.mission import (
     MissionPlan,
     MissionCancelRequest,
@@ -289,6 +289,9 @@ class MemoryMissionTransport:
         self.cancel_status_json = MISSION_STATUS_JSON
         self.events_json = MISSION_EVENT_PAGE_JSON
         self.events_jsons: list[bytes] = []
+        self.stream_events: list[bytes] = []
+        self.stream_cancel_reason = ""
+        self.stream_close_calls = 0
         self.seen: dict[str, dict[str, object]] = {}
         self.seen_calls: dict[str, list[dict[str, object]]] = {}
         self.seen_request: dict[str, object] | None = None
@@ -338,8 +341,48 @@ class MemoryMissionTransport:
             return self.events_jsons.pop(0)
         return self.events_json
 
+    def open_event_stream(self, request_json: bytes) -> StreamHandle:
+        self._remember("open_event_stream", request_json)
+        return StreamHandle.from_json(
+            _MemoryMissionStreamTransport(self),
+            b'{"stream_id":"mission-events-1","state":"Open","max_buffered_events":8}',
+        )
+
     def close(self) -> None:
         self.close_calls += 1
+
+
+class _MemoryMissionStreamTransport:
+    def __init__(self, mission_transport: MemoryMissionTransport) -> None:
+        self._mission_transport = mission_transport
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        if self._mission_transport.stream_events:
+            return self._mission_transport.stream_events.pop(0)
+        return b"""{
+          "sequence": 1,
+          "kind": "data",
+          "state": "Open",
+          "payload_json": {
+            "profile": "mission",
+            "kind": "mission_event",
+            "mission_id": "2026-07-04_010203_weather",
+            "sequence": 7,
+            "event_type": "progress",
+            "occurred_unix_ms": 1007,
+            "terminal": false,
+            "payload": {"delta": "stream"},
+            "receipt": {},
+            "metadata": {"step_id": "s1"}
+          }
+        }"""
+
+    def cancel(self, reason: str) -> bytes:
+        self._mission_transport.stream_cancel_reason = reason
+        return b'{"stream_id":"mission-events-1","cancelled":true,"state":"Cancelled","terminal":true}'
+
+    def close(self) -> None:
+        self._mission_transport.stream_close_calls += 1
 
 
 def base() -> MissionCarrierBase:
@@ -587,6 +630,48 @@ class MissionTests(unittest.TestCase):
         assert transport.seen_request is not None
         self.assertEqual(transport.seen_request["mission_id"], "2026-07-04_010203_weather")
         self.assertEqual(transport.seen_request["cursor_sequence"], 4)
+
+    def test_client_opens_runtime_event_stream(self) -> None:
+        transport = MemoryMissionTransport()
+        client = MissionClient(transport)
+
+        stream = client.open_event_stream(
+            MissionEventListRequest(
+                base=base(),
+                mission_id="2026-07-04_010203_weather",
+                cursor_sequence=7,
+                limit=10,
+            )
+        )
+        event = stream.next()
+        cancel = stream.cancel("done")
+        stream.close()
+
+        self.assertEqual(stream.stream_id, "mission-events-1")
+        self.assertEqual(event.event_type, "progress")
+        self.assertEqual(event.payload, {"delta": "stream"})
+        self.assertEqual(transport.seen["open_event_stream"]["mission_id"], "2026-07-04_010203_weather")
+        self.assertEqual(transport.seen["open_event_stream"]["cursor_sequence"], 7)
+        self.assertEqual(transport.seen["open_event_stream"]["limit"], 10)
+        self.assertTrue(cancel.cancelled)
+        self.assertEqual(transport.stream_cancel_reason, "done")
+        self.assertEqual(transport.stream_close_calls, 1)
+
+    def test_mission_event_stream_rejects_missing_payload(self) -> None:
+        transport = MemoryMissionTransport()
+        transport.stream_events = [b'{"sequence":1,"kind":"data","state":"Open"}']
+        client = MissionClient(transport)
+
+        stream = client.open_event_stream(
+            MissionEventListRequest(
+                base=base(),
+                mission_id="2026-07-04_010203_weather",
+            )
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            stream.next()
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_client_tails_mission_events_until_terminal(self) -> None:
         transport = MemoryMissionTransport()

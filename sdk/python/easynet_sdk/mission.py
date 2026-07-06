@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 from ._lifecycle import ClientLifecycle
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .invocation import InvocationDraft
+from .stream import StreamCancel, StreamHandle, StreamState
 
 
 _PROFILE = "mission"
@@ -218,6 +219,37 @@ class MissionEventPage:
             events=events,
             metadata=_required_mapping(decoded, "metadata"),
         )
+
+
+class MissionEventStream:
+    """Typed Mission view over a Runtime Core stream handle."""
+
+    def __init__(self, handle: StreamHandle) -> None:
+        if handle is None:
+            raise _invalid_mission("mission event stream handle is required")
+        self._handle = handle
+
+    @property
+    def stream_id(self) -> str:
+        return self._handle.stream_id
+
+    @property
+    def state(self) -> StreamState:
+        return self._handle.state
+
+    def next(self, timeout: float | None = None) -> MissionEvent:
+        frame = self._handle.next(timeout)
+        if frame.error is not None:
+            raise _invalid_mission("mission event stream frame carried an error")
+        if frame.payload_json is None:
+            raise _invalid_mission("mission event stream frame payload_json is required")
+        return _mission_event_from_json(frame.payload_json)
+
+    def cancel(self, reason: str = "") -> StreamCancel:
+        return self._handle.cancel(reason)
+
+    def close(self) -> None:
+        self._handle.close()
 
 
 @dataclass(frozen=True)
@@ -847,6 +879,14 @@ class MissionTransport(Protocol):
         ...
 
 
+@runtime_checkable
+class MissionEventStreamTransport(Protocol):
+    """Optional Mission transport seam for Runtime Core event streams."""
+
+    def open_event_stream(self, request_json: bytes) -> StreamHandle:
+        ...
+
+
 @dataclass(frozen=True)
 class MissionClient:
     """Mission profile facade."""
@@ -925,6 +965,19 @@ class MissionClient:
         except Exception as exc:
             raise _transport_error("mission events failed", exc) from exc
         return MissionEventPage.from_json(raw)
+
+    def open_event_stream(self, request: MissionEventListRequest) -> MissionEventStream:
+        self._require_open()
+        open_event_stream = getattr(self.transport, "open_event_stream", None)
+        if not callable(open_event_stream):
+            raise _invalid_mission("mission event stream transport is required")
+        try:
+            handle = open_event_stream(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("mission event stream open failed", exc) from exc
+        return MissionEventStream(handle)
 
     def tail_events(
         self,
@@ -1095,6 +1148,16 @@ def _output_ref(value: object) -> MissionOutputRef:
         path=_optional_string(value.get("path"), "path") or "",
         metadata=_optional_mapping(value.get("metadata"), "metadata") or {},
     )
+
+
+def _mission_event_from_json(raw: object) -> MissionEvent:
+    if isinstance(raw, dict):
+        decoded = raw
+    elif isinstance(raw, (bytes, str)):
+        decoded = _json_object(raw, "mission event")
+    else:
+        raise _invalid_mission("mission event JSON must be an object")
+    return _mission_event(decoded, _required_string(decoded, "mission_id"))
 
 
 def _mission_event(value: object, mission_id: str) -> MissionEvent:

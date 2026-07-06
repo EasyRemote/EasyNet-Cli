@@ -1401,6 +1401,12 @@ class CABIMissionTransport(_CABIProfileTransport):
             projection_keys=("mission_id", "cursor_sequence"),
         )
 
+    def open_event_stream(self, request_json: bytes) -> StreamHandle:
+        return self._open_runtime_stream(
+            request_json,
+            build_symbol="easynet_mission_build_events_invocation",
+        )
+
     def project_status(self, status_json: bytes) -> bytes:
         return self._call("easynet_mission_project_status", status_json)
 

@@ -662,6 +662,46 @@ class SharedMissionTransport:
         assert_json_equivalent(request_json, self.expected_events_request)
         return self.events_json
 
+    def open_event_stream(self, request_json: bytes) -> StreamHandle:
+        assert_json_equivalent(request_json, self.expected_events_request)
+        return StreamHandle.from_json(
+            _SharedMissionStreamTransport(self.events_json),
+            b'{"stream_id":"shared-mission-events","state":"Open"}',
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _SharedMissionStreamTransport:
+    def __init__(self, events_json: bytes) -> None:
+        page = json.loads(events_json.decode("utf-8"))
+        self._payload = page["events"][0]
+        self._emitted = False
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        if self._emitted:
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="test",
+                retry=RetryHint.NEVER,
+                message="shared mission event stream already emitted",
+            )
+        self._emitted = True
+        return json.dumps(
+            {
+                "sequence": 1,
+                "kind": "data",
+                "state": "Open",
+                "payload_json": self._payload,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    def cancel(self, reason: str) -> bytes:
+        return b'{"stream_id":"shared-mission-events","cancelled":true,"state":"Cancelled","terminal":true}'
+
     def close(self) -> None:
         return None
 
@@ -2640,6 +2680,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "build_cancel_invocation",
             "project_status",
             "project_events",
+            "open_event_stream",
         ):
             self._require_case_action(mission_case, action)
         for fixture in (
@@ -2689,6 +2730,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_expectation(
             mission_case, "mission_events_live_tail: bounded_page_state_machine"
+        )
+        self._require_case_expectation(
+            mission_case, "mission_events_runtime_stream_adapter: true"
         )
 
         mission = MissionClient(SharedMissionTransport())
@@ -2743,6 +2787,14 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             event_page.events[1].receipt["receipt_ura"],
             "easynet:///r/example/receipt/parent",
         )
+
+        event_stream = mission.open_event_stream(shared_mission_events_request())
+        stream_event = event_stream.next()
+        self.assertEqual(stream_event.mission_id, event_page.mission_id)
+        self.assertEqual(stream_event.sequence, event_page.events[0].sequence)
+        self.assertEqual(stream_event.event_type, event_page.events[0].event_type)
+        self.assertFalse(stream_event.terminal)
+        event_stream.close()
 
         run_request = shared_mission_run_request()
         with self.assertRaises(SDKError) as caught:
@@ -3942,6 +3994,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "cancel": "mission.cancel",
                     "close": "mission.close",
                     "events": "mission.events",
+                    "open_event_stream": "mission.open_event_stream",
                     "run_eal": "mission.run_eal",
                     "run_file": "mission.run_file",
                     "tail_events": "mission.tail_events",

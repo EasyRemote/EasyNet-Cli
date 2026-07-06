@@ -1423,6 +1423,7 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 		"build_cancel_invocation",
 		"project_status",
 		"project_events",
+		"open_event_stream",
 	} {
 		requireCaseAction(t, missionCase, action)
 	}
@@ -1449,6 +1450,7 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 	requireCaseExpectation(t, missionCase, "events_system_ability: mission.events")
 	requireCaseExpectation(t, missionCase, "mission_events_page_projection: true")
 	requireCaseExpectation(t, missionCase, "mission_events_live_tail: bounded_page_state_machine")
+	requireCaseExpectation(t, missionCase, "mission_events_runtime_stream_adapter: true")
 	requireCaseExpectation(t, missionCase, "mission_plan_child_invocation_conformance: true")
 
 	mission, err := NewMissionClient(&sharedMissionTransport{
@@ -1521,6 +1523,22 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 		eventPage.DroppedCount != 0 || len(eventPage.Events) != 2 ||
 		!eventPage.Events[1].Terminal || eventPage.Events[1].Receipt["receipt_ura"] != "easynet:///r/example/receipt/parent" {
 		t.Fatalf("unexpected shared mission event page: %#v", eventPage)
+	}
+
+	eventStream, err := mission.OpenEventStream(context.Background(), sharedMissionEventsRequest(t, root))
+	if err != nil {
+		t.Fatalf("OpenEventStream(shared fixture): %v", err)
+	}
+	streamEvent, err := eventStream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("mission event stream Next(shared fixture): %v", err)
+	}
+	if streamEvent.MissionID != eventPage.MissionID || streamEvent.Sequence != eventPage.Events[0].Sequence ||
+		streamEvent.EventType != eventPage.Events[0].EventType || streamEvent.Terminal {
+		t.Fatalf("unexpected shared mission stream event: %#v", streamEvent)
+	}
+	if err := eventStream.Close(context.Background()); err != nil {
+		t.Fatalf("mission event stream Close(shared fixture): %v", err)
 	}
 
 	badRun := sharedMissionRunRequest(t, root)
@@ -2654,6 +2672,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"Cancel":                 "mission.cancel",
 				"Close":                  "mission.close",
 				"Events":                 "mission.events",
+				"OpenEventStream":        "mission.open_event_stream",
 				"RunEAL":                 "mission.run_eal",
 				"RunFile":                "mission.run_file",
 				"TailEvents":             "mission.tail_events",
@@ -3314,8 +3333,37 @@ func (t *sharedMissionTransport) Events(_ context.Context, requestJSON []byte) (
 	return t.eventsJSON, nil
 }
 
+func (t *sharedMissionTransport) OpenEventStream(_ context.Context, requestJSON []byte) (*StreamHandle, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedEventsRequest)
+	emitted := false
+	return NewStreamHandleFromJSON(StreamTransportFunc{
+		RecvFunc: func(context.Context) ([]byte, error) {
+			if emitted {
+				return nil, &SDKError{Code: ErrInvalidArgument, Stage: "test", Retry: RetryNever, Message: "shared mission event stream already emitted"}
+			}
+			emitted = true
+			return []byte(fmt.Sprintf(`{"sequence":1,"kind":"data","state":"Open","payload_json":%s}`, sharedMissionEventPayload(t.t, t.eventsJSON))), nil
+		},
+		CloseFunc: func(context.Context) error { return nil },
+	}, []byte(`{"stream_id":"shared-mission-events","state":"Open"}`))
+}
+
 func (t *sharedMissionTransport) Close(context.Context) error {
 	return nil
+}
+
+func sharedMissionEventPayload(t *testing.T, eventPageJSON []byte) json.RawMessage {
+	t.Helper()
+	var page struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(eventPageJSON, &page); err != nil {
+		t.Fatalf("decode shared mission event page: %v", err)
+	}
+	if len(page.Events) == 0 {
+		t.Fatal("shared mission event page has no events")
+	}
+	return page.Events[0]
 }
 
 type sharedAdminGatewayTransport struct {
