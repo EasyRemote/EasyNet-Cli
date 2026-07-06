@@ -43,6 +43,7 @@ import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -55,6 +56,9 @@ type cabiEventsSymbols struct {
 	init                                  unsafe.Pointer
 	shutdown                              unsafe.Pointer
 	invocationInvoke                      unsafe.Pointer
+	streamOpen                            unsafe.Pointer
+	streamCancel                          unsafe.Pointer
+	streamClose                           unsafe.Pointer
 	buildDirectorySubscriptionInvocation  unsafe.Pointer
 	buildDeviceSubscriptionInvocation     unsafe.Pointer
 	buildSessionSubscriptionInvocation    unsafe.Pointer
@@ -76,6 +80,8 @@ type CABIEventsTransport struct {
 	library unsafe.Pointer
 	symbols cabiEventsSymbols
 	handle  uint64
+	runtime *CABIRuntimeTransport
+	streams map[string]*StreamHandle
 	closed  bool
 }
 
@@ -111,6 +117,14 @@ func OpenCABIEventsTransport(path string, controlPath string) (*CABIEventsTransp
 		library: library,
 		symbols: symbols,
 		handle:  handle,
+		runtime: newCABIRuntimeTransport(cabiRuntimeSymbols{
+			lastErrorJSON: symbols.lastErrorJSON,
+			stringFree:    symbols.stringFree,
+			streamOpen:    symbols.streamOpen,
+			streamCancel:  symbols.streamCancel,
+			streamClose:   symbols.streamClose,
+		}, handle, false),
+		streams: map[string]*StreamHandle{},
 	}, nil
 }
 
@@ -144,20 +158,20 @@ func (t *CABIEventsTransport) BuildInvocationSubscriptionInvocation(ctx context.
 	return t.callJSONWithOpenHandle(ctx, t.symbols.buildInvocationSubscriptionInvocation, requestJSON, "C ABI events invocation subscription invocation build failed")
 }
 
-func (t *CABIEventsTransport) SubscribeDirectory(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *CABIEventsTransport) SubscribeDirectory(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscription(ctx, requestJSON, t.symbols.buildDirectorySubscriptionInvocation, EventStreamDirectory, "C ABI events directory subscription stream failed")
 }
 
-func (t *CABIEventsTransport) SubscribeDevices(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *CABIEventsTransport) SubscribeDevices(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscription(ctx, requestJSON, t.symbols.buildDeviceSubscriptionInvocation, EventStreamDevice, "C ABI events device subscription stream failed")
 }
 
-func (t *CABIEventsTransport) SubscribeSessions(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *CABIEventsTransport) SubscribeSessions(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscription(ctx, requestJSON, t.symbols.buildSessionSubscriptionInvocation, EventStreamSession, "C ABI events session subscription stream failed")
 }
 
-func (t *CABIEventsTransport) SubscribeInvocations(context.Context, []byte) ([]byte, error) {
-	return nil, sdkProfileNotImplemented(eventsProfile, "C ABI events subscriptions are opened through RuntimeClient.InvokeStream")
+func (t *CABIEventsTransport) SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.openSubscription(ctx, requestJSON, t.symbols.buildInvocationSubscriptionInvocation, EventStreamInvocation, "C ABI events invocation subscription stream failed")
 }
 
 func (t *CABIEventsTransport) ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -195,12 +209,20 @@ func (t *CABIEventsTransport) Close(ctx context.Context) error {
 	library := t.library
 	t.library = nil
 	symbols := t.symbols
+	runtime := t.runtime
+	t.runtime = nil
+	t.streams = map[string]*StreamHandle{}
 	t.mu.Unlock()
 
 	var first error
+	if runtime != nil {
+		if err := runtime.Close(ctx); err != nil {
+			first = err
+		}
+	}
 	if handle != 0 {
 		code := int32(C.easynet_events_call_shutdown(symbols.shutdown, C.uint64_t(handle)))
-		if code != 0 {
+		if code != 0 && first == nil {
 			first = cabiEventsLastErrorOrCode(symbols, code, "C ABI events shutdown failed")
 		}
 	}
@@ -208,6 +230,77 @@ func (t *CABIEventsTransport) Close(ctx context.Context) error {
 		C.dlclose(library)
 	}
 	return first
+}
+
+func (t *CABIEventsTransport) openSubscription(ctx context.Context, requestJSON []byte, buildSymbol unsafe.Pointer, stream EventStreamKind, fallback string) ([]byte, error) {
+	request, _, err := decodeEventsSubscriptionForRuntime(requestJSON, stream)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := t.requireOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	draftJSON, err := t.callJSON(handle, buildSymbol, requestJSON, fallback)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	runtime := t.runtime
+	t.mu.Unlock()
+	if runtime == nil {
+		return nil, invalidProfileClient(eventsProfile, "C ABI events runtime stream transport is not initialized")
+	}
+	streamTransport, rawOpen, err := runtime.OpenStream(ctx, draftJSON)
+	if err != nil {
+		return nil, err
+	}
+	streamHandle, err := NewStreamHandleFromJSON(streamTransport, rawOpen)
+	if err != nil {
+		_ = streamTransport.Close(ctx)
+		return nil, err
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = map[string]*StreamHandle{}
+	}
+	t.streams[streamHandle.StreamID()] = streamHandle
+	t.mu.Unlock()
+	return eventsRuntimeStreamOpenJSON(stream, request, streamHandle)
+}
+
+func (t *CABIEventsTransport) bindEventStreamHandle(stream EventStream) EventStream {
+	if t == nil || stream.StreamID == "" {
+		return stream
+	}
+	t.mu.Lock()
+	handle := t.streams[stream.StreamID]
+	t.mu.Unlock()
+	stream.handle = handle
+	if liveEventProjectionSupported(EventStreamKind(stream.Stream)) {
+		stream.projectLive = func(ctx context.Context, input EventProjectionInput) (EventFrame, error) {
+			requestJSON, err := json.Marshal(input)
+			if err != nil {
+				return EventFrame{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events projection input: %v", err), err)
+			}
+			raw, err := t.ProjectLiveEvent(ctx, requestJSON)
+			if err != nil {
+				return EventFrame{}, err
+			}
+			return NewEventFrameFromJSON(raw)
+		}
+	}
+	stream.release = t.releaseEventStreamHandle
+	return stream
+}
+
+func (t *CABIEventsTransport) releaseEventStreamHandle(streamID string) {
+	if t == nil || streamID == "" {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, streamID)
+	t.mu.Unlock()
 }
 
 func (t *CABIEventsTransport) invokeAndProjectDeviceEvents(ctx context.Context, requestJSON []byte, fallback string) ([]byte, error) {
@@ -290,6 +383,9 @@ func bindCABIEventsSymbols(library unsafe.Pointer) (cabiEventsSymbols, error) {
 		{"easynet_init", &symbols.init},
 		{"easynet_shutdown", &symbols.shutdown},
 		{"easynet_invocation_invoke", &symbols.invocationInvoke},
+		{"easynet_invocation_stream_open", &symbols.streamOpen},
+		{"easynet_invocation_stream_cancel", &symbols.streamCancel},
+		{"easynet_invocation_stream_close", &symbols.streamClose},
 		{"easynet_events_build_directory_subscription_invocation", &symbols.buildDirectorySubscriptionInvocation},
 		{"easynet_events_build_device_subscription_invocation", &symbols.buildDeviceSubscriptionInvocation},
 		{"easynet_events_build_session_subscription_invocation", &symbols.buildSessionSubscriptionInvocation},

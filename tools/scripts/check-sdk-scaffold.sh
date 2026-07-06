@@ -135,6 +135,38 @@ PY
   fi
 }
 
+validate_c_abi_header() {
+  if ! command -v cc >/dev/null 2>&1; then
+    fail "cc is required to validate include/easynet_cli.h"
+    return
+  fi
+
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/easynet-c-abi-header.XXXXXX.c")"
+  printf '#include "include/easynet_cli.h"\n' >"$tmp"
+  if ! cc -fsyntax-only -I"$ROOT" "$tmp" >/dev/null 2>&1; then
+    fail "include/easynet_cli.h does not compile as C"
+  fi
+  rm -f "$tmp"
+
+  if ! python3 - "$ROOT/include/easynet_cli.h" <<'PY'
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+
+header = Path(sys.argv[1]).read_text(encoding="utf-8")
+names = re.findall(r"\bint32_t\s+(easynet_[A-Za-z0-9_]+)\s*\(", header)
+duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+if duplicates:
+    print("duplicate C ABI declarations: " + ", ".join(duplicates))
+    raise SystemExit(1)
+PY
+  then
+    fail "include/easynet_cli.h contains duplicate declarations"
+  fi
+}
+
 if ! command -v python3 >/dev/null 2>&1; then
   fail "python3 is required to validate SDK JSON scaffold"
 fi
@@ -191,6 +223,7 @@ for path in \
   sdk/go/signing.go \
   sdk/go/signing_test.go \
   sdk/go/import_boundary_test.go \
+  sdk/go/live_smoke_cabi_test.go \
   tools/scripts/check-backend-sdk-only-boundary.sh \
   tools/scripts/check-backend-route-family-coverage.sh \
   tools/scripts/check-easyremote-sdk-boundary.sh \
@@ -198,6 +231,7 @@ for path in \
   tools/scripts/check-sdk-parity-matrix.sh \
   tools/scripts/check-sdk-product-smokes.sh \
   tools/scripts/check-sdk-ura-naming.sh \
+  tools/scripts/go-sdk-live-smoke.sh \
   tools/scripts/python-sdk-live-smoke.sh \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
@@ -264,6 +298,7 @@ require_dir sdk/conformance/runner
 validate_json_file sdk/conformance/backend-route-family-coverage.json
 validate_json_file sdk/conformance/fixture-schema-bindings.json
 validate_fixture_schema_bindings
+validate_c_abi_header
 validate_json_file sdk/conformance/sdk-parity-matrix.json
 validate_json_file sdk/conformance/runner/rust-action-adapter-report.json
 validate_json_file sdk/conformance/runner/c-abi-action-adapter-report.json
@@ -577,6 +612,7 @@ bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-product-smokes.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-ura-naming.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/python-sdk-live-smoke.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/go-sdk-live-smoke.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"

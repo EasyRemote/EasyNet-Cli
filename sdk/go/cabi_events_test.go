@@ -139,15 +139,36 @@ func TestCABIEventsTransportBuildsCarriersAndProjectsFrames(t *testing.T) {
 	}
 }
 
-func TestCABIEventsTransportReportsUnsupportedAndClosed(t *testing.T) {
+func TestCABIEventsTransportStreamsThroughRuntimeCoreAndCloses(t *testing.T) {
 	libraryPath := buildFakeCABIEventsLibrary(t)
 	client, transport, err := NewCABIEventClient(libraryPath, "")
 	if err != nil {
 		t.Fatalf("NewCABIEventClient: %v", err)
 	}
 
-	if _, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()}); !IsCode(err, ErrNotImplemented) {
-		t.Fatalf("SubscribeDirectory error = %v, want %s", err, ErrNotImplemented)
+	stream, err := client.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeDevices: %v", err)
+	}
+	if stream.Stream != "device" || stream.StreamID != "77" || stream.State == "" {
+		t.Fatalf("device stream = %#v", stream)
+	}
+	frame, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("device stream Next: %v", err)
+	}
+	if frame.Stream != "device" || frame.Kind != "device.status_changed" || frame.Cursor.Token != "device:8" {
+		t.Fatalf("device live frame = %#v", frame)
+	}
+	cancel, err := stream.Cancel(context.Background(), "test")
+	if err != nil {
+		t.Fatalf("device stream Cancel: %v", err)
+	}
+	if !cancel.Cancelled() || cancel.StreamID() != "77" || cancel.State() != StreamCancelled {
+		t.Fatalf("device stream cancel = %#v", cancel)
 	}
 
 	if err := transport.Close(context.Background()); err != nil {
@@ -217,6 +238,27 @@ int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, 
 	(void)handle;
 	if (strstr(invocation_json, "events.device.history") == 0) return 10;
 	*out_result_json = dup_json("{\"output_json\":{\"events\":[{\"sequence\":8,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"occurred_unix_ms\":1783100000123,\"kind\":\"device.status_changed\",\"payload\":{\"state\":\"online\"}}]}}");
+	return 0;
+}
+typedef void (*stream_cb)(void *user_data, const char *chunk_json);
+int32_t easynet_invocation_stream_open(uint64_t handle, const char *invocation_json, stream_cb on_chunk, void *user_data, uint64_t *out_stream_id) {
+	(void)handle;
+	if (strstr(invocation_json, "federation.subscribe_directory_v2") == 0 &&
+	    strstr(invocation_json, "events.device.subscribe") == 0 &&
+	    strstr(invocation_json, "session.attach") == 0 &&
+	    strstr(invocation_json, "events.invocation.subscribe") == 0) return 10;
+	*out_stream_id = 77;
+	if (on_chunk != 0) {
+		on_chunk(user_data, "{\"sequence\":8,\"event\":\"chunk\",\"payload_content_type\":\"application/json\",\"payload_json\":{\"sequence\":8,\"device_ura\":\"easynet:///r/example/device/dev-a\",\"occurred_unix_ms\":1783100000123,\"kind\":\"device.status_changed\",\"payload\":{\"state\":\"online\"}},\"terminal\":false}");
+	}
+	return 0;
+}
+int32_t easynet_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
+	(void)handle; (void)stream_id;
+	return 0;
+}
+int32_t easynet_invocation_stream_close(uint64_t handle, uint64_t stream_id) {
+	(void)handle; (void)stream_id;
 	return 0;
 }
 int32_t easynet_events_build_directory_subscription_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {

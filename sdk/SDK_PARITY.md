@@ -49,8 +49,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 ## Known Gaps
 
 - C ABI now exposes invocation builder handles and submitted InvocationHandle
-  await/cancel/events/free handles for unary submit; live event streaming
-  remains incomplete.
+  await/cancel/events/free handles for unary submit; Go/Python C ABI Events
+  subscriptions now execute through Runtime Core stream handles, while product
+  live fanout cutover evidence remains incomplete.
 - C ABI now exposes schema-shaped typed error JSON for ABI return codes; Python
   and Go profile facades now expose stable `ErrorClass`, profile/source-ref
   accessors, package-level profile source refs, and execute the shared

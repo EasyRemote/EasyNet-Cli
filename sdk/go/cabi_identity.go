@@ -85,11 +85,12 @@ type cabiIdentitySymbols struct {
 // grammar, resource-ref construction, lifecycle carriers, and daemon output
 // projection to the Rust/C ABI contract.
 type CABIIdentityTransport struct {
-	mu      sync.Mutex
-	library unsafe.Pointer
-	symbols cabiIdentitySymbols
-	handle  uint64
-	closed  bool
+	mu          sync.Mutex
+	library     unsafe.Pointer
+	ownsLibrary bool
+	symbols     cabiIdentitySymbols
+	handle      uint64
+	closed      bool
 }
 
 var _ IdentityTransport = (*CABIIdentityTransport)(nil)
@@ -121,9 +122,10 @@ func OpenCABIIdentityTransport(path string, controlPath string) (*CABIIdentityTr
 		return nil, err
 	}
 	return &CABIIdentityTransport{
-		library: library,
-		symbols: symbols,
-		handle:  handle,
+		library:     library,
+		ownsLibrary: true,
+		symbols:     symbols,
+		handle:      handle,
 	}, nil
 }
 
@@ -239,6 +241,8 @@ func (t *CABIIdentityTransport) Close(ctx context.Context) error {
 	t.handle = 0
 	library := t.library
 	t.library = nil
+	ownsLibrary := t.ownsLibrary
+	t.ownsLibrary = false
 	symbols := t.symbols
 	t.mu.Unlock()
 
@@ -249,7 +253,7 @@ func (t *CABIIdentityTransport) Close(ctx context.Context) error {
 			first = cabiIdentityLastErrorOrCode(symbols, code, "C ABI identity shutdown failed")
 		}
 	}
-	if library != nil {
+	if ownsLibrary && library != nil {
 		C.dlclose(library)
 	}
 	return first

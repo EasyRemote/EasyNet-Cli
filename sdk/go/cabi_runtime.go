@@ -180,6 +180,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 	"unsafe"
@@ -377,20 +378,48 @@ func (t *CABIDaemonTransport) OpenRuntime(ctx context.Context, handleID string, 
 	if err != nil {
 		return nil, nil, err
 	}
-	var out C.uint64_t
-	code := int32(C.easynet_runtime_call_daemon_open_client(t.symbols.daemonOpenClient, C.uint64_t(daemonHandle), &out))
-	if code != 0 {
-		return nil, nil, t.lastErrorOrCode(code, "C ABI daemon open client failed")
-	}
-	runtimeHandle := uint64(out)
-	if runtimeHandle == 0 {
-		return nil, nil, invalidCABIHandle("C ABI daemon open client returned an invalid runtime handle")
+	runtimeHandle, err := t.openClientHandle(daemonHandle, "runtime")
+	if err != nil {
+		return nil, nil, err
 	}
 	runtime := newCABIRuntimeTransport(t.symbols, runtimeHandle, true)
 	t.mu.Lock()
 	t.runtimes[runtime] = struct{}{}
 	t.mu.Unlock()
 	return runtime, []byte(fmt.Sprintf(`{"ready":true,"abi_version":%d,"transport":"c_abi"}`, expectedCABIABIVersion)), nil
+}
+
+// OpenIdentityTransport opens a handle-owned Identity profile transport from a
+// daemon lifecycle handle. The profile transport shares this dynamic library
+// and owns only the C ABI client handle returned by easynet_daemon_open_client.
+func (t *CABIDaemonTransport) OpenIdentityTransport(ctx context.Context, handleID string) (*CABIIdentityTransport, error) {
+	if err := t.requireOpen(ctx); err != nil {
+		return nil, err
+	}
+	daemonHandle, err := t.requireDaemonHandle(handleID)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	library := t.library
+	t.mu.Unlock()
+	if library == nil {
+		return nil, invalidRuntimeClient("C ABI daemon transport library is closed")
+	}
+	symbols, err := bindCABIIdentitySymbols(library)
+	if err != nil {
+		return nil, err
+	}
+	identityHandle, err := t.openClientHandle(daemonHandle, "identity")
+	if err != nil {
+		return nil, err
+	}
+	return &CABIIdentityTransport{
+		library:     library,
+		ownsLibrary: false,
+		symbols:     symbols,
+		handle:      identityHandle,
+	}, nil
 }
 
 func (t *CABIDaemonTransport) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
@@ -535,6 +564,19 @@ func (t *CABIDaemonTransport) lastErrorOrCode(code int32, fallback string) error
 	return cabiRuntimeLastErrorOrCode(t.symbols, code, fallback)
 }
 
+func (t *CABIDaemonTransport) openClientHandle(daemonHandle uint64, profile string) (uint64, error) {
+	var out C.uint64_t
+	code := int32(C.easynet_runtime_call_daemon_open_client(t.symbols.daemonOpenClient, C.uint64_t(daemonHandle), &out))
+	if code != 0 {
+		return 0, t.lastErrorOrCode(code, "C ABI daemon open "+profile+" client failed")
+	}
+	clientHandle := uint64(out)
+	if clientHandle == 0 {
+		return 0, invalidCABIHandle("C ABI daemon open " + profile + " returned an invalid client handle")
+	}
+	return clientHandle, nil
+}
+
 // CABIRuntimeTransport is an optional Runtime Core transport over libeasynet_cli.
 type CABIRuntimeTransport struct {
 	mu          sync.Mutex
@@ -620,10 +662,11 @@ func (t *CABIRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 		return nil, nil, invalidCABIHandle("C ABI stream open returned an invalid stream id")
 	}
 	stream := &cabiStreamTransport{
-		owner:    t,
-		streamID: streamID,
-		token:    token,
-		inbox:    inbox,
+		owner:       t,
+		streamID:    streamID,
+		token:       token,
+		inbox:       inbox,
+		nextRecvSeq: 1,
 	}
 	t.mu.Lock()
 	t.streams[stream] = struct{}{}
@@ -656,10 +699,11 @@ func (t *CABIRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, s
 		return nil, nil, invalidCABIHandle("C ABI bidi open returned an invalid session id")
 	}
 	bidi := &cabiBidiTransport{
-		owner:  t,
-		bidiID: bidiID,
-		token:  token,
-		inbox:  inbox,
+		owner:       t,
+		bidiID:      bidiID,
+		token:       token,
+		inbox:       inbox,
+		nextRecvSeq: 1,
 	}
 	t.mu.Lock()
 	t.bidis[bidi] = struct{}{}
@@ -920,12 +964,13 @@ func (t *CABIRuntimeTransport) lastErrorOrCode(code int32, fallback string) erro
 }
 
 type cabiStreamTransport struct {
-	mu       sync.Mutex
-	owner    *CABIRuntimeTransport
-	streamID uint64
-	token    uintptr
-	inbox    *cabiCallbackInbox
-	closed   bool
+	mu          sync.Mutex
+	owner       *CABIRuntimeTransport
+	streamID    uint64
+	token       uintptr
+	inbox       *cabiCallbackInbox
+	nextRecvSeq uint64
+	closed      bool
 }
 
 func (s *cabiStreamTransport) Recv(ctx context.Context) ([]byte, error) {
@@ -935,7 +980,11 @@ func (s *cabiStreamTransport) Recv(ctx context.Context) ([]byte, error) {
 	if s == nil || s.inbox == nil {
 		return nil, invalidRuntimeClient("C ABI stream transport is not initialized")
 	}
-	return s.inbox.recv(ctx)
+	raw, err := s.inbox.recv(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return projectCABIOrderedEvent(raw, s.allocateSequence, true)
 }
 
 func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
@@ -1009,12 +1058,13 @@ func (s *cabiStreamTransport) closeWithHandle(handle uint64) error {
 }
 
 type cabiBidiTransport struct {
-	mu     sync.Mutex
-	owner  *CABIRuntimeTransport
-	bidiID uint64
-	token  uintptr
-	inbox  *cabiCallbackInbox
-	closed bool
+	mu          sync.Mutex
+	owner       *CABIRuntimeTransport
+	bidiID      uint64
+	token       uintptr
+	inbox       *cabiCallbackInbox
+	nextRecvSeq uint64
+	closed      bool
 }
 
 func (b *cabiBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
@@ -1041,7 +1091,11 @@ func (b *cabiBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 	if b == nil || b.inbox == nil {
 		return nil, invalidRuntimeClient("C ABI bidi transport is not initialized")
 	}
-	return b.inbox.recv(ctx)
+	raw, err := b.inbox.recv(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return projectCABIOrderedEvent(raw, b.allocateSequence, false)
 }
 
 func (b *cabiBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
@@ -1139,6 +1193,134 @@ func (b *cabiBidiTransport) requireOpen() error {
 		return invalidRuntimeClient("C ABI bidi transport is closed")
 	}
 	return nil
+}
+
+func (s *cabiStreamTransport) allocateSequence(observed *uint64) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if observed != nil && *observed > 0 {
+		if s.nextRecvSeq <= *observed {
+			s.nextRecvSeq = *observed + 1
+		}
+		return *observed
+	}
+	sequence := s.nextRecvSeq
+	s.nextRecvSeq++
+	return sequence
+}
+
+func (b *cabiBidiTransport) allocateSequence(observed *uint64) uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if observed != nil && *observed > 0 {
+		if b.nextRecvSeq <= *observed {
+			b.nextRecvSeq = *observed + 1
+		}
+		return *observed
+	}
+	sequence := b.nextRecvSeq
+	b.nextRecvSeq++
+	return sequence
+}
+
+func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, useObservedSequence bool) ([]byte, error) {
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return raw, nil
+	}
+	var observed *uint64
+	if useObservedSequence {
+		if sequence, ok := cabiPositiveJSONInteger(event["sequence"]); ok {
+			observed = &sequence
+		}
+	}
+	event["sequence"] = allocateSequence(observed)
+	if _, ok := event["payload_base64"]; !ok {
+		if data, ok := event["data_base64"]; ok {
+			event["payload_base64"] = data
+		}
+	}
+	if state, ok := cabiJSONInteger(event["state"]); ok {
+		event["state"] = cabiInvocationStateName(state)
+	}
+	if _, ok := event["error"]; !ok {
+		if _, hasCode := event["code"]; hasCode {
+			event["error"] = cabiCallbackError(event)
+		} else if _, hasMessage := event["message"]; hasMessage {
+			event["error"] = cabiCallbackError(event)
+		}
+	}
+	projected, err := json.Marshal(event)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode projected C ABI callback frame: %v", err), err)
+	}
+	return projected, nil
+}
+
+func cabiPositiveJSONInteger(value any) (uint64, bool) {
+	number, ok := cabiJSONInteger(value)
+	if !ok || number <= 0 {
+		return 0, false
+	}
+	return uint64(number), true
+}
+
+func cabiJSONInteger(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if math.Trunc(typed) != typed {
+			return 0, false
+		}
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	default:
+		return 0, false
+	}
+}
+
+func cabiCallbackError(event map[string]any) map[string]any {
+	return map[string]any{
+		"code":    cabiStringOrEmpty(event["code"]),
+		"message": cabiStringOrEmpty(event["message"]),
+	}
+}
+
+func cabiStringOrEmpty(value any) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
+}
+
+func cabiInvocationStateName(state int64) string {
+	switch state {
+	case 1:
+		return "Accepted"
+	case 2:
+		return "Admitted"
+	case 3:
+		return "Dispatched"
+	case 4:
+		return "Running"
+	case 5:
+		return "Completed"
+	case 6:
+		return "Failed"
+	case 7:
+		return "TimedOut"
+	case 8:
+		return "Cancelled"
+	default:
+		return strconv.FormatInt(state, 10)
+	}
 }
 
 func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) {
