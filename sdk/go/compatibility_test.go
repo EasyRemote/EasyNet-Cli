@@ -311,6 +311,14 @@ func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
 		t.Fatalf("unexpected retrieved file projection: %#v", retrieved)
 	}
 
+	retrievedByAlias, err := client.RetrieveFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retrievedByAlias.ID != retrieved.ID || transport.seen["retrieve_file"]["file_id"] == "" {
+		t.Fatalf("RetrieveFile did not delegate to retrieve transport: %#v", retrievedByAlias)
+	}
+
 	daemonDeleted, err := client.DeleteFile(context.Background(), compatibilityFileDeleteRequest(compatibilityBaseForTest()))
 	if err != nil {
 		t.Fatal(err)

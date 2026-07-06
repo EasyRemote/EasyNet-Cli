@@ -391,6 +391,10 @@ func (c *CompatibilityClient) GetFile(ctx context.Context, req CompatibilityFile
 	return NewCompatibilityFileFromJSON(raw)
 }
 
+func (c *CompatibilityClient) RetrieveFile(ctx context.Context, req CompatibilityFileRequest) (CompatibilityFile, error) {
+	return c.GetFile(ctx, req)
+}
+
 func (c *CompatibilityClient) DeleteFile(ctx context.Context, req CompatibilityFileDeleteRequest) (CompatibilityFileDeleteResult, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return CompatibilityFileDeleteResult{}, err
