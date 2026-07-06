@@ -2018,6 +2018,8 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 	requireCaseExpectation(t, surfaceCase, "health_invocation_fixture: surface-health-invocation.v4.json")
 	requireCaseExpectation(t, surfaceCase, "health_fixture: surface-health.v4.json")
 	requireCaseExpectation(t, surfaceCase, "surface_status_aliases_health: true")
+	requireCaseExpectation(t, surfaceCase, "health_descriptor_ref_source: identity_built_invocation")
+	requireCaseExpectation(t, surfaceCase, "facade_descriptor_concat: false")
 	requireCaseExpectation(t, surfaceCase, "health_rendering_owner: backend")
 	requireCaseExpectation(t, surfaceCase, "backend_rendering_owned_by_sdk: false")
 	requireCaseExpectation(t, surfaceCase, "direct_filesystem_page_transport: false")

@@ -3192,6 +3192,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             surface_case, "surface_status_aliases_health: true"
         )
         self._require_case_expectation(
+            surface_case, "health_descriptor_ref_source: identity_built_invocation"
+        )
+        self._require_case_expectation(
+            surface_case, "facade_descriptor_concat: false"
+        )
+        self._require_case_expectation(
             surface_case, "health_rendering_owner: backend"
         )
         self._require_case_expectation(

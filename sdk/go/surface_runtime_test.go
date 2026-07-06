@@ -48,6 +48,11 @@ func TestSurfaceRuntimeTransportBuildsInvocationThroughIdentity(t *testing.T) {
 	if len(identityTransport.seenBuildURA) != 1 || identityTransport.seenBuildURA[0]["ability_name"] != surfaceAbilityCreatePage {
 		t.Fatalf("ability URA was not delegated through identity client: %#v", identityTransport.seenBuildURA)
 	}
+	if len(identityTransport.seenBuildDescriptor) != 1 ||
+		identityTransport.seenBuildDescriptor[0]["ability_ura"] != "easynet:///r/example/ability/alice.pages.pages.publish" ||
+		identityTransport.seenBuildDescriptor[0]["descriptor_version"] != "1.0.0" {
+		t.Fatalf("descriptor ref was not delegated through identity client: %#v", identityTransport.seenBuildDescriptor)
+	}
 }
 
 func TestSurfaceRuntimeTransportInvokesAndProjectsRawPagesOutput(t *testing.T) {
@@ -111,6 +116,43 @@ func TestSurfaceRuntimeTransportInvokesAndProjectsRawPagesOutput(t *testing.T) {
 	}
 	if !result.Removed || result.PageID != "docs" || result.State != "deleted" {
 		t.Fatalf("unexpected delete projection: %#v", result)
+	}
+}
+
+func TestSurfaceRuntimeTransportProjectsHealthDescriptorFromIdentityBuiltInvocation(t *testing.T) {
+	identityTransport := newSurfaceRuntimeIdentityTransport()
+	identity, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: surfaceRuntimeHealthRawJSONWithoutDescriptor}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeSurfaceClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeSurfaceClient: %v", err)
+	}
+
+	health, err := client.SurfaceHealth(context.Background(), SurfaceHealthRequest{
+		SurfaceCarrierBase: surfaceBaseForTest(),
+		ProjectID:          "docs",
+	})
+	if err != nil {
+		t.Fatalf("SurfaceHealth: %v", err)
+	}
+	if health.DescriptorRef != "easynet:///r/example/ability/alice.pages.pages.health@1.0.0" {
+		t.Fatalf("descriptor ref = %q", health.DescriptorRef)
+	}
+	if len(identityTransport.seenBuildURA) != 1 ||
+		identityTransport.seenBuildURA[0]["ability_name"] != surfaceAbilityHealth {
+		t.Fatalf("ability URA was not delegated through identity client: %#v", identityTransport.seenBuildURA)
+	}
+	if len(identityTransport.seenBuildDescriptor) != 1 ||
+		identityTransport.seenBuildDescriptor[0]["ability_ura"] != "easynet:///r/example/ability/alice.pages.pages.health" ||
+		identityTransport.seenBuildDescriptor[0]["descriptor_version"] != "1.0.0" {
+		t.Fatalf("descriptor ref was not delegated through identity client: %#v", identityTransport.seenBuildDescriptor)
 	}
 }
 
@@ -187,3 +229,13 @@ const surfaceRuntimePagePageRawJSON = `{
 }`
 
 const surfaceRuntimeDeleteRawJSON = `{"project_id":"docs","removed":true}`
+
+const surfaceRuntimeHealthRawJSONWithoutDescriptor = `{
+	"owner_ura":"easynet:///r/example/agent/alice.pages",
+	"surface_ref":"easynet:///r/example/resource/alice.docs",
+	"descriptor_version":"1.0.0",
+	"state":"ready",
+	"ready":true,
+	"page_count":2,
+	"checks":[{"name":"pages","ready":true}]
+}`

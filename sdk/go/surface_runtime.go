@@ -85,7 +85,7 @@ func (t *SurfaceRuntimeTransport) ListPages(ctx context.Context, requestJSON []b
 	if err != nil {
 		return nil, err
 	}
-	output, result, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityListPages)
+	output, result, _, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityListPages)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (t *SurfaceRuntimeTransport) CreatePage(ctx context.Context, requestJSON []
 	if err != nil {
 		return nil, err
 	}
-	output, result, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityCreatePage)
+	output, result, _, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityCreatePage)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (t *SurfaceRuntimeTransport) DeletePage(ctx context.Context, requestJSON []
 	if err != nil {
 		return nil, err
 	}
-	output, _, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityDeletePage)
+	output, _, _, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityDeletePage)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func (t *SurfaceRuntimeTransport) SurfaceManifest(ctx context.Context, requestJS
 	if err != nil {
 		return nil, err
 	}
-	output, result, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityManifest)
+	output, result, _, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityManifest)
 	if err != nil {
 		return nil, err
 	}
@@ -151,11 +151,11 @@ func (t *SurfaceRuntimeTransport) SurfaceHealth(ctx context.Context, requestJSON
 	if err != nil {
 		return nil, err
 	}
-	output, _, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityHealth)
+	output, _, draft, err := t.invoke(ctx, requestJSON, request.SurfaceCarrierBase, surfaceAbilityHealth)
 	if err != nil {
 		return nil, err
 	}
-	return projectSurfaceHealth(output, request.SurfaceCarrierBase)
+	return projectSurfaceHealth(output, request.SurfaceCarrierBase, draft.DescriptorRef())
 }
 
 func (t *SurfaceRuntimeTransport) Close(context.Context) error {
@@ -202,23 +202,23 @@ func (t *SurfaceRuntimeTransport) buildInvocation(ctx context.Context, requestJS
 		Build()
 }
 
-func (t *SurfaceRuntimeTransport) invoke(ctx context.Context, requestJSON []byte, base SurfaceCarrierBase, abilityName string) ([]byte, InvocationResult, error) {
+func (t *SurfaceRuntimeTransport) invoke(ctx context.Context, requestJSON []byte, base SurfaceCarrierBase, abilityName string) ([]byte, InvocationResult, InvocationDraft, error) {
 	draft, err := t.buildInvocation(ctx, requestJSON, base, abilityName)
 	if err != nil {
-		return nil, InvocationResult{}, err
+		return nil, InvocationResult{}, InvocationDraft{}, err
 	}
 	result, err := t.runtime.Invoke(ctx, draft)
 	if err != nil {
-		return nil, InvocationResult{}, err
+		return nil, InvocationResult{}, InvocationDraft{}, err
 	}
 	if !result.OK() {
-		return nil, InvocationResult{}, surfaceInvocationFailureError(result)
+		return nil, InvocationResult{}, InvocationDraft{}, surfaceInvocationFailureError(result)
 	}
 	outputJSON := result.OutputJSON()
 	if len(outputJSON) == 0 || string(outputJSON) == "null" {
-		return nil, InvocationResult{}, invalidProfilePayload(surfaceProfile, "surface invocation output_json is required", nil)
+		return nil, InvocationResult{}, InvocationDraft{}, invalidProfilePayload(surfaceProfile, "surface invocation output_json is required", nil)
 	}
-	return outputJSON, result, nil
+	return outputJSON, result, draft, nil
 }
 
 func decodeSurfaceListPagesForRuntime(requestJSON []byte) (SurfaceListPagesRequest, error) {
@@ -580,7 +580,7 @@ func projectSurfaceMutationResult(raw []byte) ([]byte, error) {
 	})
 }
 
-func projectSurfaceHealth(raw []byte, base SurfaceCarrierBase) ([]byte, error) {
+func projectSurfaceHealth(raw []byte, base SurfaceCarrierBase, invocationDescriptorRef string) ([]byte, error) {
 	payload, err := surfaceOutputObject(raw)
 	if err != nil {
 		return nil, err
@@ -609,9 +609,9 @@ func projectSurfaceHealth(raw []byte, base SurfaceCarrierBase) ([]byte, error) {
 	if descriptorVersion == "" {
 		descriptorVersion = "1.0.0"
 	}
-	descriptorRef := firstNonEmpty(firstSurfaceString(result, "descriptor_ref"), firstSurfaceString(payload, "descriptor_ref"))
+	descriptorRef := firstNonEmpty(firstSurfaceString(result, "descriptor_ref"), firstSurfaceString(payload, "descriptor_ref"), invocationDescriptorRef)
 	if descriptorRef == "" {
-		descriptorRef = fmt.Sprintf("%s.%s@%s", strings.Replace(ownerURA, "/agent/", "/ability/", 1), surfaceAbilityHealth, descriptorVersion)
+		return nil, invalidProfilePayload(surfaceProfile, "surface health descriptor_ref is required from daemon output or identity-built invocation", nil)
 	}
 	checks := surfaceHealthChecks(result)
 	state := firstSurfaceString(result, "state")
