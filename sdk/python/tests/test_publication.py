@@ -451,6 +451,13 @@ class _PublicationAddressing:
             return _PublicationUraProjection("user")
         raise ValueError(f"invalid URA {value!r}")
 
+    def resource_ura(self, owner_ura: str, path: str) -> str:
+        if owner_ura != "easynet:///r/example/device/dev-a":
+            raise ValueError(f"unexpected owner URA {owner_ura!r}")
+        return f"easynet:///r/example/resource/device.dev-a/{path.strip('/')}"
+
+
+class _LegacyPublicationAddressing(_PublicationAddressing):
     def resource_ura(self, realm: str, owner_id: str, path: str) -> str:
         return f"easynet:///r/{realm}/resource/{owner_id}/{path.strip('/')}"
 
@@ -586,6 +593,21 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(ref["revision"], "fs-local-mapping-v1")
         self.assertEqual(invocation["target"]["subject"], ref["resource_ura"])
         self.assertEqual(invocation["args"]["node_id"], "local")
+
+    def test_publication_host_adapter_rejects_legacy_resource_ura_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "pkg"
+            package.mkdir()
+            client = _PublicationHostClient({"install_id": "inst-1"})
+
+            with self.assertRaises(SDKError) as raised:
+                PublicationHostAdapter(
+                    client,
+                    addressing=_LegacyPublicationAddressing(),
+                ).install_ability(package)
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(client.invocations, [])
 
     def test_publication_host_adapter_lists_against_remote_device_owner(self) -> None:
         row = {

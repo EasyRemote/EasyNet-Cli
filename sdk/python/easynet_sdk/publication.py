@@ -807,7 +807,6 @@ class _LocalFilesystemResourceRefs:
         owner = _required_object_attr(self._identity, "device_ura")
         resource = _resource_ura_for_addressing(
             self._addressing,
-            self._identity,
             owner,
             f"{_RESOURCE_NAMESPACE_FS}/{virtual_root}/{relative}",
         )
@@ -1448,7 +1447,7 @@ def _parse_ura_with_addressing(
 
 
 def _resource_ura_for_addressing(
-    addressing: object | None, identity: object, owner_ura: str, path: str
+    addressing: object | None, owner_ura: str, path: str
 ) -> str:
     if addressing is None:
         try:
@@ -1460,18 +1459,8 @@ def _resource_ura_for_addressing(
     build = getattr(addressing, "resource_ura", None)
     if not callable(build):
         raise _invalid_publication("publication addressing facade is missing resource_ura()")
-    realm = _required_object_attr(identity, "realm")
-    node_id = _required_object_attr(identity, "node_id")
     try:
         return build(owner_ura, path)
-    except TypeError:
-        pass
-    except SDKError:
-        raise
-    except Exception as exc:
-        raise _invalid_publication(f"build Resource URA: {exc}", exc) from exc
-    try:
-        return build(realm, f"device.{node_id}", path)
     except SDKError:
         raise
     except Exception as exc:
