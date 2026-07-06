@@ -1,0 +1,19 @@
+{
+  "name": "@easynet/daemon-sdk",
+  "version": "0.0.0-seam",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

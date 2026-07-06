@@ -985,11 +985,12 @@ require_literal sdk/SDK_INTERFACE_SPEC.md "No public object in this graph may ex
 require_literal sdk/README.md "sdk/conformance/sdk-parity-matrix.json"
 require_literal sdk/README.md "Go facade | provider-backed"
 require_literal sdk/README.md "Python facade | provider-backed"
-require_literal sdk/README.md "Node / TypeScript facade | unsupported"
+require_literal sdk/README.md "Node / TypeScript facade | Runtime Core seam"
 require_literal sdk/README.md "or complete Daemon SDK support"
 require_literal sdk/README.md "Rust/C ABI/Go/Python action-adapter reports"
 require_literal sdk/SDK_PARITY.md "No current language is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
+bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null
 
 if [[ "${#failures[@]}" -eq 0 ]]; then
   printf 'check-sdk-scaffold ok\n'
