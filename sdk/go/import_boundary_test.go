@@ -36,7 +36,7 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 					continue
 				}
 				if (needle == `easynet.run/cli/sdk/go/internal/axonpb` || needle == `google.golang.org/grpc`) &&
-					allowedConcreteDirectRuntimeProvider(path, text) {
+					allowedTaggedDirectRuntimeProvider(path, text) {
 					continue
 				}
 				if needle == `easynet.run/axon` && allowedDelegatedAxonFacade(path) {
@@ -58,7 +58,7 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	}
 }
 
-func allowedConcreteDirectRuntimeProvider(path, text string) bool {
+func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	base := filepath.Base(path)
 	if base != "direct_runtime.go" {
 		return false
