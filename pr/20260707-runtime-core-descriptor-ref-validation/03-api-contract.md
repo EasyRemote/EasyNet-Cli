@@ -8,10 +8,11 @@
 
 ## Validation Contract
 
-- Missing descriptor version is rejected.
-- Empty ability URA is rejected.
-- Multiple `@` separators are rejected.
-- Non-Ability URA refs are rejected.
+- Missing descriptor versions are rejected by the Axon/daemon-backed projection facade.
+- Empty ability URAs are rejected by the Axon/daemon-backed projection facade.
+- Ambiguous separators are rejected by the Axon/daemon-backed projection facade.
+- Non-Ability URA refs are rejected by the Axon/daemon-backed projection facade.
+- Python Runtime Core rejects only missing `descriptor_ref` tuple fields.
 
 ## Compatibility Contract
 

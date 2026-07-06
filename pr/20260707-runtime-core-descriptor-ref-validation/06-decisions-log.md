@@ -2,6 +2,6 @@
 
 ## 2026-07-07
 
-- Split Python descriptor-ref behavior into local shape validation for InvocationBuilder and transport-backed projection for callers that need canonical daemon/Axon facts.
-- Kept descriptor-ref canonical construction and projection in identity/profile helpers; Runtime Core builder validates the offline carrier shape required for tuple completeness.
-- Used an injectable Python Addressing facade because the Python builder cannot require a daemon identity transport without coupling draft construction to process liveness.
+- Kept Python descriptor-ref decomposition behind transport-backed projection for callers that need canonical daemon/Axon facts.
+- Kept descriptor-ref canonical construction and projection in identity/profile helpers; Runtime Core builder validates only tuple field presence and payload carriers.
+- Used an injectable Python Addressing facade because descriptor projection should be reusable in tests without making draft construction parse Axon grammar locally.

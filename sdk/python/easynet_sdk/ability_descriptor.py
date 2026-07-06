@@ -1,4 +1,4 @@
-"""AbilityDescriptorRef validation and Identity/Addressing projection."""
+"""AbilityDescriptorRef projection through the Identity/Addressing facade."""
 
 from __future__ import annotations
 
@@ -13,33 +13,6 @@ class AbilityDescriptorRef:
     raw: str
     ability_ura: str
     version: str
-
-
-def validate_ability_descriptor_ref_shape(raw: str) -> AbilityDescriptorRef:
-    """Validate and split the local AbilityDescriptorRef carrier shape."""
-
-    if not isinstance(raw, str) or raw.strip() == "":
-        raise _invalid_descriptor_ref("descriptor_ref is required")
-    if raw.strip() != raw:
-        raise _invalid_descriptor_ref(
-            "descriptor_ref must not contain surrounding whitespace"
-        )
-    if raw.count("@") != 1:
-        raise _invalid_descriptor_ref(
-            "descriptor_ref must be ability_ura@descriptor_version"
-        )
-    ability_ura, version = raw.split("@", 1)
-    if ability_ura.strip() == "":
-        raise _invalid_descriptor_ref("descriptor_ref ability_ura is required")
-    if version.strip() == "":
-        raise _invalid_descriptor_ref("descriptor_ref descriptor_version is required")
-    if "/ability/" not in ability_ura:
-        raise _invalid_descriptor_ref("descriptor_ref must bind an Ability URA")
-    if not ability_ura.startswith("easynet:///r/"):
-        raise _invalid_descriptor_ref(
-            "descriptor_ref ability_ura must use the runtime URA resource form"
-        )
-    return AbilityDescriptorRef(raw=raw, ability_ura=ability_ura, version=version)
 
 
 def parse_ability_descriptor_ref(

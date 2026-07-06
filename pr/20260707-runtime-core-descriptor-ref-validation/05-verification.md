@@ -13,4 +13,4 @@
 
 - `tools/scripts/check-backend-sdk-only-boundary.sh /Users/macbook.silan.tech/Documents/GitHub/EasyNet/backend`
 
-The backend boundary checker still reports direct `internal/daemon_grpc`, generated Axon protobuf package, and remaining service imports. This slice keeps Python descriptor-ref projection on the SDK Identity/Addressing facade while retaining deterministic local descriptor-ref shape validation at the InvocationDraft boundary.
+The backend boundary checker still reports direct `internal/daemon_grpc`, generated Axon protobuf package, and remaining service imports. This slice keeps Python descriptor-ref projection on the SDK Identity/Addressing facade and keeps descriptor-ref grammar out of Python Runtime Core.

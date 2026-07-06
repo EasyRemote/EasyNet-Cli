@@ -70,6 +70,37 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(direct_runtime, "invoke_pb2_grpc"))
         self.assertFalse(hasattr(direct_runtime, "types_pb2"))
 
+    def test_descriptor_ref_grammar_stays_out_of_python_runtime_core(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "easynet_sdk"
+        guarded = (
+            root / "ability_descriptor.py",
+            root / "invocation.py",
+            root / "__init__.py",
+        )
+        forbidden = (
+            "validate_ability_descriptor_ref_shape",
+            '.split("@',
+            ".split('@",
+            '.rsplit("@',
+            ".rsplit('@",
+            '.partition("@',
+            ".partition('@",
+            '.rpartition("@',
+            ".rpartition('@",
+            '.count("@',
+            ".count('@",
+        )
+        for path in guarded:
+            body = path.read_text()
+            for needle in forbidden:
+                self.assertNotIn(needle, body, f"{path} contains {needle!r}")
+
+    def test_descriptor_ref_public_helper_delegates_to_identity_projection(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "easynet_sdk"
+        body = (root / "ability_descriptor.py").read_text()
+        self.assertIn("DescriptorRefRequest", body)
+        self.assertIn("project_descriptor_ref", body)
+
 
 if __name__ == "__main__":
     unittest.main()
