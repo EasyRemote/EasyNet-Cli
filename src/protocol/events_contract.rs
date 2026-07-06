@@ -2,30 +2,28 @@
 // =====================================
 //
 // File: src/protocol/events_contract.rs
-// Description: Shared daemon SDK contract for Events profile directory stream
-//              Invocation carriers and typed event-frame projection.
+// Description: Shared daemon SDK contract for Events profile stream Invocation
+//              carriers and typed event-frame projection.
 //
 // Protocol Responsibility
 // -----------------------
-// Own the EasyNet-Cli SDK Events DTO projection for daemon directory stream
-// frames. Directory event production remains daemon-owned through
-// `federation.subscribe_directory_v2`; this module does not create a second
-// event bus, perform backend fanout, or execute stream I/O.
+// Own the EasyNet-Cli SDK Events DTO projection for daemon stream frames.
+// Event production remains daemon-owned through governed abilities; this module
+// does not create a second event bus, perform backend fanout, or execute stream
+// I/O.
 //
 // Implementation Approach
 // -----------------------
-// Reuse the shared daemon SDK Invocation carrier builder for the stream
-// ability, and project the daemon's tagged `DirectoryEvent` JSON union into a
-// binding-facing `EventFrame`. Cursor, drop-report, and terminal semantics are
-// represented as explicit value objects rather than ad hoc string rewriting in
-// each exported function.
+// Reuse the shared daemon SDK Invocation carrier builder for stream abilities,
+// and project daemon JSON payloads into binding-facing `EventFrame` values.
+// Cursor, drop-report, and terminal semantics are represented as explicit value
+// objects rather than ad hoc string rewriting in each exported function.
 //
 // Usage Contract
 // --------------
-// Directory event projection requires an explicit cursor or sequence supplied
-// by the stream reader. The daemon raw `DirectoryEvent` wire shape carries
-// event facts, not resume state; the SDK must not infer cursor positions from
-// array indexes or timestamps.
+// Live event projection requires an explicit cursor supplied by the stream
+// reader. Daemon raw event payloads carry event facts, not resume state; the SDK
+// must not infer cursor positions from array indexes or timestamps.
 //
 // Architectural Position
 // ----------------------
@@ -167,6 +165,25 @@ pub(crate) fn project_directory_event(input: &Value) -> Result<Value, EventsErro
         Some(event.clone()),
     )?
     .to_json()
+}
+
+pub(crate) fn project_live_event(input: &Value) -> Result<Value, EventsError> {
+    let obj = object(input, "EventsLiveEventInput")?;
+    let cursor = EventCursor::from_input(obj)?;
+    match cursor.stream.as_str() {
+        DIRECTORY_STREAM => project_directory_event(input),
+        DEVICE_STREAM => project_device_live_event(obj, cursor),
+        INVOCATION_STREAM => project_invocation_live_event(obj, cursor),
+        SESSION_STREAM => Err(EventsError::InvalidField(
+            "cursor",
+            "session live event projection is not part of the Events profile contract"
+                .to_string(),
+        )),
+        _ => Err(EventsError::InvalidField(
+            "cursor",
+            "unsupported Events profile stream".to_string(),
+        )),
+    }
 }
 
 pub(crate) fn project_terminal(input: &Value) -> Result<Value, EventsError> {
@@ -586,6 +603,111 @@ fn project_device_event_row(row: &Value) -> Result<Value, EventsError> {
     }))
 }
 
+fn project_device_live_event(
+    input: &Map<String, Value>,
+    cursor: EventCursor,
+) -> Result<Value, EventsError> {
+    cursor.require_stream(DEVICE_STREAM, "cursor")?;
+    let event = input.get("event").ok_or(EventsError::MissingField("event"))?;
+    let event_obj = object(event, "DeviceEvent")?;
+    reject_sequence_mismatch(event_obj, &cursor)?;
+    let device_ura = required_string(event_obj, "device_ura")?;
+    validate_device_ura(device_ura, "device_ura")?;
+    let occurred_unix_ms = event_unix_ms(event_obj)?;
+    let kind = optional_string(event_obj, "kind").unwrap_or_else(|| "device.event".to_string());
+    let payload = event_obj
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(event_obj.clone()));
+    EventFrame {
+        stream: DEVICE_STREAM.to_string(),
+        kind,
+        lifecycle: "live",
+        event_id: optional_string(input, "event_id").unwrap_or_else(|| cursor.event_id()),
+        cursor: cursor.clone(),
+        resume_token: optional_string(input, "resume_token")
+            .unwrap_or_else(|| cursor.resume_token()),
+        occurred_unix_ms,
+        subject_ref: typed_ura_ref(device_ura, "device_ura")?,
+        tenant_ref: tenant_ref_from_input(input, Some(device_ura))?,
+        payload: Some(payload),
+        dropped_count: 0,
+        reconnect_after_ms: None,
+        terminal: false,
+        daemon_event_type: optional_string(event_obj, "type"),
+        metadata_extra: Value::Null,
+    }
+    .to_json()
+}
+
+fn project_invocation_live_event(
+    input: &Map<String, Value>,
+    cursor: EventCursor,
+) -> Result<Value, EventsError> {
+    cursor.require_stream(INVOCATION_STREAM, "cursor")?;
+    let event = input.get("event").ok_or(EventsError::MissingField("event"))?;
+    let event_obj = object(event, "InvocationEvent")?;
+    reject_sequence_mismatch(event_obj, &cursor)?;
+    let invocation_id = required_string(event_obj, "invocation_id")?;
+    validate_token(invocation_id, "invocation_id")?;
+    let occurred_unix_ms = event_unix_ms(event_obj)?;
+    let kind =
+        optional_string(event_obj, "kind").unwrap_or_else(|| "invocation.event".to_string());
+    let payload = event_obj
+        .get("payload")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(event_obj.clone()));
+    EventFrame {
+        stream: INVOCATION_STREAM.to_string(),
+        kind,
+        lifecycle: "live",
+        event_id: optional_string(input, "event_id").unwrap_or_else(|| cursor.event_id()),
+        cursor: cursor.clone(),
+        resume_token: optional_string(input, "resume_token")
+            .unwrap_or_else(|| cursor.resume_token()),
+        occurred_unix_ms,
+        subject_ref: invocation_ref(invocation_id),
+        tenant_ref: tenant_ref_from_input(input, None)?,
+        payload: Some(payload),
+        dropped_count: 0,
+        reconnect_after_ms: None,
+        terminal: false,
+        daemon_event_type: optional_string(event_obj, "type"),
+        metadata_extra: Value::Null,
+    }
+    .to_json()
+}
+
+fn reject_sequence_mismatch(
+    event: &Map<String, Value>,
+    cursor: &EventCursor,
+) -> Result<(), EventsError> {
+    let Some(sequence) = optional_u64(event, "sequence") else {
+        return Ok(());
+    };
+    if sequence == cursor.sequence {
+        return Ok(());
+    }
+    Err(EventsError::InvalidField(
+        "sequence",
+        "event sequence must match stream cursor sequence".to_string(),
+    ))
+}
+
+fn event_unix_ms(event: &Map<String, Value>) -> Result<i64, EventsError> {
+    if event.get("occurred_unix_ms").is_some() {
+        return required_nonnegative_i64(event, "occurred_unix_ms");
+    }
+    required_nonnegative_i64(event, "unix_ms")
+}
+
+fn invocation_ref(invocation_id: &str) -> Value {
+    json!({
+        "kind": "invocation",
+        "invocation_id": invocation_id,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EventCursor {
     stream: String,
@@ -771,7 +893,7 @@ struct EventFrame {
     dropped_count: u64,
     reconnect_after_ms: Option<u64>,
     terminal: bool,
-    daemon_event_type: Option<&'static str>,
+    daemon_event_type: Option<String>,
     metadata_extra: Value,
 }
 
@@ -803,7 +925,7 @@ impl EventFrame {
             dropped_count: 0,
             reconnect_after_ms: None,
             terminal: false,
-            daemon_event_type: Some(frame_kind.daemon_event_type),
+            daemon_event_type: Some(frame_kind.daemon_event_type.to_string()),
             metadata_extra: Value::Null,
         })
     }
@@ -814,21 +936,18 @@ impl EventFrame {
             "profile".to_string(),
             Value::String(EVENTS_PROFILE.to_string()),
         );
-        metadata.insert(
-            "stream".to_string(),
-            Value::String(DIRECTORY_STREAM.to_string()),
-        );
+        metadata.insert("stream".to_string(), Value::String(self.stream.clone()));
         metadata.insert(
             "carrier_owner".to_string(),
             Value::String("daemon_sdk".to_string()),
         );
         metadata.insert(
             "source".to_string(),
-            Value::String("daemon_directory_event".to_string()),
+            Value::String(event_source_for_stream(&self.stream).to_string()),
         );
         metadata.insert(
             "stream_ability".to_string(),
-            Value::String(DIRECTORY_ABILITY.to_string()),
+            Value::String(event_stream_ability(&self.stream).to_string()),
         );
         metadata.insert(
             "lifecycle".to_string(),
@@ -837,7 +956,7 @@ impl EventFrame {
         if let Some(event_type) = self.daemon_event_type {
             metadata.insert(
                 "daemon_event_type".to_string(),
-                Value::String(event_type.to_string()),
+                Value::String(event_type),
             );
         }
         if let Value::Object(extra) = self.metadata_extra {
@@ -874,6 +993,26 @@ fn typed_ura_ref(raw: &str, field: &'static str) -> Result<Value, EventsError> {
         "ura": raw,
         "role": ura_role(parsed.kind),
     }))
+}
+
+fn event_source_for_stream(stream: &str) -> &'static str {
+    match stream {
+        DIRECTORY_STREAM => "daemon_directory_event",
+        DEVICE_STREAM => "daemon_device_event",
+        SESSION_STREAM => "daemon_session_event",
+        INVOCATION_STREAM => "daemon_invocation_event",
+        _ => "daemon_event",
+    }
+}
+
+fn event_stream_ability(stream: &str) -> &'static str {
+    match stream {
+        DIRECTORY_STREAM => DIRECTORY_ABILITY,
+        DEVICE_STREAM => DEVICE_SUBSCRIBE_ABILITY,
+        SESSION_STREAM => SESSION_ATTACH_ABILITY,
+        INVOCATION_STREAM => INVOCATION_SUBSCRIBE_ABILITY,
+        _ => "events.unknown",
+    }
 }
 
 fn tenant_ref_from_input(
@@ -1397,6 +1536,70 @@ mod tests {
         let err = project_directory_event(&input).unwrap_err();
 
         assert!(err.to_string().contains("unknown DirectoryEvent type"));
+    }
+
+    #[test]
+    fn live_event_projects_device_payload_with_stream_cursor() {
+        let frame = project_live_event(&json!({
+            "cursor": {"stream": "device", "sequence": 8},
+            "event": {
+                "sequence": 8,
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "occurred_unix_ms": 1783100000123i64,
+                "kind": "device.status_changed",
+                "payload": {"state": "online"}
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(frame["stream"], "device");
+        assert_eq!(frame["kind"], "device.status_changed");
+        assert_eq!(frame["cursor"]["token"], "device:8");
+        assert_eq!(frame["subject_ref"]["role"], "device");
+        assert_eq!(frame["metadata"]["stream_ability"], "events.device.subscribe");
+        assert_eq!(frame["metadata"]["lifecycle"], "live");
+    }
+
+    #[test]
+    fn live_event_projects_invocation_payload_without_fabricated_ura() {
+        let frame = project_live_event(&json!({
+            "cursor": {"stream": "invocation", "sequence": 4},
+            "event": {
+                "sequence": 4,
+                "invocation_id": "inv-1",
+                "occurred_unix_ms": 1783100001123i64,
+                "kind": "invocation.completed",
+                "payload": {"terminal_state": "Completed"}
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(frame["stream"], "invocation");
+        assert_eq!(frame["kind"], "invocation.completed");
+        assert_eq!(frame["subject_ref"]["kind"], "invocation");
+        assert_eq!(frame["subject_ref"]["invocation_id"], "inv-1");
+        assert_eq!(
+            frame["metadata"]["stream_ability"],
+            "events.invocation.subscribe"
+        );
+    }
+
+    #[test]
+    fn live_event_rejects_payload_cursor_sequence_mismatch() {
+        let err = project_live_event(&json!({
+            "cursor": {"stream": "device", "sequence": 8},
+            "event": {
+                "sequence": 9,
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "occurred_unix_ms": 1783100000123i64
+            }
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field sequence: event sequence must match stream cursor sequence"
+        );
     }
 
     #[test]

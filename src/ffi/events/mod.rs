@@ -36,7 +36,7 @@ use crate::protocol::events_contract::{
     build_device_event_history_invocation, build_device_subscription_invocation,
     build_directory_subscription_invocation, build_invocation_subscription_invocation,
     build_session_subscription_invocation, project_device_event_page, project_directory_event,
-    project_drop_report, project_terminal, EventsError,
+    project_drop_report, project_live_event, project_terminal, EventsError,
 };
 
 /// Build a complete Invocation JSON carrier for daemon
@@ -192,6 +192,29 @@ pub unsafe extern "C" fn easynet_events_project_directory_event(
         "out_event_json",
         "event_json",
         project_directory_event,
+    )
+}
+
+/// Project a daemon raw live event frame plus explicit cursor into the SDK
+/// EventFrame DTO.
+///
+/// # Safety
+/// `event_json` must be a valid UTF-8 C string and `out_event_json` must be a
+/// non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_events_project_live_event(
+    handle: EasynetHandle,
+    event_json: *const c_char,
+    out_event_json: *mut *mut c_char,
+) -> i32 {
+    project_events_json(
+        handle,
+        event_json,
+        out_event_json,
+        "easynet_events_project_live_event",
+        "out_event_json",
+        "event_json",
+        project_live_event,
     )
 }
 
@@ -464,6 +487,63 @@ mod tests {
         assert_eq!(value["kind"], "directory.agent_revoked");
         assert_eq!(value["cursor"]["token"], "directory:8");
         assert_eq!(value["subject_ref"]["role"], "agent");
+        release(handle);
+    }
+
+    #[test]
+    fn events_project_live_event_projects_device_and_invocation_frames() {
+        let handle = handle();
+        let raw_device = CString::new(
+            serde_json::json!({
+                "cursor": {"stream": "device", "sequence": 8},
+                "event": {
+                    "sequence": 8,
+                    "device_ura": "easynet:///r/example/device/dev-a",
+                    "occurred_unix_ms": 1783100000123i64,
+                    "kind": "device.status_changed",
+                    "payload": {"state": "online"}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out_device: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_events_project_live_event(handle, raw_device.as_ptr(), &mut out_device)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out_device);
+        assert_eq!(value["stream"], "device");
+        assert_eq!(value["kind"], "device.status_changed");
+        assert_eq!(value["metadata"]["stream_ability"], "events.device.subscribe");
+
+        let raw_invocation = CString::new(
+            serde_json::json!({
+                "cursor": {"stream": "invocation", "sequence": 4},
+                "event": {
+                    "sequence": 4,
+                    "invocation_id": "inv-1",
+                    "occurred_unix_ms": 1783100001123i64,
+                    "kind": "invocation.completed",
+                    "payload": {"terminal_state": "Completed"}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out_invocation: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_events_project_live_event(handle, raw_invocation.as_ptr(), &mut out_invocation)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out_invocation);
+        assert_eq!(value["stream"], "invocation");
+        assert_eq!(value["subject_ref"]["kind"], "invocation");
+        assert_eq!(value["subject_ref"]["invocation_id"], "inv-1");
         release(handle);
     }
 

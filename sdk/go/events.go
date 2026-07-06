@@ -109,7 +109,7 @@ type EventFilter struct {
 	InvocationID string `json:"invocation_id,omitempty"`
 }
 
-// EventProjectionInput asks the daemon contract to project one raw directory event.
+// EventProjectionInput asks the daemon contract to project one raw live event.
 type EventProjectionInput struct {
 	Cursor      EventCursor    `json:"cursor"`
 	Event       map[string]any `json:"event"`
@@ -149,7 +149,7 @@ type EventStream struct {
 	ResumeToken      string         `json:"resume_token,omitempty"`
 	Metadata         map[string]any `json:"metadata"`
 	handle           *StreamHandle  `json:"-"`
-	projectDirectory func(context.Context, EventProjectionInput) (DirectoryEvent, error)
+	projectLive      func(context.Context, EventProjectionInput) (EventFrame, error)
 	release          func(string) `json:"-"`
 }
 
@@ -200,6 +200,7 @@ type EventTransport interface {
 	SubscribeInvocations(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListDeviceEvents(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
+	ProjectLiveEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
 	ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error)
 	ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error)
 }
@@ -216,6 +217,7 @@ type EventTransportFunc struct {
 	SubscribeInvocationsFunc                  func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListDeviceEventsFunc                      func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ProjectDirectoryEventFunc                 func(ctx context.Context, eventJSON []byte) ([]byte, error)
+	ProjectLiveEventFunc                      func(ctx context.Context, eventJSON []byte) ([]byte, error)
 	ProjectDropReportFunc                     func(ctx context.Context, dropJSON []byte) ([]byte, error)
 	ProjectTerminalFunc                       func(ctx context.Context, terminalJSON []byte) ([]byte, error)
 }
@@ -288,6 +290,13 @@ func (f EventTransportFunc) ProjectDirectoryEvent(ctx context.Context, eventJSON
 		return nil, invalidProfileClient(eventsProfile, "events project-directory-event transport function is required")
 	}
 	return f.ProjectDirectoryEventFunc(ctx, eventJSON)
+}
+
+func (f EventTransportFunc) ProjectLiveEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
+	if f.ProjectLiveEventFunc == nil {
+		return nil, invalidProfileClient(eventsProfile, "events project-live-event transport function is required")
+	}
+	return f.ProjectLiveEventFunc(ctx, eventJSON)
 }
 
 func (f EventTransportFunc) ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error) {
@@ -434,7 +443,11 @@ func (c *EventClient) subscribeTransport(stream EventStreamKind) (func(context.C
 }
 
 func (c *EventClient) ProjectDirectoryEvent(ctx context.Context, input EventProjectionInput) (DirectoryEvent, error) {
-	return c.projectFrame(ctx, input, validateEventProjectionInput, c.transport.ProjectDirectoryEvent, "events project directory event failed")
+	return c.projectFrame(ctx, input, validateDirectoryEventProjectionInput, c.transport.ProjectDirectoryEvent, "events project directory event failed")
+}
+
+func (c *EventClient) ProjectLiveEvent(ctx context.Context, input EventProjectionInput) (EventFrame, error) {
+	return c.projectFrame(ctx, input, validateEventProjectionInput, c.transport.ProjectLiveEvent, "events project live event failed")
 }
 
 func (c *EventClient) ProjectDropReport(ctx context.Context, input EventDropReportInput) (EventDropReport, error) {
@@ -508,16 +521,16 @@ func (s EventStream) Next(ctx context.Context) (EventFrame, error) {
 	if err == nil {
 		return frame, nil
 	}
-	if s.Stream != string(EventStreamDirectory) || s.projectDirectory == nil {
+	if s.projectLive == nil {
 		return EventFrame{}, err
 	}
 	var rawEvent map[string]any
 	if decodeErr := json.Unmarshal(payload, &rawEvent); decodeErr != nil {
 		return EventFrame{}, err
 	}
-	return s.projectDirectory(ctx, EventProjectionInput{
+	return s.projectLive(ctx, EventProjectionInput{
 		Cursor: EventCursor{
-			Stream:   string(EventStreamDirectory),
+			Stream:   s.Stream,
 			Sequence: event.Sequence(),
 		},
 		Event: rawEvent,
@@ -788,7 +801,18 @@ func validateEventProjectionInput(input any) error {
 		return err
 	}
 	if value.Event == nil {
-		return invalidProfilePayload(eventsProfile, "directory event payload is required", nil)
+		return invalidProfilePayload(eventsProfile, "event payload is required", nil)
+	}
+	return nil
+}
+
+func validateDirectoryEventProjectionInput(input any) error {
+	if err := validateEventProjectionInput(input); err != nil {
+		return err
+	}
+	value := input.(EventProjectionInput)
+	if value.Cursor.Stream != string(EventStreamDirectory) {
+		return invalidProfilePayload(eventsProfile, "event cursor stream mismatch", nil)
 	}
 	return nil
 }

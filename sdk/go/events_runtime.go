@@ -44,6 +44,7 @@ type EventsRuntimeTransport struct {
 // and draining streams.
 type EventsProjectionProvider interface {
 	ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
+	ProjectLiveEvent(ctx context.Context, eventJSON []byte) ([]byte, error)
 	ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error)
 	ProjectTerminal(ctx context.Context, terminalJSON []byte) ([]byte, error)
 }
@@ -140,6 +141,21 @@ func (t *EventsRuntimeTransport) ProjectDirectoryEvent(ctx context.Context, even
 		return nil, err
 	}
 	raw, err := provider.ProjectDirectoryEvent(ctx, eventJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := NewEventFrameFromJSON(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (t *EventsRuntimeTransport) ProjectLiveEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
+	provider, err := t.requireProjectionProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := provider.ProjectLiveEvent(ctx, eventJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -285,13 +301,13 @@ func (t *EventsRuntimeTransport) bindEventStreamHandle(stream EventStream) Event
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	stream.handle = t.streams[stream.StreamID]
-	if stream.Stream == string(EventStreamDirectory) && t.projectionProvider != nil {
-		stream.projectDirectory = func(ctx context.Context, input EventProjectionInput) (DirectoryEvent, error) {
+	if liveEventProjectionSupported(EventStreamKind(stream.Stream)) && t.projectionProvider != nil {
+		stream.projectLive = func(ctx context.Context, input EventProjectionInput) (EventFrame, error) {
 			requestJSON, err := json.Marshal(input)
 			if err != nil {
 				return EventFrame{}, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode events projection input: %v", err), err)
 			}
-			raw, err := t.ProjectDirectoryEvent(ctx, requestJSON)
+			raw, err := t.ProjectLiveEvent(ctx, requestJSON)
 			if err != nil {
 				return EventFrame{}, err
 			}
@@ -300,6 +316,10 @@ func (t *EventsRuntimeTransport) bindEventStreamHandle(stream EventStream) Event
 	}
 	stream.release = t.releaseEventStreamHandle
 	return stream
+}
+
+func liveEventProjectionSupported(stream EventStreamKind) bool {
+	return stream == EventStreamDirectory || stream == EventStreamDevice || stream == EventStreamInvocation
 }
 
 func (t *EventsRuntimeTransport) releaseEventStreamHandle(streamID string) {

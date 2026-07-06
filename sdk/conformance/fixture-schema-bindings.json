@@ -230,6 +230,10 @@
       "schema": "events-device-event-page.schema.json"
     },
     {
+      "fixture": "event.device-live.v4.json",
+      "schema": "events.schema.json"
+    },
+    {
       "fixture": "event.directory-drop-report.v4.json",
       "schema": "events.schema.json"
     },
@@ -239,6 +243,10 @@
     },
     {
       "fixture": "event.directory.v4.json",
+      "schema": "events.schema.json"
+    },
+    {
+      "fixture": "event.invocation-live.v4.json",
       "schema": "events.schema.json"
     },
     {

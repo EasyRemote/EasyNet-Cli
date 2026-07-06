@@ -15,6 +15,10 @@ steps:
     fixture: events-device-event-list-request.v4.json
   - action: project_device_event_page
     fixture: event.device-page.v4.json
+  - action: project_raw_device_stream_payload
+    fixture: event.device-live.v4.json
+  - action: project_raw_invocation_stream_payload
+    fixture: event.invocation-live.v4.json
 expect:
   result: events_device_invocation_history_observed
   device_request_schema: events-device-subscription-request.schema.json
@@ -26,11 +30,15 @@ expect:
   invocation_subscription_invocation_fixture: events-invocation-subscription-invocation.v4.json
   device_history_invocation_fixture: events-device-history-invocation.v4.json
   device_event_page_fixture: event.device-page.v4.json
+  device_live_event_fixture: event.device-live.v4.json
+  invocation_live_event_fixture: event.invocation-live.v4.json
   device_stream_system_ability: events.device.subscribe
   invocation_stream_system_ability: events.invocation.subscribe
   device_history_system_ability: events.device.history
   typed_event_filter: provider_backed
   event_filter_lowers_to_daemon_args: true
+  raw_device_stream_projection: provider_backed
+  raw_invocation_stream_projection: provider_backed
   runtime_core_stream_open_required: true
   runtime_core_invoke_required: true
   sdk_local_event_bus_allowed: false

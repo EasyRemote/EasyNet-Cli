@@ -379,8 +379,10 @@ fixture_files=(
   runtime.error.v4.json
   event.directory.v4.json
   event.device-page.v4.json
+  event.device-live.v4.json
   event.directory-drop-report.v4.json
   event.directory-terminal.v4.json
+  event.invocation-live.v4.json
   events-directory-subscription-request.v4.json
   events-directory-subscription-invocation.v4.json
   events-device-subscription-request.v4.json

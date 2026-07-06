@@ -92,6 +92,7 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_events_build_device_event_history_invocation",
     "easynet_events_project_device_event_page",
     "easynet_events_project_directory_event",
+    "easynet_events_project_live_event",
     "easynet_events_project_terminal",
     "easynet_events_project_drop_report",
     "easynet_admin_build_agent_list_invocation",
@@ -1701,8 +1702,8 @@ class CABIEventTransport(_CABIProfileTransport):
                 "stream_ability": "federation.subscribe_directory_v2",
                 "carrier_owner": "daemon_sdk",
             },
-            directory_projector=lambda input: EventFrame.from_json(
-                self.project_directory_event(input.to_json_bytes())
+            live_projector=lambda input: EventFrame.from_json(
+                self.project_live_event(input.to_json_bytes())
             ),
         )
         self._event_streams.append(stream)
@@ -1723,6 +1724,9 @@ class CABIEventTransport(_CABIProfileTransport):
                 "stream_ability": "events.device.subscribe",
                 "carrier_owner": "daemon_sdk",
             },
+            live_projector=lambda input: EventFrame.from_json(
+                self.project_live_event(input.to_json_bytes())
+            ),
         )
         self._event_streams.append(stream)
         return stream
@@ -1761,6 +1765,9 @@ class CABIEventTransport(_CABIProfileTransport):
                 "stream_ability": "events.invocation.subscribe",
                 "carrier_owner": "daemon_sdk",
             },
+            live_projector=lambda input: EventFrame.from_json(
+                self.project_live_event(input.to_json_bytes())
+            ),
         )
         self._event_streams.append(stream)
         return stream
@@ -1774,6 +1781,9 @@ class CABIEventTransport(_CABIProfileTransport):
 
     def project_directory_event(self, event_json: bytes) -> bytes:
         return self._call("easynet_events_project_directory_event", event_json)
+
+    def project_live_event(self, event_json: bytes) -> bytes:
+        return self._call("easynet_events_project_live_event", event_json)
 
     def project_drop_report(self, drop_json: bytes) -> bytes:
         return self._call("easynet_events_project_drop_report", drop_json)

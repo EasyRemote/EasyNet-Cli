@@ -51,6 +51,15 @@
             "ura": {"type": "string", "minLength": 1},
             "role": {"type": "string", "minLength": 1}
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "invocation_id"],
+          "properties": {
+            "kind": {"const": "invocation"},
+            "invocation_id": {"type": "string", "minLength": 1}
+          }
         }
       ]
     },

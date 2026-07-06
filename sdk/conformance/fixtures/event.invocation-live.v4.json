@@ -1,0 +1,33 @@
+{
+  "profile": "events",
+  "stream": "invocation",
+  "kind": "invocation.completed",
+  "event_id": "evt-invocation-4",
+  "cursor": {
+    "stream": "invocation",
+    "sequence": 4,
+    "token": "invocation:4"
+  },
+  "resume_token": "invocation:4",
+  "occurred_unix_ms": 1783100001123,
+  "occurred_at": "2026-07-03T17:33:21.123Z",
+  "subject_ref": {
+    "kind": "invocation",
+    "invocation_id": "inv-1"
+  },
+  "tenant_ref": null,
+  "payload": {
+    "terminal_state": "Completed"
+  },
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": false,
+  "metadata": {
+    "profile": "events",
+    "stream": "invocation",
+    "carrier_owner": "daemon_sdk",
+    "source": "daemon_invocation_event",
+    "stream_ability": "events.invocation.subscribe",
+    "lifecycle": "live"
+  }
+}

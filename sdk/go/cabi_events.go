@@ -62,6 +62,7 @@ type cabiEventsSymbols struct {
 	buildDeviceEventHistoryInvocation     unsafe.Pointer
 	projectDeviceEventPage                unsafe.Pointer
 	projectDirectoryEvent                 unsafe.Pointer
+	projectLiveEvent                      unsafe.Pointer
 	projectTerminal                       unsafe.Pointer
 	projectDropReport                     unsafe.Pointer
 }
@@ -165,6 +166,10 @@ func (t *CABIEventsTransport) ListDeviceEvents(ctx context.Context, requestJSON 
 
 func (t *CABIEventsTransport) ProjectDirectoryEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
 	return t.callJSONWithOpenHandle(ctx, t.symbols.projectDirectoryEvent, eventJSON, "C ABI events directory event projection failed")
+}
+
+func (t *CABIEventsTransport) ProjectLiveEvent(ctx context.Context, eventJSON []byte) ([]byte, error) {
+	return t.callJSONWithOpenHandle(ctx, t.symbols.projectLiveEvent, eventJSON, "C ABI events live event projection failed")
 }
 
 func (t *CABIEventsTransport) ProjectDropReport(ctx context.Context, dropJSON []byte) ([]byte, error) {
@@ -292,6 +297,7 @@ func bindCABIEventsSymbols(library unsafe.Pointer) (cabiEventsSymbols, error) {
 		{"easynet_events_build_device_event_history_invocation", &symbols.buildDeviceEventHistoryInvocation},
 		{"easynet_events_project_device_event_page", &symbols.projectDeviceEventPage},
 		{"easynet_events_project_directory_event", &symbols.projectDirectoryEvent},
+		{"easynet_events_project_live_event", &symbols.projectLiveEvent},
 		{"easynet_events_project_terminal", &symbols.projectTerminal},
 		{"easynet_events_project_drop_report", &symbols.projectDropReport},
 	}

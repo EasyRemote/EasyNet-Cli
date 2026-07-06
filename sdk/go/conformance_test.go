@@ -2065,6 +2065,8 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 		"build_invocation_subscription_invocation",
 		"build_device_event_history_invocation",
 		"project_device_event_page",
+		"project_raw_device_stream_payload",
+		"project_raw_invocation_stream_payload",
 	} {
 		requireCaseAction(t, eventsCase, action)
 	}
@@ -2073,6 +2075,8 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 		"events-invocation-subscription-request.v4.json",
 		"events-device-event-list-request.v4.json",
 		"event.device-page.v4.json",
+		"event.device-live.v4.json",
+		"event.invocation-live.v4.json",
 	} {
 		requireCaseFixture(t, eventsCase, fixture)
 	}
@@ -2084,6 +2088,8 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 	requireCaseExpectation(t, eventsCase, "device_history_system_ability: events.device.history")
 	requireCaseExpectation(t, eventsCase, "typed_event_filter: provider_backed")
 	requireCaseExpectation(t, eventsCase, "event_filter_lowers_to_daemon_args: true")
+	requireCaseExpectation(t, eventsCase, "raw_device_stream_projection: provider_backed")
+	requireCaseExpectation(t, eventsCase, "raw_invocation_stream_projection: provider_backed")
 	requireCaseExpectation(t, eventsCase, "sdk_local_event_bus_allowed: false")
 	requireCaseExpectation(t, eventsCase, "daemon_side_filtering_backend_cutover: incomplete")
 
@@ -2092,9 +2098,13 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 		expectedDeviceSubscriptionRequest:     sharedEventsDeviceSubscriptionRequestJSON(t, root),
 		expectedInvocationSubscriptionRequest: sharedEventsInvocationSubscriptionRequestJSON(t, root),
 		expectedDeviceEventListRequest:        sharedEventsDeviceEventListRequestJSON(t, root),
+		expectedDeviceLiveProjectionInput:     sharedEventsLiveProjectionInputJSON(t, root, "event.device-live.v4.json"),
+		expectedInvocationLiveProjectionInput: sharedEventsLiveProjectionInputJSON(t, root, "event.invocation-live.v4.json"),
 		deviceSubscriptionInvocationJSON:      sharedFixture(t, root, "events-device-subscription-invocation.v4.json"),
 		invocationSubscriptionInvocationJSON:  sharedFixture(t, root, "events-invocation-subscription-invocation.v4.json"),
 		deviceEventPageJSON:                   sharedFixture(t, root, "event.device-page.v4.json"),
+		deviceLiveEventJSON:                   sharedFixture(t, root, "event.device-live.v4.json"),
+		invocationLiveEventJSON:               sharedFixture(t, root, "event.invocation-live.v4.json"),
 	})
 	if err != nil {
 		t.Fatalf("NewEventClient: %v", err)
@@ -2131,6 +2141,20 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 		page.Items[0].Cursor.Token != "device:8" ||
 		page.Items[0].Metadata["source"] != "daemon_device_event" {
 		t.Fatalf("unexpected device event page: %#v", page)
+	}
+	deviceEvent, err := events.ProjectLiveEvent(context.Background(), sharedEventsLiveProjectionInput(t, root, "event.device-live.v4.json"))
+	if err != nil {
+		t.Fatalf("ProjectLiveEvent(device fixture): %v", err)
+	}
+	if deviceEvent.Stream != "device" || deviceEvent.Metadata["stream_ability"] != "events.device.subscribe" {
+		t.Fatalf("unexpected device live event: %#v", deviceEvent)
+	}
+	invocationEvent, err := events.ProjectLiveEvent(context.Background(), sharedEventsLiveProjectionInput(t, root, "event.invocation-live.v4.json"))
+	if err != nil {
+		t.Fatalf("ProjectLiveEvent(invocation fixture): %v", err)
+	}
+	if invocationEvent.Stream != "invocation" || invocationEvent.Kind != "invocation.completed" {
+		t.Fatalf("unexpected invocation live event: %#v", invocationEvent)
 	}
 }
 
@@ -2797,6 +2821,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"Close":                                 "events.close",
 				"ListDeviceEvents":                      "events.list_device_events",
 				"ProjectDirectoryEvent":                 "events.project_directory_event",
+				"ProjectLiveEvent":                      "events.project_live_event",
 				"ProjectDropReport":                     "events.project_drop_report",
 				"ProjectTerminal":                       "events.project_terminal",
 				"SubscribeDevices":                      "events.subscribe_devices",
@@ -3582,6 +3607,8 @@ type sharedEventsTransport struct {
 	expectedInvocationSubscriptionRequest []byte
 	expectedDeviceEventListRequest        []byte
 	expectedDirectoryProjectionInput      []byte
+	expectedDeviceLiveProjectionInput     []byte
+	expectedInvocationLiveProjectionInput []byte
 	expectedDropReportInput               []byte
 	expectedTerminalInput                 []byte
 	directorySubscriptionInvocationJSON   []byte
@@ -3590,6 +3617,8 @@ type sharedEventsTransport struct {
 	invocationSubscriptionInvocationJSON  []byte
 	deviceEventPageJSON                   []byte
 	directoryEventJSON                    []byte
+	deviceLiveEventJSON                   []byte
+	invocationLiveEventJSON               []byte
 	dropReportJSON                        []byte
 	terminalJSON                          []byte
 }
@@ -3638,6 +3667,31 @@ func (t *sharedEventsTransport) ListDeviceEvents(_ context.Context, requestJSON 
 func (t *sharedEventsTransport) ProjectDirectoryEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
 	assertJSONEquivalent(t.t, eventJSON, t.expectedDirectoryProjectionInput)
 	return t.directoryEventJSON, nil
+}
+
+func (t *sharedEventsTransport) ProjectLiveEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
+	var request map[string]any
+	if err := json.Unmarshal(eventJSON, &request); err != nil {
+		t.t.Fatalf("decode live event projection input: %v", err)
+	}
+	cursor, ok := request["cursor"].(map[string]any)
+	if !ok {
+		t.t.Fatalf("live event projection missing cursor: %#v", request)
+	}
+	switch cursor["stream"] {
+	case "directory":
+		assertJSONEquivalent(t.t, eventJSON, t.expectedDirectoryProjectionInput)
+		return t.directoryEventJSON, nil
+	case "device":
+		assertJSONEquivalent(t.t, eventJSON, t.expectedDeviceLiveProjectionInput)
+		return t.deviceLiveEventJSON, nil
+	case "invocation":
+		assertJSONEquivalent(t.t, eventJSON, t.expectedInvocationLiveProjectionInput)
+		return t.invocationLiveEventJSON, nil
+	default:
+		t.t.Fatalf("unsupported live event projection stream: %#v", cursor["stream"])
+		return nil, nil
+	}
 }
 
 func (t *sharedEventsTransport) ProjectDropReport(_ context.Context, dropJSON []byte) ([]byte, error) {
@@ -4489,6 +4543,46 @@ func sharedEventsProjectionInputJSON(t *testing.T, root string) []byte {
 	raw, err := json.Marshal(sharedEventsProjectionInput(t, root))
 	if err != nil {
 		t.Fatalf("marshal shared events projection input: %v", err)
+	}
+	return raw
+}
+
+func sharedEventsLiveProjectionInput(t *testing.T, root string, fixture string) EventProjectionInput {
+	t.Helper()
+	frame := sharedEventsFrameMap(t, root, fixture)
+	cursor := sharedEventsCursorFromFrame(t, frame)
+	event, ok := frame["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("shared live event fixture payload is not an object: %s", fixture)
+	}
+	if cursor.Stream == string(EventStreamDevice) {
+		subject := frame["subject_ref"].(map[string]any)
+		event["device_ura"] = subject["ura"]
+		event["occurred_unix_ms"] = frame["occurred_unix_ms"]
+		event["kind"] = frame["kind"]
+		event["sequence"] = float64(cursor.Sequence)
+	}
+	if cursor.Stream == string(EventStreamInvocation) {
+		subject := frame["subject_ref"].(map[string]any)
+		event["invocation_id"] = subject["invocation_id"]
+		event["occurred_unix_ms"] = frame["occurred_unix_ms"]
+		event["kind"] = frame["kind"]
+		event["sequence"] = float64(cursor.Sequence)
+	}
+	return EventProjectionInput{
+		Cursor:      cursor,
+		Event:       event,
+		EventID:     frame["event_id"].(string),
+		ResumeToken: frame["resume_token"].(string),
+		TenantRef:   frame["tenant_ref"],
+	}
+}
+
+func sharedEventsLiveProjectionInputJSON(t *testing.T, root string, fixture string) []byte {
+	t.Helper()
+	raw, err := json.Marshal(sharedEventsLiveProjectionInput(t, root, fixture))
+	if err != nil {
+		t.Fatalf("marshal shared live events projection input: %v", err)
 	}
 	return raw
 }

@@ -244,7 +244,7 @@ func TestRuntimeEventsProjectsRawDirectoryStreamPayload(t *testing.T) {
 	}
 	var seenProjection map[string]any
 	provider := EventTransportFunc{
-		ProjectDirectoryEventFunc: func(ctx context.Context, eventJSON []byte) ([]byte, error) {
+		ProjectLiveEventFunc: func(ctx context.Context, eventJSON []byte) ([]byte, error) {
 			if err := json.Unmarshal(eventJSON, &seenProjection); err != nil {
 				return nil, err
 			}
@@ -273,6 +273,129 @@ func TestRuntimeEventsProjectsRawDirectoryStreamPayload(t *testing.T) {
 	if cursor["stream"] != "directory" || cursor["sequence"].(float64) != 3 ||
 		event["type"] != "agent_advertised" {
 		t.Fatalf("projection input = %#v", seenProjection)
+	}
+}
+
+func TestRuntimeEventsProjectsRawDeviceAndInvocationStreamPayloads(t *testing.T) {
+	identityTransport := &compatibilityRuntimeIdentityTransport{
+		abilityByName: map[string]string{
+			eventsAbilitySubscribeDevices:     "easynet:///r/example/ability/device.dev-a.events.device.subscribe",
+			eventsAbilitySubscribeInvocations: "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe",
+		},
+		descriptorByAbility: map[string]string{
+			"easynet:///r/example/ability/device.dev-a.events.device.subscribe":     "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0",
+			"easynet:///r/example/ability/device.dev-a.events.invocation.subscribe": "easynet:///r/example/ability/device.dev-a.events.invocation.subscribe@1.0.0",
+		},
+	}
+	identityClient, err := NewIdentityClient(identityTransport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	seen := map[string]map[string]any{}
+	provider := EventTransportFunc{
+		ProjectLiveEventFunc: func(ctx context.Context, eventJSON []byte) ([]byte, error) {
+			var request map[string]any
+			if err := json.Unmarshal(eventJSON, &request); err != nil {
+				return nil, err
+			}
+			cursor := request["cursor"].(map[string]any)
+			stream := cursor["stream"].(string)
+			seen[stream] = request
+			if stream == "device" {
+				return []byte(eventsRuntimeDeviceFrameJSON), nil
+			}
+			return []byte(eventsRuntimeInvocationFrameJSON), nil
+		},
+	}
+
+	deviceRuntime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{
+		streamTransport: StreamTransportFunc{
+			RecvFunc: func(ctx context.Context) ([]byte, error) {
+				return []byte(`{
+					"sequence": 8,
+					"kind": "data",
+					"state": "Open",
+					"terminal": false,
+					"payload_content_type": "application/json",
+					"payload_json": {
+						"sequence": 8,
+						"device_ura": "easynet:///r/example/device/dev-a",
+						"occurred_unix_ms": 1783100000123,
+						"kind": "device.status_changed",
+						"payload": {"state": "online"}
+					}
+				}`), nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient device: %v", err)
+	}
+	deviceClient, err := NewRuntimeEventClientWithProjectionProvider(deviceRuntime, identityClient, provider)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClient device: %v", err)
+	}
+	deviceStream, err := deviceClient.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeDevices: %v", err)
+	}
+	deviceFrame, err := deviceStream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("device EventStream.Next: %v", err)
+	}
+	if deviceFrame.Stream != "device" || deviceFrame.Kind != "device.status_changed" {
+		t.Fatalf("device frame = %#v", deviceFrame)
+	}
+	if seen["device"]["cursor"].(map[string]any)["sequence"].(float64) != 8 {
+		t.Fatalf("device projection = %#v", seen["device"])
+	}
+
+	invocationRuntime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{
+		streamTransport: StreamTransportFunc{
+			RecvFunc: func(ctx context.Context) ([]byte, error) {
+				return []byte(`{
+					"sequence": 4,
+					"kind": "data",
+					"state": "Open",
+					"terminal": false,
+					"payload_content_type": "application/json",
+					"payload_json": {
+						"sequence": 4,
+						"invocation_id": "inv-1",
+						"occurred_unix_ms": 1783100001123,
+						"kind": "invocation.completed",
+						"payload": {"terminal_state": "Completed"}
+					}
+				}`), nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient invocation: %v", err)
+	}
+	invocationClient, err := NewRuntimeEventClientWithProjectionProvider(invocationRuntime, identityClient, provider)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClient invocation: %v", err)
+	}
+	invocationStream, err := invocationClient.SubscribeInvocations(context.Background(), EventsInvocationSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		InvocationID:      "inv-1",
+	})
+	if err != nil {
+		t.Fatalf("SubscribeInvocations: %v", err)
+	}
+	invocationFrame, err := invocationStream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("invocation EventStream.Next: %v", err)
+	}
+	if invocationFrame.Stream != "invocation" || invocationFrame.Kind != "invocation.completed" {
+		t.Fatalf("invocation frame = %#v", invocationFrame)
+	}
+	if seen["invocation"]["event"].(map[string]any)["invocation_id"] != "inv-1" {
+		t.Fatalf("invocation projection = %#v", seen["invocation"])
 	}
 }
 
@@ -508,6 +631,42 @@ const eventsRuntimeDirectoryFrameJSON = `{
   "reconnect_after_ms": null,
   "terminal": false,
   "metadata": {"source": "runtime_projection_provider"}
+}`
+
+const eventsRuntimeDeviceFrameJSON = `{
+  "profile": "events",
+  "stream": "device",
+  "kind": "device.status_changed",
+  "event_id": "evt-device-runtime",
+  "cursor": {"stream": "device", "sequence": 8, "token": "device:8"},
+  "resume_token": "device:8",
+  "occurred_unix_ms": 1783100000123,
+  "occurred_at": "2026-07-03T17:33:20.123Z",
+  "subject_ref": {"kind": "ura", "ura": "easynet:///r/example/device/dev-a", "role": "device"},
+  "tenant_ref": {"kind": "realm", "realm": "example"},
+  "payload": {"state": "online"},
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": false,
+  "metadata": {"profile": "events", "stream": "device", "source": "runtime_projection_provider"}
+}`
+
+const eventsRuntimeInvocationFrameJSON = `{
+  "profile": "events",
+  "stream": "invocation",
+  "kind": "invocation.completed",
+  "event_id": "evt-invocation-runtime",
+  "cursor": {"stream": "invocation", "sequence": 4, "token": "invocation:4"},
+  "resume_token": "invocation:4",
+  "occurred_unix_ms": 1783100001123,
+  "occurred_at": "2026-07-03T17:33:21.123Z",
+  "subject_ref": {"kind": "invocation", "invocation_id": "inv-1"},
+  "tenant_ref": null,
+  "payload": {"terminal_state": "Completed"},
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": false,
+  "metadata": {"profile": "events", "stream": "invocation", "source": "runtime_projection_provider"}
 }`
 
 const eventsRuntimeDropFrameJSON = `{

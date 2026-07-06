@@ -1210,6 +1210,7 @@ class FakeRawCABI:
             return MISSION_EVENT_PAGE_PROJECTION
         if symbol in {
             "easynet_events_project_directory_event",
+            "easynet_events_project_live_event",
             "easynet_events_project_terminal",
             "easynet_events_project_drop_report",
         }:

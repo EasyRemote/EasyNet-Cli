@@ -76,6 +76,11 @@ func (m *memoryEventTransport) ProjectDirectoryEvent(_ context.Context, eventJSO
 	return []byte(m.event), nil
 }
 
+func (m *memoryEventTransport) ProjectLiveEvent(_ context.Context, eventJSON []byte) ([]byte, error) {
+	m.remember("project_live_event", eventJSON)
+	return []byte(m.event), nil
+}
+
 func (m *memoryEventTransport) ProjectDropReport(_ context.Context, dropJSON []byte) ([]byte, error) {
 	m.remember("project_drop_report", dropJSON)
 	return []byte(m.drop), nil

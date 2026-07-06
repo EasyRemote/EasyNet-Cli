@@ -900,6 +900,12 @@ class SharedEventsTransport:
             shared_events_device_event_list_request_json()
         )
         self.expected_directory_projection_input = shared_events_projection_input_json()
+        self.expected_device_live_projection_input = (
+            shared_events_live_projection_input_json("event.device-live.v4.json")
+        )
+        self.expected_invocation_live_projection_input = (
+            shared_events_live_projection_input_json("event.invocation-live.v4.json")
+        )
         self.expected_drop_report_input = shared_events_drop_report_input_json()
         self.expected_terminal_input = shared_events_terminal_input_json()
         self.directory_subscription_invocation_json = shared_fixture(
@@ -916,6 +922,8 @@ class SharedEventsTransport:
         )
         self.device_event_page_json = shared_fixture("event.device-page.v4.json")
         self.directory_event_json = shared_fixture("event.directory.v4.json")
+        self.device_live_event_json = shared_fixture("event.device-live.v4.json")
+        self.invocation_live_event_json = shared_fixture("event.invocation-live.v4.json")
         self.drop_report_json = shared_fixture("event.directory-drop-report.v4.json")
         self.terminal_json = shared_fixture("event.directory-terminal.v4.json")
 
@@ -984,6 +992,22 @@ class SharedEventsTransport:
     def project_directory_event(self, event_json: bytes) -> bytes:
         assert_json_equivalent(event_json, self.expected_directory_projection_input)
         return self.directory_event_json
+
+    def project_live_event(self, event_json: bytes) -> bytes:
+        decoded = json.loads(event_json.decode("utf-8"))
+        stream = decoded["cursor"]["stream"]
+        if stream == "directory":
+            assert_json_equivalent(event_json, self.expected_directory_projection_input)
+            return self.directory_event_json
+        if stream == "device":
+            assert_json_equivalent(event_json, self.expected_device_live_projection_input)
+            return self.device_live_event_json
+        if stream == "invocation":
+            assert_json_equivalent(
+                event_json, self.expected_invocation_live_projection_input
+            )
+            return self.invocation_live_event_json
+        raise AssertionError(f"unsupported live event projection stream: {stream}")
 
     def project_drop_report(self, drop_json: bytes) -> bytes:
         assert_json_equivalent(drop_json, self.expected_drop_report_input)
@@ -3385,6 +3409,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "build_invocation_subscription_invocation",
             "build_device_event_history_invocation",
             "project_device_event_page",
+            "project_raw_device_stream_payload",
+            "project_raw_invocation_stream_payload",
         ):
             self._require_case_action(events_case, action)
         for fixture in (
@@ -3392,6 +3418,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "events-invocation-subscription-request.v4.json",
             "events-device-event-list-request.v4.json",
             "event.device-page.v4.json",
+            "event.device-live.v4.json",
+            "event.invocation-live.v4.json",
         ):
             self._require_case_fixture(events_case, fixture)
         self._require_case_expectation(
@@ -3423,6 +3451,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             events_case, "event_filter_lowers_to_daemon_args: true"
         )
         self._require_case_expectation(
+            events_case, "raw_device_stream_projection: provider_backed"
+        )
+        self._require_case_expectation(
+            events_case, "raw_invocation_stream_projection: provider_backed"
+        )
+        self._require_case_expectation(
             events_case, "sdk_local_event_bus_allowed: false"
         )
         self._require_case_expectation(
@@ -3437,6 +3471,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             shared_events_invocation_subscription_request()
         )
         page = events.list_device_events(shared_events_device_event_list_request())
+        device_event = events.project_live_event(
+            shared_events_live_projection_input("event.device-live.v4.json")
+        )
+        invocation_event = events.project_live_event(
+            shared_events_live_projection_input("event.invocation-live.v4.json")
+        )
 
         self.assertEqual(
             device_subscription.metadata["system_ability"],
@@ -3455,6 +3495,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(page.stream, "device")
         self.assertEqual(page.items[0].cursor.token, "device:8")
         self.assertEqual(page.items[0].metadata["source"], "daemon_device_event")
+        self.assertEqual(device_event.stream, "device")
+        self.assertEqual(
+            device_event.metadata["stream_ability"], "events.device.subscribe"
+        )
+        self.assertEqual(invocation_event.stream, "invocation")
+        self.assertEqual(invocation_event.kind, "invocation.completed")
 
     def test_python_surface_executes_shared_page_carrier_conformance_case(self) -> None:
         surface_case = shared_case("surface-page-carriers.yaml")
@@ -4145,6 +4191,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "list_device_events": "events.list_device_events",
                     "project_directory_event": "events.project_directory_event",
                     "project_drop_report": "events.project_drop_report",
+                    "project_live_event": "events.project_live_event",
                     "project_terminal": "events.project_terminal",
                     "subscribe_devices": "events.subscribe_devices",
                     "subscribe_directory": "events.subscribe_directory",
@@ -5188,6 +5235,33 @@ def shared_events_projection_input() -> EventProjectionInput:
 
 def shared_events_projection_input_json() -> bytes:
     return shared_events_projection_input().to_json_bytes()
+
+
+def shared_events_live_projection_input(fixture: str) -> EventProjectionInput:
+    frame = shared_events_frame(fixture)
+    cursor = shared_events_cursor_from_frame(frame)
+    event = dict(frame["payload"])
+    if cursor.stream == "device":
+        event["device_ura"] = frame["subject_ref"]["ura"]
+        event["occurred_unix_ms"] = frame["occurred_unix_ms"]
+        event["kind"] = frame["kind"]
+        event["sequence"] = cursor.sequence
+    if cursor.stream == "invocation":
+        event["invocation_id"] = frame["subject_ref"]["invocation_id"]
+        event["occurred_unix_ms"] = frame["occurred_unix_ms"]
+        event["kind"] = frame["kind"]
+        event["sequence"] = cursor.sequence
+    return EventProjectionInput(
+        cursor=cursor,
+        event=event,
+        event_id=frame["event_id"],
+        resume_token=frame["resume_token"],
+        tenant_ref=frame["tenant_ref"],
+    )
+
+
+def shared_events_live_projection_input_json(fixture: str) -> bytes:
+    return shared_events_live_projection_input(fixture).to_json_bytes()
 
 
 def shared_events_drop_report_input() -> EventDropReportInput:

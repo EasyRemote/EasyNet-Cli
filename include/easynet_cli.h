@@ -728,6 +728,12 @@ int32_t easynet_events_project_directory_event(
     char **out_event_json
 );
 
+int32_t easynet_events_project_live_event(
+    EasynetHandle handle,
+    const char *event_json,
+    char **out_event_json
+);
+
 int32_t easynet_events_project_terminal(
     EasynetHandle handle,
     const char *terminal_json,

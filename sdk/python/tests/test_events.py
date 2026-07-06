@@ -190,6 +190,42 @@ EVENTS_DEVICE_EVENT_PAGE_WITH_DIRECTORY_ITEM = b"""{
   "metadata": {"profile": "events"}
 }"""
 
+EVENTS_DEVICE_EVENT = b"""{
+  "profile": "events",
+  "stream": "device",
+  "kind": "device.status_changed",
+  "event_id": "evt-device-8",
+  "cursor": {"stream": "device", "sequence": 8, "token": "device:8"},
+  "resume_token": "device:8",
+  "occurred_unix_ms": 1783100000123,
+  "occurred_at": "2026-07-03T17:33:20.123Z",
+  "subject_ref": {"kind": "ura", "ura": "easynet:///r/example/device/dev-a", "role": "device"},
+  "tenant_ref": {"kind": "realm", "realm": "example"},
+  "payload": {"state": "online"},
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": false,
+  "metadata": {"profile": "events", "stream": "device", "source": "daemon_device_event"}
+}"""
+
+EVENTS_INVOCATION_EVENT = b"""{
+  "profile": "events",
+  "stream": "invocation",
+  "kind": "invocation.completed",
+  "event_id": "evt-invocation-4",
+  "cursor": {"stream": "invocation", "sequence": 4, "token": "invocation:4"},
+  "resume_token": "invocation:4",
+  "occurred_unix_ms": 1783100001123,
+  "occurred_at": "2026-07-03T17:33:21.123Z",
+  "subject_ref": {"kind": "invocation", "invocation_id": "inv-1"},
+  "tenant_ref": null,
+  "payload": {"terminal_state": "Completed"},
+  "dropped_count": 0,
+  "reconnect_after_ms": null,
+  "terminal": false,
+  "metadata": {"profile": "events", "stream": "invocation", "source": "daemon_invocation_event"}
+}"""
+
 
 def event_stream(stream: str) -> bytes:
     return (
@@ -247,6 +283,16 @@ class MemoryEventTransport:
 
     def project_directory_event(self, event_json: bytes) -> bytes:
         self._remember("project_directory_event", event_json)
+        return EVENTS_DIRECTORY_EVENT
+
+    def project_live_event(self, event_json: bytes) -> bytes:
+        self._remember("project_live_event", event_json)
+        request = self.seen["project_live_event"]
+        stream = request["cursor"]["stream"]
+        if stream == "device":
+            return EVENTS_DEVICE_EVENT
+        if stream == "invocation":
+            return EVENTS_INVOCATION_EVENT
         return EVENTS_DIRECTORY_EVENT
 
     def project_drop_report(self, drop_json: bytes) -> bytes:
@@ -416,7 +462,7 @@ class EventClientTests(unittest.TestCase):
         stream = EventStream.from_runtime_stream(
             "directory",
             runtime_stream,
-            directory_projector=lambda input: seen.append(input)
+            live_projector=lambda input: seen.append(input)
             or EventFrame.from_json(EVENTS_DIRECTORY_EVENT),
         )
 
@@ -425,6 +471,71 @@ class EventClientTests(unittest.TestCase):
         self.assertEqual(frame.kind, "directory.agent_advertised")
         self.assertEqual(seen[0].cursor.sequence, 3)
         self.assertEqual(seen[0].event["type"], "agent_advertised")
+
+    def test_event_stream_projects_raw_device_and_invocation_payloads(self) -> None:
+        seen: list[EventProjectionInput] = []
+
+        device_stream = StreamHandle.from_json(
+            MemoryStreamTransport(
+                b"""{
+                  "sequence": 8,
+                  "kind": "data",
+                  "state": "Open",
+                  "terminal": false,
+                  "payload_json": {
+                    "sequence": 8,
+                    "device_ura": "easynet:///r/example/device/dev-a",
+                    "occurred_unix_ms": 1783100000123,
+                    "kind": "device.status_changed",
+                    "payload": {"state": "online"}
+                  }
+                }"""
+            ),
+            b'{"stream_id":"events-device-raw","state":"Open"}',
+        )
+        device_events = EventStream.from_runtime_stream(
+            "device",
+            device_stream,
+            live_projector=lambda input: seen.append(input)
+            or EventFrame.from_json(EVENTS_DEVICE_EVENT),
+        )
+
+        device_frame = device_events.next()
+
+        self.assertEqual(device_frame.kind, "device.status_changed")
+        self.assertEqual(seen[0].cursor.stream, "device")
+        self.assertEqual(seen[0].cursor.sequence, 8)
+
+        invocation_stream = StreamHandle.from_json(
+            MemoryStreamTransport(
+                b"""{
+                  "sequence": 4,
+                  "kind": "data",
+                  "state": "Open",
+                  "terminal": false,
+                  "payload_json": {
+                    "sequence": 4,
+                    "invocation_id": "inv-1",
+                    "occurred_unix_ms": 1783100001123,
+                    "kind": "invocation.completed",
+                    "payload": {"terminal_state": "Completed"}
+                  }
+                }"""
+            ),
+            b'{"stream_id":"events-invocation-raw","state":"Open"}',
+        )
+        invocation_events = EventStream.from_runtime_stream(
+            "invocation",
+            invocation_stream,
+            live_projector=lambda input: seen.append(input)
+            or EventFrame.from_json(EVENTS_INVOCATION_EVENT),
+        )
+
+        invocation_frame = invocation_events.next()
+
+        self.assertEqual(invocation_frame.kind, "invocation.completed")
+        self.assertEqual(seen[1].cursor.stream, "invocation")
+        self.assertEqual(seen[1].event["invocation_id"], "inv-1")
 
     def test_directory_projectors_reject_session_cursor(self) -> None:
         client = EventClient(MemoryEventTransport())

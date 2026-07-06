@@ -244,11 +244,12 @@ class EventProjectionInput:
     resume_token: str = ""
     tenant_ref: object = None
 
-    def to_json_bytes(self) -> bytes:
+    def to_json_bytes(self, expected_stream: str | None = None) -> bytes:
         _validate_cursor(self.cursor, require_token=False)
-        _require_cursor_stream(self.cursor, _DIRECTORY_STREAM)
+        if expected_stream is not None:
+            _require_cursor_stream(self.cursor, expected_stream)
         if self.event is None:
-            raise _invalid_events("directory event payload is required")
+            raise _invalid_events("event payload is required")
         value: dict[str, object] = {
             "cursor": self.cursor.to_json_dict(),
             "event": dict(self.event),
@@ -324,7 +325,7 @@ class EventStream:
     _runtime_stream: Optional[StreamHandle] = field(
         default=None, repr=False, compare=False
     )
-    _directory_projector: Optional[Callable[[EventProjectionInput], "DirectoryEvent"]] = field(
+    _live_projector: Optional[Callable[[EventProjectionInput], "EventFrame"]] = field(
         default=None, repr=False, compare=False
     )
 
@@ -349,7 +350,7 @@ class EventStream:
         *,
         resume_token: str = "",
         metadata: Mapping[str, object] | None = None,
-        directory_projector: Callable[[EventProjectionInput], "DirectoryEvent"] | None = None,
+        live_projector: Callable[[EventProjectionInput], "EventFrame"] | None = None,
     ) -> "EventStream":
         if stream not in _SUPPORTED_STREAMS:
             raise _invalid_events("invalid event stream projection")
@@ -363,7 +364,7 @@ class EventStream:
             resume_token=resume_token,
             metadata=dict(metadata or {"profile": _PROFILE}),
             _runtime_stream=runtime_stream,
-            _directory_projector=directory_projector,
+            _live_projector=live_projector,
         )
 
     def next(self, timeout: float | None = None) -> "EventFrame":
@@ -387,11 +388,15 @@ class EventStream:
         try:
             return EventFrame.from_mapping(_payload_mapping(event.payload_json))
         except SDKError as exc:
-            if self.stream != _DIRECTORY_STREAM or self._directory_projector is None:
+            if self.stream not in {
+                _DIRECTORY_STREAM,
+                _DEVICE_STREAM,
+                _INVOCATION_STREAM,
+            } or self._live_projector is None:
                 raise exc
-        return self._directory_projector(
+        return self._live_projector(
             EventProjectionInput(
-                cursor=EventCursor(_DIRECTORY_STREAM, event.sequence),
+                cursor=EventCursor(self.stream, event.sequence),
                 event=_payload_mapping(event.payload_json),
             )
         )
@@ -534,6 +539,9 @@ class EventTransport(Protocol):
     def project_directory_event(self, event_json: bytes) -> bytes:
         ...
 
+    def project_live_event(self, event_json: bytes) -> bytes:
+        ...
+
     def project_drop_report(self, drop_json: bytes) -> bytes:
         ...
 
@@ -669,9 +677,17 @@ class EventClient:
     def project_directory_event(self, input: EventProjectionInput) -> DirectoryEvent:
         self._require_open()
         return self._frame(
-            input.to_json_bytes(),
+            input.to_json_bytes(_DIRECTORY_STREAM),
             self.transport.project_directory_event,
             "events project directory event failed",
+        )
+
+    def project_live_event(self, input: EventProjectionInput) -> EventFrame:
+        self._require_open()
+        return self._frame(
+            input.to_json_bytes(),
+            self.transport.project_live_event,
+            "events project live event failed",
         )
 
     def project_drop_report(self, input: EventDropReportInput) -> EventDropReport:
