@@ -3562,6 +3562,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "project_agent_page": "directory_identity.directory.project_agent_page",
                     "project_device_page": "directory_identity.directory.project_device_page",
                     "project_resolved_ref": "directory_identity.directory.project_resolved_ref",
+                    "project_subscription": "directory_identity.directory.project_subscription",
                     "resolve": "directory_identity.directory.resolve",
                     "subscribe_directory": "directory_identity.directory.subscribe",
                 },

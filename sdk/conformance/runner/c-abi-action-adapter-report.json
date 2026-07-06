@@ -46,6 +46,13 @@
       "message": null
     },
     {
+      "case_id": "directory/subscription_stream",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "c_abi_test", "ref_path": "src/ffi/directory/mod.rs"}],
+      "message": null
+    },
+    {
       "case_id": "error/typed_json",
       "profile": "runtime_core",
       "status": "passed",

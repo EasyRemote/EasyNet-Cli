@@ -273,9 +273,11 @@ class FakeRawCABI:
         return self._write(
             out_ptr,
             b'{"abi_version":4,"sdk_version":"0.91.30",'
-            b'"profiles":{"directory_identity":"read_model_projection_partial"},'
+            b'"profiles":{"directory_identity":'
+            b'"read_model_subscription_projection_partial"},'
             b'"symbols":{"directory_identity_projection":true,'
             b'"identity_signing_key_lifecycle":true,'
+            b'"directory_subscription_projection":true,'
             b'"events_session_stream":true},"axon_pb":true}',
         )
 
@@ -1043,6 +1045,8 @@ class FakeRawCABI:
             return DIRECTORY_LIST_ABILITIES_INVOCATION
         if symbol == "easynet_directory_build_resolve_invocation":
             return DIRECTORY_RESOLVE_INVOCATION
+        if symbol == "easynet_directory_build_subscription_invocation":
+            return DIRECTORY_SUBSCRIPTION_INVOCATION
         if symbol == "easynet_receipt_build_fetch_invocation":
             return RECEIPT_FETCH_INVOCATION
         if symbol == "easynet_receipt_build_list_history_invocation":
@@ -1180,6 +1184,8 @@ class FakeRawCABI:
             return DIRECTORY_ABILITY_PAGE_PROJECTION
         if symbol == "easynet_directory_project_resolved_ref":
             return DIRECTORY_RESOLVED_REF_PROJECTION
+        if symbol == "easynet_directory_project_subscription":
+            return DIRECTORY_SUBSCRIPTION_OPENING_PROJECTION
         if symbol == "easynet_receipt_verify":
             return RECEIPT_VERIFICATION_PROJECTION
         if symbol == "easynet_receipt_verify_chain":
@@ -1685,6 +1691,31 @@ DIRECTORY_LIST_ABILITIES_INVOCATION = (
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"directory_identity",'
     b'"system_ability":"meta.list_abilities","carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_SUBSCRIPTION_INVOCATION = (
+    b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"callee_ura":"easynet:///r/example/device/dev-a",'
+    b'"descriptor_ref":"easynet:///r/example/ability/'
+    b'device.dev-a.directory.subscribe@1.0.0",'
+    b'"subject_ura":"easynet:///r/example/device/dev-a",'
+    b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
+    b'"causal_context":{"form":"none"},'
+    b'"args":{"stream":"directory","resume_cursor":'
+    b'{"stream":"directory","sequence":8,"token":"directory:8"}},'
+    b'"content_type":"application/json",'
+    b'"metadata":{"profile":"directory_identity",'
+    b'"system_ability":"directory.subscribe","carrier_owner":"daemon_sdk"}}'
+)
+
+DIRECTORY_SUBSCRIPTION_OPENING_PROJECTION = (
+    b'{"profile":"directory_identity","kind":"directory_subscription",'
+    b'"stream":"directory","state":"Opening",'
+    b'"cursor":{"stream":"directory","sequence":8,"token":"directory:8"},'
+    b'"resume_token":"directory:8","drop_count":0,"events":[],'
+    b'"metadata":{"profile":"directory_identity","source":"runtime_stream",'
+    b'"stream_ability":"directory.subscribe","carrier_owner":"daemon_sdk",'
+    b'"runtime_stream_id":"404","max_buffered_events":1024}}'
 )
 
 DIRECTORY_RESOLVE_INVOCATION = (
@@ -3327,20 +3358,23 @@ class CABITransportTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(subscription.state, "Live")
+        self.assertEqual(subscription.state, "Opening")
         self.assertEqual(subscription.cursor.resume_token(), "directory:8")
         self.assertEqual(subscription.resume_token, "directory:8")
         self.assertEqual(subscription.events, ())
-        self.assertEqual(subscription.metadata["stream_ability"], "federation.subscribe_directory_v2")
+        self.assertEqual(subscription.metadata["stream_ability"], "directory.subscribe")
         self.assertEqual(
             [item[0] for item in raw.profile_requests],
-            ["easynet_events_build_directory_subscription_invocation"],
+            [
+                "easynet_directory_build_subscription_invocation",
+                "easynet_directory_project_subscription",
+            ],
         )
         self.assertEqual(raw.runtime_requests[0][0], "stream_open")
         self.assertEqual(
             raw.runtime_requests[0][1]["descriptor_ref"],
             "easynet:///r/example/ability/"
-            "device.dev-a.federation.subscribe_directory_v2@1.0.0",
+            "device.dev-a.directory.subscribe@1.0.0",
         )
         self.assertEqual(raw.stream_closes, [])
 
@@ -3349,6 +3383,24 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(subscription.state, "Closed")
         self.assertEqual(raw.stream_closes, [404])
         self.assertEqual(raw.stream_cancels, [])
+        self.assertEqual(raw.buffers, {})
+
+    def test_directory_project_subscription_uses_directory_cabi_projection(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        client = DirectoryClient(CABIDirectoryTransport(lib, handle=7))
+
+        subscription = client.project_subscription(
+            DIRECTORY_SUBSCRIPTION_OPENING_PROJECTION
+        )
+
+        self.assertEqual(subscription.state, "Opening")
+        self.assertEqual(subscription.cursor.resume_token(), "directory:8")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests],
+            ["easynet_directory_project_subscription"],
+        )
+        self.assertEqual(raw.runtime_requests, [])
         self.assertEqual(raw.buffers, {})
 
     def test_directory_client_close_closes_subscription_runtime_stream(self) -> None:

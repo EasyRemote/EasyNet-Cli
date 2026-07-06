@@ -11,7 +11,10 @@ use super::EASYNET_ABI_VERSION;
 pub const PROFILES: &[(&str, &str)] = &[
     ("runtime_core", "partial"),
     ("receipt", "fetch_projection_partial"),
-    ("directory_identity", "read_model_projection_partial"),
+    (
+        "directory_identity",
+        "read_model_subscription_projection_partial",
+    ),
     ("publication", "carrier_partial"),
     ("host_binding", "codec_partial"),
     ("mission", "carrier_status_partial"),
@@ -32,6 +35,7 @@ pub const ALWAYS_ON_SYMBOLS: &[&str] = &[
     "identity_signing_key_lifecycle",
     "directory_read_model",
     "directory_resolve",
+    "directory_subscription_projection",
     "host_binding_codec",
     "publication_carriers",
     "mission_carriers",

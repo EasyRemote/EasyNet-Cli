@@ -506,6 +506,9 @@ class DirectoryTransport(Protocol):
     def project_resolved_ref(self, answer_json: bytes) -> bytes:
         ...
 
+    def project_subscription(self, subscription_json: bytes) -> bytes:
+        ...
+
     def resolve(self, request_json: bytes) -> bytes:
         ...
 
@@ -703,6 +706,16 @@ class DirectoryClient:
         except Exception as exc:
             raise _transport_error("directory project resolved ref failed", exc) from exc
         return ResolvedRef.from_json(raw)
+
+    def project_subscription(self, subscription_json: bytes) -> DirectorySubscription:
+        self._require_open()
+        try:
+            raw = self.transport.project_subscription(subscription_json)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("directory project subscription failed", exc) from exc
+        return DirectorySubscription.from_json(raw)
 
     def subscribe_directory(self, request: DirectorySubscriptionRequest) -> DirectorySubscription:
         self._require_open()

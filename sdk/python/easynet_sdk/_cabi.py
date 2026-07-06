@@ -43,10 +43,12 @@ _JSON_HANDLE_OUTPUT_SYMBOLS = (
     "easynet_directory_build_list_agents_invocation",
     "easynet_directory_build_list_abilities_invocation",
     "easynet_directory_build_resolve_invocation",
+    "easynet_directory_build_subscription_invocation",
     "easynet_directory_project_device_page",
     "easynet_directory_project_agent_page",
     "easynet_directory_project_ability_page",
     "easynet_directory_project_resolved_ref",
+    "easynet_directory_project_subscription",
     "easynet_receipt_build_fetch_invocation",
     "easynet_receipt_build_list_history_invocation",
     "easynet_receipt_build_get_history_invocation",
@@ -1111,7 +1113,7 @@ class CABIDirectoryTransport(_CABIProfileTransport):
 
     def build_directory_subscription_invocation(self, request_json: bytes) -> bytes:
         return self._call(
-            "easynet_events_build_directory_subscription_invocation", request_json
+            "easynet_directory_build_subscription_invocation", request_json
         )
 
     def resolve(self, request_json: bytes) -> bytes:
@@ -1145,18 +1147,22 @@ class CABIDirectoryTransport(_CABIProfileTransport):
     def subscribe_directory(self, request_json: bytes) -> DirectorySubscription:
         runtime_stream = self._open_runtime_stream(
             request_json,
-            build_symbol="easynet_events_build_directory_subscription_invocation",
+            build_symbol="easynet_directory_build_subscription_invocation",
         )
-        subscription = DirectorySubscription.from_runtime_stream(
-            runtime_stream,
-            cursor=_directory_subscription_cursor_from_request(request_json),
-            metadata={
-                "profile": "directory_identity",
-                "source": "runtime_stream",
-                "stream_ability": "federation.subscribe_directory_v2",
-                "carrier_owner": "daemon_sdk",
-            },
+        projection_json = self._call(
+            "easynet_directory_project_subscription",
+            _projection_request_json(
+                request_json,
+                {
+                    "stream_id": runtime_stream.stream_id,
+                    "state": getattr(runtime_stream.state, "value", str(runtime_stream.state)),
+                    "max_buffered_events": runtime_stream.max_buffered_events,
+                },
+                passthrough_keys=("resume_cursor",),
+            ),
         )
+        subscription = DirectorySubscription.from_json(projection_json)
+        object.__setattr__(subscription, "_runtime_stream", runtime_stream)
         self._subscriptions.append(subscription)
         return subscription
 
@@ -1189,6 +1195,9 @@ class CABIDirectoryTransport(_CABIProfileTransport):
 
     def project_resolved_ref(self, answer_json: bytes) -> bytes:
         return self._call("easynet_directory_project_resolved_ref", answer_json)
+
+    def project_subscription(self, subscription_json: bytes) -> bytes:
+        return self._call("easynet_directory_project_subscription", subscription_json)
 
     def close(self) -> None:
         if self._closed:

@@ -4,7 +4,7 @@
   "profiles": {
     "runtime_core": "partial",
     "receipt": "fetch_projection_partial",
-    "directory_identity": "read_model_projection_partial",
+    "directory_identity": "read_model_subscription_projection_partial",
     "publication": "carrier_partial",
     "host_binding": "codec_partial",
     "mission": "carrier_status_partial",
@@ -24,6 +24,7 @@
     "identity_signing_key_lifecycle": true,
     "directory_read_model": true,
     "directory_resolve": true,
+    "directory_subscription_projection": true,
     "host_binding_codec": true,
     "publication_carriers": true,
     "mission_carriers": true,

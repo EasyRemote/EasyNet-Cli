@@ -73,10 +73,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   construction, and broader language-facade cutovers remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, Directory subscribe stream
-  guardrails for Go/Python, Identity URA/DescriptorRef projection guardrails,
-  and identity signing-key register/list/revoke builder/projection guardrails
-  exist; C ABI subscribe projection, signer construction, and broader external
-  language-facade cutovers remain incomplete.
+  guardrails for Go/Python, C ABI `directory.subscribe` carrier/projection
+  symbols, Identity URA/DescriptorRef projection guardrails, and identity
+  signing-key register/list/revoke builder/projection guardrails exist; signer
+  construction and broader external language-facade cutovers remain incomplete.
 - Publication ResourceRef/package validation/plugin install/deploy-unpublish
   carrier and lifecycle guardrails exist for Rust/C ABI; Go now executes
   list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
@@ -121,9 +121,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   quota/rate limits, billing, backend HTTP route shaping, multipart
   upload/storage policy, SSE/WebSocket fanout, and product cutovers remain
   incomplete.
-- C ABI Directory subscribe projection, Axon-backed receipt chain/DAG
-  verification, and RFC-007 receipt URA construction remain
-  schema/conformance declarations only.
+- Axon-backed receipt chain/DAG verification and RFC-007 receipt URA
+  construction remain schema/conformance declarations only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
   file, terminal, remote desktop, browser, and media session DTOs; Go/Python
   facades now expose Runtime-backed record-returning helper execution. Backend

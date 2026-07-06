@@ -3,15 +3,16 @@
 //
 // File: src/protocol/directory_contract.rs
 // Description: Shared daemon SDK contract for Directory resolve/read-model
-//              carriers and paginated device/agent/ability page projections.
+//              carriers, subscription carriers, and stable DTO projections.
 //
 // Protocol Responsibility
 // -----------------------
 // Own the EasyNet-Cli SDK Directory DTO projection for daemon read models.
 // This module builds complete Invocation carriers for existing daemon
-// read-model abilities and projects their outputs into stable DTOs. It does
-// not implement a second directory database, perform live distributed fan-out,
-// own event subscriptions, select routes, or execute abilities.
+// read-model abilities and projects their outputs into stable DTOs. It also
+// builds the daemon-owned `directory.subscribe` carrier and projects stream
+// open/subscription state. It does not implement a second directory database,
+// perform live distributed fan-out, select routes, or execute abilities.
 //
 // Implementation Approach
 // -----------------------
@@ -23,14 +24,16 @@
 // --------------
 // Carrier construction requires explicit Invocation tuple fields. Directory
 // list methods accept only SDK query fields and lower to daemon read-model
-// abilities. Projection accepts daemon output JSON facts and returns bounded
-// pages; malformed rows are rejected instead of silently skipped.
+// abilities. Subscription methods expose bounded state projections around a
+// daemon stream handle. Projection accepts daemon output JSON facts and returns
+// bounded pages or subscription state; malformed rows are rejected instead of
+// silently skipped.
 //
 // Architectural Position
 // ----------------------
 // EasyNet-Cli daemon SDK Directory profile. Runtime Core remains the only
-// submit/open path for returned Invocation carriers; Events owns directory
-// stream subscription DTOs.
+// submit/open path for returned Invocation carriers. Events owns federation
+// directory event frames; this profile owns DirectorySubscription state.
 
 use serde_json::{json, Map, Value};
 
@@ -49,9 +52,12 @@ const ABILITY_NODE_LIST: &str = crate::daemon::ability::names::device_control::N
 const ABILITY_AGENT_LIST: &str = crate::daemon::ability::names::agents::AGENT_LIST;
 const ABILITY_META_LIST_ABILITIES: &str =
     crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+const ABILITY_DIRECTORY_SUBSCRIBE: &str = "directory.subscribe";
 
 pub(crate) const DIRECTORY_DEFAULT_PAGE_SIZE: usize = 50;
 pub(crate) const DIRECTORY_MAX_PAGE_SIZE: usize = 500;
+pub(crate) const DIRECTORY_SUBSCRIPTION_MAX_BUFFERED_EVENTS: usize = 1024;
+const DIRECTORY_STREAM: &str = "directory";
 
 pub(crate) type DirectoryError = SdkContractError;
 
@@ -82,6 +88,13 @@ pub(crate) fn build_list_abilities_invocation(request: &Value) -> Result<Value, 
     let _ = PageControls::from_request(obj)?;
     let args = list_abilities_args(obj)?;
     build_system_invocation(obj, DIRECTORY_PROFILE, ABILITY_META_LIST_ABILITIES, args)
+}
+
+pub(crate) fn build_subscription_invocation(request: &Value) -> Result<Value, DirectoryError> {
+    let obj = object(request, "DirectorySubscriptionRequest")?;
+    reject_unsupported_fields(obj, DIRECTORY_SUBSCRIPTION_REQUEST_FIELDS)?;
+    let args = subscription_args(obj)?;
+    build_system_invocation(obj, DIRECTORY_PROFILE, ABILITY_DIRECTORY_SUBSCRIBE, args)
 }
 
 pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryError> {
@@ -146,6 +159,56 @@ pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryErro
             "raw_answer": answer,
         },
     }))
+}
+
+pub(crate) fn project_subscription(input: &Value) -> Result<Value, DirectoryError> {
+    let input = projection_payload(input);
+    if is_directory_subscription(input) {
+        validate_subscription(input)?;
+        return Ok(input.clone());
+    }
+    let obj = object(input, "DirectorySubscriptionProjection")?;
+    let result = obj
+        .get("result")
+        .or_else(|| obj.get("runtime_stream"))
+        .filter(|value| !value.is_null())
+        .unwrap_or(input);
+    let result_obj = object(result, "DirectorySubscriptionRuntimeStream")?;
+    let cursor = subscription_cursor_from_value(
+        obj.get("resume_cursor")
+            .or_else(|| result_obj.get("cursor"))
+            .unwrap_or(&Value::Null),
+    )?;
+    let state = subscription_state_from_runtime(result_obj)?;
+    let stream_id = optional_string(result_obj, "stream_id");
+    let max_buffered_events = optional_usize(result_obj, "max_buffered_events")?
+        .unwrap_or(DIRECTORY_SUBSCRIPTION_MAX_BUFFERED_EVENTS);
+    if max_buffered_events > DIRECTORY_SUBSCRIPTION_MAX_BUFFERED_EVENTS {
+        return Err(DirectoryError::InvalidField(
+            "max_buffered_events",
+            format!("must not exceed {DIRECTORY_SUBSCRIPTION_MAX_BUFFERED_EVENTS}"),
+        ));
+    }
+    let subscription = json!({
+        "profile": DIRECTORY_PROFILE,
+        "kind": "directory_subscription",
+        "stream": DIRECTORY_STREAM,
+        "state": state,
+        "cursor": cursor,
+        "resume_token": cursor["token"].clone(),
+        "drop_count": 0,
+        "events": [],
+        "metadata": {
+            "profile": DIRECTORY_PROFILE,
+            "source": "runtime_stream",
+            "stream_ability": ABILITY_DIRECTORY_SUBSCRIBE,
+            "carrier_owner": "daemon_sdk",
+            "runtime_stream_id": stream_id,
+            "max_buffered_events": max_buffered_events,
+        },
+    });
+    validate_subscription(&subscription)?;
+    Ok(subscription)
 }
 
 pub(crate) fn project_device_page(input: &Value) -> Result<Value, DirectoryError> {
@@ -244,6 +307,24 @@ const DIRECTORY_ABILITY_REQUEST_FIELDS: &[&str] = &[
     "owner_ura",
     "ability_ura",
 ];
+const DIRECTORY_SUBSCRIPTION_REQUEST_FIELDS: &[&str] = &[
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+    "stream",
+    "realm",
+    "owner_ura",
+    "device_ura",
+    "agent_ura",
+    "ability_ura",
+    "item_kind",
+    "resume_cursor",
+    "heartbeat_interval_ms",
+];
 
 fn reject_unsupported_fields(
     obj: &Map<String, Value>,
@@ -310,6 +391,51 @@ fn list_abilities_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError
     if let Some(ability_ura) = optional_string_field(obj, "ability_ura")? {
         validate_ability_ura(&ability_ura, "ability_ura")?;
         args.insert("subject_ura".to_string(), Value::String(ability_ura));
+    }
+    Ok(Value::Object(args))
+}
+
+fn subscription_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError> {
+    let mut args = Map::new();
+    let stream =
+        optional_string_field(obj, "stream")?.unwrap_or_else(|| DIRECTORY_STREAM.to_string());
+    if stream != DIRECTORY_STREAM {
+        return Err(DirectoryError::InvalidField(
+            "stream",
+            format!("expected {DIRECTORY_STREAM:?}, got {stream:?}"),
+        ));
+    }
+    args.insert(
+        "stream".to_string(),
+        Value::String(DIRECTORY_STREAM.to_string()),
+    );
+    for field in ["realm", "item_kind"] {
+        if let Some(value) = optional_string_field(obj, field)? {
+            validate_token_field(field, &value)?;
+            args.insert(field.to_string(), Value::String(value));
+        }
+    }
+    for field in ["owner_ura", "device_ura", "agent_ura"] {
+        if let Some(value) = optional_string_field(obj, field)? {
+            validate_owner_ura(&value, field)?;
+            args.insert(field.to_string(), Value::String(value));
+        }
+    }
+    if let Some(value) = optional_string_field(obj, "ability_ura")? {
+        validate_ability_ura(&value, "ability_ura")?;
+        args.insert("ability_ura".to_string(), Value::String(value));
+    }
+    if let Some(cursor) = obj.get("resume_cursor").filter(|value| !value.is_null()) {
+        args.insert(
+            "resume_cursor".to_string(),
+            subscription_cursor_from_value(cursor)?,
+        );
+    }
+    if let Some(heartbeat_interval_ms) = optional_usize(obj, "heartbeat_interval_ms")? {
+        args.insert(
+            "heartbeat_interval_ms".to_string(),
+            Value::Number(heartbeat_interval_ms.into()),
+        );
     }
     Ok(Value::Object(args))
 }
@@ -439,6 +565,211 @@ fn projection_payload(input: &Value) -> &Value {
         .as_object()
         .and_then(|obj| obj.get("output_json").filter(|value| !value.is_null()))
         .unwrap_or(input)
+}
+
+fn is_directory_subscription(input: &Value) -> bool {
+    input.as_object().is_some_and(|obj| {
+        obj.get("profile").and_then(Value::as_str) == Some(DIRECTORY_PROFILE)
+            && obj.get("kind").and_then(Value::as_str) == Some("directory_subscription")
+    })
+}
+
+fn subscription_state_from_runtime(
+    result: &Map<String, Value>,
+) -> Result<&'static str, DirectoryError> {
+    match optional_string(result, "state").as_deref() {
+        None | Some("") | Some("Open") | Some("Opening") => Ok("Opening"),
+        Some("CatchingUp") => Ok("CatchingUp"),
+        Some("Live") => Ok("Live"),
+        Some("Resuming") => Ok("Resuming"),
+        Some("Closed") | Some("Completed") => Ok("Closed"),
+        Some("Failed") => Ok("Failed"),
+        Some(other) => Err(DirectoryError::InvalidField(
+            "state",
+            format!("unsupported directory subscription state {other:?}"),
+        )),
+    }
+}
+
+fn subscription_cursor_from_value(value: &Value) -> Result<Value, DirectoryError> {
+    let cursor = match value {
+        Value::Null => DirectoryCursor::new(0),
+        Value::String(raw) => DirectoryCursor::parse_token(raw, "resume_cursor")?,
+        Value::Object(obj) => {
+            let stream = optional_string_field(obj, "stream")?
+                .unwrap_or_else(|| DIRECTORY_STREAM.to_string());
+            if stream != DIRECTORY_STREAM {
+                return Err(DirectoryError::InvalidField(
+                    "resume_cursor",
+                    format!("expected {DIRECTORY_STREAM:?}, got {stream:?}"),
+                ));
+            }
+            let sequence = optional_usize(obj, "sequence")?.unwrap_or(0);
+            let token = optional_string_field(obj, "token")?
+                .unwrap_or_else(|| format!("{DIRECTORY_STREAM}:{sequence}"));
+            let cursor = DirectoryCursor { sequence, token };
+            cursor.validate("resume_cursor")?;
+            cursor
+        }
+        _ => {
+            return Err(DirectoryError::InvalidField(
+                "resume_cursor",
+                "must be an object, token string, or null".to_string(),
+            ))
+        }
+    };
+    Ok(cursor.to_json())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectoryCursor {
+    sequence: usize,
+    token: String,
+}
+
+impl DirectoryCursor {
+    fn new(sequence: usize) -> Self {
+        Self {
+            sequence,
+            token: format!("{DIRECTORY_STREAM}:{sequence}"),
+        }
+    }
+
+    fn parse_token(raw: &str, field: &'static str) -> Result<Self, DirectoryError> {
+        let Some(sequence) = raw.strip_prefix("directory:") else {
+            return Err(DirectoryError::InvalidField(
+                field,
+                "must use directory:<sequence> token form".to_string(),
+            ));
+        };
+        let sequence = sequence
+            .parse::<usize>()
+            .map_err(|err| DirectoryError::InvalidField(field, err.to_string()))?;
+        Ok(Self::new(sequence))
+    }
+
+    fn validate(&self, field: &'static str) -> Result<(), DirectoryError> {
+        let expected = format!("{DIRECTORY_STREAM}:{}", self.sequence);
+        if self.token != expected {
+            return Err(DirectoryError::InvalidField(
+                field,
+                format!("token must equal {expected:?}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "stream": DIRECTORY_STREAM,
+            "sequence": self.sequence,
+            "token": self.token,
+        })
+    }
+}
+
+fn validate_subscription(subscription: &Value) -> Result<(), DirectoryError> {
+    let obj = object(subscription, "DirectorySubscription")?;
+    if obj.get("profile").and_then(Value::as_str) != Some(DIRECTORY_PROFILE)
+        || obj.get("kind").and_then(Value::as_str) != Some("directory_subscription")
+        || obj.get("stream").and_then(Value::as_str) != Some(DIRECTORY_STREAM)
+    {
+        return Err(DirectoryError::InvalidField(
+            "subscription",
+            "invalid directory subscription projection".to_string(),
+        ));
+    }
+    let state = required_string(obj, "state")?;
+    if !matches!(
+        state,
+        "Opening" | "CatchingUp" | "Live" | "Resuming" | "Closed" | "Failed"
+    ) {
+        return Err(DirectoryError::InvalidField(
+            "state",
+            "unsupported directory subscription state".to_string(),
+        ));
+    }
+    let cursor = subscription_cursor_from_value(
+        obj.get("cursor")
+            .ok_or(DirectoryError::MissingField("cursor"))?,
+    )?;
+    let resume_token = required_string(obj, "resume_token")?;
+    if cursor["token"].as_str() != Some(resume_token) {
+        return Err(DirectoryError::InvalidField(
+            "resume_token",
+            "must match cursor token".to_string(),
+        ));
+    }
+    if optional_usize(obj, "drop_count")?.is_none() {
+        return Err(DirectoryError::MissingField("drop_count"));
+    }
+    let events = obj
+        .get("events")
+        .and_then(Value::as_array)
+        .ok_or(DirectoryError::MissingField("events"))?;
+    if events.len() > DIRECTORY_SUBSCRIPTION_MAX_BUFFERED_EVENTS {
+        return Err(DirectoryError::InvalidField(
+            "events",
+            format!("must not exceed {DIRECTORY_SUBSCRIPTION_MAX_BUFFERED_EVENTS} items"),
+        ));
+    }
+    let mut snapshot_complete = obj
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("snapshot_complete"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut last_sequence: Option<usize> = None;
+    let mut seen_ids = std::collections::BTreeSet::new();
+    for event in events {
+        let event = object(event, "DirectorySubscriptionEvent")?;
+        if event.get("profile").and_then(Value::as_str) != Some(DIRECTORY_PROFILE)
+            || event.get("stream").and_then(Value::as_str) != Some(DIRECTORY_STREAM)
+        {
+            return Err(DirectoryError::InvalidField(
+                "event",
+                "invalid directory subscription event".to_string(),
+            ));
+        }
+        let event_id = required_string(event, "event_id")?;
+        if !seen_ids.insert(event_id.to_string()) {
+            return Err(DirectoryError::InvalidField(
+                "event_id",
+                "duplicate directory subscription event id".to_string(),
+            ));
+        }
+        let event_cursor = subscription_cursor_from_value(
+            event
+                .get("cursor")
+                .ok_or(DirectoryError::MissingField("cursor"))?,
+        )?;
+        let event_resume_token = required_string(event, "resume_token")?;
+        if event_cursor["token"].as_str() != Some(event_resume_token) {
+            return Err(DirectoryError::InvalidField(
+                "resume_token",
+                "event resume_token must match event cursor token".to_string(),
+            ));
+        }
+        let sequence = event_cursor["sequence"].as_u64().unwrap_or(0) as usize;
+        if last_sequence.is_some_and(|last| sequence <= last) {
+            return Err(DirectoryError::InvalidField(
+                "cursor",
+                "directory subscription event sequence must increase".to_string(),
+            ));
+        }
+        last_sequence = Some(sequence);
+        let phase = required_string(event, "phase")?;
+        if phase == "live" && !snapshot_complete {
+            return Err(DirectoryError::InvalidField(
+                "phase",
+                "live directory event before snapshot_complete".to_string(),
+            ));
+        }
+        if phase == "snapshot_complete" {
+            snapshot_complete = true;
+        }
+    }
+    Ok(())
 }
 
 fn validate_limit(limit: usize) -> Result<(), DirectoryError> {
@@ -699,6 +1030,16 @@ fn validate_realm_hint(raw: &str) -> Result<(), DirectoryError> {
     Ok(())
 }
 
+fn validate_token_field(field: &'static str, raw: &str) -> Result<(), DirectoryError> {
+    if raw.trim().is_empty() || raw.chars().any(char::is_whitespace) {
+        return Err(DirectoryError::InvalidField(
+            field,
+            "must be a non-empty token without whitespace".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn optional_u64(obj: &Map<String, Value>, field: &'static str) -> Option<u64> {
     match obj.get(field) {
         Some(Value::Number(number)) => number.as_u64(),
@@ -826,6 +1167,116 @@ mod tests {
         assert_eq!(
             invocation["args"]["subject_ura"],
             "easynet:///r/example/ability/device.dev-a.fs.read"
+        );
+    }
+
+    #[test]
+    fn build_subscription_invocation_targets_directory_subscribe() {
+        let request = base_request(json!({
+            "stream": "directory",
+            "item_kind": "ability",
+            "resume_cursor": {"stream": "directory", "sequence": 8}
+        }));
+
+        let invocation = build_subscription_invocation(&request).unwrap();
+
+        assert_eq!(
+            invocation["metadata"]["system_ability"],
+            ABILITY_DIRECTORY_SUBSCRIBE
+        );
+        assert_eq!(invocation["metadata"]["profile"], DIRECTORY_PROFILE);
+        assert_eq!(
+            invocation["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0"
+        );
+        assert_eq!(
+            invocation["args"]["resume_cursor"],
+            json!({"stream": "directory", "sequence": 8, "token": "directory:8"})
+        );
+    }
+
+    #[test]
+    fn project_subscription_projects_runtime_open_state() {
+        let projection = project_subscription(&json!({
+            "result": {
+                "stream_id": "404",
+                "state": "Open",
+                "max_buffered_events": 1024
+            },
+            "resume_cursor": {"stream": "directory", "sequence": 8}
+        }))
+        .unwrap();
+
+        assert_eq!(projection["profile"], DIRECTORY_PROFILE);
+        assert_eq!(projection["kind"], "directory_subscription");
+        assert_eq!(projection["state"], "Opening");
+        assert_eq!(projection["cursor"]["token"], "directory:8");
+        assert_eq!(
+            projection["metadata"]["stream_ability"],
+            ABILITY_DIRECTORY_SUBSCRIBE
+        );
+        assert_eq!(projection["metadata"]["runtime_stream_id"], "404");
+    }
+
+    #[test]
+    fn project_subscription_rejects_live_before_snapshot_complete() {
+        let err = project_subscription(&json!({
+            "profile": "directory_identity",
+            "kind": "directory_subscription",
+            "stream": "directory",
+            "state": "Live",
+            "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+            "resume_token": "directory:1",
+            "drop_count": 0,
+            "events": [{
+                "profile": "directory_identity",
+                "stream": "directory",
+                "kind": "upsert",
+                "event_id": "evt-1",
+                "phase": "live",
+                "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+                "resume_token": "directory:1",
+                "terminal": false,
+                "metadata": {}
+            }],
+            "metadata": {}
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field phase: live directory event before snapshot_complete"
+        );
+    }
+
+    #[test]
+    fn project_subscription_rejects_event_resume_token_mismatch() {
+        let err = project_subscription(&json!({
+            "profile": "directory_identity",
+            "kind": "directory_subscription",
+            "stream": "directory",
+            "state": "Live",
+            "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+            "resume_token": "directory:1",
+            "drop_count": 0,
+            "events": [{
+                "profile": "directory_identity",
+                "stream": "directory",
+                "kind": "snapshot_complete",
+                "event_id": "evt-1",
+                "phase": "snapshot_complete",
+                "cursor": {"stream": "directory", "sequence": 1, "token": "directory:1"},
+                "resume_token": "directory:999",
+                "terminal": false,
+                "metadata": {}
+            }],
+            "metadata": {}
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field resume_token: event resume_token must match event cursor token"
         );
     }
 

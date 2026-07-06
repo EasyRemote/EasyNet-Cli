@@ -65,9 +65,11 @@
 //   typed frame projection helpers.
 // - `easynet_directory_build_list_*_invocation`,
 //   `easynet_directory_build_resolve_invocation`,
-//   `easynet_directory_project_*_page`, and
-//   `easynet_directory_project_resolved_ref`: Directory read-model carrier,
-//   resolve carrier, and projection helpers.
+//   `easynet_directory_build_subscription_invocation`,
+//   `easynet_directory_project_*_page`,
+//   `easynet_directory_project_resolved_ref`, and
+//   `easynet_directory_project_subscription`: Directory read-model carrier,
+//   resolve carrier, subscription carrier, and projection helpers.
 // - `easynet_receipt_build_fetch_invocation`,
 //   `easynet_receipt_project`, `easynet_receipt_verify`, and
 //   `easynet_receipt_causal_ref`: Receipt fetch carrier and conservative

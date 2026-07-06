@@ -3,12 +3,13 @@
 //
 // File: src/ffi/directory/mod.rs
 // Description: C ABI DirectoryClient projection helpers for daemon SDK
-//              resolve/read-model carriers and result DTOs.
+//              resolve/read-model/subscription carriers and result DTOs.
 //
 // Protocol Responsibility
 // -----------------------
 // Expose Directory DTO construction without letting language facades own
-// daemon read-model ability names, pagination rules, or row projection logic.
+// daemon read-model ability names, pagination rules, subscription state, or row
+// projection logic.
 //
 // Implementation Approach
 // -----------------------
@@ -33,8 +34,9 @@ use crate::ffi::client::handle::EasynetHandle;
 use crate::ffi::profile_json::{project_profile_json, ProfileJsonSpec};
 use crate::protocol::directory_contract::{
     build_list_abilities_invocation, build_list_agents_invocation, build_list_devices_invocation,
-    build_resolve_invocation, project_ability_page, project_agent_page, project_device_page,
-    project_resolved_ref, DirectoryError,
+    build_resolve_invocation, build_subscription_invocation, project_ability_page,
+    project_agent_page, project_device_page, project_resolved_ref, project_subscription,
+    DirectoryError,
 };
 
 /// Build a complete Invocation JSON carrier for daemon `node.list`.
@@ -125,6 +127,28 @@ pub unsafe extern "C" fn easynet_directory_build_resolve_invocation(
     )
 }
 
+/// Build a complete Invocation JSON carrier for daemon `directory.subscribe`.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_directory_build_subscription_invocation(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_invocation_json: *mut *mut c_char,
+) -> i32 {
+    project_directory_json(
+        handle,
+        request_json,
+        out_invocation_json,
+        "easynet_directory_build_subscription_invocation",
+        "out_invocation_json",
+        "request_json",
+        build_subscription_invocation,
+    )
+}
+
 /// Project daemon `node.list` output into a Directory device page.
 ///
 /// # Safety
@@ -210,6 +234,28 @@ pub unsafe extern "C" fn easynet_directory_project_resolved_ref(
         "out_resolved_ref_json",
         "answer_json",
         project_resolved_ref,
+    )
+}
+
+/// Project daemon directory stream-open/subscription state into a stable DTO.
+///
+/// # Safety
+/// `subscription_json` must be a valid UTF-8 C string and
+/// `out_subscription_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_directory_project_subscription(
+    handle: EasynetHandle,
+    subscription_json: *const c_char,
+    out_subscription_json: *mut *mut c_char,
+) -> i32 {
+    project_directory_json(
+        handle,
+        subscription_json,
+        out_subscription_json,
+        "easynet_directory_project_subscription",
+        "out_subscription_json",
+        "subscription_json",
+        project_subscription,
     )
 }
 
@@ -351,6 +397,31 @@ mod tests {
     }
 
     #[test]
+    fn directory_build_subscription_projects_carrier() {
+        let handle = handle();
+        let raw = base_request(serde_json::json!({
+            "stream": "directory",
+            "item_kind": "ability",
+            "resume_cursor": {"stream": "directory", "sequence": 8}
+        }));
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_directory_build_subscription_invocation(handle, raw.as_ptr(), &mut out)
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["metadata"]["system_ability"], "directory.subscribe");
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.directory.subscribe@1.0.0"
+        );
+        assert_eq!(value["args"]["resume_cursor"]["token"], "directory:8");
+        release(handle);
+    }
+
+    #[test]
     fn directory_project_device_page_projects_page() {
         let handle = handle();
         let raw = CString::new(
@@ -417,6 +488,36 @@ mod tests {
         assert_eq!(value["kind"], "resolved_ref");
         assert_eq!(value["answer_kind"], "RESOLVE_ANSWER_KIND_FINAL_ROUTE");
         assert_eq!(value["metadata"]["source"], "namespace.resolve");
+        release(handle);
+    }
+
+    #[test]
+    fn directory_project_subscription_projects_runtime_open_state() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "result": {
+                    "stream_id": "404",
+                    "state": "Open",
+                    "max_buffered_events": 1024
+                },
+                "resume_cursor": {"stream": "directory", "sequence": 8}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code =
+            unsafe { easynet_directory_project_subscription(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(value["profile"], "directory_identity");
+        assert_eq!(value["kind"], "directory_subscription");
+        assert_eq!(value["state"], "Opening");
+        assert_eq!(value["cursor"]["token"], "directory:8");
+        assert_eq!(value["metadata"]["stream_ability"], "directory.subscribe");
         release(handle);
     }
 
