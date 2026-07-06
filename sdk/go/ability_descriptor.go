@@ -1,6 +1,10 @@
 package easynet
 
-import "strings"
+import (
+	"strings"
+
+	axonsdk "easynet.run/axon/sdk/go/easynet"
+)
 
 // AbilityDescriptorHints mirrors descriptor tool-annotation booleans that
 // consumers may render without parsing ability names.
@@ -24,6 +28,22 @@ type AbilityDescriptorProjection struct {
 	Hints       AbilityDescriptorHints
 	InputSchema map[string]any
 	Metadata    map[string]any
+}
+
+// AbilityDescriptorRef is the canonical descriptor identity
+// `ability_ura@version`.
+type AbilityDescriptorRef struct {
+	Raw        string
+	AbilityURA string
+	Version    string
+}
+
+func ParseAbilityDescriptorRef(raw string) (AbilityDescriptorRef, error) {
+	ref, err := axonsdk.ParseAbilityDescriptorRef(raw)
+	if err != nil {
+		return AbilityDescriptorRef{}, err
+	}
+	return AbilityDescriptorRef{Raw: ref.Raw, AbilityURA: ref.AbilityURA, Version: ref.Version}, nil
 }
 
 func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {

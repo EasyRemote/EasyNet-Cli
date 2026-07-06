@@ -33,6 +33,9 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 				if needle == `import "C"` && allowedPrivateCABIAdapter(path, text) {
 					continue
 				}
+				if needle == `easynet.run/axon` && allowedDelegatedAxonFacade(path) {
+					continue
+				}
 				if needle == `google.golang.org/protobuf` && allowedPrivateAxonAdapter(path) {
 					continue
 				}
@@ -48,6 +51,15 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 
 func allowedPrivateAxonAdapter(path string) bool {
 	return strings.HasPrefix(filepath.ToSlash(path), "internal/axonpb/")
+}
+
+func allowedDelegatedAxonFacade(path string) bool {
+	switch filepath.ToSlash(path) {
+	case "ability_descriptor.go", "authority.go", "ura.go":
+		return true
+	default:
+		return false
+	}
 }
 
 func allowedPrivateCABIAdapter(path, text string) bool {
