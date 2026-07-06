@@ -43,7 +43,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -911,20 +911,21 @@ pub struct ProxyListUserDevicesResponse {
 /// forwarded verbatim to each peer's daemon-local `namespace.resolve` surface;
 /// the proxy does not reinterpret resolver semantics.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct NamespaceProxyResolveRequest {
     #[serde(default)]
     pub peer_hub_urls: Vec<String>,
-    #[serde(default, rename = "queryName", alias = "query_name")]
+    #[serde(default, rename = "queryName")]
     pub query_name: String,
-    #[serde(default, rename = "qtype", alias = "qType")]
+    #[serde(default, rename = "qtype")]
     pub qtype: String,
-    #[serde(default, rename = "callerUra", alias = "caller_ura")]
+    #[serde(default, rename = "callerUra")]
     pub caller_ura: String,
-    #[serde(default, rename = "subjectUra", alias = "subject_ura")]
+    #[serde(default, rename = "subjectUra")]
     pub subject_ura: String,
-    #[serde(default, rename = "realmHint", alias = "realm_hint")]
+    #[serde(default, rename = "realmHint")]
     pub realm_hint: String,
-    #[serde(default, rename = "abilityName", alias = "ability_name")]
+    #[serde(default, rename = "abilityName")]
     pub ability_name: String,
 }
 
@@ -1265,9 +1266,10 @@ mod tests {
             "byte-identical input must produce byte-identical hash"
         );
         assert_eq!(a.len(), 64, "SHA-256 hex must be 64 characters");
-        assert!(a
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]
@@ -2000,8 +2002,8 @@ mod tests {
 
     // ── N3-N4 bridge: handle_discover_with_user_filter ─────────
 
-    fn populated_view_two_realms(
-    ) -> crate::daemon::federation::directory::SharedFederatedDirectoryView {
+    fn populated_view_two_realms()
+    -> crate::daemon::federation::directory::SharedFederatedDirectoryView {
         use crate::daemon::federation::directory::{
             DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
         };
