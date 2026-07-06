@@ -2,7 +2,12 @@ package easynet
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -157,6 +162,159 @@ func adminBaseForTest() AdminCarrierBase {
 		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext:     map[string]any{"form": "none"},
 		Metadata:          map[string]any{"request_id": "admin-agent-list-1"},
+	}
+}
+
+type fakeGatewayDaemon struct {
+	stopped bool
+}
+
+func (d *fakeGatewayDaemon) Stop() error {
+	d.stopped = true
+	return nil
+}
+
+func writeGatewayPEM(t *testing.T, root string) (string, string) {
+	t.Helper()
+	cert := filepath.Join(root, "cert.pem")
+	key := filepath.Join(root, "key.pem")
+	if err := os.WriteFile(cert, []byte("-----BEGIN CERTIFICATE-----\nAAECAwQFBgc=\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key, []byte("-----BEGIN PRIVATE KEY-----\nAAA=\n-----END PRIVATE KEY-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return cert, key
+}
+
+func TestGatewayLifecycleFacadeMaterializesHubConfigOnce(t *testing.T) {
+	root := t.TempDir()
+	cert, key := writeGatewayPEM(t, root)
+	var started []string
+	facade, err := NewGatewayLifecycleFacade(func(realm string) (GatewayDaemonHandle, error) {
+		started = append(started, realm)
+		return &fakeGatewayDaemon{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := facade.Start(GatewayConfig{
+		Port:        8443,
+		Realm:       `ac"me`,
+		HomeDir:     root,
+		TLSCertPath: cert,
+		TLSKeyPath:  key,
+		Hostname:    "hub.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := facade.Start(GatewayConfig{
+		Port:        9443,
+		Realm:       "ignored",
+		HomeDir:     root,
+		TLSCertPath: cert,
+		TLSKeyPath:  key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(root, "daemon-config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(configBytes)
+	if runtime != second {
+		t.Fatal("start while running must return the same runtime")
+	}
+	if len(started) != 1 || started[0] != `ac"me` {
+		t.Fatalf("started realms = %#v", started)
+	}
+	if facade.State() != GatewayLifecycleRunning {
+		t.Fatalf("state = %s", facade.State())
+	}
+	for _, want := range []string{
+		`realm = "ac\"me"`,
+		`listen_tcp = "0.0.0.0:8443"`,
+		`tls_cert_pem = "` + cert + `"`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("config missing %q:\n%s", want, config)
+		}
+	}
+	if runtime.Endpoint != "hub.example:8443" {
+		t.Fatalf("endpoint = %q", runtime.Endpoint)
+	}
+	expected := sha256.Sum256([]byte{0, 1, 2, 3, 4, 5, 6, 7})
+	if strings.ReplaceAll(runtime.Fingerprint, ":", "") != strings.ToUpper(hex.EncodeToString(expected[:])) {
+		t.Fatalf("fingerprint = %q", runtime.Fingerprint)
+	}
+}
+
+func TestGatewayLifecycleFacadePreservesOperatorConfig(t *testing.T) {
+	root := t.TempDir()
+	cert, key := writeGatewayPEM(t, root)
+	configPath := filepath.Join(root, "daemon-config.toml")
+	if err := os.WriteFile(configPath, []byte("# operator-authored\n[daemon]\nmode = \"hub\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	facade, err := NewGatewayLifecycleFacade(func(string) (GatewayDaemonHandle, error) {
+		return &fakeGatewayDaemon{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := facade.Start(GatewayConfig{Port: 8443, Realm: "acme", HomeDir: root, TLSCertPath: cert, TLSKeyPath: key}); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(content), "# operator-authored") {
+		t.Fatalf("operator config was overwritten:\n%s", content)
+	}
+}
+
+func TestGatewayLifecycleFacadeStopsDaemonAndValidatesTLS(t *testing.T) {
+	root := t.TempDir()
+	cert, key := writeGatewayPEM(t, root)
+	daemon := &fakeGatewayDaemon{}
+	facade, err := NewGatewayLifecycleFacade(func(string) (GatewayDaemonHandle, error) {
+		return daemon, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := facade.Start(GatewayConfig{Port: 8443, Realm: "acme", HomeDir: root, TLSCertPath: cert, TLSKeyPath: key}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := facade.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !daemon.stopped {
+		t.Fatal("daemon was not stopped")
+	}
+	if facade.State() != GatewayLifecycleIdle {
+		t.Fatalf("state = %s", facade.State())
+	}
+	_, err = facade.Start(GatewayConfig{Port: 8443, Realm: "acme", HomeDir: root, TLSCertPath: filepath.Join(root, "missing.pem"), TLSKeyPath: key})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing TLS cert error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestCertificateFingerprintRejectsNonPEM(t *testing.T) {
+	cert := filepath.Join(t.TempDir(), "bad.pem")
+	if err := os.WriteFile(cert, []byte("not pem"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CertificateFingerprint(cert); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("CertificateFingerprint error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

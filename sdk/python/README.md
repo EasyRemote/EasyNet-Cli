@@ -126,7 +126,8 @@ dispatch/projection glue for gateway status, hub join/leave, pairing
 preflight/create/validate, credential verification, device-session
 create/list/delete, and device revoke, and SDK-owned `GatewayLifecycleFacade`
 hub-config materialization, lifecycle state, TLS file validation, endpoint
-projection, and certificate fingerprint projection.
+projection, and certificate fingerprint projection exported from the package
+root for product consumers.
 EventClient exposes directory/device/session/invocation subscription
 Invocation carriers, C ABI-backed directory/device/session/invocation
 subscription execution through Runtime Core open_stream, C ABI-backed bounded
@@ -162,5 +163,5 @@ backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
 multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
 profile-specific stream execution adapters, daemon-backed MissionPlan child
 Invocation execution behavior, and daemon/ABI-backed Server pairing/hub lifecycle
-product cutover remain incomplete. See
+live product smokes remain incomplete. See
 `../SDK_PARITY.md` before claiming package stability.

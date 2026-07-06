@@ -67,16 +67,17 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   responsibilities. Go and Python now have optional C ABI authority transports
   that sign prepared bytes through explicit external signers and materialize
   metadata through C ABI. Signing, verification, and trust-anchor admission
-  remain daemon/Axon-owned; backend source cutover remains incomplete.
+  remain daemon/Axon-owned; backend product trust policy and live route smokes
+  remain outside this SDK parity gate.
 - Backend SDK-only import-ban enforcement now has a shared `backend/import_ban`
   conformance case and executable scanner gate; the sibling EasyNet backend
-  still reports raw Axon, generated Axon protobuf, and direct daemon transport
-  violations before cutover can be claimed.
+  now passes the SDK-only boundary gate, so raw Axon, generated Axon protobuf,
+  and direct daemon transport regressions are blocked by the aggregate readiness
+  gate.
 - Backend Hub route-family coverage now has a shared
   `backend/hub_route_family_coverage` conformance case, a SPEC 29.2 manifest,
-  and an executable validator gate for all 14 Hub route families; real backend
-  route source cutover and per-family smokes remain incomplete before cutover
-  can be claimed.
+  and an executable validator gate for all 14 Hub route families; per-family
+  live route smokes remain product-owned evidence outside the SDK parity matrix.
 - Receipt fetch carrier, projection, causal-ref guardrails,
   single-receipt and cross-invocation chain Axon signature verification over
   full audit-bundle receipts, and invocation-history list/get/trace carrier
@@ -178,15 +179,16 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   unary/server-stream/bidi transport, plus `RuntimeProfileBundle` factories for Runtime Core-backed
   profile clients with stable per-profile error source refs; direct Go daemon
   UDS endpoint discovery exists, while remaining profile conformance action
-  execution and backend source cutover violations remain incomplete before backend cutover.
+  execution and backend live-smoke evidence remain incomplete before a full
+  backend product cutover claim.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, Runtime Core-backed directory
   subscription streams, directory subscription state seams, and close state
   seams plus `IdentityClient` descriptor, identity, Axon-delegated
   URA/DescriptorRef helper seams, ResourceRef, signing-key lifecycle,
-  signer-handle projection, signer workflow acquisition, and close state seams; signing-key live execution
-  adapters, concrete daemon carriers, and backend route cutover remain
-  incomplete.
+  signer-handle projection, signer workflow acquisition, and close state seams;
+  signing-key live execution adapters, concrete daemon carriers, and backend
+  live route smokes remain incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   invocation-history list/get/trace read-model methods, optional C ABI v4
@@ -227,9 +229,12 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   plus
   `GatewayStatus`, `AdminAgentPage`, lifecycle-result, pairing token, device
   credential, credential verification, typed device-session projection seams,
-  C ABI-backed device-admin/session result projection, and close state seams;
-  certificate policy, backend trust policy persistence, and backend route cutover
-  remain incomplete.
+  C ABI-backed device-admin/session result projection, close state seams, and
+  an SDK-owned `GatewayLifecycleFacade` for hub-config materialization,
+  explicit lifecycle state, TLS file validation, endpoint projection,
+  certificate fingerprint projection, and daemon-handle stop mechanics;
+  certificate policy, backend trust policy persistence, and backend live route
+  smokes remain incomplete.
 - Go Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, with session subscriptions requiring
   explicit daemon `session_id` rather than product `session_ura`, Runtime
@@ -296,12 +301,13 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   authority metadata projections with mutually-exclusive InvocationBuilder
   attachment guardrails, provider-backed `AuthorityClient` minting facades and C ABI
   authority transport over runtime-core signing-material/materialization helpers, stable
-  per-profile error source refs; private C ABI v4 profile carrier/projection bridges for
-  Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
-  Surface, Compatibility, and Wrapper carriers/records; direct daemon
-  prepare/submit adapters, live profile execution adapters, remaining EasyRemote repository extraction,
-  and remaining profile conformance action execution remain incomplete before
-  EasyRemote cutover.
+  per-profile error source refs; private C ABI v4 profile carrier/projection
+  bridges for Receipt, Directory, Publication, Host Binding, Mission,
+  Admin + Gateway, Events, Surface, Compatibility, and Wrapper carriers/records;
+  EasyRemote repository extraction and boundary gates now pass through the
+  aggregate readiness gate, while live profile execution adapters and remaining
+  profile conformance action execution remain incomplete before a full product
+  stability claim.
 - Python Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, list/resolve Invocation carrier
   builders, Directory projection helpers, C ABI-backed directory subscription
@@ -322,7 +328,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   daemon key inventory plus a Python `Ed25519SignatureProvider` for local
   signatures over daemon/Axon-provided canonical signing material; Python now
   also exposes directory buffered-event/drop projection state-machine helpers,
-  while actual EasyRemote repository extraction remains incomplete.
+  and the EasyRemote repository boundary gate now passes.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
   projection, `invocation.history.get` fetch Invocation carrier construction,
   invocation-history list/get/trace read-model methods,
