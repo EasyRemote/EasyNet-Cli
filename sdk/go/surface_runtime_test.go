@@ -56,7 +56,8 @@ func TestSurfaceRuntimeTransportBuildsInvocationThroughIdentity(t *testing.T) {
 }
 
 func TestSurfaceRuntimeTransportInvokesAndProjectsRawPagesOutput(t *testing.T) {
-	identity, err := NewIdentityClient(newSurfaceRuntimeIdentityTransport())
+	identityTransport := newSurfaceRuntimeIdentityTransport()
+	identity, err := NewIdentityClient(identityTransport)
 	if err != nil {
 		t.Fatalf("NewIdentityClient: %v", err)
 	}
@@ -72,20 +73,31 @@ func TestSurfaceRuntimeTransportInvokesAndProjectsRawPagesOutput(t *testing.T) {
 
 	page, err := client.ListPages(context.Background(), SurfaceListPagesRequest{
 		SurfaceCarrierBase: surfaceBaseForTest(),
-		Limit:              1,
+		Limit:              2,
 	})
 	if err != nil {
 		t.Fatalf("ListPages: %v", err)
 	}
-	if len(page.Items) != 1 || page.Items[0].PageID != "docs" {
+	if len(page.Items) != 2 || page.Items[0].PageID != "docs" || page.Items[1].PageID != "blog" {
 		t.Fatalf("unexpected projected page: %#v", page)
 	}
 	if page.Items[0].OwnerURA != "easynet:///r/example/agent/alice.pages" ||
 		page.Items[0].SurfaceRef != "easynet:///r/example/resource/alice.docs" {
 		t.Fatalf("owner/surface refs not projected: %#v", page.Items[0])
 	}
-	if page.NextCursor == nil || *page.NextCursor != "1" {
-		t.Fatalf("next cursor = %#v, want 1", page.NextCursor)
+	if page.Items[1].OwnerURA != "easynet:///r/example/agent/alice.pages" ||
+		page.Items[1].SurfaceRef != "easynet:///r/example/resource/agent.alice.pages/blog" {
+		t.Fatalf("missing surface_ref was not projected through identity: %#v", page.Items[1])
+	}
+	if page.NextCursor != nil {
+		t.Fatalf("next cursor = %#v, want nil", page.NextCursor)
+	}
+	if len(identityTransport.seenBuildURA) != 2 ||
+		identityTransport.seenBuildURA[0]["ability_name"] != surfaceAbilityListPages ||
+		identityTransport.seenBuildURA[1]["kind"] != "resource" ||
+		identityTransport.seenBuildURA[1]["owner_ura"] != "easynet:///r/example/agent/alice.pages" ||
+		identityTransport.seenBuildURA[1]["path"] != "blog" {
+		t.Fatalf("missing surface_ref did not delegate to identity BuildURA: %#v", identityTransport.seenBuildURA)
 	}
 	args := runtimeTransport.seenDraft["args"].(map[string]any)
 	if len(args) != 0 {
@@ -194,6 +206,9 @@ func newSurfaceRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport
 			"easynet:///r/example/ability/alice.pages.pages.unpublish": "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0",
 			"easynet:///r/example/ability/alice.pages.pages.get":       "easynet:///r/example/ability/alice.pages.pages.get@1.0.0",
 			"easynet:///r/example/ability/alice.pages.pages.health":    "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+		},
+		resourceByOwnerPath: map[string]string{
+			"easynet:///r/example/agent/alice.pages\nblog": "easynet:///r/example/resource/agent.alice.pages/blog",
 		},
 		descriptorProjection: identityDescriptorProjectionJSON,
 	}

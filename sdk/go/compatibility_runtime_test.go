@@ -12,6 +12,7 @@ type compatibilityRuntimeIdentityTransport struct {
 	seenBuildURA         []map[string]any
 	seenBuildDescriptor  []map[string]any
 	abilityByName        map[string]string
+	resourceByOwnerPath  map[string]string
 	descriptorByAbility  map[string]string
 	descriptorProjection string
 }
@@ -52,6 +53,20 @@ func (t *compatibilityRuntimeIdentityTransport) BuildURA(ctx context.Context, re
 		return nil, err
 	}
 	t.seenBuildURA = append(t.seenBuildURA, requestMapForTest(requestJSON))
+	if req.Kind == "resource" {
+		resourceURA := t.resourceByOwnerPath[req.OwnerURA+"\n"+req.Path]
+		if resourceURA == "" {
+			return nil, fmt.Errorf("unexpected resource owner/path: %s %s", req.OwnerURA, req.Path)
+		}
+		return []byte(fmt.Sprintf(`{
+			"kind":"resource",
+			"valid":true,
+			"ura":%q,
+			"profile":"easynet-strict-v2",
+			"components":{"owner_ura":%q,"path":%q},
+			"metadata":{"grammar_owner":"axon"}
+		}`, resourceURA, req.OwnerURA, req.Path)), nil
+	}
 	abilityURA := t.abilityByName[req.AbilityName]
 	if abilityURA == "" {
 		return nil, fmt.Errorf("unexpected ability name: %s", req.AbilityName)

@@ -90,8 +90,9 @@ func (t *SurfaceRuntimeTransport) ListPages(ctx context.Context, requestJSON []b
 		return nil, err
 	}
 	return projectSurfacePagePage(output, surfaceProjectionHints{
+		Context:        ctx,
+		Identity:       t.identity,
 		OwnerURA:       request.CalleeURA,
-		Realm:          realmFromURA(request.CalleeURA),
 		Limit:          normalizedSurfaceLimit(request.Limit),
 		Cursor:         request.Cursor,
 		SelectedNodeID: result.SelectedNodeID(),
@@ -108,8 +109,9 @@ func (t *SurfaceRuntimeTransport) CreatePage(ctx context.Context, requestJSON []
 		return nil, err
 	}
 	return projectSurfacePageRecord(output, surfaceProjectionHints{
+		Context:        ctx,
+		Identity:       t.identity,
 		OwnerURA:       request.CalleeURA,
-		Realm:          realmFromURA(request.CalleeURA),
 		SelectedNodeID: result.SelectedNodeID(),
 	})
 }
@@ -136,8 +138,9 @@ func (t *SurfaceRuntimeTransport) SurfaceManifest(ctx context.Context, requestJS
 		return nil, err
 	}
 	return projectSurfaceManifest(output, surfaceProjectionHints{
+		Context:        ctx,
+		Identity:       t.identity,
 		OwnerURA:       request.CalleeURA,
-		Realm:          realmFromURA(request.CalleeURA),
 		SelectedNodeID: result.SelectedNodeID(),
 	})
 }
@@ -155,7 +158,11 @@ func (t *SurfaceRuntimeTransport) SurfaceHealth(ctx context.Context, requestJSON
 	if err != nil {
 		return nil, err
 	}
-	return projectSurfaceHealth(output, request.SurfaceCarrierBase, draft.DescriptorRef())
+	return projectSurfaceHealth(output, request.SurfaceCarrierBase, draft.DescriptorRef(), surfaceProjectionHints{
+		Context:  ctx,
+		Identity: t.identity,
+		OwnerURA: request.CalleeURA,
+	})
 }
 
 func (t *SurfaceRuntimeTransport) Close(context.Context) error {
@@ -359,8 +366,9 @@ func surfaceInvocationFailureError(result InvocationResult) error {
 }
 
 type surfaceProjectionHints struct {
+	Context        context.Context
+	Identity       *IdentityClient
 	OwnerURA       string
-	Realm          string
 	Limit          int
 	Cursor         string
 	SelectedNodeID string
@@ -438,23 +446,20 @@ func projectSurfacePageRecord(raw []byte, hints surfaceProjectionHints) ([]byte,
 	if err := validateSurfaceProjectID(pageID); err != nil {
 		return nil, err
 	}
-	user := firstSurfaceString(payload, "user")
-	surfaceRef := firstSurfaceString(payload, "surface_ref", "project_ura", "resource_ura")
-	if surfaceRef == "" && user != "" && hints.Realm != "" {
-		surfaceRef = fmt.Sprintf("easynet:///r/%s/resource/%s.%s", hints.Realm, user, pageID)
-	}
-	if surfaceRef == "" {
-		return nil, invalidProfilePayload(surfaceProfile, "surface_ref is required", nil)
-	}
 	ownerURA := firstSurfaceString(payload, "owner_ura")
 	if ownerURA == "" {
 		ownerURA = hints.OwnerURA
 	}
-	if ownerURA == "" && user != "" {
-		realm := realmFromURA(surfaceRef)
-		if realm != "" {
-			ownerURA = fmt.Sprintf("easynet:///r/%s/agent/%s.pages", realm, user)
+	surfaceRef := firstSurfaceString(payload, "surface_ref", "project_ura", "resource_ura")
+	if surfaceRef == "" && ownerURA != "" && hints.Context != nil && hints.Identity != nil {
+		builtRef, err := hints.Identity.ResourceURA(hints.Context, ownerURA, pageID)
+		if err != nil {
+			return nil, err
 		}
+		surfaceRef = builtRef
+	}
+	if surfaceRef == "" {
+		return nil, invalidProfilePayload(surfaceProfile, "surface_ref is required", nil)
 	}
 	if ownerURA == "" {
 		return nil, invalidProfilePayload(surfaceProfile, "owner_ura is required", nil)
@@ -580,7 +585,7 @@ func projectSurfaceMutationResult(raw []byte) ([]byte, error) {
 	})
 }
 
-func projectSurfaceHealth(raw []byte, base SurfaceCarrierBase, invocationDescriptorRef string) ([]byte, error) {
+func projectSurfaceHealth(raw []byte, base SurfaceCarrierBase, invocationDescriptorRef string, hints surfaceProjectionHints) ([]byte, error) {
 	payload, err := surfaceOutputObject(raw)
 	if err != nil {
 		return nil, err
@@ -595,7 +600,8 @@ func projectSurfaceHealth(raw []byte, base SurfaceCarrierBase, invocationDescrip
 	ownerURA := firstNonEmpty(firstSurfaceString(result, "owner_ura"), firstSurfaceString(payload, "owner_ura"), base.CalleeURA)
 	surfaceRef := firstNonEmpty(firstSurfaceString(result, "surface_ref", "project_ura", "resource_ura"), firstSurfaceString(payload, "surface_ref", "project_ura", "resource_ura"))
 	if surfaceRef == "" {
-		if recordRaw, err := projectSurfacePageRecord(raw, surfaceProjectionHints{OwnerURA: ownerURA, Realm: realmFromURA(ownerURA)}); err == nil {
+		hints.OwnerURA = ownerURA
+		if recordRaw, err := projectSurfacePageRecord(raw, hints); err == nil {
 			record, recordErr := NewSurfacePageRecordFromJSON(recordRaw)
 			if recordErr == nil {
 				surfaceRef = record.SurfaceRef
@@ -713,19 +719,6 @@ func firstSurfaceString(values map[string]any, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func realmFromURA(value string) string {
-	const marker = "easynet:///r/"
-	if !strings.HasPrefix(value, marker) {
-		return ""
-	}
-	rest := strings.TrimPrefix(value, marker)
-	realm, _, ok := strings.Cut(rest, "/")
-	if !ok {
-		return ""
-	}
-	return realm
 }
 
 func validateSurfacePublicRef(value string) error {
