@@ -634,7 +634,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 values.append(item.value)
 
         self.assertEqual(values, [0, 1])
-        self.assertTrue(is_code(caught.exception, ErrorCode.ADMISSION_DENIED))
+        self.assertEqual(caught.exception.code, ErrorCode.ABILITY_FAILED)
         self.assertEqual(caught.exception.details["reason"], "function_raised")
 
     def test_stream_adapter_preserves_error_shaped_user_data(self) -> None:
