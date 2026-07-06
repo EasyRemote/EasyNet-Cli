@@ -142,7 +142,7 @@ func TestReceiptRuntimeTransportDelegatesReceiptProjectionsToProvider(t *testing
 		},
 		CausalRefFunc: func(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 			seen["causal"] = string(receiptJSON)
-			return []byte(`{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`), nil
+			return []byte(`{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`), nil
 		},
 	}
 	client, err := NewRuntimeReceiptClientWithProjectionProvider(runtime, identity, provider)

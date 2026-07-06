@@ -237,7 +237,7 @@ int32_t easynet_receipt_verify_chain(uint64_t handle, const char *request_json, 
 }
 int32_t easynet_receipt_causal_ref(uint64_t handle, const char *receipt_json, char **out_causal_ref_json) {
 	(void)handle; (void)receipt_json;
-	*out_causal_ref_json = dup_json("{\"causal_ref\":\"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"receipt_ura\":\"easynet:///r/example/receipt/receipt-1\",\"invocation_id\":null,\"form\":\"receipt_ref\",\"metadata\":{}}");
+	*out_causal_ref_json = dup_json("{\"causal_ref\":\"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"receipt_ura\":\"easynet:///r/example/receipt/receipt-1\",\"receipt_hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"causal_context\":{\"form\":\"receipt_ref\",\"receipt_ura\":\"easynet:///r/example/receipt/receipt-1\",\"receipt_hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"invocation_id\":null,\"form\":\"receipt_ref\",\"metadata\":{}}");
 	return 0;
 }
 `

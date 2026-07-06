@@ -109,11 +109,19 @@ type ReceiptChainVerification struct {
 
 // CausalRef is a daemon/Axon-returned causal reference for child invocations.
 type CausalRef struct {
-	CausalRef    string         `json:"causal_ref"`
-	ReceiptURA   *string        `json:"receipt_ura"`
-	InvocationID *string        `json:"invocation_id"`
-	Form         string         `json:"form,omitempty"`
-	Metadata     map[string]any `json:"metadata"`
+	CausalRef      string         `json:"causal_ref"`
+	ReceiptURA     *string        `json:"receipt_ura"`
+	ReceiptHashHex string         `json:"receipt_hash_hex"`
+	CausalContext  map[string]any `json:"causal_context"`
+	InvocationID   *string        `json:"invocation_id"`
+	Verified       bool           `json:"verified"`
+	Form           string         `json:"form,omitempty"`
+	Metadata       map[string]any `json:"metadata"`
+}
+
+// ToCausalContext returns the child-Invocation causal_context projection.
+func (r CausalRef) ToCausalContext() map[string]any {
+	return copyMap(r.CausalContext)
 }
 
 // ReceiptTransport supplies receipt operations behind the SDK facade.
@@ -541,12 +549,27 @@ func NewCausalRefFromJSON(raw []byte) (CausalRef, error) {
 	if err := json.Unmarshal(raw, &ref); err != nil {
 		return CausalRef{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode causal ref JSON: %v", err), err)
 	}
-	if ref.CausalRef == "" {
-		return CausalRef{}, invalidProfilePayload(receiptProfile, "causal_ref is required", nil)
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return CausalRef{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode causal ref JSON: %v", err), err)
+	}
+	causalContext, err := causalContextFromReceiptProjection(obj)
+	if err != nil {
+		return CausalRef{}, err
+	}
+	receiptURA, _ := receiptStringField(causalContext, "receipt_ura")
+	receiptHash, _ := receiptHashField(causalContext)
+	form, _ := receiptStringField(causalContext, "form")
+	if form == "" {
+		form = "scalar"
 	}
 	if ref.Metadata == nil {
 		ref.Metadata = map[string]any{}
 	}
+	ref.ReceiptURA = &receiptURA
+	ref.ReceiptHashHex = receiptHash
+	ref.CausalContext = causalContext
+	ref.Form = form
 	return ref, nil
 }
 
@@ -643,6 +666,55 @@ func validateReceiptChainVerificationRequest(req ReceiptChainVerificationRequest
 		}
 	}
 	return nil
+}
+
+func causalContextFromReceiptProjection(obj map[string]any) (map[string]any, error) {
+	context := map[string]any{}
+	hasContext := false
+	if rawContext, ok := obj["causal_context"]; ok && rawContext != nil {
+		hasContext = true
+		decoded, ok := rawContext.(map[string]any)
+		if !ok {
+			return nil, invalidProfilePayload(receiptProfile, "causal_context must be an object", nil)
+		}
+		for key, value := range decoded {
+			context[key] = value
+		}
+		if form, ok := receiptStringField(context, "form"); !ok || form == "" {
+			return nil, invalidProfilePayload(receiptProfile, "causal_context.form is required", nil)
+		}
+	} else {
+		receiptURA, ok := receiptStringField(obj, "receipt_ura")
+		if !ok {
+			return nil, invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
+		}
+		form, _ := receiptStringField(obj, "form")
+		if form == "" {
+			form = "scalar"
+		}
+		context["form"] = form
+		context["receipt_ura"] = receiptURA
+	}
+	receiptURA, ok := receiptStringField(context, "receipt_ura")
+	if !ok {
+		return nil, invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
+	}
+	receiptHash, ok := receiptHashField(context)
+	if !ok && !hasContext {
+		receiptHash, ok = receiptHashField(obj)
+		if ok {
+			context["receipt_hash_hex"] = receiptHash
+		}
+	}
+	if !ok {
+		return nil, invalidProfilePayload(receiptProfile, "receipt_hash_hex is required", nil)
+	}
+	if _, err := hex.DecodeString(receiptHash); err != nil || len(receiptHash) != 64 {
+		return nil, invalidProfilePayload(receiptProfile, "receipt hash must decode to exactly 32 bytes", err)
+	}
+	context["receipt_ura"] = receiptURA
+	context["receipt_hash_hex"] = receiptHash
+	return context, nil
 }
 
 func receiptStringField(obj map[string]any, key string) (string, bool) {

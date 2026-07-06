@@ -267,7 +267,7 @@ func TestReceiptVerifyAndCausalRefDecodeDaemonProjections(t *testing.T) {
 	receiptURA := "easynet:///r/example/receipt/receipt-1"
 	transport := &memoryReceiptTransport{
 		verifyJSON:    `{"verified":true,"receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","method":"axon-full-receipt","metadata":{"source":"axon"}}`,
-		causalRefJSON: `{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
+		causalRefJSON: `{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -288,6 +288,17 @@ func TestReceiptVerifyAndCausalRefDecodeDaemonProjections(t *testing.T) {
 	}
 	if causal.CausalRef == "" || causal.Form != "scalar" {
 		t.Fatalf("unexpected causal ref: %#v", causal)
+	}
+	if causal.ReceiptHashHex != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("causal receipt hash = %q", causal.ReceiptHashHex)
+	}
+	if causal.CausalContext["receipt_hash_hex"] != causal.ReceiptHashHex {
+		t.Fatalf("causal context missing hash: %#v", causal.CausalContext)
+	}
+	context := causal.ToCausalContext()
+	context["receipt_hash_hex"] = "mutated"
+	if causal.CausalContext["receipt_hash_hex"] != causal.ReceiptHashHex {
+		t.Fatalf("ToCausalContext leaked mutable context: %#v", causal.CausalContext)
 	}
 }
 
@@ -357,6 +368,20 @@ func TestReceiptCausalRefRejectsEmptyProjection(t *testing.T) {
 
 	if _, err := client.CausalRef(context.Background(), []byte(`{"receipt":true}`)); err == nil {
 		t.Fatalf("CausalRef accepted empty projection")
+	}
+}
+
+func TestReceiptCausalRefRejectsProjectionWithoutReceiptHash(t *testing.T) {
+	_, err := NewCausalRefFromJSON([]byte(`{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","receipt_ura":"easynet:///r/example/receipt/receipt-1","form":"scalar","metadata":{}}`))
+	if err == nil {
+		t.Fatalf("CausalRef accepted projection without receipt hash")
+	}
+}
+
+func TestReceiptCausalRefRejectsContextWithoutReceiptHash(t *testing.T) {
+	_, err := NewCausalRefFromJSON([]byte(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/receipt/receipt-1"},"metadata":{}}`))
+	if err == nil {
+		t.Fatalf("CausalRef accepted causal_context without receipt hash")
 	}
 }
 
