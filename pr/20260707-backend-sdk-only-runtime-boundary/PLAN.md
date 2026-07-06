@@ -30,12 +30,24 @@ bytes, and bidi protocol frame mapping.
    call sites first.
 2. Move protocol-shaped conversions behind SDK-owned DTOs or delete them when a
    public SDK profile already exists.
-3. Keep temporary states explicit as `Seam` or `Provider-backed`; do not label
+3. Add a generic Go native Runtime provider seam over the Rust/C ABI core so
+   downstream users do not import C ABI names, generated Axon proto, or
+   backend-local daemon transports.
+4. Keep temporary states explicit as `Seam` or `Provider-backed`; do not label
    backend cutover-ready until the static boundary checker passes.
+
+## Capability State
+
+- Go Runtime Core logical model: Provider-backed.
+- Go direct gRPC provider: Seam only, build-tagged for protocol-reference and
+  migration tests; not a default backend dependency.
+- Go native Runtime provider over Rust/C ABI core: Provider-backed when built
+  with `easynet_cabi`; explicitly Unsupported otherwise.
 
 ## Verification
 
 - `go test ./...` in `EasyNet-Cli/sdk/go`.
+- `go test -tags=easynet_cabi ./...` in `EasyNet-Cli/sdk/go`.
 - Focused backend package tests for touched route/profile family.
 - `tools/scripts/check-backend-sdk-only-boundary.sh ../EasyNet/backend`.
 - Backend `go test ./...` when the slice touches shared service wiring.
