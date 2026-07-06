@@ -212,6 +212,56 @@ class AbilityDeployResult:
 
 
 @dataclass(frozen=True)
+class AbilityDescriptorHints:
+    """Tool-annotation booleans projected from an advertised AbilityDescriptor."""
+
+    read_only: bool = False
+    destructive: bool = False
+    idempotent: bool = False
+    streaming_only: bool = False
+    bidi_only: bool = False
+
+
+@dataclass(frozen=True)
+class AbilityDescriptorProjection:
+    """Generic SDK projection of an advertised AbilityDescriptor."""
+
+    ability_ura: str = ""
+    name: str = ""
+    owner_ura: str = ""
+    source: str = ""
+    description: str = ""
+    hints: AbilityDescriptorHints = field(default_factory=AbilityDescriptorHints)
+    input_schema: Mapping[str, object] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorProjection:
+    """Project a bare or resolver-wrapped AbilityDescriptor map."""
+
+    values = _merge_ability_descriptor_mapping(raw)
+    hints = _ability_descriptor_hints(_optional_descriptor_mapping(values.get("hints")))
+    schema = _optional_descriptor_mapping(values.get("schema_summary"))
+    input_schema = _optional_descriptor_mapping(schema.get("input")) if schema else {}
+    name = _descriptor_string(values.get("name"))
+    if not name:
+        name = _join_ability_descriptor_name(
+            _descriptor_string(values.get("namespace")),
+            _descriptor_string(values.get("local_name")),
+        )
+    return AbilityDescriptorProjection(
+        ability_ura=_descriptor_string(values.get("ability_ura")),
+        name=name,
+        owner_ura=_descriptor_string(values.get("owner_ura")),
+        source=_descriptor_string(values.get("source")),
+        description=_descriptor_string(values.get("description")),
+        hints=hints,
+        input_schema=input_schema,
+        metadata=_optional_descriptor_mapping(values.get("metadata")),
+    )
+
+
+@dataclass(frozen=True)
 class AbilityImplID:
     """One executable binding for enable/disable operations."""
 
@@ -1596,6 +1646,49 @@ def _required_mapping(decoded: Mapping[str, object], field_name: str) -> Mapping
     if not isinstance(value, dict):
         raise _invalid_publication(f"{field_name} must be an object")
     return dict(value)
+
+
+def _merge_ability_descriptor_mapping(raw: Mapping[str, object]) -> dict[str, object]:
+    nested = _optional_descriptor_mapping(raw.get("descriptor"))
+    if not nested:
+        return dict(raw)
+    merged = dict(nested)
+    for key, value in raw.items():
+        if key != "descriptor":
+            merged[key] = value
+    return merged
+
+
+def _ability_descriptor_hints(values: Mapping[str, object]) -> AbilityDescriptorHints:
+    return AbilityDescriptorHints(
+        read_only=_descriptor_bool(values.get("read_only")),
+        destructive=_descriptor_bool(values.get("destructive")),
+        idempotent=_descriptor_bool(values.get("idempotent")),
+        streaming_only=_descriptor_bool(values.get("streaming_only")),
+        bidi_only=_descriptor_bool(values.get("bidi_only")),
+    )
+
+
+def _join_ability_descriptor_name(namespace: str, local_name: str) -> str:
+    namespace = namespace.strip()
+    local_name = local_name.strip()
+    if not namespace:
+        return local_name
+    if not local_name:
+        return namespace
+    return f"{namespace}.{local_name}"
+
+
+def _descriptor_string(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _descriptor_bool(value: object) -> bool:
+    return value if isinstance(value, bool) else False
+
+
+def _optional_descriptor_mapping(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _invalid_publication(

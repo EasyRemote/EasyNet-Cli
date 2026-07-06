@@ -331,6 +331,8 @@ from .receipt import (
 from .publication import (
     AbilityDeployRequest,
     AbilityDeployResult,
+    AbilityDescriptorHints,
+    AbilityDescriptorProjection,
     AbilityInstallProjection,
     PublicationHostAdapter,
     PublicationCatalogFacade,
@@ -352,6 +354,7 @@ from .publication import (
     RuntimePublicationTransport,
     UnpublishAbilityRequest,
     ValidatePackageOptions,
+    project_ability_descriptor,
 )
 from .signing import (
     Ed25519SignatureProvider,

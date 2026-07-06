@@ -5,6 +5,7 @@ from pathlib import Path
 
 from easynet_sdk import (
     AbilityDeployRequest,
+    AbilityDescriptorProjection,
     AbilityImplID,
     AbilityImplLifecycleRequest,
     PublicationHostAdapter,
@@ -20,6 +21,7 @@ from easynet_sdk import (
     SDKError,
     UnpublishAbilityRequest,
     is_code,
+    project_ability_descriptor,
 )
 
 from test_runtime import MemoryRuntimeTransport
@@ -118,6 +120,60 @@ SHOW_INVOCATION_JSON = b"""{
     "carrier_owner": "daemon_sdk"
   }
 }"""
+
+
+class AbilityDescriptorProjectionTests(unittest.TestCase):
+    def test_project_ability_descriptor_merges_nested_descriptor(self) -> None:
+        projection = project_ability_descriptor(
+            {
+                "descriptor": {
+                    "name": "skill.list",
+                    "owner_ura": "easynet:///r/localhost/device/node-a",
+                    "ability_ura": "easynet:///r/localhost/ability/device.node-a.skill.list",
+                    "metadata": {
+                        "tool_name": "skill.list",
+                        "host_node_id": "node-a",
+                    },
+                },
+                "name": "agent.list",
+            }
+        )
+
+        self.assertIsInstance(projection, AbilityDescriptorProjection)
+        self.assertEqual(projection.name, "agent.list")
+        self.assertEqual(projection.owner_ura, "easynet:///r/localhost/device/node-a")
+        self.assertEqual(
+            projection.ability_ura,
+            "easynet:///r/localhost/ability/device.node-a.skill.list",
+        )
+        self.assertEqual(projection.metadata["host_node_id"], "node-a")
+
+    def test_project_ability_descriptor_reads_summary_hints_and_schema(self) -> None:
+        projection = project_ability_descriptor(
+            {
+                "ability_ura": "easynet:///r/localhost/ability/device.node-a.agent.list",
+                "owner_ura": "easynet:///r/localhost/device/node-a",
+                "namespace": "agent",
+                "local_name": "list",
+                "description": "List agents",
+                "hints": {
+                    "read_only": True,
+                    "destructive": False,
+                    "idempotent": True,
+                    "streaming_only": True,
+                    "bidi_only": True,
+                },
+                "schema_summary": {"input": {"type": "object"}},
+            }
+        )
+
+        self.assertEqual(projection.name, "agent.list")
+        self.assertTrue(projection.hints.read_only)
+        self.assertTrue(projection.hints.idempotent)
+        self.assertTrue(projection.hints.streaming_only)
+        self.assertTrue(projection.hints.bidi_only)
+        self.assertFalse(projection.hints.destructive)
+        self.assertEqual(projection.input_schema["type"], "object")
 
 UNPUBLISH_INVOCATION_JSON = b"""{
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
