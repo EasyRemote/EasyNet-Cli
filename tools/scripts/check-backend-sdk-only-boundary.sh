@@ -50,10 +50,14 @@ package daemon_grpc
 
 type Client struct{}
 EOF
+  cat >>"$tmp/backend/go.mod" <<'EOF'
+require easynet.run/axon/sdk/go v0.0.0
+EOF
   if "$0" "$tmp/backend" >/tmp/backend-sdk-only-boundary-self-test.out 2>&1; then
     echo "self-test expected forbidden backend fixture to fail" >&2
     exit 1
   fi
+  grep -Fq "raw_axon_module_dependency" /tmp/backend-sdk-only-boundary-self-test.out
   grep -Fq "raw_axon_import" /tmp/backend-sdk-only-boundary-self-test.out
   grep -Fq "generated_axon_pb_import" /tmp/backend-sdk-only-boundary-self-test.out
   grep -Fq "generated_axon_pb_package" /tmp/backend-sdk-only-boundary-self-test.out
@@ -249,6 +253,33 @@ def go_code_without_comments(text: str) -> str:
         index += 1
     return "".join(output)
 
+
+def scan_go_mod(path: Path) -> None:
+    in_require_block = False
+    for index, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        if in_require_block:
+            if stripped == ")":
+                in_require_block = False
+                continue
+            module = stripped.split()[0] if stripped.split() else ""
+            if module.startswith("easynet.run/axon") and "// indirect" not in raw_line:
+                violations.append(("go.mod", index, "raw_axon_module_dependency", module))
+            continue
+        if stripped == "require (":
+            in_require_block = True
+            continue
+        if stripped.startswith("require "):
+            fields = stripped.split()
+            if len(fields) >= 2:
+                module = fields[1]
+                if module.startswith("easynet.run/axon") and "// indirect" not in raw_line:
+                    violations.append(("go.mod", index, "raw_axon_module_dependency", module))
+
+
+scan_go_mod(backend / "go.mod")
 
 for source in production_go_files(backend):
     text = source.read_text(encoding="utf-8", errors="replace")
