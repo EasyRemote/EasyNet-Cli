@@ -82,15 +82,33 @@ class DaemonInvocationTransport:
         cls,
         *,
         control_path: str = "",
+        library_path: str | None = None,
         options: ConnectOptions = ConnectOptions(),
+        identity: Any | None = None,
     ) -> "DaemonInvocationTransport":
         """Open a direct daemon Axon gRPC-over-UDS Runtime Core session."""
 
         from .direct_runtime import DirectDaemonRuntimeConnector
+        from .identity import AddressingClient
 
         control_path = options.control_path or control_path
+        close_identity = False
+        if identity is None:
+            from . import _cabi
+
+            identity = AddressingClient(
+                _cabi.open_cabi_identity_transport(
+                    control_path=control_path,
+                    library_path=library_path,
+                )
+            )
+            close_identity = True
         connection = RuntimeConnection(
-            DirectDaemonRuntimeConnector(control_path=control_path)
+            DirectDaemonRuntimeConnector(
+                control_path=control_path,
+                identity=identity,
+                close_identity=close_identity,
+            )
         )
         connection.connect(
             ConnectOptions(

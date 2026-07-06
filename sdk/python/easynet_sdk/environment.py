@@ -122,11 +122,22 @@ class SdkEnvironment:
         """Open a stateful RuntimeConnection over daemon Axon gRPC UDS."""
 
         self._require_open()
+        from . import _cabi
         from .direct_runtime import DirectDaemonRuntimeConnector
 
         options = self._connect_options(options)
+        identity = AddressingClient(
+            _cabi.open_cabi_identity_transport(
+                control_path=options.control_path,
+                library_path=self.library_path,
+            )
+        )
         connection = RuntimeConnection(
-            DirectDaemonRuntimeConnector(control_path=options.control_path)
+            DirectDaemonRuntimeConnector(
+                control_path=options.control_path,
+                identity=identity,
+                close_identity=True,
+            )
         )
         connection.connect(options)
         return self._track(connection)
@@ -170,6 +181,7 @@ class SdkEnvironment:
         return self._track(
             DaemonInvocationTransport.connect_direct(
                 control_path=self.resolved_control_path(),
+                library_path=self.library_path,
                 options=self._connect_options(options),
             )
         )

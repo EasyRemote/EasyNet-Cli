@@ -25,12 +25,18 @@ from easynet_sdk.direct_runtime import (
     DirectDaemonRuntimeConnector,
     DirectDaemonRuntimeTransport,
 )
+from easynet_sdk.identity import AbilityAddress
 
 from test_runtime import complete_draft
 
 invoke_pb2: Any = _invoke_pb2
 invoke_pb2_grpc: Any = _invoke_pb2_grpc
 types_pb2: Any = _types_pb2
+
+DESCRIPTOR_REF = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
+ABILITY_PUBLIC_NAME = "observe.health"
+CALLEE_URA = "easynet:///r/example/device/dev-a"
 
 
 class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
@@ -186,7 +192,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_handshake_reports_runtime_capabilities(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            connector = DirectDaemonRuntimeConnector()
+            connector = DirectDaemonRuntimeConnector(identity=_identity())
             transport, facts_json = connector.handshake(
                 json.dumps(
                     {
@@ -215,7 +221,10 @@ class DirectRuntimeTests(unittest.TestCase):
         servicer = RecordingInvocationServicer()
         handle_transport = _RecordingHandleTransport()
         with _fake_daemon(servicer) as endpoint:
-            connector = DirectDaemonRuntimeConnector(handle_transport=handle_transport)
+            connector = DirectDaemonRuntimeConnector(
+                handle_transport=handle_transport,
+                identity=_identity(),
+            )
             transport, facts_json = connector.handshake(
                 json.dumps(
                     {
@@ -261,10 +270,15 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_closes_owned_handle_transport_once(self) -> None:
         servicer = RecordingInvocationServicer()
         handle_transport = _RecordingHandleTransport()
+        identity = _identity()
         with _fake_daemon(servicer) as endpoint:
-            connector = DirectDaemonRuntimeConnector().with_handle_transport(
-                handle_transport,
-                close_on_connector_close=True,
+            connector = (
+                DirectDaemonRuntimeConnector()
+                .with_identity(identity, close_on_connector_close=True)
+                .with_handle_transport(
+                    handle_transport,
+                    close_on_connector_close=True,
+                )
             )
             transport, facts_json = connector.handshake(
                 json.dumps(
@@ -284,6 +298,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(facts["prepare"], True)
         self.assertEqual(facts["submit_signed"], True)
         self.assertEqual(handle_transport.close_count, 1)
+        self.assertEqual(identity.close_count, 1)
 
     def test_direct_transport_closes_owned_handle_transport_once(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -294,6 +309,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
                 handle_transport=handle_transport,
+                identity=_identity(),
                 close_handle_transport=True,
             )
             transport.close()
@@ -303,13 +319,15 @@ class DirectRuntimeTests(unittest.TestCase):
 
     def test_direct_transport_invokes_daemon_over_axon_grpc_uds(self) -> None:
         servicer = RecordingInvocationServicer()
+        identity = _identity()
         with _fake_daemon(servicer) as endpoint:
             transport = DaemonInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=5000,
-                )
+                ),
+                identity=identity,
             )
             try:
                 result = transport.invoke(complete_draft())
@@ -325,7 +343,11 @@ class DirectRuntimeTests(unittest.TestCase):
 
         self.assertEqual(len(servicer.requests), 1)
         request = servicer.requests[0]
-        self.assertEqual(request.function_name, complete_draft().descriptor_ref)
+        self.assertEqual(request.function_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.WhichOneof("typed_target"), "ability")
+        self.assertEqual(request.target.ability.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.ability.function_name, ABILITY_PUBLIC_NAME)
         self.assertEqual(request.content_type, "application/json")
         self.assertEqual(request.arguments, b"{}")
         self.assertEqual(request.content_envelope.encoding, "identity")
@@ -342,6 +364,26 @@ class DirectRuntimeTests(unittest.TestCase):
             "easynet:///r/example/device/dev-a",
         )
         self.assertEqual(request.envelope.causal_context.WhichOneof("form"), "none")
+        self.assertEqual(identity.descriptor_refs, [DESCRIPTOR_REF])
+        self.assertEqual(identity.ability_uras, [ABILITY_URA])
+
+    def test_direct_transport_rejects_descriptor_not_owned_by_callee(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectDaemonRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(owner_ura="easynet:///r/example/device/other"),
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(complete_draft().to_json().encode("utf-8"))
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
+        self.assertEqual(servicer.requests, [])
 
     def test_direct_transport_projects_failed_terminal_state_to_admission_denied(self) -> None:
         class FailedServicer(RecordingInvocationServicer):
@@ -359,7 +401,8 @@ class DirectRuntimeTests(unittest.TestCase):
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=5000,
-                )
+                ),
+                identity=_identity(),
             )
             try:
                 result = transport.invoke(complete_draft())
@@ -387,7 +430,8 @@ class DirectRuntimeTests(unittest.TestCase):
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=5000,
-                )
+                ),
+                identity=_identity(),
             )
             try:
                 result = transport.invoke(complete_draft())
@@ -408,6 +452,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
+                identity=_identity(),
             )
             try:
                 draft = complete_draft().to_json_dict()
@@ -430,7 +475,8 @@ class DirectRuntimeTests(unittest.TestCase):
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=1000,
-                )
+                ),
+                identity=_identity(),
             )
             try:
                 stream = transport.stream(complete_draft())
@@ -450,7 +496,9 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertTrue(terminal["terminal"])
         self.assertEqual(len(servicer.stream_requests), 1)
         request = servicer.stream_requests[0]
-        self.assertEqual(request.function_name, complete_draft().descriptor_ref)
+        self.assertEqual(request.function_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.WhichOneof("typed_target"), "ability")
         self.assertEqual(request.content_type, "application/json")
         self.assertEqual(request.arguments, b"{}")
         self.assertEqual(
@@ -476,7 +524,8 @@ class DirectRuntimeTests(unittest.TestCase):
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=1000,
-                )
+                ),
+                identity=_identity(),
             )
             try:
                 stream = transport.stream(complete_draft())
@@ -497,7 +546,8 @@ class DirectRuntimeTests(unittest.TestCase):
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=1000,
-                )
+                ),
+                identity=_identity(),
             )
             try:
                 bidi = transport.bidi(
@@ -553,8 +603,10 @@ class DirectRuntimeTests(unittest.TestCase):
             envelope_open.envelope.subject.ura,
             "easynet:///r/example/device/dev-a",
         )
-        self.assertEqual(envelope_open.target.ability_name, complete_draft().descriptor_ref)
-        self.assertEqual(envelope_open.target.WhichOneof("typed_target"), None)
+        self.assertEqual(envelope_open.target.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(envelope_open.target.WhichOneof("typed_target"), "ability")
+        self.assertEqual(envelope_open.target.ability.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(envelope_open.target.ability.function_name, ABILITY_PUBLIC_NAME)
         self.assertEqual(envelope_open.initial_args, b"{}")
         self.assertEqual(envelope_open.args_content_type, "application/json")
         self.assertEqual(envelope_open.content_envelope.encoding, "identity")
@@ -576,7 +628,8 @@ class DirectRuntimeTests(unittest.TestCase):
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
                     invoke_timeout_ms=5000,
-                )
+                ),
+                identity=_identity(),
             )
             try:
                 bidi = transport.bidi(
@@ -599,6 +652,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
+                identity=_identity(),
             )
             try:
                 with self.assertRaises(SDKError) as raised:
@@ -620,6 +674,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
+                identity=_identity(),
             )
             try:
                 with self.assertRaises(SDKError) as raised:
@@ -637,9 +692,23 @@ class DirectRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             endpoint = str(Path(tmp) / "missing.sock")
             with self.assertRaises(SDKError) as raised:
-                DirectDaemonRuntimeTransport.open(endpoint, dial_timeout_seconds=0.05)
+                DirectDaemonRuntimeTransport.open(
+                    endpoint,
+                    dial_timeout_seconds=0.05,
+                    identity=_identity(),
+                )
 
         self.assertTrue(is_code(raised.exception, ErrorCode.DAEMON_OFFLINE))
+
+    def test_direct_transport_requires_identity_projection_before_open(self) -> None:
+        with self.assertRaises(SDKError) as raised:
+            DirectDaemonRuntimeTransport.open(
+                "/tmp/direct-runtime-unused.sock",
+                dial_timeout_seconds=0.05,
+            )
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(raised.exception.stage, "direct_runtime")
 
     def test_direct_transport_rejects_use_after_close(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -648,6 +717,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
+                identity=_identity(),
             )
             transport.close()
             with self.assertRaises(SDKError) as raised:
@@ -677,6 +747,44 @@ class _fake_daemon:
     def __exit__(self, *exc_info: object) -> None:
         self._server.stop(0).wait()
         self._tmp.cleanup()
+
+
+class _RecordingIdentity:
+    def __init__(self, *, owner_ura: str = CALLEE_URA) -> None:
+        self.owner_ura = owner_ura
+        self.descriptor_refs: list[str] = []
+        self.ability_uras: list[str] = []
+        self.close_count = 0
+
+    def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
+        self.descriptor_refs.append(descriptor_ref)
+        if descriptor_ref != DESCRIPTOR_REF:
+            raise AssertionError(f"unexpected descriptor_ref: {descriptor_ref}")
+        return ABILITY_URA
+
+    def ability_address(self, ability_ura: str) -> AbilityAddress:
+        self.ability_uras.append(ability_ura)
+        if ability_ura != ABILITY_URA:
+            raise AssertionError(f"unexpected ability_ura: {ability_ura}")
+        return AbilityAddress(
+            ability_ura=ability_ura,
+            owner_ura=self.owner_ura,
+            owner_kind="device",
+            public_name=ABILITY_PUBLIC_NAME,
+            subject_ura=ability_ura,
+            local_registry_ability=ABILITY_PUBLIC_NAME,
+            namespace="observe",
+            local_name="health",
+            profile="easynet-strict-v2",
+            metadata={"grammar_owner": "axon"},
+        )
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
+def _identity(*, owner_ura: str = CALLEE_URA) -> _RecordingIdentity:
+    return _RecordingIdentity(owner_ura=owner_ura)
 
 
 class _RecordingHandleTransport:

@@ -14,7 +14,7 @@ import queue
 import secrets
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 import grpc  # type: ignore[import-untyped]
 
@@ -32,6 +32,7 @@ from .errors import (
     canonical_terminal_state_code,
 )
 from .invocation import InvocationDraft
+from .identity import AbilityAddress
 from .runtime import RuntimeTransport
 from .bidi import BidiFrame, BidiTransport
 from .stream import StreamTransport
@@ -43,6 +44,17 @@ DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
 _DIRECT_BIDI_EOF = object()
 
+
+class DirectRuntimeIdentityProjector(Protocol):
+    """Identity facade required by direct runtime descriptor projection."""
+
+    def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
+        ...
+
+    def ability_address(self, ability_ura: str) -> AbilityAddress:
+        ...
+
+
 @dataclass
 class DirectDaemonRuntimeConnector:
     """RuntimeConnector for direct daemon Invocation gRPC over UDS."""
@@ -50,6 +62,8 @@ class DirectDaemonRuntimeConnector:
     control_path: str = ""
     discovery_reader: Any = read_control_discovery
     handle_transport: RuntimeTransport | None = None
+    identity: DirectRuntimeIdentityProjector | None = None
+    close_identity: bool = False
     close_handle_transport: bool = False
     _transports: list["DirectDaemonRuntimeTransport"] = field(default_factory=list)
     _closed: bool = False
@@ -114,6 +128,7 @@ class DirectDaemonRuntimeConnector:
             invoke_timeout_seconds=invoke_timeout,
             max_message_bytes=max_message_bytes,
             handle_transport=self.handle_transport,
+            identity=self.identity,
             close_handle_transport=False,
         )
         self._transports.append(transport)
@@ -143,6 +158,17 @@ class DirectDaemonRuntimeConnector:
         )
         return self
 
+    def with_identity(
+        self,
+        identity: DirectRuntimeIdentityProjector | None,
+        *,
+        close_on_connector_close: bool = False,
+    ) -> "DirectDaemonRuntimeConnector":
+        self._require_open()
+        self.identity = identity
+        self.close_identity = close_on_connector_close and identity is not None
+        return self
+
     def close(self) -> None:
         if self._closed:
             return
@@ -152,7 +178,10 @@ class DirectDaemonRuntimeConnector:
         handle_transport = (
             self.handle_transport if self.close_handle_transport else None
         )
+        identity = self.identity if self.close_identity else None
         self.handle_transport = None
+        self.identity = None
+        self.close_identity = False
         self.close_handle_transport = False
         first_error: SDKError | None = None
         for transport in transports:
@@ -167,6 +196,10 @@ class DirectDaemonRuntimeConnector:
                 handle_transport,
                 message="close direct runtime handle transport failed",
             )
+            if first_error is None:
+                first_error = close_error
+        if identity is not None:
+            close_error = _close_identity_projector(identity)
             if first_error is None:
                 first_error = close_error
         if first_error is not None:
@@ -187,6 +220,7 @@ class DirectDaemonRuntimeTransport:
         endpoint: str,
         invoke_timeout_seconds: float,
         handle_transport: RuntimeTransport | None = None,
+        identity: DirectRuntimeIdentityProjector | None = None,
         close_handle_transport: bool = False,
     ) -> None:
         self._channel = channel
@@ -194,6 +228,7 @@ class DirectDaemonRuntimeTransport:
         self._endpoint = endpoint
         self._invoke_timeout_seconds = invoke_timeout_seconds
         self._handle_transport = handle_transport
+        self._identity = identity
         self._close_handle_transport = (
             close_handle_transport and handle_transport is not None
         )
@@ -208,8 +243,15 @@ class DirectDaemonRuntimeTransport:
         invoke_timeout_seconds: float = DEFAULT_INVOKE_TIMEOUT_SECONDS,
         max_message_bytes: int = 0,
         handle_transport: RuntimeTransport | None = None,
+        identity: DirectRuntimeIdentityProjector | None = None,
         close_handle_transport: bool = False,
     ) -> "DirectDaemonRuntimeTransport":
+        if identity is None:
+            raise _direct_error(
+                "identity projection facade is required for direct runtime descriptor projection",
+                code=ErrorCode.INVALID_ARGUMENT,
+                retry=RetryHint.NEVER,
+            )
         target = _grpc_uds_target(endpoint)
         options: list[tuple[str, int]] = []
         if max_message_bytes:
@@ -247,6 +289,7 @@ class DirectDaemonRuntimeTransport:
             endpoint=endpoint,
             invoke_timeout_seconds=invoke_timeout_seconds,
             handle_transport=handle_transport,
+            identity=identity,
             close_handle_transport=close_handle_transport,
         )
 
@@ -254,7 +297,7 @@ class DirectDaemonRuntimeTransport:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
-            request = _draft_to_invoke_request(draft)
+            request = _draft_to_invoke_request(draft, self._identity)
             response = self._stub.Invoke(
                 request,
                 timeout=self._invoke_timeout_seconds,
@@ -278,7 +321,7 @@ class DirectDaemonRuntimeTransport:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
-            request = _draft_to_stream_request(draft)
+            request = _draft_to_stream_request(draft, self._identity)
             iterator = self._stub.InvokeStream(
                 request,
                 timeout=self._invoke_timeout_seconds,
@@ -313,7 +356,7 @@ class DirectDaemonRuntimeTransport:
         try:
             draft = InvocationDraft.from_json(draft_json)
             streams = _bidi_stream_descriptors(streams_json)
-            open_frame = _draft_to_bidi_open_frame(draft, streams)
+            open_frame = _draft_to_bidi_open_frame(draft, streams, self._identity)
             transport = DirectDaemonBidiTransport(endpoint=self._endpoint)
             transport.start(
                 self._stub,
@@ -721,24 +764,40 @@ def _stream_chunk_terminal(chunk: Any) -> bool:
     }
 
 
-def _draft_to_invoke_request(draft: InvocationDraft) -> Any:
-    fields = _invoke_request_fields(draft)
+@dataclass(frozen=True)
+class _DirectAbilityProjection:
+    ability_ura: str
+    public_name: str
+
+
+def _draft_to_invoke_request(
+    draft: InvocationDraft,
+    identity: DirectRuntimeIdentityProjector,
+) -> Any:
+    fields = _invoke_request_fields(draft, identity)
     return _invoke_pb2.InvokeRequest(**fields)
 
 
-def _draft_to_stream_request(draft: InvocationDraft) -> Any:
-    fields = _invoke_request_fields(draft)
+def _draft_to_stream_request(
+    draft: InvocationDraft,
+    identity: DirectRuntimeIdentityProjector,
+) -> Any:
+    fields = _invoke_request_fields(draft, identity)
     return _invoke_pb2.InvokeServerStreamRequest(**fields)
 
 
-def _draft_to_bidi_open_frame(draft: InvocationDraft, streams: list[Any]) -> Any:
-    fields = _invoke_request_fields(draft)
+def _draft_to_bidi_open_frame(
+    draft: InvocationDraft,
+    streams: list[Any],
+    identity: DirectRuntimeIdentityProjector,
+) -> Any:
+    fields = _invoke_request_fields(draft, identity)
     return _invoke_pb2.InvokeBidiUp(
         sequence=0,
         mac=_bidi_open_mac(draft),
         envelope_open=_invoke_pb2.EnvelopeOpen(
             envelope=fields["envelope"],
-            target=_bidi_target(draft),
+            target=fields["target"],
             initial_args=fields["arguments"],
             args_content_type=fields["content_type"],
             streams=streams,
@@ -748,8 +807,12 @@ def _draft_to_bidi_open_frame(draft: InvocationDraft, streams: list[Any]) -> Any
     )
 
 
-def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
+def _invoke_request_fields(
+    draft: InvocationDraft,
+    identity: DirectRuntimeIdentityProjector,
+) -> dict[str, object]:
     content_type = draft.content_type
+    ability = _direct_ability_projection(draft, identity)
     return {
         "envelope": _types_pb2.Envelope(
             request_id=f"req-{secrets.token_hex(16)}",
@@ -763,7 +826,8 @@ def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
             causal_context=_causal_context(draft.causal_context),
             caller_signature=_caller_signature(draft),
         ),
-        "function_name": draft.descriptor_ref,
+        "target": _invocation_target(ability.public_name),
+        "function_name": ability.public_name,
         "arguments": _arguments(draft),
         "content_type": content_type,
         "metadata": _metadata(draft.metadata),
@@ -772,6 +836,57 @@ def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
             encoding="identity",
         ),
     }
+
+
+def _direct_ability_projection(
+    draft: InvocationDraft,
+    identity: DirectRuntimeIdentityProjector,
+) -> _DirectAbilityProjection:
+    try:
+        ability_ura = identity.ability_ura_from_descriptor_ref(draft.descriptor_ref)
+        address = identity.ability_address(ability_ura)
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _direct_error(
+            f"project descriptor_ref: {exc}",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+            cause=exc,
+        ) from exc
+    if address.owner_ura != draft.callee_ura:
+        raise _direct_error(
+            "descriptor_ref is not owned by callee",
+            code=ErrorCode.INVALID_INVOCATION,
+            retry=RetryHint.NEVER,
+            details={
+                "descriptor_ref": draft.descriptor_ref,
+                "callee_ura": draft.callee_ura,
+                "ability_ura": ability_ura,
+                "owner_ura": address.owner_ura,
+            },
+        )
+    if not address.public_name:
+        raise _direct_error(
+            "descriptor_ref ability projection is missing public_name",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+            details={"descriptor_ref": draft.descriptor_ref},
+        )
+    return _DirectAbilityProjection(
+        ability_ura=ability_ura,
+        public_name=address.public_name,
+    )
+
+
+def _invocation_target(ability_name: str) -> Any:
+    return _types_pb2.InvocationTarget(
+        ability_name=ability_name,
+        ability=_types_pb2.AbilityTarget(
+            ability_name=ability_name,
+            function_name=ability_name,
+        ),
+    )
 
 
 def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
@@ -827,10 +942,6 @@ def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
             )
         )
     return result
-
-
-def _bidi_target(draft: InvocationDraft) -> Any:
-    return _types_pb2.InvocationTarget(ability_name=draft.descriptor_ref)
 
 
 def _bidi_open_mac(draft: InvocationDraft) -> bytes:
@@ -1264,6 +1375,25 @@ def _close_runtime_transport(
     except Exception as exc:
         return _direct_error(
             f"{message}: {exc}",
+            code=ErrorCode.ROUTE_UNAVAILABLE,
+            retry=RetryHint.UNKNOWN,
+            retryable=False,
+            cause=exc,
+        )
+
+
+def _close_identity_projector(identity: DirectRuntimeIdentityProjector) -> SDKError | None:
+    close = getattr(identity, "close", None)
+    if close is None:
+        return None
+    try:
+        close()
+        return None
+    except SDKError as exc:
+        return exc
+    except Exception as exc:
+        return _direct_error(
+            f"close direct runtime identity projection failed: {exc}",
             code=ErrorCode.ROUTE_UNAVAILABLE,
             retry=RetryHint.UNKNOWN,
             retryable=False,
