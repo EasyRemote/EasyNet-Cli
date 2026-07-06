@@ -23,8 +23,12 @@ from test_runtime import MemoryRuntimeTransport
 from test_signing import signer_handle
 
 
+ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
+DESCRIPTOR_REF = f"{ABILITY_URA}@1.0.0"
+
+
 class AbilityInvocationClientTests(unittest.TestCase):
-    def test_build_invocation_from_ability_name_delegates_descriptor_ref(self) -> None:
+    def test_build_invocation_from_ability_ura_delegates_descriptor_ref(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()
         client = AbilityInvocationClient(
@@ -32,26 +36,18 @@ class AbilityInvocationClientTests(unittest.TestCase):
             addressing=AddressingClient(identity),
         )
 
-        draft = client.build_invocation(_request(ability_name="observe.health"))
+        draft = client.build_invocation(_request(ability_ura=ABILITY_URA))
 
         self.assertEqual(
             draft.descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            DESCRIPTOR_REF,
         )
         self.assertEqual(draft.subject_ura, "easynet:///r/example/device/dev-a")
         self.assertEqual(draft.causal_context, {"form": "none"})
         self.assertEqual(
             identity.seen_requests,
             [
-                {
-                    "kind": "ability",
-                    "owner_ura": "easynet:///r/example/device/dev-a",
-                    "ability_name": "observe.health",
-                },
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-                    "descriptor_version": "1.0.0",
-                },
+                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
             ],
         )
 
@@ -63,22 +59,17 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         draft = client.build_invocation(
-            _request(
-                ability_ura="easynet:///r/example/ability/device.dev-a.observe.health"
-            )
+            _request(ability_ura=ABILITY_URA)
         )
 
         self.assertEqual(
             draft.descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            DESCRIPTOR_REF,
         )
         self.assertEqual(
             identity.seen_requests,
             [
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-                    "descriptor_version": "1.0.0",
-                }
+                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"}
             ],
         )
 
@@ -92,23 +83,21 @@ class AbilityInvocationClientTests(unittest.TestCase):
         draft = client.build_invocation(
             _request(
                 descriptor_ref=(
-                    "easynet:///r/example/ability/"
-                    "device.dev-a.observe.health@1.0.0"
+                    DESCRIPTOR_REF
                 )
             )
         )
 
         self.assertEqual(
             draft.descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            DESCRIPTOR_REF,
         )
         self.assertEqual(
             identity.seen_requests,
             [
                 {
                     "descriptor_ref": (
-                        "easynet:///r/example/ability/"
-                        "device.dev-a.observe.health@1.0.0"
+                        DESCRIPTOR_REF
                     )
                 }
             ],
@@ -122,12 +111,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
             addressing=AddressingClient(identity),
         )
 
-        result = client.invoke(_request(ability_name="observe.health"))
-        stream = client.stream(_request(ability_name="observe.health"))
+        result = client.invoke(_request(ability_ura=ABILITY_URA))
+        stream = client.stream(_request(ability_ura=ABILITY_URA))
         event = stream.next()
         stream.close()
         bidi = client.bidi(
-            _request(ability_name="observe.health"),
+            _request(ability_ura=ABILITY_URA),
             (BidiStreamDescriptor(stream_id=1, content_type="application/json"),),
         )
         bidi.close_send()
@@ -139,7 +128,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         assert runtime_transport.seen_draft is not None
         self.assertEqual(
             runtime_transport.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            DESCRIPTOR_REF,
         )
         self.assertEqual(
             runtime_transport.seen_streams,
@@ -156,10 +145,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
         result = client.invoke_target(
             _target_request(
-                ability_ura=(
-                    "easynet:///r/example/ability/"
-                    "device.dev-a.observe.health"
-                )
+                ability_ura=ABILITY_URA
             )
         )
 
@@ -171,20 +157,17 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime.seen_draft["subject_ura"],
-            "easynet:///r/example/ability/device.dev-a.observe.health",
+            ABILITY_URA,
         )
         self.assertEqual(
             runtime.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            DESCRIPTOR_REF,
         )
         self.assertEqual(
             identity.seen_requests,
             [
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-                    "descriptor_version": "1.0.0",
-                },
-                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
+                {"ura": ABILITY_URA},
             ],
         )
 
@@ -198,8 +181,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         draft = client.build_target_invocation(
             _target_request(
                 descriptor_ref=(
-                    "easynet:///r/example/ability/"
-                    "device.dev-a.observe.health@1.0.0"
+                    DESCRIPTOR_REF
                 )
             )
         )
@@ -214,50 +196,10 @@ class AbilityInvocationClientTests(unittest.TestCase):
             [
                 {
                     "descriptor_ref": (
-                        "easynet:///r/example/ability/"
-                        "device.dev-a.observe.health@1.0.0"
+                        DESCRIPTOR_REF
                     )
                 },
-                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
-            ],
-        )
-
-    def test_target_invocation_from_owner_ability_delegates_ura_builder(self) -> None:
-        identity = _identity_transport()
-        runtime = MemoryRuntimeTransport()
-        client = AbilityInvocationClient(
-            runtime=RuntimeClient(runtime),
-            addressing=AddressingClient(identity),
-        )
-
-        stream = client.stream_target(
-            _target_request(
-                owner_ura="easynet:///r/example/device/dev-a",
-                ability_name="observe.health",
-            )
-        )
-        event = stream.next()
-        stream.close()
-
-        self.assertTrue(event.terminal)
-        assert runtime.seen_draft is not None
-        self.assertEqual(
-            runtime.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
-        )
-        self.assertEqual(
-            identity.seen_requests,
-            [
-                {
-                    "kind": "ability",
-                    "owner_ura": "easynet:///r/example/device/dev-a",
-                    "ability_name": "observe.health",
-                },
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-                    "descriptor_version": "1.0.0",
-                },
-                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+                {"ura": ABILITY_URA},
             ],
         )
 
@@ -270,7 +212,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         prepared, material = client.prepare(
-            _request(ability_name="observe.health"),
+            _request(ability_ura=ABILITY_URA),
             PrepareOptions(
                 expires_in_ms=60000,
                 signer_id="signer-alice-key-1",
@@ -294,20 +236,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
         assert runtime.seen_draft is not None
         self.assertEqual(
             runtime.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            DESCRIPTOR_REF,
         )
         self.assertEqual(
             identity.seen_requests,
             [
-                {
-                    "kind": "ability",
-                    "owner_ura": "easynet:///r/example/device/dev-a",
-                    "ability_name": "observe.health",
-                },
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-                    "descriptor_version": "1.0.0",
-                },
+                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
             ],
         )
 
@@ -328,10 +262,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
         signed, material = client.prepare_and_sign_target(
             _target_request(
-                ability_ura=(
-                    "easynet:///r/example/ability/"
-                    "device.dev-a.observe.health"
-                )
+                ability_ura=ABILITY_URA
             ),
             signer,
             PrepareOptions(expires_in_ms=60000),
@@ -348,7 +279,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime.seen_draft["subject_ura"],
-            "easynet:///r/example/ability/device.dev-a.observe.health",
+            ABILITY_URA,
         )
 
         handle = client.submit_signed(signed)
@@ -369,11 +300,8 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(
             identity.seen_requests,
             [
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
-                    "descriptor_version": "1.0.0",
-                },
-                {"ura": "easynet:///r/example/ability/device.dev-a.observe.health"},
+                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
+                {"ura": ABILITY_URA},
             ],
         )
 
@@ -386,17 +314,14 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
         for request in (
             _target_request(),
-            _target_request(owner_ura="easynet:///r/example/device/dev-a"),
-            _target_request(ability_name="observe.health"),
             _target_request(
                 ability_ura=(
                     " easynet:///r/example/ability/device.dev-a.observe.health"
                 )
             ),
             _target_request(
-                ability_ura="easynet:///r/example/ability/device.dev-a.observe.health",
-                owner_ura="easynet:///r/example/device/dev-a",
-                ability_name="observe.health",
+                ability_ura=ABILITY_URA,
+                descriptor_ref=DESCRIPTOR_REF,
             ),
         ):
             with self.subTest(request=request):
@@ -419,11 +344,8 @@ class AbilityInvocationClientTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             client.build_invocation(
                 _request(
-                    ability_name="observe.health",
-                    ability_ura=(
-                        "easynet:///r/example/ability/"
-                        "device.dev-a.observe.health"
-                    ),
+                    descriptor_ref=DESCRIPTOR_REF,
+                    ability_ura=ABILITY_URA,
                 )
             )
 
@@ -435,7 +357,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
                     subject_ura="easynet:///r/example/device/dev-a",
                     nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                     causal_context={"form": "none"},
-                    ability_name="observe.health",
+                    ability_ura=ABILITY_URA,
                 )
             )
 
@@ -447,14 +369,14 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         with self.assertRaises(SDKError) as caught:
-            client.invoke(_request(ability_name=" observe.health"))
+            client.invoke(_request(ability_ura=f" {ABILITY_URA}"))
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
         with self.assertRaises(SDKError) as caught:
             client.invoke(
                 _request_with(
                     caller_ura=" easynet:///r/example/agent/alice.sdk",
-                    ability_name="observe.health",
+                    ability_ura=ABILITY_URA,
                 )
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
@@ -480,7 +402,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         request = child.call_request(
             callee_ura="easynet:///r/example/device/dev-a",
             subject_ura="easynet:///r/example/device/dev-a",
-            ability_name="observe.health",
+            ability_ura=ABILITY_URA,
             args={"child": True},
             metadata={"attempt": 1},
         )
@@ -488,7 +410,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         result = child.invoke(
             callee_ura="easynet:///r/example/device/dev-a",
             subject_ura="easynet:///r/example/device/dev-a",
-            ability_name="observe.health",
+            ability_ura=ABILITY_URA,
             args={"child": True},
             metadata={"attempt": 1},
         )
@@ -525,8 +447,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         target = child.target_request(
-            owner_ura="easynet:///r/example/device/dev-a",
-            ability_name="observe.health",
+            ability_ura=ABILITY_URA,
             subject_ura="easynet:///r/example/device/dev-a",
             metadata={"attempt": 2},
         )
@@ -549,7 +470,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(runtime.close_calls, 1)
         self.assertEqual(identity.close_calls, 1)
         with self.assertRaises(SDKError):
-            client.invoke(_request(ability_name="observe.health"))
+            client.invoke(_request(ability_ura=ABILITY_URA))
 
 
 class ChildReceiptTransport:
@@ -593,12 +514,10 @@ def _request(
     *,
     descriptor_ref: str = "",
     ability_ura: str = "",
-    ability_name: str = "",
 ) -> AbilityCallRequest:
     return _request_with(
         descriptor_ref=descriptor_ref,
         ability_ura=ability_ura,
-        ability_name=ability_name,
     )
 
 
@@ -606,8 +525,6 @@ def _target_request(
     *,
     descriptor_ref: str = "",
     ability_ura: str = "",
-    owner_ura: str = "",
-    ability_name: str = "",
 ) -> AbilityTargetRequest:
     return AbilityTargetRequest(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -615,8 +532,6 @@ def _target_request(
         causal_context={"form": "none"},
         descriptor_ref=descriptor_ref,
         ability_ura=ability_ura,
-        owner_ura=owner_ura,
-        ability_name=ability_name,
         args={"ready": True},
     )
 
@@ -630,7 +545,6 @@ def _request_with(
     content_type: str = "application/json",
     descriptor_ref: str = "",
     ability_ura: str = "",
-    ability_name: str = "",
 ) -> AbilityCallRequest:
     return AbilityCallRequest(
         caller_ura=caller_ura,
@@ -641,7 +555,6 @@ def _request_with(
         content_type=content_type,
         descriptor_ref=descriptor_ref,
         ability_ura=ability_ura,
-        ability_name=ability_name,
         args={"city": "Singapore"},
     )
 

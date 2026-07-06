@@ -4735,7 +4735,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             {
                 "caller": "easynet:///r/example/agent/alice.sdk",
                 "callee": "easynet:///r/example/device/dev-a",
-                "ability": "er.weather",
+                "ability": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
                 "subject": "easynet:///r/example/device/dev-a",
                 "nonce": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal": {"form": "none"},
@@ -4756,15 +4756,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(
             identity.seen_requests,
             [
-                {"descriptor_ref": "er.weather"},
                 {
-                    "kind": "ability",
-                    "owner_ura": "easynet:///r/example/device/dev-a",
-                    "ability_name": "er.weather",
-                },
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
-                    "descriptor_version": "1.0.0",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0"
                 },
             ],
         )

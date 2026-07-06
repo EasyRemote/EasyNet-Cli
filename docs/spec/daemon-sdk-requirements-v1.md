@@ -2239,9 +2239,11 @@ MUST accept the same Invocation JSON shape:
 
 This section describes the SDK Invocation JSON v4 projection. It is derived
 from Axon canonical Invocation/URA/DescriptorRef helpers and MUST be generated
-or validated against those helpers. Existing ABI v3 `ability`-name JSON remains
-a legacy compatibility input until an ABI v4 cutover; ABI v3 adapters MUST
-canonicalize into this v4 projection before daemon submission.
+or validated against those helpers. ABI v3 `ability`-name JSON is retired:
+SDK and FFI adapters MUST reject it instead of canonicalizing it as a
+compatibility input. Product consumers must supply the v4 projection directly
+or obtain a descriptor ref from the identity/addressing helpers before building
+an invocation.
 
 ```json
 {

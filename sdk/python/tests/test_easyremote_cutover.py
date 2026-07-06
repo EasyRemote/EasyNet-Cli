@@ -10,10 +10,12 @@ from easynet_sdk import (
     AbilityInvocationClient,
     AbilityTargetRequest,
     AddressingClient,
+    ErrorCode,
     InvocationObjectAdapter,
     InvocationResult,
     ReceiptClient,
     RuntimeClient,
+    is_code,
     ability_address,
     audit_consumer_boundary,
 )
@@ -24,7 +26,7 @@ from test_runtime import MemoryRuntimeTransport
 
 
 class EasyRemoteCutoverTests(unittest.TestCase):
-    def test_invocation_object_adapter_builds_sdk_draft_from_route_name(
+    def test_invocation_object_adapter_rejects_route_name_alias(
         self,
     ) -> None:
         identity_transport = RejectBareDescriptorTransport()
@@ -35,41 +37,24 @@ class EasyRemoteCutoverTests(unittest.TestCase):
         )
         adapter = InvocationObjectAdapter(client)
 
-        draft = adapter.build_invocation(
-            EasyRemoteTuple(
-                caller="easynet:///r/example/agent/alice.sdk",
-                callee="easynet:///r/example/device/dev-a",
-                ability="er.weather",
-                subject="easynet:///r/example/device/dev-a",
-                nonce=bytes(range(1, 17)),
-                causal=None,
-                arguments=EasyRemoteArguments.from_json({"city": "Singapore"}),
-            ),
-            metadata={"trace_id": "er-1"},
-        )
+        with self.assertRaises(Exception) as caught:
+            adapter.build_invocation(
+                EasyRemoteTuple(
+                    caller="easynet:///r/example/agent/alice.sdk",
+                    callee="easynet:///r/example/device/dev-a",
+                    ability="er.weather",
+                    subject="easynet:///r/example/device/dev-a",
+                    nonce=bytes(range(1, 17)),
+                    causal=None,
+                    arguments=EasyRemoteArguments.from_json({"city": "Singapore"}),
+                ),
+                metadata={"trace_id": "er-1"},
+            )
 
-        self.assertEqual(
-            draft.descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
-        )
-        self.assertEqual(draft.nonce_base64, "AQIDBAUGBwgJCgsMDQ4PEA==")
-        self.assertEqual(draft.causal_context, {"form": "none"})
-        self.assertEqual(draft.metadata, {"trace_id": "er-1"})
-        self.assertEqual(draft.args, {"city": "Singapore"})
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(
             identity_transport.seen_requests,
-            [
-                {"descriptor_ref": "er.weather"},
-                {
-                    "kind": "ability",
-                    "owner_ura": "easynet:///r/example/device/dev-a",
-                    "ability_name": "er.weather",
-                },
-                {
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.er.weather",
-                    "descriptor_version": "1.0.0",
-                },
-            ],
+            [{"descriptor_ref": "er.weather"}],
         )
 
     def test_invocation_object_adapter_returns_wire_dict(
@@ -216,7 +201,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
             EasyRemoteTuple(
                 caller="easynet:///r/example/agent/alice.sdk",
                 callee="easynet:///r/example/device/dev-a",
-                ability="er.weather",
+                ability="easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
                 subject="easynet:///r/example/device/dev-a",
                 nonce=bytes(range(1, 17)),
                 causal=None,

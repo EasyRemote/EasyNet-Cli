@@ -509,7 +509,7 @@ class ReceiptTests(unittest.TestCase):
             subject_ura="easynet:///r/example/device/dev-a",
             nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
             causal_context=causal_context,
-            ability_name="child.echo",
+            ability_ura="easynet:///r/example/ability/device.dev-a.child.echo",
             args={},
         )
         self.assertEqual(child.causal_context["form"], "scalar")

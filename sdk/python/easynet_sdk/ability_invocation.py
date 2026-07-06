@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from .bidi import BidiSession, BidiStreamDescriptor
-from .errors import ErrorCode, RetryHint, SDKError, is_code
+from .errors import ErrorCode, RetryHint, SDKError
 from .identity import AddressingClient, DescriptorRefRequest
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
 from .receipt import ReceiptClient
@@ -34,7 +34,6 @@ class AbilityCallRequest:
     causal_context: Mapping[str, object]
     descriptor_ref: str = ""
     ability_ura: str = ""
-    ability_name: str = ""
     descriptor_version: str = "1.0.0"
     content_type: str = "application/json"
     args: Any = field(default_factory=dict)
@@ -52,8 +51,6 @@ class AbilityTargetRequest:
     causal_context: Mapping[str, object]
     descriptor_ref: str = ""
     ability_ura: str = ""
-    owner_ura: str = ""
-    ability_name: str = ""
     subject_ura: str = ""
     descriptor_version: str = "1.0.0"
     content_type: str = "application/json"
@@ -89,8 +86,6 @@ class AbilityChildContext:
         *,
         descriptor_ref: str = "",
         ability_ura: str = "",
-        owner_ura: str = "",
-        ability_name: str = "",
         subject_ura: str = "",
         descriptor_version: str = "1.0.0",
         content_type: str = "application/json",
@@ -107,8 +102,6 @@ class AbilityChildContext:
             causal_context=_required_mapping(self.causal_context, "causal_context"),
             descriptor_ref=descriptor_ref,
             ability_ura=ability_ura,
-            owner_ura=owner_ura,
-            ability_name=ability_name,
             subject_ura=subject_ura,
             descriptor_version=descriptor_version,
             content_type=content_type,
@@ -125,7 +118,6 @@ class AbilityChildContext:
         subject_ura: str,
         descriptor_ref: str = "",
         ability_ura: str = "",
-        ability_name: str = "",
         descriptor_version: str = "1.0.0",
         content_type: str = "application/json",
         args: Any = None,
@@ -143,7 +135,6 @@ class AbilityChildContext:
             causal_context=_required_mapping(self.causal_context, "causal_context"),
             descriptor_ref=descriptor_ref,
             ability_ura=ability_ura,
-            ability_name=ability_name,
             descriptor_version=descriptor_version,
             content_type=content_type,
             args={} if args is None else args,
@@ -229,14 +220,7 @@ class AbilityInvocationClient:
                 version,
             )
         else:
-            ability_ura = self.addressing.owner_ability_ura(
-                _required_string(request.owner_ura, "owner_ura"),
-                _required_string(request.ability_name, "ability_name"),
-            )
-            descriptor_ref = self.addressing.canonical_ability_descriptor_ref(
-                ability_ura,
-                version,
-            )
+            raise _invalid_ability_invocation("unknown ability target selector")
         address = self.addressing.ability_address(ability_ura)
         subject_ura = request.subject_ura or address.subject_ura
         return ResolvedAbilityTarget(
@@ -442,61 +426,45 @@ class AbilityInvocationClient:
         self.close()
 
     def _descriptor_ref(self, request: AbilityCallRequest) -> str:
+        descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
+        ability_ura = _selector_string(request.ability_ura, "ability_ura")
         selectors = tuple(
-            value.strip()
-            for value in (
-                request.descriptor_ref,
-                request.ability_ura,
-                request.ability_name,
-            )
-            if value.strip()
+            value for value in (descriptor_ref, ability_ura) if value
         )
         if len(selectors) != 1:
             raise _invalid_ability_invocation(
-                "exactly one of descriptor_ref, ability_ura, or ability_name is required"
+                "exactly one of descriptor_ref or ability_ura is required"
             )
-        if request.descriptor_ref.strip():
+        if descriptor_ref:
             return self.addressing.canonical_ability_descriptor_ref(
-                request.descriptor_ref
+                descriptor_ref
             )
         version = _required_string(request.descriptor_version, "descriptor_version")
-        if request.ability_ura.strip():
+        if ability_ura:
             return self.addressing.canonical_ability_descriptor_ref(
-                request.ability_ura,
+                ability_ura,
                 version,
             )
-        return self.addressing.owner_ability_descriptor_ref(
-            _required_string(request.callee_ura, "callee_ura"),
-            _required_string(request.ability_name, "ability_name"),
-            version,
-        )
+        raise _invalid_ability_invocation("unknown ability invocation selector")
 
     def _target_selector(self, request: AbilityTargetRequest) -> str:
         descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
         ability_ura = _selector_string(request.ability_ura, "ability_ura")
-        owner_ura = _selector_string(request.owner_ura, "owner_ura")
-        ability_name = _selector_string(request.ability_name, "ability_name")
         selector_count = sum(
             (
                 bool(descriptor_ref),
                 bool(ability_ura),
-                bool(owner_ura or ability_name),
             )
         )
         if selector_count != 1:
             raise _invalid_ability_invocation(
-                "exactly one of descriptor_ref, ability_ura, or owner_ura plus "
-                "ability_name is required"
-            )
-        if bool(owner_ura) != bool(ability_name):
-            raise _invalid_ability_invocation(
-                "owner_ura and ability_name must be provided together"
+                "exactly one of descriptor_ref or ability_ura is required"
             )
         if descriptor_ref:
             return "descriptor_ref"
         if ability_ura:
             return "ability_ura"
-        return "owner_ability"
+        raise _invalid_ability_invocation("unknown ability target selector")
 
     def _require_open(self) -> RuntimeClient:
         if self._closed:
@@ -540,20 +508,7 @@ class InvocationObjectAdapter:
             descriptor_version=version,
             selector="descriptor_ref",
         )
-        try:
-            return self.invoker.build_invocation(direct_request)
-        except SDKError as exc:
-            if not _is_descriptor_selector_rejection(exc):
-                raise
-        return self.invoker.build_invocation(
-            self._request_from_tuple(
-                tuple_,
-                metadata=metadata,
-                caller_signature=caller_signature,
-                descriptor_version=version,
-                selector="ability_name",
-            )
-        )
+        return self.invoker.build_invocation(direct_request)
 
     def to_wire_dict(
         self,
@@ -651,9 +606,10 @@ class InvocationObjectAdapter:
         ability = _required_string(_tuple_value(tuple_, "ability"), "ability")
         selector_kwargs: dict[str, str] = {}
         if selector == "descriptor_ref":
-            selector_kwargs["descriptor_ref"] = ability
-        elif selector == "ability_name":
-            selector_kwargs["ability_name"] = ability
+            if _is_ability_ura_text(ability):
+                selector_kwargs["ability_ura"] = ability
+            else:
+                selector_kwargs["descriptor_ref"] = ability
         else:
             raise _invalid_ability_invocation("unknown invocation object selector")
         return AbilityCallRequest(
@@ -692,6 +648,10 @@ def _selector_string(value: object, field_name: str) -> str:
     return value
 
 
+def _is_ability_ura_text(value: str) -> bool:
+    return value.startswith("easynet:///") and "/ability/" in value and "@" not in value
+
+
 def _required_mapping(
     value: Mapping[str, object] | object, field_name: str
 ) -> Mapping[str, object]:
@@ -718,13 +678,6 @@ def _invalid_ability_invocation(message: str) -> SDKError:
         retryable=False,
         message=message,
     )
-
-
-def _is_descriptor_selector_rejection(error: SDKError) -> bool:
-    return is_code(error, ErrorCode.INVALID_ARGUMENT) and error.stage in {
-        "directory_identity",
-        "identity",
-    }
 
 
 def _tuple_value(tuple_: object, field_name: str) -> object:

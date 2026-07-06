@@ -399,7 +399,7 @@ class SdkEnvironmentTests(unittest.TestCase):
                     subject_ura="easynet:///r/example/device/dev-a",
                     nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                     causal_context={"form": "none"},
-                    ability_name="observe.health",
+                    ability_ura="easynet:///r/example/ability/device.dev-a.observe.health",
                     args={},
                 )
             )
@@ -409,7 +409,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(raw.init_paths, ["/tmp/control.json", "/tmp/control.json"])
         self.assertEqual(
             [entry[0] for entry in raw.identity_requests],
-            ["build_ura", "project_ura", "build_descriptor_ref"],
+            ["build_descriptor_ref"],
         )
         self.assertEqual(raw.runtime_requests[0][0], "invoke")
         self.assertEqual(raw.shutdown_handles, [42, 42])
