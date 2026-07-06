@@ -550,6 +550,9 @@ _RAW_URA_SHAPE_LITERALS = {
     "/resource/",
     "/user/",
 }
+_RAW_URA_LITERAL = re.compile(
+    r"\beasynet:///r/[^/]+/(agent|ability|device|hub|resource|user)(?:/|$)"
+)
 _RAW_URA_SHAPE_METHODS = {
     "endswith",
     "find",
@@ -590,17 +593,42 @@ def _audit_raw_ura_shape_literals(
 
 
 def _raw_ura_shape_markers(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _raw_ura_literal_markers(node.value)
     if isinstance(node, ast.Compare):
         if any(
             isinstance(op, (ast.In, ast.NotIn, ast.Eq, ast.NotEq))
             for op in node.ops
         ):
-            return _string_constants_in(node) & _RAW_URA_SHAPE_LITERALS
+            return _raw_ura_markers_in(node) & _RAW_URA_SHAPE_LITERALS
     if isinstance(node, ast.Call):
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr in _RAW_URA_SHAPE_METHODS:
-            return _string_constants_in_args(node.args) & _RAW_URA_SHAPE_LITERALS
+            return _raw_ura_markers_in_args(node.args) & _RAW_URA_SHAPE_LITERALS
     return set()
+
+
+def _raw_ura_markers_in(node: ast.AST) -> set[str]:
+    markers: set[str] = set()
+    for value in _string_constants_in(node):
+        markers.update(_raw_ura_literal_markers(value))
+    return markers
+
+
+def _raw_ura_markers_in_args(nodes: Iterable[ast.AST]) -> set[str]:
+    markers: set[str] = set()
+    for node in nodes:
+        markers.update(_raw_ura_markers_in(node))
+    return markers
+
+
+def _raw_ura_literal_markers(value: str) -> set[str]:
+    markers = {marker for marker in _RAW_URA_SHAPE_LITERALS if marker in value}
+    match = _RAW_URA_LITERAL.search(value)
+    if match:
+        markers.add("easynet:///r/")
+        markers.add(f"/{match.group(1)}/")
+    return markers
 
 
 def _string_constants_in(node: ast.AST) -> set[str]:

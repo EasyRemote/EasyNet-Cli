@@ -459,6 +459,12 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
 
                     def is_user(value):
                         return value.startswith("/user/")
+
+                    def hardcoded_user():
+                        return "easynet:///r/example/user/alice"
+
+                    def exact_hub(value):
+                        return value == "easynet:///r/example/hub"
                     '''
                 ),
                 encoding="utf-8",
@@ -476,6 +482,7 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
             "/hub/",
             "/resource/",
             "/user/",
+            "easynet:///r/",
         ):
             self.assertIn(marker, details)
 
@@ -621,7 +628,7 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
             (root / "docs_only.py").write_text(
                 textwrap.dedent(
                     '''
-                    """Mentions easynet_daemon_start, dlopen, /agent/, and /user/ in prose only."""
+                    """Mentions easynet_daemon_start, dlopen, /agent/, /user/, and easynet:///r/example/hub in prose only."""
 
                     # ctypes.CDLL("libeasynet_cli.dylib")
                     # symbol = "easynet_runtime_invoke"
