@@ -7,6 +7,12 @@ export declare const RetryHint: Readonly<{
   AFTER_BACKOFF: "after_backoff";
   UNKNOWN: "unknown";
 }>;
+export declare const DEFAULT_DIRECTORY_PAGE_SIZE: 50;
+export declare const MAX_DIRECTORY_PAGE_SIZE: 500;
+export declare const DIRECTORY_IDENTITY_PROFILE: "directory_identity";
+export declare const DEFAULT_DIRECTORY_PAGE_SIZE: 50;
+export declare const MAX_DIRECTORY_PAGE_SIZE: 500;
+export declare const DIRECTORY_IDENTITY_PROFILE: "directory_identity";
 
 export interface SDKErrorOptions {
   code: string;
@@ -52,6 +58,158 @@ export class Client {
   constructor(transport: DiscoveryTransport);
   featureDiscovery(): Promise<FeatureSet>;
   requireABI(expected: number): Promise<FeatureSet>;
+  close(): Promise<void>;
+}
+
+export interface IdentityTransport {
+  projectDescriptorRef(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDescriptorRef?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  ownerAbilityURA?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  resourceURA?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class IdentityClient {
+  constructor(transport: IdentityTransport);
+  projectDescriptorRef(request: Record<string, unknown>): Promise<Record<string, unknown>>;
+  buildDescriptorRef(request: Record<string, unknown>): Promise<Record<string, unknown>>;
+  canonicalAbilityDescriptorRef(value: string, descriptorVersion?: string): Promise<string>;
+  abilityURAFromDescriptorRef(descriptorRef: string): Promise<string>;
+  ownerAbilityURA(ownerURA: string, abilityName: string): Promise<string>;
+  ownerAbilityDescriptorRef(ownerURA: string, abilityName: string, descriptorVersion: string): Promise<string>;
+  resourceURA(ownerURA: string, path: string): Promise<string>;
+  close(): Promise<void>;
+}
+
+export interface DirectoryTransport {
+  resolve(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listDevices?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listAgents?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listAbilities?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDirectorySubscriptionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  subscribeDirectory?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
+  close?(): Promise<void> | void;
+}
+
+export class DirectoryClient {
+  constructor(transport: DirectoryTransport);
+  resolve(query: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listDevices(query: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listAgents(query: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listAbilities(query: Record<string, unknown>): Promise<Record<string, unknown>>;
+  buildDirectorySubscriptionInvocation(request: Record<string, unknown>): Promise<Record<string, unknown>>;
+  subscribeDirectory(request: Record<string, unknown>): Promise<StreamHandle>;
+  close(): Promise<void>;
+}
+
+export interface IdentityTransport {
+  projectDescriptorRef(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDescriptorRef?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  ownerAbilityURA?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  resourceURA?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export interface DescriptorRefRequest {
+  descriptor_ref: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DescriptorRefBuildRequest {
+  ability_ura: string;
+  descriptor_version: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IdentityProjection {
+  kind?: string;
+  valid?: boolean;
+  ura?: string;
+  descriptor_ref?: string;
+  ability_ura?: string;
+  descriptor_version?: string;
+  profile?: string;
+  components?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export class IdentityClient {
+  constructor(transport: IdentityTransport);
+  projectDescriptorRef(request: DescriptorRefRequest): Promise<IdentityProjection>;
+  buildDescriptorRef(request: DescriptorRefBuildRequest): Promise<IdentityProjection>;
+  canonicalAbilityDescriptorRef(value: string, descriptorVersion?: string): Promise<string>;
+  abilityURAFromDescriptorRef(descriptorRef: string): Promise<string>;
+  ownerAbilityURA(ownerURA: string, abilityName: string): Promise<string>;
+  ownerAbilityDescriptorRef(ownerURA: string, abilityName: string, descriptorVersion: string): Promise<string>;
+  resourceURA(ownerURA: string, path: string): Promise<string>;
+  close(): Promise<void>;
+}
+
+export interface DirectoryQueryBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  limit?: number;
+  cursor?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ResolveQuery extends DirectoryQueryBase {
+  query_name?: string;
+  ability_name?: string;
+  qtype?: string;
+  realm_hint?: string;
+  peer_hub_urls?: string[];
+}
+
+export interface DeviceQuery extends DirectoryQueryBase {}
+export interface AgentQuery extends DirectoryQueryBase {}
+
+export interface AbilityQuery extends DirectoryQueryBase {
+  scope?: string;
+  owner_ura?: string;
+  ability_ura?: string;
+}
+
+export interface DirectorySubscriptionCursor {
+  stream: string;
+  sequence: number;
+  token?: string;
+}
+
+export interface DirectorySubscriptionRequest extends DirectoryQueryBase {
+  stream?: "directory";
+  realm?: string;
+  owner_ura?: string;
+  device_ura?: string;
+  agent_ura?: string;
+  ability_ura?: string;
+  item_kind?: string;
+  resume_cursor?: DirectorySubscriptionCursor;
+  heartbeat_interval_ms?: number;
+}
+
+export interface DirectoryTransport {
+  resolve(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listDevices?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listAgents?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listAbilities?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDirectorySubscriptionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  subscribeDirectory?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
+  close?(): Promise<void> | void;
+}
+
+export class DirectoryClient {
+  constructor(transport: DirectoryTransport);
+  resolve(query: ResolveQuery): Promise<Record<string, unknown>>;
+  listDevices(query: DeviceQuery): Promise<Record<string, unknown>>;
+  listAgents(query: AgentQuery): Promise<Record<string, unknown>>;
+  listAbilities(query: AbilityQuery): Promise<Record<string, unknown>>;
+  buildDirectorySubscriptionInvocation(request: DirectorySubscriptionRequest): Promise<Record<string, unknown>>;
+  subscribeDirectory(request: DirectorySubscriptionRequest): Promise<StreamHandle>;
   close(): Promise<void>;
 }
 

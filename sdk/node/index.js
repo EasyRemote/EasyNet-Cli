@@ -36,6 +36,10 @@ export const RetryHint = Object.freeze({
   UNKNOWN: "unknown",
 });
 
+export const DEFAULT_DIRECTORY_PAGE_SIZE = 50;
+export const MAX_DIRECTORY_PAGE_SIZE = 500;
+export const DIRECTORY_IDENTITY_PROFILE = "directory_identity";
+
 export class SDKError extends Error {
   constructor({
     code,
@@ -137,6 +141,211 @@ export class Client {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class IdentityClient {
+  constructor(transport) {
+    if (!transport || typeof transport.projectDescriptorRef !== "function") {
+      throw invalidSDK("identity transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async projectDescriptorRef(request) {
+    const payload = identityRequest(request, ["descriptor_ref", "metadata"]);
+    cleanRequiredString(payload.descriptor_ref, "descriptor_ref");
+    return callJSON(this.requireOpen(), "projectDescriptorRef", payload, "identity descriptor_ref projection");
+  }
+
+  async buildDescriptorRef(request) {
+    const payload = identityRequest(request, ["ability_ura", "descriptor_version", "metadata"]);
+    cleanRequiredString(payload.ability_ura, "ability_ura");
+    cleanRequiredString(payload.descriptor_version, "descriptor_version");
+    return callJSON(this.requireOpen(), "buildDescriptorRef", payload, "identity descriptor_ref build");
+  }
+
+  async canonicalAbilityDescriptorRef(value, descriptorVersion = "") {
+    cleanRequiredString(value, descriptorVersion ? "ability_ura" : "descriptor_ref");
+    if (descriptorVersion) {
+      const projection = await this.buildDescriptorRef({
+        ability_ura: value,
+        descriptor_version: descriptorVersion,
+      });
+      return requiredWireString(projection.descriptor_ref, "descriptor_ref");
+    }
+    const projection = await this.projectDescriptorRef({ descriptor_ref: value });
+    return requiredWireString(projection.descriptor_ref, "descriptor_ref");
+  }
+
+  async abilityURAFromDescriptorRef(descriptorRef) {
+    const projection = await this.projectDescriptorRef({ descriptor_ref: descriptorRef });
+    return requiredWireString(projection.ability_ura, "ability_ura");
+  }
+
+  async ownerAbilityURA(ownerURA, abilityName) {
+    cleanRequiredString(ownerURA, "owner_ura");
+    cleanRequiredString(abilityName, "ability_name");
+    const projection = await callJSON(
+      this.requireOpen(),
+      "ownerAbilityURA",
+      { owner_ura: ownerURA, ability_name: abilityName },
+      "identity owner ability URA",
+    );
+    return requiredWireString(projection.ability_ura ?? projection.ura, "ability_ura");
+  }
+
+  async ownerAbilityDescriptorRef(ownerURA, abilityName, descriptorVersion) {
+    const abilityURA = await this.ownerAbilityURA(ownerURA, abilityName);
+    return this.canonicalAbilityDescriptorRef(abilityURA, descriptorVersion);
+  }
+
+  async resourceURA(ownerURA, path) {
+    cleanRequiredString(ownerURA, "owner_ura");
+    cleanRequiredString(path, "path");
+    const projection = await callJSON(
+      this.requireOpen(),
+      "resourceURA",
+      { owner_ura: ownerURA, path },
+      "identity resource URA",
+    );
+    return requiredWireString(projection.resource_ura ?? projection.ura, "resource_ura");
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("identity client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class DirectoryClient {
+  constructor(transport) {
+    if (!transport || typeof transport.resolve !== "function") {
+      throw invalidSDK("directory transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async resolve(query) {
+    const payload = directoryRequest(query, [
+      ...directoryBaseFields(),
+      "query_name",
+      "ability_name",
+      "qtype",
+      "realm_hint",
+      "peer_hub_urls",
+    ]);
+    validateDirectoryBase(payload, false);
+    if (!payload.query_name && !payload.realm_hint) {
+      throw invalidDirectory("query_name or realm_hint is required");
+    }
+    return callJSON(this.requireOpen(), "resolve", payload, "directory resolve");
+  }
+
+  async listDevices(query) {
+    return this.listPage("listDevices", query, "directory devices page", directoryBaseFields());
+  }
+
+  async listAgents(query) {
+    return this.listPage("listAgents", query, "directory agents page", directoryBaseFields());
+  }
+
+  async listAbilities(query) {
+    return this.listPage("listAbilities", query, "directory abilities page", [
+      ...directoryBaseFields(),
+      "scope",
+      "owner_ura",
+      "ability_ura",
+    ]);
+  }
+
+  async listPage(method, query, label, allowed) {
+    const payload = directoryRequest(query, allowed);
+    applyDirectoryDefaultLimit(payload);
+    validateDirectoryBase(payload, true);
+    return callJSON(this.requireOpen(), method, payload, label);
+  }
+
+  async buildDirectorySubscriptionInvocation(request) {
+    const payload = directoryRequest(request, [
+      ...directoryBaseFields(),
+      "stream",
+      "realm",
+      "owner_ura",
+      "device_ura",
+      "agent_ura",
+      "ability_ura",
+      "item_kind",
+      "resume_cursor",
+      "heartbeat_interval_ms",
+    ]);
+    validateDirectoryBase(payload, false);
+    if (payload.stream && payload.stream !== "directory") {
+      throw invalidDirectory("directory subscription stream mismatch");
+    }
+    payload.stream = payload.stream || "directory";
+    if (payload.heartbeat_interval_ms !== undefined && (!Number.isInteger(payload.heartbeat_interval_ms) || payload.heartbeat_interval_ms < 0)) {
+      throw invalidDirectory("heartbeat_interval_ms must be non-negative");
+    }
+    return callJSON(this.requireOpen(), "buildDirectorySubscriptionInvocation", payload, "directory subscription invocation");
+  }
+
+  async subscribeDirectory(request) {
+    const payload = directoryRequest(request, [
+      ...directoryBaseFields(),
+      "stream",
+      "realm",
+      "owner_ura",
+      "device_ura",
+      "agent_ura",
+      "ability_ura",
+      "item_kind",
+      "resume_cursor",
+      "heartbeat_interval_ms",
+    ]);
+    validateDirectoryBase(payload, false);
+    payload.stream = payload.stream || "directory";
+    const transport = this.requireOpen();
+    if (typeof transport.subscribeDirectory !== "function") {
+      throw invalidSDK("directory subscribe transport function is required");
+    }
+    const result = await transport.subscribeDirectory(Buffer.from(JSON.stringify(payload)));
+    return new StreamHandle(result.transport, parseJSON(result.open, "directory subscription open"));
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("directory client is closed");
     }
     return this.transport;
   }
@@ -542,6 +751,94 @@ export class BidiSession {
   }
 }
 
+function callJSON(transport, method, payload, label) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  return Promise.resolve(transport[method](Buffer.from(JSON.stringify(payload)))).then((raw) =>
+    parseJSON(raw, label),
+  );
+}
+
+function identityRequest(value, allowed) {
+  return requestObject(value, allowed, "identity request");
+}
+
+function directoryRequest(value, allowed) {
+  return requestObject(value, allowed, "directory request");
+}
+
+function requestObject(value, allowed, label) {
+  const payload = objectValue(value, label);
+  rejectUnknownFields(payload, allowed);
+  for (const [key, raw] of Object.entries(payload)) {
+    if (typeof raw === "string" && raw.trim() !== raw) {
+      throw invalidSDK(`${key} must not contain surrounding whitespace`);
+    }
+  }
+  return payload;
+}
+
+function directoryBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "limit",
+    "cursor",
+    "metadata",
+  ];
+}
+
+function validateDirectoryBase(payload, requireLimit) {
+  cleanRequiredString(payload.caller_ura, "caller_ura");
+  cleanRequiredString(payload.callee_ura, "callee_ura");
+  cleanRequiredString(payload.subject_ura, "subject_ura");
+  cleanRequiredString(payload.descriptor_version, "descriptor_version");
+  cleanRequiredString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  if (payload.cursor !== undefined) {
+    cleanOptionalString(payload.cursor, "cursor");
+  }
+  if (requireLimit) {
+    validateDirectoryLimit(payload.limit);
+  } else if (payload.limit !== undefined) {
+    validateDirectoryLimit(payload.limit);
+  }
+}
+
+function applyDirectoryDefaultLimit(payload) {
+  if (payload.limit === undefined || payload.limit === 0) {
+    payload.limit = DEFAULT_DIRECTORY_PAGE_SIZE;
+  }
+}
+
+function validateDirectoryLimit(value) {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_DIRECTORY_PAGE_SIZE) {
+    throw invalidDirectory(`limit must be between 1 and ${MAX_DIRECTORY_PAGE_SIZE}`);
+  }
+}
+
+function cleanRequiredString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidSDK(`${field} is required`);
+  }
+  return value;
+}
+
+function cleanOptionalString(value, field) {
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidSDK(`${field} must be a string without surrounding whitespace`);
+  }
+  return value;
+}
+
 function assertDraft(value) {
   if (!(value instanceof InvocationDraft)) {
     throw invalidInvocation("invocation draft is required");
@@ -746,6 +1043,16 @@ function invalidSDK(message) {
     code: ErrorCode.INVALID_ARGUMENT,
     stage: "sdk",
     retry: RetryHint.NEVER,
+    message,
+  });
+}
+
+function invalidDirectory(message) {
+  return new SDKError({
+    code: ErrorCode.INVALID_ARGUMENT,
+    stage: "directory",
+    retry: RetryHint.NEVER,
+    source: DIRECTORY_IDENTITY_PROFILE,
     message,
   });
 }

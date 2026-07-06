@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   Client,
+  DEFAULT_DIRECTORY_PAGE_SIZE,
+  DirectoryClient,
   ErrorCode,
+  IdentityClient,
   InvocationBuilder,
   RuntimeClient,
   SDKError,
@@ -19,6 +22,15 @@ const completeDraft = () =>
     .withCausalContext({ form: "none" })
     .withJSONArgs({})
     .withContentType("application/json");
+
+const directoryBase = () => ({
+  caller_ura: "easynet:///r/example/agent/alice.sdk",
+  callee_ura: "easynet:///r/example/device/dev-a",
+  subject_ura: "easynet:///r/example/device/dev-a",
+  descriptor_version: "1.0.0",
+  nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+  causal_context: { form: "none" },
+});
 
 test("feature discovery decodes canonical Runtime Core facts", async () => {
   const client = new Client({
@@ -221,4 +233,158 @@ test("BidiSession exposes async iteration and AbortSignal cancellation", async (
     (error) => error instanceof SDKError && error.code === ErrorCode.CANCELLED,
   );
   assert.deepEqual(cancelled, ["stop bidi"]);
+});
+
+test("IdentityClient delegates DescriptorRef and URA projections without local grammar", async () => {
+  const seen = [];
+  const identity = new IdentityClient({
+    projectDescriptorRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project", request });
+      return JSON.stringify({
+        kind: "descriptor_ref",
+        valid: true,
+        descriptor_ref: request.descriptor_ref,
+        ability_ura: "easynet:///r/example/ability/device.dev-a.observe.health",
+        descriptor_version: "1.0.0",
+        profile: "directory_identity",
+        components: {},
+        metadata: {},
+      });
+    },
+    buildDescriptorRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build", request });
+      return JSON.stringify({
+        kind: "descriptor_ref",
+        valid: true,
+        descriptor_ref: `${request.ability_ura}@${request.descriptor_version}`,
+        ability_ura: request.ability_ura,
+        descriptor_version: request.descriptor_version,
+        profile: "directory_identity",
+        components: {},
+        metadata: {},
+      });
+    },
+    ownerAbilityURA: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "owner", request });
+      return JSON.stringify({
+        ability_ura: "easynet:///r/example/ability/device.dev-a.observe.health",
+      });
+    },
+    resourceURA: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "resource", request });
+      return JSON.stringify({
+        resource_ura: "easynet:///r/example/resource/alice.docs",
+      });
+    },
+  });
+
+  const ability = await identity.abilityURAFromDescriptorRef(
+    "opaque-descriptor-ref-from-identity-profile",
+  );
+  assert.equal(ability, "easynet:///r/example/ability/device.dev-a.observe.health");
+
+  const descriptor = await identity.ownerAbilityDescriptorRef(
+    "easynet:///r/example/device/dev-a",
+    "observe.health",
+    "1.0.0",
+  );
+  assert.equal(descriptor, "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0");
+
+  const resource = await identity.resourceURA("easynet:///r/example/agent/alice.sdk", "docs");
+  assert.equal(resource, "easynet:///r/example/resource/alice.docs");
+  assert.deepEqual(seen.map((item) => item.method), ["project", "owner", "build", "resource"]);
+
+  await assert.rejects(
+    () => identity.projectDescriptorRef({ descriptor_ref: " descriptor " }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("DirectoryClient delegates bounded read-model pages without fanout", async () => {
+  const seen = [];
+  const directory = new DirectoryClient({
+    resolve: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "resolve", request });
+      return JSON.stringify({ kind: "resolved_ref", profile: "directory_identity" });
+    },
+    listDevices: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "devices", request });
+      return JSON.stringify({
+        profile: "directory_identity",
+        kind: "device_page",
+        items: [],
+        next_cursor: "",
+        metadata: {},
+      });
+    },
+    listAbilities: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "abilities", request });
+      return JSON.stringify({
+        profile: "directory_identity",
+        kind: "ability_page",
+        items: [],
+        next_cursor: "",
+        metadata: {},
+      });
+    },
+  });
+
+  await directory.resolve({ ...directoryBase(), query_name: "dev-a", ability_name: "observe.health" });
+  const devices = await directory.listDevices(directoryBase());
+  const abilities = await directory.listAbilities({
+    ...directoryBase(),
+    limit: 25,
+    scope: "owner",
+    owner_ura: "easynet:///r/example/device/dev-a",
+  });
+
+  assert.equal(devices.kind, "device_page");
+  assert.equal(abilities.kind, "ability_page");
+  assert.equal(seen[1].request.limit, DEFAULT_DIRECTORY_PAGE_SIZE);
+  assert.equal(seen[2].request.limit, 25);
+  assert.equal(seen[2].request.owner_ura, "easynet:///r/example/device/dev-a");
+
+  await assert.rejects(
+    () => directory.listDevices({ ...directoryBase(), limit: 501 }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => directory.resolve({ ...directoryBase() }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("DirectoryClient exposes subscription as StreamHandle seam", async () => {
+  const events = [
+    { kind: "directory_event", phase: "live" },
+    { kind: "directory_event", phase: "terminal", terminal: true },
+  ];
+  const directory = new DirectoryClient({
+    resolve: () => JSON.stringify({ kind: "resolved_ref" }),
+    subscribeDirectory: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      assert.equal(request.stream, "directory");
+      return {
+        open: JSON.stringify({ stream: "directory", state: "Live" }),
+        transport: {
+          receive: () => JSON.stringify(events.shift()),
+          close: () => {},
+        },
+      };
+    },
+  });
+
+  const stream = await directory.subscribeDirectory(directoryBase());
+  const phases = [];
+  for await (const event of stream.events()) {
+    phases.push(event.phase);
+  }
+  assert.deepEqual(phases, ["live", "terminal"]);
 });
