@@ -14,8 +14,10 @@ from .errors import (
     canonical_failure_code,
     profile_error_details,
 )
+from .bidi import BidiSession, BidiStreamDescriptor
 from .invocation import InvocationDraft
 from .runtime import RuntimeClient
+from .stream import StreamHandle
 
 
 _PROFILE = "wrappers"
@@ -319,6 +321,51 @@ class WrapperTransport(Protocol):
         ...
 
 
+@runtime_checkable
+class WrapperSessionTransport(Protocol):
+    """Optional Runtime Core stream/bidi transport for session wrappers."""
+
+    def open_terminal_session_stream(self, request_json: bytes) -> StreamHandle:
+        ...
+
+    def open_terminal_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        ...
+
+    def open_remote_desktop_session_stream(self, request_json: bytes) -> StreamHandle:
+        ...
+
+    def open_remote_desktop_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        ...
+
+    def open_browser_session_stream(self, request_json: bytes) -> StreamHandle:
+        ...
+
+    def open_browser_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        ...
+
+    def open_media_session_stream(self, request_json: bytes) -> StreamHandle:
+        ...
+
+    def open_media_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        ...
+
+
 @dataclass
 class RuntimeWrapperTransport:
     """Wrapper transport that executes helpers through Runtime Core."""
@@ -385,6 +432,74 @@ class RuntimeWrapperTransport:
             project_method="project_media_session",
             failure_message="wrapper media session invocation failed",
             output_message="wrapper media session output must be an object",
+        )
+
+    def open_terminal_session_stream(self, request_json: bytes) -> StreamHandle:
+        return self._invoke_stream(
+            request_json,
+            build_method="build_terminal_session_invocation",
+        )
+
+    def open_terminal_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        return self._open_bidi(
+            request_json,
+            build_method="build_terminal_session_invocation",
+            streams=streams,
+        )
+
+    def open_remote_desktop_session_stream(self, request_json: bytes) -> StreamHandle:
+        return self._invoke_stream(
+            request_json,
+            build_method="build_remote_desktop_session_invocation",
+        )
+
+    def open_remote_desktop_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        return self._open_bidi(
+            request_json,
+            build_method="build_remote_desktop_session_invocation",
+            streams=streams,
+        )
+
+    def open_browser_session_stream(self, request_json: bytes) -> StreamHandle:
+        return self._invoke_stream(
+            request_json,
+            build_method="build_browser_session_invocation",
+        )
+
+    def open_browser_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        return self._open_bidi(
+            request_json,
+            build_method="build_browser_session_invocation",
+            streams=streams,
+        )
+
+    def open_media_session_stream(self, request_json: bytes) -> StreamHandle:
+        return self._invoke_stream(
+            request_json,
+            build_method="build_media_session_invocation",
+        )
+
+    def open_media_session_bidi(
+        self,
+        request_json: bytes,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        return self._open_bidi(
+            request_json,
+            build_method="build_media_session_invocation",
+            streams=streams,
         )
 
     def project_file_record(self, file_json: bytes) -> bytes:
@@ -455,6 +570,22 @@ class RuntimeWrapperTransport:
         if not isinstance(output, dict):
             raise _invalid_wrappers(output_message)
         return getattr(self.carrier, project_method)(_json_bytes(output))
+
+    def _invoke_stream(self, request_json: bytes, *, build_method: str) -> StreamHandle:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        return self.runtime.invoke_stream(draft)
+
+    def _open_bidi(
+        self,
+        request_json: bytes,
+        *,
+        build_method: str,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        return self.runtime.open_bidi(draft, streams)
 
     def _require_open(self) -> None:
         if self._closed:
@@ -565,6 +696,92 @@ class WrapperClient:
             )
         )
 
+    def open_terminal_session_stream(self, request: WrapperTerminalStartRequest) -> StreamHandle:
+        self._require_open()
+        return self._stream(
+            request.to_json_bytes(),
+            self._session_transport().open_terminal_session_stream,
+            "wrapper terminal session stream failed",
+        )
+
+    def open_terminal_session_bidi(
+        self,
+        request: WrapperTerminalStartRequest,
+        streams: tuple[BidiStreamDescriptor, ...] = (),
+    ) -> BidiSession:
+        self._require_open()
+        return self._bidi(
+            request.to_json_bytes(),
+            self._session_transport().open_terminal_session_bidi,
+            streams,
+            "wrapper terminal session bidi failed",
+        )
+
+    def open_remote_desktop_session_stream(
+        self, request: WrapperRemoteDesktopStartRequest
+    ) -> StreamHandle:
+        self._require_open()
+        return self._stream(
+            request.to_json_bytes(),
+            self._session_transport().open_remote_desktop_session_stream,
+            "wrapper remote desktop session stream failed",
+        )
+
+    def open_remote_desktop_session_bidi(
+        self,
+        request: WrapperRemoteDesktopStartRequest,
+        streams: tuple[BidiStreamDescriptor, ...] = (),
+    ) -> BidiSession:
+        self._require_open()
+        return self._bidi(
+            request.to_json_bytes(),
+            self._session_transport().open_remote_desktop_session_bidi,
+            streams,
+            "wrapper remote desktop session bidi failed",
+        )
+
+    def open_browser_session_stream(self, request: WrapperBrowserStartRequest) -> StreamHandle:
+        self._require_open()
+        return self._stream(
+            request.to_json_bytes(),
+            self._session_transport().open_browser_session_stream,
+            "wrapper browser session stream failed",
+        )
+
+    def open_browser_session_bidi(
+        self,
+        request: WrapperBrowserStartRequest,
+        streams: tuple[BidiStreamDescriptor, ...] = (),
+    ) -> BidiSession:
+        self._require_open()
+        return self._bidi(
+            request.to_json_bytes(),
+            self._session_transport().open_browser_session_bidi,
+            streams,
+            "wrapper browser session bidi failed",
+        )
+
+    def open_media_session_stream(self, request: WrapperMediaStartRequest) -> StreamHandle:
+        self._require_open()
+        return self._stream(
+            request.to_json_bytes(),
+            self._session_transport().open_media_session_stream,
+            "wrapper media session stream failed",
+        )
+
+    def open_media_session_bidi(
+        self,
+        request: WrapperMediaStartRequest,
+        streams: tuple[BidiStreamDescriptor, ...] = (),
+    ) -> BidiSession:
+        self._require_open()
+        return self._bidi(
+            request.to_json_bytes(),
+            self._session_transport().open_media_session_bidi,
+            streams,
+            "wrapper media session bidi failed",
+        )
+
     def project_file_record(self, request: WrapperFileRecordRequest) -> WrapperFileRecord:
         _validate_file_request(request)
         return _file_record(
@@ -650,10 +867,43 @@ class WrapperClient:
             raise _invalid_wrappers("wrapper transport is required")
         return self.transport
 
+    def _session_transport(self) -> WrapperSessionTransport:
+        transport = self._transport()
+        if not isinstance(transport, WrapperSessionTransport):
+            raise _invalid_wrappers("wrapper session transport is required")
+        return transport
+
     def _invocation(
         self, request_json: bytes, fn: Callable[[bytes], bytes], label: str
     ) -> InvocationDraft:
         return InvocationDraft.from_json(self._execute(request_json, fn, label))
+
+    def _stream(
+        self,
+        request_json: bytes,
+        fn: Callable[[bytes], StreamHandle],
+        label: str,
+    ) -> StreamHandle:
+        try:
+            return fn(request_json)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
+
+    def _bidi(
+        self,
+        request_json: bytes,
+        fn: Callable[[bytes, tuple[BidiStreamDescriptor, ...]], BidiSession],
+        streams: tuple[BidiStreamDescriptor, ...],
+        label: str,
+    ) -> BidiSession:
+        try:
+            return fn(request_json, streams)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(label, exc) from exc
 
     def _execute(self, request_json: bytes, fn: Callable[[bytes], bytes], label: str) -> bytes:
         try:

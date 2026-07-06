@@ -2398,6 +2398,8 @@ func TestGoWrapperFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 		requireCaseFixture(t, wrapperCase, fixture)
 	}
 	requireCaseExpectation(t, wrapperCase, "execution_transport_owner: runtime_core")
+	requireCaseExpectation(t, wrapperCase, "stream_bidi_transport_owner: runtime_core")
+	requireCaseExpectation(t, wrapperCase, "runtime_wrapper_stream_bidi_facade: true")
 	requireCaseExpectation(t, wrapperCase, "product_http_websocket_owner: backend")
 	requireCaseExpectation(t, wrapperCase, "rejects_invalid_owner_ura: true")
 	requireCaseExpectation(t, wrapperCase, "rejects_missing_session_state: true")
@@ -2759,6 +2761,14 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"ProjectMediaSession":                 "wrappers.media.project_session",
 				"ProjectRemoteDesktopSession":         "wrappers.remote_desktop.project_session",
 				"ProjectTerminalSession":              "wrappers.terminal.project_session",
+				"OpenBrowserSessionBidi":              "wrappers.browser.open_bidi",
+				"OpenBrowserSessionStream":            "wrappers.browser.open_stream",
+				"OpenMediaSessionBidi":                "wrappers.media.open_bidi",
+				"OpenMediaSessionStream":              "wrappers.media.open_stream",
+				"OpenRemoteDesktopSessionBidi":        "wrappers.remote_desktop.open_bidi",
+				"OpenRemoteDesktopSessionStream":      "wrappers.remote_desktop.open_stream",
+				"OpenTerminalSessionBidi":             "wrappers.terminal.open_bidi",
+				"OpenTerminalSessionStream":           "wrappers.terminal.open_stream",
 				"StartBrowserSession":                 "wrappers.browser.start_session",
 				"StartMediaSession":                   "wrappers.media.start_session",
 				"StartRemoteDesktopSession":           "wrappers.remote_desktop.start_session",
@@ -2910,7 +2920,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "backend_hub",
 			Profile:  "wrappers",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"TransferFile", "StartTerminalSession", "StartRemoteDesktopSession", "StartBrowserSession", "StartMediaSession"}},
+				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"TransferFile", "StartTerminalSession", "StartRemoteDesktopSession", "StartBrowserSession", "StartMediaSession", "OpenTerminalSessionStream", "OpenTerminalSessionBidi", "OpenRemoteDesktopSessionStream", "OpenRemoteDesktopSessionBidi"}},
 			},
 		},
 		{
@@ -3004,7 +3014,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "cli",
 			Profile:  "wrappers",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"TransferFile", "StartTerminalSession"}},
+				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"TransferFile", "StartTerminalSession", "OpenTerminalSessionStream", "OpenTerminalSessionBidi"}},
 			},
 		},
 		{
@@ -3027,7 +3037,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "desktop_gui",
 			Profile:  "wrappers",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"StartTerminalSession", "StartRemoteDesktopSession"}},
+				{Type: reflect.TypeOf((*WrapperClient)(nil)), Methods: []string{"StartTerminalSession", "StartRemoteDesktopSession", "OpenTerminalSessionStream", "OpenTerminalSessionBidi", "OpenRemoteDesktopSessionStream", "OpenRemoteDesktopSessionBidi"}},
 			},
 		},
 		{

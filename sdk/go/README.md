@@ -62,7 +62,8 @@ OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
 Invocation carriers plus model, chat, stream, file, and file-delete projection
 seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
-builders, transport-backed helper close state seams, and record projections. Direct UDS transport,
+builders, Runtime Core stream/bidi session entry points, transport-backed helper
+close state seams, and record projections. Direct UDS transport,
 Axon-backed receipt verification,
 concrete publication/host-binding/mission
 carriers, daemon stream-backed mission event adapters, concrete Admin trust/session carriers,

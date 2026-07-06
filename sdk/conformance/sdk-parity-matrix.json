@@ -149,7 +149,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_bidi.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Concrete product wrapper stream adapters remain incomplete outside the daemon SDK."
+      "remaining": "P1 language facades and product stream cutovers remain incomplete outside the daemon SDK."
     },
     {
       "capability_id": "directory_identity",
@@ -289,7 +289,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_wrappers.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete."
+      "remaining": "Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade."
     },
     {
       "capability_id": "conformance_runner",

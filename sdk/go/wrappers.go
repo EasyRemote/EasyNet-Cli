@@ -180,6 +180,20 @@ type WrapperTransport interface {
 	StartMediaSession(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
+// WrapperSessionTransport optionally opens Runtime Core stream/bidi sessions for
+// session-oriented wrappers without making carrier/projection transports own
+// stream lifecycle semantics.
+type WrapperSessionTransport interface {
+	OpenTerminalSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error)
+	OpenTerminalSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error)
+	OpenRemoteDesktopSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error)
+	OpenRemoteDesktopSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error)
+	OpenBrowserSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error)
+	OpenBrowserSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error)
+	OpenMediaSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error)
+	OpenMediaSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error)
+}
+
 // WrapperTransportFunc adapts functions into a WrapperTransport.
 type WrapperTransportFunc struct {
 	BuildFileTransferInvocationFunc         func(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -361,6 +375,54 @@ func (c *WrapperClient) StartMediaSession(ctx context.Context, req WrapperMediaS
 	return NewWrapperMediaSessionRecordFromJSON(raw)
 }
 
+func (c *WrapperClient) OpenTerminalSessionStream(ctx context.Context, req WrapperTerminalStartRequest) (*StreamHandle, error) {
+	return c.openSessionStream(ctx, req, validateWrapperTerminalStartRequest, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+		return transport.OpenTerminalSessionStream(ctx, requestJSON)
+	}, "wrapper terminal session stream failed")
+}
+
+func (c *WrapperClient) OpenTerminalSessionBidi(ctx context.Context, req WrapperTerminalStartRequest, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	return c.openSessionBidi(ctx, req, validateWrapperTerminalStartRequest, streams, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+		return transport.OpenTerminalSessionBidi(ctx, requestJSON, streams)
+	}, "wrapper terminal session bidi failed")
+}
+
+func (c *WrapperClient) OpenRemoteDesktopSessionStream(ctx context.Context, req WrapperRemoteDesktopStartRequest) (*StreamHandle, error) {
+	return c.openSessionStream(ctx, req, validateWrapperRemoteDesktopStartRequest, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+		return transport.OpenRemoteDesktopSessionStream(ctx, requestJSON)
+	}, "wrapper remote desktop session stream failed")
+}
+
+func (c *WrapperClient) OpenRemoteDesktopSessionBidi(ctx context.Context, req WrapperRemoteDesktopStartRequest, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	return c.openSessionBidi(ctx, req, validateWrapperRemoteDesktopStartRequest, streams, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+		return transport.OpenRemoteDesktopSessionBidi(ctx, requestJSON, streams)
+	}, "wrapper remote desktop session bidi failed")
+}
+
+func (c *WrapperClient) OpenBrowserSessionStream(ctx context.Context, req WrapperBrowserStartRequest) (*StreamHandle, error) {
+	return c.openSessionStream(ctx, req, validateWrapperBrowserStartRequest, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+		return transport.OpenBrowserSessionStream(ctx, requestJSON)
+	}, "wrapper browser session stream failed")
+}
+
+func (c *WrapperClient) OpenBrowserSessionBidi(ctx context.Context, req WrapperBrowserStartRequest, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	return c.openSessionBidi(ctx, req, validateWrapperBrowserStartRequest, streams, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+		return transport.OpenBrowserSessionBidi(ctx, requestJSON, streams)
+	}, "wrapper browser session bidi failed")
+}
+
+func (c *WrapperClient) OpenMediaSessionStream(ctx context.Context, req WrapperMediaStartRequest) (*StreamHandle, error) {
+	return c.openSessionStream(ctx, req, validateWrapperMediaStartRequest, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+		return transport.OpenMediaSessionStream(ctx, requestJSON)
+	}, "wrapper media session stream failed")
+}
+
+func (c *WrapperClient) OpenMediaSessionBidi(ctx context.Context, req WrapperMediaStartRequest, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	return c.openSessionBidi(ctx, req, validateWrapperMediaStartRequest, streams, func(transport WrapperSessionTransport, ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+		return transport.OpenMediaSessionBidi(ctx, requestJSON, streams)
+	}, "wrapper media session bidi failed")
+}
+
 func (c *WrapperClient) ProjectFileRecord(req WrapperFileRecordRequest) (WrapperFileRecord, error) {
 	if c == nil {
 		return WrapperFileRecord{}, invalidProfileClient(wrappersProfile, "wrapper client is not initialized")
@@ -410,6 +472,58 @@ func (c *WrapperClient) execute(ctx context.Context, req any, validate func(any)
 		return nil, wrapWrapperTransportError(label, err)
 	}
 	return raw, nil
+}
+
+func (c *WrapperClient) openSessionStream(ctx context.Context, req any, validate func(any) error, fn func(WrapperSessionTransport, context.Context, []byte) (*StreamHandle, error), label string) (*StreamHandle, error) {
+	if err := c.requireTransportReady(ctx); err != nil {
+		return nil, err
+	}
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	requestJSON, err := marshalWrapperExecutionRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := c.sessionTransport()
+	if err != nil {
+		return nil, err
+	}
+	handle, err := fn(transport, ctx, requestJSON)
+	if err != nil {
+		return nil, wrapWrapperTransportError(label, err)
+	}
+	return handle, nil
+}
+
+func (c *WrapperClient) openSessionBidi(ctx context.Context, req any, validate func(any) error, streams []BidiStreamDescriptor, fn func(WrapperSessionTransport, context.Context, []byte, []BidiStreamDescriptor) (*BidiSession, error), label string) (*BidiSession, error) {
+	if err := c.requireTransportReady(ctx); err != nil {
+		return nil, err
+	}
+	if err := validate(req); err != nil {
+		return nil, err
+	}
+	requestJSON, err := marshalWrapperExecutionRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := c.sessionTransport()
+	if err != nil {
+		return nil, err
+	}
+	session, err := fn(transport, ctx, requestJSON, streams)
+	if err != nil {
+		return nil, wrapWrapperTransportError(label, err)
+	}
+	return session, nil
+}
+
+func (c *WrapperClient) sessionTransport() (WrapperSessionTransport, error) {
+	transport, ok := c.transport.(WrapperSessionTransport)
+	if !ok {
+		return nil, invalidProfileClient(wrappersProfile, "wrapper session transport is required")
+	}
+	return transport, nil
 }
 
 func (c *WrapperClient) requireTransportReady(ctx context.Context) error {

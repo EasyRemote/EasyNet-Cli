@@ -5,7 +5,7 @@ required_for:
   - c_abi
   - go
   - python
-description: Convenience wrapper profile projects file, terminal, remote desktop, browser, and media session facts into SDK-owned DTO records without starting sessions or bypassing Runtime Core stream/bidi paths.
+description: Convenience wrapper profile projects file, terminal, remote desktop, browser, and media session facts into SDK-owned DTO records and opens session streams/bidi through Runtime Core without owning product HTTP/WebSocket bridges.
 steps:
   - action: project_file_record
     fixture: wrapper-file-record.v4.json
@@ -30,6 +30,8 @@ expect:
   browser_fixture: wrapper-browser-session.v4.json
   media_fixture: wrapper-media-session.v4.json
   execution_transport_owner: runtime_core
+  stream_bidi_transport_owner: runtime_core
+  runtime_wrapper_stream_bidi_facade: true
   product_http_websocket_owner: backend
   rejects_invalid_owner_ura: true
   rejects_missing_session_state: true

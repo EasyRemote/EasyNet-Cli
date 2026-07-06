@@ -3599,6 +3599,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         ):
             self._require_case_fixture(wrapper_case, fixture)
         self._require_case_expectation(wrapper_case, "execution_transport_owner: runtime_core")
+        self._require_case_expectation(wrapper_case, "stream_bidi_transport_owner: runtime_core")
+        self._require_case_expectation(wrapper_case, "runtime_wrapper_stream_bidi_facade: true")
         self._require_case_expectation(wrapper_case, "product_http_websocket_owner: backend")
         self._require_case_expectation(wrapper_case, "rejects_invalid_owner_ura: true")
         self._require_case_expectation(wrapper_case, "rejects_missing_session_state: true")
@@ -4005,6 +4007,14 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "project_media_session": "wrappers.media.project_session",
                     "project_remote_desktop_session": "wrappers.remote_desktop.project_session",
                     "project_terminal_session": "wrappers.terminal.project_session",
+                    "open_browser_session_bidi": "wrappers.browser.open_bidi",
+                    "open_browser_session_stream": "wrappers.browser.open_stream",
+                    "open_media_session_bidi": "wrappers.media.open_bidi",
+                    "open_media_session_stream": "wrappers.media.open_stream",
+                    "open_remote_desktop_session_bidi": "wrappers.remote_desktop.open_bidi",
+                    "open_remote_desktop_session_stream": "wrappers.remote_desktop.open_stream",
+                    "open_terminal_session_bidi": "wrappers.terminal.open_bidi",
+                    "open_terminal_session_stream": "wrappers.terminal.open_stream",
                     "start_browser_session": "wrappers.browser.start_session",
                     "start_media_session": "wrappers.media.start_session",
                     "start_remote_desktop_session": "wrappers.remote_desktop.start_session",
@@ -4094,7 +4104,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             (
                 "backend_hub",
                 "wrappers",
-                ((WrapperClient, ("transfer_file", "start_terminal_session", "start_remote_desktop_session", "start_browser_session", "start_media_session")),),
+                ((WrapperClient, ("transfer_file", "start_terminal_session", "start_remote_desktop_session", "start_browser_session", "start_media_session", "open_terminal_session_stream", "open_terminal_session_bidi", "open_remote_desktop_session_stream", "open_remote_desktop_session_bidi")),),
             ),
             (
                 "easyremote",
@@ -4174,7 +4184,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             (
                 "cli",
                 "wrappers",
-                ((WrapperClient, ("transfer_file", "start_terminal_session")),),
+                ((WrapperClient, ("transfer_file", "start_terminal_session", "open_terminal_session_stream", "open_terminal_session_bidi")),),
             ),
             (
                 "desktop_gui",
@@ -4193,7 +4203,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             (
                 "desktop_gui",
                 "wrappers",
-                ((WrapperClient, ("start_terminal_session", "start_remote_desktop_session")),),
+                ((WrapperClient, ("start_terminal_session", "start_remote_desktop_session", "open_terminal_session_stream", "open_terminal_session_bidi", "open_remote_desktop_session_stream", "open_remote_desktop_session_bidi")),),
             ),
             (
                 "third_party_host_app",

@@ -261,6 +261,20 @@ func TestWrapperExecutesTransportBackedHelpers(t *testing.T) {
 	}
 }
 
+func TestWrapperSessionStreamsFailClosedWithoutRuntimeTransport(t *testing.T) {
+	client, err := NewWrapperClientWithTransport(&memoryWrapperTransport{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.OpenTerminalSessionStream(context.Background(), wrapperTerminalStartRequest()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("OpenTerminalSessionStream error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := client.OpenTerminalSessionBidi(context.Background(), wrapperTerminalStartRequest(), nil); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("OpenTerminalSessionBidi error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestWrapperDecodesProfileRecords(t *testing.T) {
 	file, err := NewWrapperFileRecordFromJSON([]byte(wrapperFileRecordJSON))
 	if err != nil {

@@ -143,7 +143,7 @@ WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, including C ABI-backed record-returning file, terminal, remote desktop,
 browser, and media helper execution through Runtime Core invoke, plus public
-`RuntimeWrapperTransport` composition for carrier-build/runtime-invoke/
+`RuntimeWrapperTransport` composition for carrier-build/runtime-invoke/stream/bidi/
 record-project execution,
 transport-backed helper close state seams, and record projections. EasyRemote
 signed unary dispatch now flows through Runtime Core

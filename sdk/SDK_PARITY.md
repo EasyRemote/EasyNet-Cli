@@ -33,7 +33,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition and signer-handle provenance guardrails exist; live daemon keyring policy cutover remains incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
-| bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; concrete product wrapper stream adapters remain incomplete outside the daemon SDK. |
+| bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
 | receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus cross-invocation chain signature and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
@@ -43,7 +43,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
 | compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
-| wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and product wrapper cutovers remain incomplete. |
+| wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade. |
 | conformance runner | SDK Parity | provider-backed | provider-backed | Non-P0 language action-adapter reports and external product cutover smokes remain incomplete outside the Go/Python SDK parity gate. |
 
 ## Known Gaps
@@ -130,9 +130,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 - RFC-007 receipt URA construction remains schema/conformance declaration only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
   file, terminal, remote desktop, browser, and media session DTOs; Go/Python
-  facades now expose Runtime-backed record-returning helper execution. Backend
-  HTTP/WebSocket bridges, storage policy, concrete stream/bidi adapters, and
-  product cutovers remain incomplete.
+  facades now expose Runtime-backed record-returning helper execution plus
+  Runtime Core stream/bidi session entry points. Backend HTTP/WebSocket bridges,
+  storage policy, and product cutovers remain incomplete outside the daemon SDK
+  facade.
 - Go package exposes Runtime Core feature/version discovery with `SdkEnvironment`
   process root, default daemon discovery/connect policy, explicit
   `DaemonControl` access, local runtime connect, idempotent environment close,
@@ -228,10 +229,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   incomplete outside the daemon SDK.
 - Go Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session Invocation carrier builders, `WrapperRuntimeTransport`
-  Runtime Core execution, transport-backed helper close state, and record
-  projections; backend HTTP/WebSocket bridges, storage policy, concrete
-  stream/bidi adapters, and product wrapper cutovers remain incomplete outside
-  the daemon SDK.
+  Runtime Core execution and stream/bidi session entry points, transport-backed
+  helper close state, and record projections; backend HTTP/WebSocket bridges,
+  storage policy, and product wrapper cutovers remain incomplete outside the
+  daemon SDK facade.
 - Python package exposes Runtime Core feature/version discovery with root client close, public
   `SdkEnvironment` process-root factories with default daemon control-path
   resolution over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
@@ -417,13 +418,14 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   adapters, and EasyRemote/Hub compatibility cutovers remain incomplete.
 - Python Wrapper facade exposes `WrapperClient` file, terminal, remote desktop,
   browser, and media session Invocation carrier builders, public
-  `RuntimeWrapperTransport` carrier-build/runtime-invoke/record-project
-  composition, transport-backed helper close state seams, and record
+  `RuntimeWrapperTransport` carrier-build/runtime-invoke/stream/bidi/
+  record-project composition, transport-backed helper close state seams, and record
   projections; Python concrete C ABI transport now backs wrapper carrier
   builders plus record-returning file, terminal, remote desktop, browser, and
-  media helper execution through Runtime Core, while backend HTTP/WebSocket
-  bridges, storage policy, concrete stream/bidi adapters, and product wrapper
-  cutovers remain incomplete.
+  media helper execution through Runtime Core, while Python `RuntimeWrapperTransport`
+  opens wrapper session stream/bidi handles through Runtime Core. Backend
+  HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain
+  incomplete outside the daemon SDK facade.
 - Go and Python stream/bidi facades now expose schema-shaped Runtime Core
   terminal projections backed by shared conformance expectations; C ABI stream
   and bidi readers now project callback-queue overflow as typed terminal

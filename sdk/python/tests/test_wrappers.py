@@ -2,6 +2,7 @@ import json
 import unittest
 
 from easynet_sdk import (
+    BidiStreamDescriptor,
     ErrorCode,
     SDKError,
     WrapperBrowserSessionRecord,
@@ -408,6 +409,17 @@ class WrapperClientTests(unittest.TestCase):
         media = client.start_media_session(media_start_request())
         self.assertEqual(media.kind, "media_session")
 
+    def test_session_streams_fail_closed_without_runtime_transport(self) -> None:
+        client = WrapperClient(MemoryWrapperTransport())
+
+        with self.assertRaises(SDKError) as stream_caught:
+            client.open_terminal_session_stream(terminal_start_request())
+        self.assertTrue(is_code(stream_caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as bidi_caught:
+            client.open_terminal_session_bidi(terminal_start_request())
+        self.assertTrue(is_code(bidi_caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_runtime_wrapper_transport_executes_helpers_through_runtime_core(self) -> None:
         carrier = MemoryWrapperTransport()
         runtime_transport = WrapperRuntimeTransport()
@@ -436,6 +448,78 @@ class WrapperClientTests(unittest.TestCase):
         client.close()
         self.assertEqual(runtime_transport.close_calls, 1)
         self.assertEqual(carrier.close_calls, 1)
+
+    def test_runtime_wrapper_transport_opens_stream_and_bidi(self) -> None:
+        carrier = MemoryWrapperTransport()
+        runtime_transport = WrapperRuntimeTransport()
+        client = WrapperClient(
+            RuntimeWrapperTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        def assert_stream(open_fn, want_descriptor: str) -> None:
+            stream = open_fn()
+            self.assertEqual(stream.stream_id, "stream-1")
+            assert runtime_transport.seen_draft is not None
+            self.assertEqual(runtime_transport.seen_draft["descriptor_ref"], want_descriptor)
+
+        def assert_bidi(open_fn, want_descriptor: str) -> None:
+            session = open_fn(
+                (
+                    BidiStreamDescriptor(
+                        stream_id=1,
+                        content_type="application/json",
+                        ordering="ordered",
+                    ),
+                )
+            )
+            self.assertEqual(session.session_id, "bidi-1")
+            assert runtime_transport.seen_streams is not None
+            self.assertEqual(runtime_transport.seen_streams[0]["stream_id"], 1)
+            self.assertEqual(runtime_transport.seen_draft["descriptor_ref"], want_descriptor)
+
+        assert_stream(
+            lambda: client.open_terminal_session_stream(terminal_start_request()),
+            "easynet:///r/example/ability/device.dev-a.wrapper.terminal.start@1.0.0",
+        )
+        assert_bidi(
+            lambda streams: client.open_terminal_session_bidi(
+                terminal_start_request(), streams
+            ),
+            "easynet:///r/example/ability/device.dev-a.wrapper.terminal.start@1.0.0",
+        )
+        assert_stream(
+            lambda: client.open_remote_desktop_session_stream(
+                remote_desktop_start_request()
+            ),
+            "easynet:///r/example/ability/device.dev-a.wrapper.remote_desktop.start@1.0.0",
+        )
+        assert_bidi(
+            lambda streams: client.open_remote_desktop_session_bidi(
+                remote_desktop_start_request(), streams
+            ),
+            "easynet:///r/example/ability/device.dev-a.wrapper.remote_desktop.start@1.0.0",
+        )
+        assert_stream(
+            lambda: client.open_browser_session_stream(browser_start_request()),
+            "easynet:///r/example/ability/device.dev-a.wrapper.browser.start@1.0.0",
+        )
+        assert_bidi(
+            lambda streams: client.open_browser_session_bidi(
+                browser_start_request(), streams
+            ),
+            "easynet:///r/example/ability/device.dev-a.wrapper.browser.start@1.0.0",
+        )
+        assert_stream(
+            lambda: client.open_media_session_stream(media_start_request()),
+            "easynet:///r/example/ability/device.dev-a.wrapper.media.start@1.0.0",
+        )
+        assert_bidi(
+            lambda streams: client.open_media_session_bidi(media_start_request(), streams),
+            "easynet:///r/example/ability/device.dev-a.wrapper.media.start@1.0.0",
+        )
 
     def test_runtime_wrapper_transport_rejects_failed_or_malformed_output(self) -> None:
         failed = WrapperClient(

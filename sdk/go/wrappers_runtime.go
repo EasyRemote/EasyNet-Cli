@@ -136,6 +136,70 @@ func (t *WrapperRuntimeTransport) StartMediaSession(ctx context.Context, request
 	return t.invoke(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityMediaStart)
 }
 
+func (t *WrapperRuntimeTransport) OpenTerminalSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+	request, err := decodeWrapperTerminalStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openStream(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityTerminalStart)
+}
+
+func (t *WrapperRuntimeTransport) OpenTerminalSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	request, err := decodeWrapperTerminalStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openBidi(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityTerminalStart, streams)
+}
+
+func (t *WrapperRuntimeTransport) OpenRemoteDesktopSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+	request, err := decodeWrapperRemoteDesktopStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openStream(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityRemoteDesktopStart)
+}
+
+func (t *WrapperRuntimeTransport) OpenRemoteDesktopSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	request, err := decodeWrapperRemoteDesktopStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openBidi(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityRemoteDesktopStart, streams)
+}
+
+func (t *WrapperRuntimeTransport) OpenBrowserSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+	request, err := decodeWrapperBrowserStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openStream(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityBrowserStart)
+}
+
+func (t *WrapperRuntimeTransport) OpenBrowserSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	request, err := decodeWrapperBrowserStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openBidi(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityBrowserStart, streams)
+}
+
+func (t *WrapperRuntimeTransport) OpenMediaSessionStream(ctx context.Context, requestJSON []byte) (*StreamHandle, error) {
+	request, err := decodeWrapperMediaStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openStream(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityMediaStart)
+}
+
+func (t *WrapperRuntimeTransport) OpenMediaSessionBidi(ctx context.Context, requestJSON []byte, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	request, err := decodeWrapperMediaStartForRuntime(requestJSON)
+	if err != nil {
+		return nil, err
+	}
+	return t.openBidi(ctx, requestJSON, request.WrapperCarrierBase, wrapperAbilityMediaStart, streams)
+}
+
 func (t *WrapperRuntimeTransport) Close(context.Context) error {
 	return nil
 }
@@ -197,6 +261,22 @@ func (t *WrapperRuntimeTransport) invoke(ctx context.Context, requestJSON []byte
 		return nil, invalidProfilePayload(wrappersProfile, "wrapper invocation output_json is required", nil)
 	}
 	return outputJSON, nil
+}
+
+func (t *WrapperRuntimeTransport) openStream(ctx context.Context, requestJSON []byte, base WrapperCarrierBase, abilityName string) (*StreamHandle, error) {
+	draft, err := t.buildInvocation(ctx, requestJSON, base, abilityName)
+	if err != nil {
+		return nil, err
+	}
+	return t.runtime.InvokeStream(ctx, draft)
+}
+
+func (t *WrapperRuntimeTransport) openBidi(ctx context.Context, requestJSON []byte, base WrapperCarrierBase, abilityName string, streams []BidiStreamDescriptor) (*BidiSession, error) {
+	draft, err := t.buildInvocation(ctx, requestJSON, base, abilityName)
+	if err != nil {
+		return nil, err
+	}
+	return t.runtime.OpenBidi(ctx, draft, streams)
 }
 
 func decodeWrapperFileTransferForRuntime(requestJSON []byte) (WrapperFileTransferRequest, error) {
