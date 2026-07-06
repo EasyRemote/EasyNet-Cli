@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Stable ABI return codes project to schema-backed DaemonError JSON so bindings never parse human last-error strings.
 steps:
   - action: trigger_invalid_handle_error

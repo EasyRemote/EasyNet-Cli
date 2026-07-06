@@ -4,6 +4,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: DirectoryClient builds complete Invocation carriers for daemon directory.subscribe and projects snapshot/live subscription state without facade-side fan-out.
 steps:
   - action: build_directory_subscription_invocation

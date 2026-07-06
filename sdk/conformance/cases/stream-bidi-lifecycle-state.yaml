@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Stream close and bidi close-send preserve owner scoping, distinguish local release from cancel, and keep bidi receive state alive after local half-close.
 steps:
   - action: open_stream

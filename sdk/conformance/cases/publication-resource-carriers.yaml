@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: PublicationClient builds daemon-authored ResourceRefs, validates ability package manifests, and returns complete Invocation carriers for daemon publication system abilities without product-facade carrier forks.
 steps:
   - action: build_resource_ref

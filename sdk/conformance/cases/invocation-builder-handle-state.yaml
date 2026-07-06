@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Builder handles expose complete draft inspection and are consumed by build or prepare success.
 steps:
   - action: create_builder

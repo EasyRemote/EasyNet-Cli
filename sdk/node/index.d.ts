@@ -11,6 +11,9 @@ export declare const DEFAULT_DIRECTORY_PAGE_SIZE: 50;
 export declare const MAX_DIRECTORY_PAGE_SIZE: 500;
 export declare const DIRECTORY_IDENTITY_PROFILE: "directory_identity";
 export declare const RECEIPT_PROFILE: "receipt";
+export declare const PUBLICATION_PROFILE: "publication";
+export declare const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: 50;
+export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 
 export interface SDKErrorOptions {
   code: string;
@@ -257,6 +260,113 @@ export class ReceiptClient {
   verifyChain(request: { receipts: Array<ReceiptRef | ReceiptRefFields>; metadata?: Record<string, unknown> }): Promise<Record<string, unknown>>;
   causalRef(receiptJSON: Uint8Array | string | Record<string, unknown>): Promise<Record<string, unknown>>;
   causalContext(receiptJSON: Uint8Array | string | Record<string, unknown>): Promise<Record<string, unknown>>;
+  close(): Promise<void>;
+}
+
+export interface PublicationTransport {
+  buildResourceRef(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  validatePackage?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  deployAbility?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDeployInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  installPlugin?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listAbilities?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  showAbility?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  enableAbilityImpl?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  disableAbilityImpl?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildUnpublishInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  unpublishAbility?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export interface LocalResourceRefRequest {
+  path: string;
+  capability: "list" | "stat" | "read" | "write";
+}
+
+export interface ResourceRef {
+  resource_ura: string;
+  owner_ura: string;
+  namespace: string;
+  capability: string;
+  expires_unix_ms?: number;
+  revision: string;
+  display_path?: string;
+}
+
+export interface PackageValidationRequest {
+  package_path?: string;
+  manifest?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PublicationCarrierBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AbilityDeployRequest extends PublicationCarrierBase {
+  resource_ref: ResourceRef;
+  node_id: string;
+}
+
+export interface PublishedAbilityQuery extends PublicationCarrierBase {
+  limit?: number;
+  cursor?: string;
+  owner_ura?: string;
+  ability_ura?: string;
+}
+
+export interface ShowAbilityRequest {
+  descriptor_ref: string;
+  caller_ura?: string;
+  callee_ura?: string;
+  subject_ura?: string;
+  descriptor_version?: string;
+  nonce_base64?: string;
+  causal_context?: Record<string, unknown>;
+  owner_ura?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AbilityImplLifecycleRequest {
+  impl_id: string;
+  ability_ura: string;
+  caller_ura?: string;
+  callee_ura?: string;
+  subject_ura?: string;
+  descriptor_version?: string;
+  nonce_base64?: string;
+  causal_context?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UnpublishAbilityRequest extends PublicationCarrierBase {
+  ability_ura: string;
+}
+
+export interface PluginInstallRequest {
+  source: string;
+  metadata?: Record<string, unknown>;
+}
+
+export class PublicationClient {
+  constructor(transport: PublicationTransport);
+  buildLocalResourceRef(request: LocalResourceRefRequest): Promise<Record<string, unknown>>;
+  validatePackage(request: PackageValidationRequest): Promise<Record<string, unknown>>;
+  deployAbility(request: AbilityDeployRequest): Promise<Record<string, unknown>>;
+  buildDeployInvocation(request: AbilityDeployRequest): Promise<InvocationDraft>;
+  installPlugin(request: PluginInstallRequest): Promise<Record<string, unknown>>;
+  listAbilities(request: PublishedAbilityQuery): Promise<Record<string, unknown>>;
+  showAbility(request: ShowAbilityRequest): Promise<Record<string, unknown>>;
+  enableAbilityImpl(request: AbilityImplLifecycleRequest): Promise<Record<string, unknown>>;
+  disableAbilityImpl(request: AbilityImplLifecycleRequest): Promise<Record<string, unknown>>;
+  buildUnpublishInvocation(request: UnpublishAbilityRequest): Promise<InvocationDraft>;
+  unpublishAbility(request: UnpublishAbilityRequest): Promise<Record<string, unknown>>;
   close(): Promise<void>;
 }
 

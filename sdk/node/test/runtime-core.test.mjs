@@ -8,6 +8,7 @@ import {
   ErrorCode,
   IdentityClient,
   InvocationBuilder,
+  PublicationClient,
   ReceiptChain,
   ReceiptClient,
   ReceiptRef,
@@ -43,6 +44,37 @@ const receiptFetch = () => ({
 
 const receiptHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+const publicationResourceRef = () => ({
+  resource_ura: "easynet:///r/example/resource/fs.local.pkg",
+  owner_ura: "easynet:///r/example/device/dev-a",
+  namespace: "fs",
+  display_path: "/tmp/easynet/pkg",
+  capability: "read",
+  expires_unix_ms: 0,
+  revision: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+});
+
+const publicationDeploy = () => ({
+  ...directoryBase(),
+  resource_ref: publicationResourceRef(),
+  node_id: "local",
+  metadata: { request_id: "deploy-1" },
+});
+
+const publicationDraftJSON = (descriptorRef) =>
+  new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/alice.sdk")
+    .withCalleeURA("easynet:///r/example/device/dev-a")
+    .withDescriptorRef(descriptorRef)
+    .withSubjectURA("easynet:///r/example/device/dev-a")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs({ ok: true })
+    .withContentType("application/json")
+    .withMetadata({ profile: "publication" })
+    .build()
+    .toJSONString();
+
 test("feature discovery decodes canonical Runtime Core facts", async () => {
   const client = new Client({
     featureDiscovery: () =>
@@ -59,12 +91,25 @@ test("feature discovery decodes canonical Runtime Core facts", async () => {
   assert.equal(features.abiVersion, 4);
   assert.equal(features.version().sdkVersion, "0.91.30");
   assert.equal(features.symbols.runtime_health, true);
+
+  await assert.rejects(
+    () => client.requireABI(5),
+    (error) => error instanceof SDKError && error.code === ErrorCode.VERSION_MISMATCH,
+  );
 });
 
 test("InvocationBuilder validates tuple completeness without descriptor grammar", () => {
-  const draft = completeDraft().build();
+  const builder = completeDraft();
+  const inspected = builder.inspect();
+  assert.equal(inspected.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+
+  const draft = builder.build();
   assert.equal(draft.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
   assert.equal(draft.toJSON().descriptor_ref, "opaque-descriptor-ref-from-identity-profile");
+  assert.throws(
+    () => builder.inspect(),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_HANDLE,
+  );
 
   assert.throws(
     () =>
@@ -334,6 +379,17 @@ test("DirectoryClient delegates bounded read-model pages without fanout", async 
         metadata: {},
       });
     },
+    listAgents: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "agents", request });
+      return JSON.stringify({
+        profile: "directory_identity",
+        kind: "agent_page",
+        items: [],
+        next_cursor: "",
+        metadata: {},
+      });
+    },
     listAbilities: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
       seen.push({ method: "abilities", request });
@@ -349,6 +405,7 @@ test("DirectoryClient delegates bounded read-model pages without fanout", async 
 
   await directory.resolve({ ...directoryBase(), query_name: "dev-a", ability_name: "observe.health" });
   const devices = await directory.listDevices(directoryBase());
+  const agents = await directory.listAgents({ ...directoryBase(), limit: 10 });
   const abilities = await directory.listAbilities({
     ...directoryBase(),
     limit: 25,
@@ -357,10 +414,12 @@ test("DirectoryClient delegates bounded read-model pages without fanout", async 
   });
 
   assert.equal(devices.kind, "device_page");
+  assert.equal(agents.kind, "agent_page");
   assert.equal(abilities.kind, "ability_page");
   assert.equal(seen[1].request.limit, DEFAULT_DIRECTORY_PAGE_SIZE);
-  assert.equal(seen[2].request.limit, 25);
-  assert.equal(seen[2].request.owner_ura, "easynet:///r/example/device/dev-a");
+  assert.equal(seen[2].request.limit, 10);
+  assert.equal(seen[3].request.limit, 25);
+  assert.equal(seen[3].request.owner_ura, "easynet:///r/example/device/dev-a");
 
   await assert.rejects(
     () => directory.listDevices({ ...directoryBase(), limit: 501 }),
@@ -379,6 +438,11 @@ test("DirectoryClient exposes subscription as StreamHandle seam", async () => {
   ];
   const directory = new DirectoryClient({
     resolve: () => JSON.stringify({ kind: "resolved_ref" }),
+    buildDirectorySubscriptionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      assert.equal(request.stream, "directory");
+      return completeDraft().build().toJSONString();
+    },
     subscribeDirectory: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
       assert.equal(request.stream, "directory");
@@ -391,6 +455,9 @@ test("DirectoryClient exposes subscription as StreamHandle seam", async () => {
       };
     },
   });
+
+  const carrier = await directory.buildDirectorySubscriptionInvocation(directoryBase());
+  assert.equal(carrier.descriptor_ref, "opaque-descriptor-ref-from-identity-profile");
 
   const stream = await directory.subscribeDirectory(directoryBase());
   const phases = [];
@@ -529,6 +596,211 @@ test("ReceiptRef rejects fabricated or malformed receipt anchors", () => {
   );
   assert.throws(
     () => new ReceiptRef({ receipt_ura: "easynet:///r/example/resource/receipt.inv-1", receipt_hash_hex: "abc" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("PublicationClient delegates resource, package, deploy, and unpublish carriers", async () => {
+  const seen = [];
+  const publication = new PublicationClient({
+    buildResourceRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "resource", request });
+      return JSON.stringify(publicationResourceRef());
+    },
+    validatePackage: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "validate", request });
+      return JSON.stringify({
+        profile: "publication",
+        kind: "package_validation",
+        valid: true,
+        package_path: request.package_path,
+        manifest_path: `${request.package_path}/ability.json`,
+        manifest_hash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        manifest: {
+          name: "weather",
+          namespace: "er",
+          wire_key: "er.weather",
+          descriptor_version: "1.0.0",
+          description: "",
+          exec_kind: "host_stream",
+          timeout_seconds: null,
+          input_schema: {},
+          output_schema: null,
+        },
+        errors: [],
+        metadata: {},
+      });
+    },
+    buildDeployInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "deploy_carrier", request });
+      return publicationDraftJSON("easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0");
+    },
+    buildUnpublishInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "unpublish_carrier", request });
+      return publicationDraftJSON("easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0");
+    },
+  });
+
+  const ref = await publication.buildLocalResourceRef({
+    path: "/tmp/easynet/pkg",
+    capability: "read",
+  });
+  const validation = await publication.validatePackage({ package_path: "/tmp/easynet/pkg" });
+  const deploy = await publication.buildDeployInvocation(publicationDeploy());
+  const unpublish = await publication.buildUnpublishInvocation({
+    ...directoryBase(),
+    ability_ura: "easynet:///r/example/ability/device.dev-a.er.weather",
+    metadata: { request_id: "unpublish-1" },
+  });
+
+  assert.equal(ref.resource_ura, "easynet:///r/example/resource/fs.local.pkg");
+  assert.equal(validation.valid, true);
+  assert.equal(deploy.descriptorRef, "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0");
+  assert.equal(unpublish.descriptorRef, "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0");
+  assert.deepEqual(seen.map((item) => item.method), [
+    "resource",
+    "validate",
+    "deploy_carrier",
+    "unpublish_carrier",
+  ]);
+  assert.equal(seen[2].request.resource_ref.resource_ura, ref.resource_ura);
+});
+
+test("PublicationClient delegates read models and lifecycle projections", async () => {
+  const seen = [];
+  const publication = new PublicationClient({
+    buildResourceRef: () => JSON.stringify(publicationResourceRef()),
+    listAbilities: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "list", request });
+      return JSON.stringify({
+        profile: "publication",
+        kind: "published_ability_page",
+        item_kind: "published_ability",
+        items: [],
+        next_cursor: null,
+        limit: request.limit,
+        source: "daemon_read_model",
+        metadata: {},
+      });
+    },
+    showAbility: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "show", request });
+      return JSON.stringify({
+        descriptor: { descriptor_ref: request.descriptor_ref },
+        implementation: {},
+        metadata: {},
+      });
+    },
+    installPlugin: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "install", request });
+      return JSON.stringify({
+        profile: "publication",
+        kind: "plugin_install_result",
+        source: request.source,
+        install_id: "install-1",
+        status: "installed",
+        metadata: {},
+      });
+    },
+    enableAbilityImpl: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "enable", request });
+      return JSON.stringify({
+        profile: "publication",
+        kind: "ability_impl_enabled",
+        status: "enabled",
+        metadata: {},
+      });
+    },
+    disableAbilityImpl: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "disable", request });
+      return JSON.stringify({
+        profile: "publication",
+        kind: "ability_impl_disabled",
+        status: "disabled",
+        metadata: {},
+      });
+    },
+    unpublishAbility: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "unpublish", request });
+      return JSON.stringify({
+        profile: "publication",
+        kind: "ability_unpublished",
+        status: "unpublished",
+        metadata: {},
+      });
+    },
+  });
+
+  const page = await publication.listAbilities({ ...directoryBase() });
+  const ability = await publication.showAbility({
+    descriptor_ref: "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+  });
+  const installed = await publication.installPlugin({ source: "/tmp/easynet/plugin" });
+  const enabled = await publication.enableAbilityImpl({
+    impl_id: "impl-1",
+    ability_ura: "easynet:///r/example/ability/device.dev-a.er.weather",
+  });
+  const disabled = await publication.disableAbilityImpl({
+    impl_id: "impl-1",
+    ability_ura: "easynet:///r/example/ability/device.dev-a.er.weather",
+  });
+  const unpublished = await publication.unpublishAbility({
+    ...directoryBase(),
+    ability_ura: "easynet:///r/example/ability/device.dev-a.er.weather",
+  });
+
+  assert.equal(page.limit, 50);
+  assert.equal(ability.descriptor.descriptor_ref, "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0");
+  assert.equal(installed.status, "installed");
+  assert.equal(enabled.status, "enabled");
+  assert.equal(disabled.status, "disabled");
+  assert.equal(unpublished.status, "unpublished");
+  assert.deepEqual(seen.map((item) => item.method), [
+    "list",
+    "show",
+    "install",
+    "enable",
+    "disable",
+    "unpublish",
+  ]);
+});
+
+test("PublicationClient rejects incomplete carriers and local resource fabrication", async () => {
+  const publication = new PublicationClient({
+    buildResourceRef: () => JSON.stringify(publicationResourceRef()),
+  });
+
+  await assert.rejects(
+    () => publication.buildLocalResourceRef({ path: "relative/pkg", capability: "read" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () =>
+      publication.buildDeployInvocation({
+        ...publicationDeploy(),
+        resource_ref: { ...publicationResourceRef(), namespace: "system" },
+      }),
+    (error) => error instanceof SDKError && error.source === "publication",
+  );
+  await assert.rejects(
+    () => publication.buildUnpublishInvocation({ ...directoryBase() }),
+    (error) => error instanceof SDKError && error.source === "publication",
+  );
+
+  await publication.close();
+  await publication.close();
+  await assert.rejects(
+    () => publication.buildLocalResourceRef({ path: "/tmp/easynet/pkg", capability: "read" }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });

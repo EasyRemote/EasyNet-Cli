@@ -4,6 +4,102 @@
   "adapter_kind": "node_facade_conformance_tests",
   "records": [
     {
+      "case_id": "directory/list_pagination",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "directory/no_default_fanout",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "directory/resolve",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "directory/subscription_stream",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "error/typed_json",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "identity/ura_descriptor_projection",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/builder_handle_state",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "memc/consumer_coverage",
       "profile": "memc",
       "status": "passed",
@@ -30,6 +126,54 @@
     {
       "case_id": "memc/profile_exclusivity",
       "profile": "memc",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "publication/resource_carriers",
+      "profile": "publication",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "stream_bidi/lifecycle_state",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {

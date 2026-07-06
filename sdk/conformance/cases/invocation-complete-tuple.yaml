@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Builder rejects missing seven-tuple fields before prepare or submit.
 steps:
   - action: build_invocation

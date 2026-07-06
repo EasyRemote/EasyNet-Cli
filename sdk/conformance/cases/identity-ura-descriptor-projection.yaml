@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: IdentityClient URA and AbilityDescriptorRef projection delegates to Axon helpers and rejects facade-owned grammar drift.
 steps:
   - action: project_ura

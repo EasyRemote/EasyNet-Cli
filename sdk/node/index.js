@@ -40,6 +40,9 @@ export const DEFAULT_DIRECTORY_PAGE_SIZE = 50;
 export const MAX_DIRECTORY_PAGE_SIZE = 500;
 export const DIRECTORY_IDENTITY_PROFILE = "directory_identity";
 export const RECEIPT_PROFILE = "receipt";
+export const PUBLICATION_PROFILE = "publication";
+export const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50;
+export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 
 export class SDKError extends Error {
   constructor({
@@ -511,6 +514,94 @@ export class ReceiptClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("receipt client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class PublicationClient {
+  constructor(transport) {
+    if (!transport || typeof transport.buildResourceRef !== "function") {
+      throw invalidSDK("publication transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async buildLocalResourceRef(request) {
+    const payload = localResourceRefRequest(request);
+    return callJSON(this.requireOpen(), "buildResourceRef", payload, "publication resource_ref");
+  }
+
+  async validatePackage(request) {
+    const payload = packageValidationRequest(request);
+    return callJSON(this.requireOpen(), "validatePackage", payload, "publication package validation");
+  }
+
+  async deployAbility(request) {
+    const payload = abilityDeployRequest(request);
+    return callJSON(this.requireOpen(), "deployAbility", payload, "publication deploy result");
+  }
+
+  async buildDeployInvocation(request) {
+    const payload = abilityDeployRequest(request);
+    return InvocationDraft.fromJSON(
+      await callRaw(this.requireOpen(), "buildDeployInvocation", payload),
+    );
+  }
+
+  async installPlugin(request) {
+    const payload = pluginInstallRequest(request);
+    return callJSON(this.requireOpen(), "installPlugin", payload, "publication plugin install");
+  }
+
+  async listAbilities(request) {
+    const payload = publishedAbilityQuery(request);
+    return callJSON(this.requireOpen(), "listAbilities", payload, "publication ability page");
+  }
+
+  async showAbility(request) {
+    const payload = showAbilityRequest(request);
+    return callJSON(this.requireOpen(), "showAbility", payload, "publication ability");
+  }
+
+  async enableAbilityImpl(request) {
+    const payload = abilityImplLifecycleRequest(request);
+    return callJSON(this.requireOpen(), "enableAbilityImpl", payload, "publication enable ability impl");
+  }
+
+  async disableAbilityImpl(request) {
+    const payload = abilityImplLifecycleRequest(request);
+    return callJSON(this.requireOpen(), "disableAbilityImpl", payload, "publication disable ability impl");
+  }
+
+  async buildUnpublishInvocation(request) {
+    const payload = unpublishAbilityRequest(request);
+    return InvocationDraft.fromJSON(
+      await callRaw(this.requireOpen(), "buildUnpublishInvocation", payload),
+    );
+  }
+
+  async unpublishAbility(request) {
+    const payload = unpublishAbilityRequest(request);
+    return callJSON(this.requireOpen(), "unpublishAbility", payload, "publication unpublish result");
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("publication client is closed");
     }
     return this.transport;
   }
@@ -1065,6 +1156,199 @@ function receiptChainRequest(value) {
   return payload;
 }
 
+function publicationCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+  ];
+}
+
+function localResourceRefRequest(value) {
+  const payload = requestObject(value, ["path", "capability"], "local resource ref request");
+  const resourcePath = publicationRequiredString(payload.path, "path");
+  if (!isAbsolutePath(resourcePath)) {
+    throw invalidPublication("absolute resource path is required");
+  }
+  if (!["list", "stat", "read", "write"].includes(payload.capability)) {
+    throw invalidPublication("capability must be one of list, stat, read, or write");
+  }
+  return payload;
+}
+
+function packageValidationRequest(value) {
+  const payload = requestObject(
+    value,
+    ["package_path", "manifest", "metadata"],
+    "package validation request",
+  );
+  if (payload.package_path !== undefined) {
+    publicationRequiredString(payload.package_path, "package_path");
+  }
+  if (payload.manifest !== undefined) {
+    objectValue(payload.manifest, "manifest");
+  }
+  if (!payload.package_path && payload.manifest === undefined) {
+    throw invalidPublication("package_path or manifest is required");
+  }
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function abilityDeployRequest(value) {
+  const payload = requestObject(
+    value,
+    [...publicationCarrierBaseFields(), "resource_ref", "node_id"],
+    "ability deploy request",
+  );
+  validatePublicationCarrierBase(payload, "complete deploy invocation carrier is required");
+  validateResourceRef(payload.resource_ref);
+  publicationRequiredString(payload.node_id, "node_id");
+  return payload;
+}
+
+function pluginInstallRequest(value) {
+  const payload = requestObject(value, ["source", "metadata"], "plugin install request");
+  publicationRequiredString(payload.source, "source");
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function publishedAbilityQuery(value) {
+  const payload = requestObject(
+    value,
+    [...publicationCarrierBaseFields(), "limit", "cursor", "owner_ura", "ability_ura"],
+    "published ability query",
+  );
+  validatePublicationCarrierBase(payload, "complete publication query carrier is required");
+  if (payload.limit === undefined || payload.limit === 0) {
+    payload.limit = DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE;
+  }
+  validatePublishedAbilityLimit(payload.limit);
+  if (payload.cursor !== undefined) {
+    cleanOptionalString(payload.cursor, "cursor");
+  }
+  if (payload.owner_ura !== undefined) {
+    publicationRequiredString(payload.owner_ura, "owner_ura");
+  }
+  if (payload.ability_ura !== undefined) {
+    publicationRequiredString(payload.ability_ura, "ability_ura");
+  }
+  return payload;
+}
+
+function showAbilityRequest(value) {
+  const payload = requestObject(
+    value,
+    [...publicationCarrierBaseFields(), "descriptor_ref", "owner_ura"],
+    "show ability request",
+  );
+  publicationRequiredString(payload.descriptor_ref, "descriptor_ref");
+  if (hasAnyField(payload, publicationCarrierBaseFields())) {
+    validatePublicationCarrierBase(payload, "complete show invocation carrier is required");
+  } else if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  if (payload.owner_ura !== undefined) {
+    publicationRequiredString(payload.owner_ura, "owner_ura");
+  }
+  return payload;
+}
+
+function abilityImplLifecycleRequest(value) {
+  const payload = requestObject(
+    value,
+    [...publicationCarrierBaseFields(), "impl_id", "ability_ura"],
+    "ability impl lifecycle request",
+  );
+  publicationRequiredString(payload.impl_id, "impl_id");
+  publicationRequiredString(payload.ability_ura, "ability_ura");
+  if (hasAnyField(payload, publicationCarrierBaseFields())) {
+    validatePublicationCarrierBase(payload, "complete ability impl lifecycle invocation carrier is required");
+  } else if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function unpublishAbilityRequest(value) {
+  const payload = requestObject(
+    value,
+    [...publicationCarrierBaseFields(), "ability_ura"],
+    "unpublish ability request",
+  );
+  validatePublicationCarrierBase(payload, "complete unpublish invocation carrier is required");
+  publicationRequiredString(payload.ability_ura, "ability_ura");
+  return payload;
+}
+
+function validatePublicationCarrierBase(payload, message) {
+  try {
+    cleanRequiredString(payload.caller_ura, "caller_ura");
+    cleanRequiredString(payload.callee_ura, "callee_ura");
+    cleanRequiredString(payload.subject_ura, "subject_ura");
+    cleanRequiredString(payload.descriptor_version, "descriptor_version");
+    cleanRequiredString(payload.nonce_base64, "nonce_base64");
+    objectValue(payload.causal_context, "causal_context");
+    if (payload.metadata !== undefined) {
+      objectValue(payload.metadata, "metadata");
+    }
+  } catch (error) {
+    if (error instanceof SDKError) {
+      throw invalidPublication(message);
+    }
+    throw error;
+  }
+}
+
+function validateResourceRef(value) {
+  const ref = objectValue(value, "resource_ref");
+  publicationRequiredString(ref.resource_ura, "resource_ura");
+  publicationRequiredString(ref.owner_ura, "owner_ura");
+  const namespace = publicationRequiredString(ref.namespace, "namespace");
+  publicationRequiredString(ref.capability, "capability");
+  publicationRequiredString(ref.revision, "revision");
+  if (["axon", "daemon", "easynet", "internal", "system"].includes(namespace.toLowerCase())) {
+    throw invalidPublication("resource_ref namespace is reserved");
+  }
+  if (ref.display_path !== undefined) {
+    cleanOptionalString(ref.display_path, "display_path");
+  }
+}
+
+function publicationRequiredString(value, field) {
+  try {
+    return cleanRequiredString(value, field);
+  } catch (error) {
+    if (error instanceof SDKError) {
+      throw invalidPublication(`${field} is required`);
+    }
+    throw error;
+  }
+}
+
+function validatePublishedAbilityLimit(value) {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_PUBLISHED_ABILITY_PAGE_SIZE) {
+    throw invalidPublication(`limit must be between 1 and ${MAX_PUBLISHED_ABILITY_PAGE_SIZE}`);
+  }
+}
+
+function hasAnyField(payload, fields) {
+  return fields.some((field) => Object.hasOwn(payload, field));
+}
+
+function isAbsolutePath(value) {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
 function jsonPayloadBytes(value, field) {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     if (value.length === 0) {
@@ -1381,6 +1665,16 @@ function invalidReceipt(message) {
     stage: "receipt",
     retry: RetryHint.NEVER,
     source: RECEIPT_PROFILE,
+    message,
+  });
+}
+
+function invalidPublication(message) {
+  return new SDKError({
+    code: ErrorCode.INVALID_ARGUMENT,
+    stage: "publication",
+    retry: RetryHint.NEVER,
+    source: PUBLICATION_PROFILE,
     message,
   });
 }

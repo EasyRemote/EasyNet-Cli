@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Directory resolve builds a namespace.resolve Invocation carrier and projects daemon ResolveAnswer JSON into a stable ResolvedRef DTO without SDK-owned route selection.
 steps:
   - action: build_resolve_invocation

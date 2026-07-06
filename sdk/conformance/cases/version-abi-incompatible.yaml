@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: SDK returns a typed version mismatch before opening invocation traffic.
 steps:
   - action: load_fixture
