@@ -55,7 +55,7 @@ func allowedPrivateAxonAdapter(path string) bool {
 
 func allowedDelegatedAxonFacade(path string) bool {
 	switch filepath.ToSlash(path) {
-	case "ability_descriptor.go", "authority.go", "invocation_canonical.go", "ura.go":
+	case "ability_descriptor.go", "authority.go", "invocation_canonical.go", "invoke_remote.go", "ura.go":
 		return true
 	default:
 		return false
