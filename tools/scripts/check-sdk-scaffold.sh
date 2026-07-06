@@ -330,6 +330,7 @@ schema_files=(
   surface-delete-page-request.schema.json
   surface-manifest-request.schema.json
   surface-page-project-request.schema.json
+  surface-health-request.schema.json
   surface-page-page.schema.json
   surface-public-page-ref.schema.json
   surface-manifest.schema.json
@@ -456,6 +457,8 @@ fixture_files=(
   surface-delete-page-invocation.v4.json
   surface-manifest-request.v4.json
   surface-manifest-invocation.v4.json
+  surface-health-request.v4.json
+  surface-health-invocation.v4.json
   surface-page-record.v4.json
   surface-page-page.v4.json
   surface-public-page-ref.v4.json

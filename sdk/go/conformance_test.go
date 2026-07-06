@@ -1787,8 +1787,11 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 		"build_surface_create_page_invocation",
 		"build_surface_delete_page_invocation",
 		"build_surface_manifest_invocation",
+		"build_surface_health_invocation",
 		"project_surface_page_page",
 		"project_surface_manifest",
+		"project_surface_health",
+		"project_surface_status",
 	} {
 		requireCaseAction(t, surfaceCase, action)
 	}
@@ -1797,14 +1800,20 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 		"surface-create-page-request.v4.json",
 		"surface-delete-page-request.v4.json",
 		"surface-manifest-request.v4.json",
+		"surface-health-request.v4.json",
 		"surface-page-page.v4.json",
 		"surface-manifest.v4.json",
+		"surface-health.v4.json",
 	} {
 		requireCaseFixture(t, surfaceCase, fixture)
 	}
-	for _, ability := range []string{"pages.list", "pages.publish", "pages.get", "pages.unpublish"} {
+	for _, ability := range []string{"pages.list", "pages.publish", "pages.get", "pages.unpublish", "pages.health"} {
 		requireCaseLiteral(t, surfaceCase, "- "+ability)
 	}
+	requireCaseExpectation(t, surfaceCase, "health_invocation_fixture: surface-health-invocation.v4.json")
+	requireCaseExpectation(t, surfaceCase, "health_fixture: surface-health.v4.json")
+	requireCaseExpectation(t, surfaceCase, "surface_status_aliases_health: true")
+	requireCaseExpectation(t, surfaceCase, "health_rendering_owner: backend")
 	requireCaseExpectation(t, surfaceCase, "backend_rendering_owned_by_sdk: false")
 	requireCaseExpectation(t, surfaceCase, "direct_filesystem_page_transport: false")
 
@@ -1814,12 +1823,15 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 		expectedCreateRequest:   sharedFixture(t, root, "surface-create-page-request.v4.json"),
 		expectedDeleteRequest:   sharedFixture(t, root, "surface-delete-page-request.v4.json"),
 		expectedManifestRequest: sharedFixture(t, root, "surface-manifest-request.v4.json"),
+		expectedHealthRequest:   sharedFixture(t, root, "surface-health-request.v4.json"),
 		listInvocationJSON:      sharedFixture(t, root, "surface-list-pages-invocation.v4.json"),
 		createInvocationJSON:    sharedFixture(t, root, "surface-create-page-invocation.v4.json"),
 		deleteInvocationJSON:    sharedFixture(t, root, "surface-delete-page-invocation.v4.json"),
 		manifestInvocationJSON:  sharedFixture(t, root, "surface-manifest-invocation.v4.json"),
+		healthInvocationJSON:    sharedFixture(t, root, "surface-health-invocation.v4.json"),
 		pagePageJSON:            sharedFixture(t, root, "surface-page-page.v4.json"),
 		manifestJSON:            sharedFixture(t, root, "surface-manifest.v4.json"),
+		healthJSON:              sharedFixture(t, root, "surface-health.v4.json"),
 	})
 	if err != nil {
 		t.Fatalf("NewSurfaceClient: %v", err)
@@ -1861,6 +1873,15 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 		t.Fatalf("unexpected shared surface manifest invocation: %#v", manifestDraft)
 	}
 
+	healthDraft, err := surface.BuildHealthInvocation(context.Background(), sharedSurfaceHealthRequest(t, root))
+	if err != nil {
+		t.Fatalf("BuildHealthInvocation(shared fixture): %v", err)
+	}
+	if healthDraft.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.health@1.0.0" ||
+		healthDraft.Metadata()["system_ability"] != "pages.health" {
+		t.Fatalf("unexpected shared surface health invocation: %#v", healthDraft)
+	}
+
 	page, err := surface.ListPages(context.Background(), sharedSurfaceListPagesRequest(t, root))
 	if err != nil {
 		t.Fatalf("ListPages(shared fixture): %v", err)
@@ -1877,6 +1898,23 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 	if manifest.Kind != "surface_manifest" || manifest.Page.PageID != "docs" ||
 		manifest.Entrypoint["kind"] != "public_page_ref" {
 		t.Fatalf("unexpected shared surface manifest: %#v", manifest)
+	}
+
+	health, err := surface.SurfaceHealth(context.Background(), sharedSurfaceHealthRequest(t, root))
+	if err != nil {
+		t.Fatalf("SurfaceHealth(shared fixture): %v", err)
+	}
+	if !health.Ready || health.Metadata["rendering_owner"] != "backend" ||
+		health.DescriptorRef != "easynet:///r/example/ability/alice.pages.pages.health@1.0.0" {
+		t.Fatalf("unexpected shared surface health: %#v", health)
+	}
+
+	status, err := surface.SurfaceStatus(context.Background(), SurfaceStatusRequest(sharedSurfaceHealthRequest(t, root)))
+	if err != nil {
+		t.Fatalf("SurfaceStatus(shared fixture): %v", err)
+	}
+	if status.SurfaceRef != health.SurfaceRef || status.State != health.State {
+		t.Fatalf("surface status did not preserve health projection: status=%#v health=%#v", status, health)
 	}
 
 	incomplete := sharedSurfaceCreatePageRequest(t, root)
@@ -3166,12 +3204,15 @@ type sharedSurfaceTransport struct {
 	expectedCreateRequest   []byte
 	expectedDeleteRequest   []byte
 	expectedManifestRequest []byte
+	expectedHealthRequest   []byte
 	listInvocationJSON      []byte
 	createInvocationJSON    []byte
 	deleteInvocationJSON    []byte
 	manifestInvocationJSON  []byte
+	healthInvocationJSON    []byte
 	pagePageJSON            []byte
 	manifestJSON            []byte
+	healthJSON              []byte
 }
 
 func (t *sharedSurfaceTransport) BuildListPagesInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -3194,8 +3235,9 @@ func (t *sharedSurfaceTransport) BuildManifestInvocation(_ context.Context, requ
 	return t.manifestInvocationJSON, nil
 }
 
-func (t *sharedSurfaceTransport) BuildHealthInvocation(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedSurfaceTransport) BuildHealthInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedHealthRequest)
+	return t.healthInvocationJSON, nil
 }
 
 func (t *sharedSurfaceTransport) ListPages(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -3220,8 +3262,9 @@ func (t *sharedSurfaceTransport) PublicPageRef(context.Context, []byte) ([]byte,
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
-func (t *sharedSurfaceTransport) SurfaceHealth(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedSurfaceTransport) SurfaceHealth(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedHealthRequest)
+	return t.healthJSON, nil
 }
 
 type sharedCompatibilityTransport struct {
@@ -4125,6 +4168,15 @@ func sharedSurfaceManifestRequest(t *testing.T, root string) SurfaceManifestRequ
 	var request SurfaceManifestRequest
 	if err := json.Unmarshal(sharedFixture(t, root, "surface-manifest-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared surface manifest request: %v", err)
+	}
+	return request
+}
+
+func sharedSurfaceHealthRequest(t *testing.T, root string) SurfaceHealthRequest {
+	t.Helper()
+	var request SurfaceHealthRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "surface-health-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared surface health request: %v", err)
 	}
 	return request
 }

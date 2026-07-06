@@ -119,8 +119,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   quota/rate limits, billing, backend HTTP route shaping, multipart
   upload/storage policy, SSE/WebSocket fanout, and product cutovers remain
   incomplete.
-- Directory subscribe convenience methods, Axon-backed receipt verification,
-  and full surface status remain schema/conformance declarations only.
+- Directory subscribe convenience methods and Axon-backed receipt verification
+  remain schema/conformance declarations only.
 - Convenience wrapper carrier/projection guardrails exist for Rust/C ABI over
   file, terminal, remote desktop, browser, and media session DTOs; Go/Python
   facades now expose Runtime-backed record-returning helper execution. Backend

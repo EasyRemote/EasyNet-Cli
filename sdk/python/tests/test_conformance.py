@@ -116,6 +116,7 @@ from easynet_sdk import (
     SurfaceClient,
     SurfaceCreatePageRequest,
     SurfaceDeletePageRequest,
+    SurfaceHealthRequest,
     SurfaceListPagesRequest,
     SurfaceManifest,
     SurfaceManifestRequest,
@@ -912,6 +913,7 @@ class SharedSurfaceTransport:
         self.expected_create_request = shared_fixture("surface-create-page-request.v4.json")
         self.expected_delete_request = shared_fixture("surface-delete-page-request.v4.json")
         self.expected_manifest_request = shared_fixture("surface-manifest-request.v4.json")
+        self.expected_health_request = shared_fixture("surface-health-request.v4.json")
         self.list_invocation_json = shared_fixture("surface-list-pages-invocation.v4.json")
         self.create_invocation_json = shared_fixture(
             "surface-create-page-invocation.v4.json"
@@ -922,8 +924,12 @@ class SharedSurfaceTransport:
         self.manifest_invocation_json = shared_fixture(
             "surface-manifest-invocation.v4.json"
         )
+        self.health_invocation_json = shared_fixture(
+            "surface-health-invocation.v4.json"
+        )
         self.page_page_json = shared_fixture("surface-page-page.v4.json")
         self.manifest_json = shared_fixture("surface-manifest.v4.json")
+        self.health_json = shared_fixture("surface-health.v4.json")
 
     def build_list_pages_invocation(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_list_request)
@@ -942,12 +948,8 @@ class SharedSurfaceTransport:
         return self.manifest_invocation_json
 
     def build_health_invocation(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared surface conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_health_request)
+        return self.health_invocation_json
 
     def list_pages(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_list_request)
@@ -982,12 +984,8 @@ class SharedSurfaceTransport:
         )
 
     def surface_health(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared surface conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_health_request)
+        return self.health_json
 
     def close(self) -> None:
         return None
@@ -2996,8 +2994,11 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "build_surface_create_page_invocation",
             "build_surface_delete_page_invocation",
             "build_surface_manifest_invocation",
+            "build_surface_health_invocation",
             "project_surface_page_page",
             "project_surface_manifest",
+            "project_surface_health",
+            "project_surface_status",
         ):
             self._require_case_action(surface_case, action)
         for fixture in (
@@ -3005,12 +3006,33 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "surface-create-page-request.v4.json",
             "surface-delete-page-request.v4.json",
             "surface-manifest-request.v4.json",
+            "surface-health-request.v4.json",
             "surface-page-page.v4.json",
             "surface-manifest.v4.json",
+            "surface-health.v4.json",
         ):
             self._require_case_fixture(surface_case, fixture)
-        for ability in ("pages.list", "pages.publish", "pages.get", "pages.unpublish"):
+        for ability in (
+            "pages.list",
+            "pages.publish",
+            "pages.get",
+            "pages.unpublish",
+            "pages.health",
+        ):
             self._require_case_literal(surface_case, f"- {ability}")
+        self._require_case_expectation(
+            surface_case,
+            "health_invocation_fixture: surface-health-invocation.v4.json",
+        )
+        self._require_case_expectation(
+            surface_case, "health_fixture: surface-health.v4.json"
+        )
+        self._require_case_expectation(
+            surface_case, "surface_status_aliases_health: true"
+        )
+        self._require_case_expectation(
+            surface_case, "health_rendering_owner: backend"
+        )
         self._require_case_expectation(
             surface_case, "backend_rendering_owned_by_sdk: false"
         )
@@ -3056,6 +3078,15 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(manifest_draft.metadata["system_ability"], "pages.get")
 
+        health_draft = surface.build_health_invocation(
+            shared_surface_health_request()
+        )
+        self.assertEqual(
+            health_draft.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+        )
+        self.assertEqual(health_draft.metadata["system_ability"], "pages.health")
+
         page = surface.list_pages(shared_surface_list_pages_request())
         self.assertEqual(page.kind, "surface_page_page")
         self.assertEqual(page.source, "pages_read_model")
@@ -3068,6 +3099,18 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(manifest.kind, "surface_manifest")
         self.assertEqual(manifest.page.page_id, "docs")
         self.assertEqual(manifest.entrypoint["kind"], "public_page_ref")
+
+        health = surface.surface_health(shared_surface_health_request())
+        self.assertTrue(health.ready)
+        self.assertEqual(health.metadata["rendering_owner"], "backend")
+        self.assertEqual(
+            health.descriptor_ref,
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+        )
+
+        status = surface.surface_status(shared_surface_health_request())
+        self.assertEqual(status.surface_ref, health.surface_ref)
+        self.assertEqual(status.state, health.state)
 
         create_request = shared_surface_create_page_request()
         with self.assertRaises(SDKError) as caught:
@@ -4704,6 +4747,15 @@ def shared_surface_manifest_request() -> SurfaceManifestRequest:
     return SurfaceManifestRequest(
         base=shared_surface_carrier_base("surface-manifest-request.v4.json"),
         project_id=decoded["project_id"],
+    )
+
+
+def shared_surface_health_request() -> SurfaceHealthRequest:
+    decoded = json.loads(shared_fixture("surface-health-request.v4.json"))
+    return SurfaceHealthRequest(
+        base=shared_surface_carrier_base("surface-health-request.v4.json"),
+        project_id=decoded.get("project_id", ""),
+        surface_ref=decoded.get("surface_ref", ""),
     )
 
 

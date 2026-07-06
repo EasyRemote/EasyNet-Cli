@@ -418,6 +418,14 @@
       "schema": "surface-health.schema.json"
     },
     {
+      "fixture": "surface-health-invocation.v4.json",
+      "schema": "invocation.schema.json"
+    },
+    {
+      "fixture": "surface-health-request.v4.json",
+      "schema": "surface-health-request.schema.json"
+    },
+    {
       "fixture": "surface-list-pages-invocation.v4.json",
       "schema": "invocation.schema.json"
     },
