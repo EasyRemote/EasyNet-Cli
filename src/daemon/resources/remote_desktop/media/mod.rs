@@ -538,12 +538,29 @@ mod tests {
         assert_eq!(catalog[2]["external_binary_required"], json!(false));
 
         // The native ScreenCaptureKit + VideoToolbox plugin is compiled in on
-        // macOS only; elsewhere the descriptor stays not_installed.
+        // macOS only. Runtime permission can still make it unavailable without
+        // changing the compiled plugin descriptor.
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(catalog[2]["status"], json!("available"));
-            assert_eq!(catalog[2]["transport_ready"], json!(true));
-            assert_eq!(catalog[2]["production_ready"], json!(true));
+            let native = native_webrtc_backend_runtime_descriptor();
+            assert_eq!(catalog[2]["status"], json!(native.status));
+            assert_eq!(
+                catalog[2]["transport_ready"],
+                json!(native.transport_ready())
+            );
+            assert_eq!(
+                catalog[2]["production_ready"],
+                json!(native.production_ready())
+            );
+            if native.is_available() {
+                assert_eq!(catalog[2]["status"], json!("available"));
+            } else {
+                assert_eq!(catalog[2]["status"], json!("permission_denied"));
+                assert_eq!(
+                    catalog[2]["unavailable_reason"],
+                    json!("screen_capture_permission_denied")
+                );
+            }
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -578,23 +595,41 @@ mod tests {
     }
 
     // On macOS the native ScreenCaptureKit + VideoToolbox plugin is the
-    // production backend and is selected for WebRTC transport; the gate opens.
+    // production backend only when runtime Screen Recording permission is
+    // granted. Without that permission, direct WebRTC falls back to the
+    // baseline xcap/OpenH264 path and the production gate stays closed.
     #[cfg(target_os = "macos")]
     #[test]
-    fn native_plugin_is_the_production_webrtc_backend_on_macos() {
+    fn native_plugin_runtime_permission_controls_production_gate_on_macos() {
         let entry = xcap_display_entry();
+        let native = native_webrtc_backend_runtime_descriptor();
 
-        assert_eq!(
-            production_backend_for_entry(&entry).unwrap().backend_id(),
-            MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
-        );
-        assert_eq!(
-            webrtc_transport_backend_for_entry(&entry)
-                .unwrap()
-                .backend_id(),
-            MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
-        );
-        assert_eq!(production_gate_view()["ready"], json!(true));
+        if native.is_available() {
+            assert_eq!(
+                production_backend_for_entry(&entry).unwrap().backend_id(),
+                MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
+            );
+            assert_eq!(
+                webrtc_transport_backend_for_entry(&entry)
+                    .unwrap()
+                    .backend_id(),
+                MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID
+            );
+            assert_eq!(production_gate_view()["ready"], json!(true));
+        } else {
+            assert!(production_backend_for_entry(&entry).is_none());
+            assert_eq!(
+                webrtc_transport_backend_for_entry(&entry)
+                    .unwrap()
+                    .backend_id(),
+                XCAP_OPENH264_WEBRTC_BACKEND_ID
+            );
+            assert_eq!(production_gate_view()["ready"], json!(false));
+            assert_eq!(
+                production_gate_view()["reason"],
+                json!("screen_capture_permission_denied")
+            );
+        }
     }
 
     // Off macOS the native plugin is absent, so the WebRTC transport falls
