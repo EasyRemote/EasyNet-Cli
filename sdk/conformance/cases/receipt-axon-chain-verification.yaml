@@ -1,0 +1,21 @@
+id: receipt/axon_chain_verification
+profile: receipt
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Receipt chain verification exposes the daemon/Axon provider projection for full Axon audit-bundle receipts, including single-invocation signature chain checks and parent-receipt closure, while language facades only parse the projection.
+steps:
+  - action: verify_full_receipt_chain
+  - action: require_axon_provider_projection
+  - action: require_parent_receipt_closure
+  - action: reject_language_facade_verifier
+expect:
+  result: receipt_axon_chain_projection_observed
+  verifier_owner: axon
+  facade_verifier_owner: daemon_sdk_provider
+  chain_projection: single_invocation_signature_chain_with_parent_closure
+  parent_dag_closed: true
+  cross_invocation_causal_dag: incomplete_until_axon_library_api
+  receipt_ura_construction: opaque_until_rfc_007

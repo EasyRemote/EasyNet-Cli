@@ -946,6 +946,20 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	if _, err := NewCausalRefFromJSON([]byte(`{"metadata":{}}`)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("summary-only causal ref did not produce InvalidArgument: %v", err)
 	}
+
+	chainCase := sharedCase(t, root, "receipt-axon-chain-verification.yaml")
+	requireCaseID(t, chainCase, "receipt/axon_chain_verification")
+	for _, action := range []string{
+		"verify_full_receipt_chain",
+		"require_axon_provider_projection",
+		"require_parent_receipt_closure",
+		"reject_language_facade_verifier",
+	} {
+		requireCaseAction(t, chainCase, action)
+	}
+	requireCaseExpectation(t, chainCase, "chain_projection: single_invocation_signature_chain_with_parent_closure")
+	requireCaseExpectation(t, chainCase, "parent_dag_closed: true")
+	requireCaseExpectation(t, chainCase, "cross_invocation_causal_dag: incomplete_until_axon_library_api")
 }
 
 func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *testing.T) {

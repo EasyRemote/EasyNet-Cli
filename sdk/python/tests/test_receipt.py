@@ -55,8 +55,8 @@ class MemoryReceiptTransport:
             b'"metadata":{"source":"axon"}}'
         )
         self.verify_chain_json = (
-            b'{"verified":false,"continuous":true,'
-            b'"method":"daemon_receipt_chain_continuity","reason":"continuity only",'
+            b'{"verified":true,"continuous":true,'
+            b'"method":"axon_receipt_chain_signature","reason":"",'
             b'"requires_full_receipt":true,'
             b'"root_receipt_ura":"easynet:///r/example/receipt/receipt-1",'
             b'"terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2",'
@@ -64,12 +64,14 @@ class MemoryReceiptTransport:
             b'"items":[{"index":0,'
             b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"prev_receipt_hash_hex":null,"continuous":true,"metadata":{}},'
+            b'"prev_receipt_hash_hex":null,"continuous":true,'
+            b'"metadata":{"parent_receipt_count":0}},'
             b'{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2",'
             b'"receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
             b'"prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"continuous":true,"metadata":{}}],'
-            b'"metadata":{"chain_projection":"hash_continuity"}}'
+            b'"continuous":true,"metadata":{"parent_receipt_count":1}}],'
+            b'"metadata":{"chain_projection":"single_invocation_signature_chain_with_parent_closure",'
+            b'"parent_dag_closed":true,"assurance":"cryptographic"}}'
         )
         self.causal_ref_json = (
             b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
@@ -551,10 +553,15 @@ class ReceiptTests(unittest.TestCase):
             )
         )
 
-        self.assertFalse(result.verified)
+        self.assertTrue(result.verified)
         self.assertTrue(result.continuous)
-        self.assertEqual(result.method, "daemon_receipt_chain_continuity")
+        self.assertEqual(result.method, "axon_receipt_chain_signature")
         self.assertEqual(result.receipt_count, 2)
+        self.assertEqual(
+            result.metadata["chain_projection"],
+            "single_invocation_signature_chain_with_parent_closure",
+        )
+        self.assertTrue(result.metadata["parent_dag_closed"])
         assert transport.seen_chain_request is not None
         receipts = transport.seen_chain_request["receipts"]
         self.assertIsInstance(receipts, list)

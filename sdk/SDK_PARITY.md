@@ -353,8 +353,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   explicit direct-runtime prepare/submit/handle delegation is available through
   the SDK facade, while daemon-owned signer acquisition/keyring policy, daemon-backed
   MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
-  pairing/hub lifecycle cutover, and full receipt verification remain
-  incomplete.
+  pairing/hub lifecycle cutover, cross-invocation receipt DAG verification, and
+  RFC-007 receipt URA construction remain incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel/events
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
   through Runtime Core invoke, C ABI-backed mission events execution through

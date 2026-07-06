@@ -168,7 +168,7 @@
     {
       "capability_id": "receipt",
       "profile": "receipt",
-      "shared_cases": ["sdk/conformance/cases/receipt-fetch-carrier.yaml", "sdk/conformance/cases/receipt-projection-causal-ref.yaml"],
+      "shared_cases": ["sdk/conformance/cases/receipt-fetch-carrier.yaml", "sdk/conformance/cases/receipt-projection-causal-ref.yaml", "sdk/conformance/cases/receipt-axon-chain-verification.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/receipt_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -177,7 +177,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_receipt.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Axon-backed full cryptographic verification and RFC-007 receipt URA construction remain incomplete."
+      "remaining": "Cross-invocation Axon causal DAG verification and RFC-007 receipt URA construction remain incomplete."
     },
     {
       "capability_id": "publication",

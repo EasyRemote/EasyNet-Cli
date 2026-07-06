@@ -2041,6 +2041,22 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             CausalRef.from_json(b'{"metadata":{}}')
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
+        chain_case = shared_case("receipt-axon-chain-verification.yaml")
+        self._require_case_id(chain_case, "receipt/axon_chain_verification")
+        for action in (
+            "verify_full_receipt_chain",
+            "require_axon_provider_projection",
+            "require_parent_receipt_closure",
+            "reject_language_facade_verifier",
+        ):
+            self._require_case_action(chain_case, action)
+        for expectation in (
+            "chain_projection: single_invocation_signature_chain_with_parent_closure",
+            "parent_dag_closed: true",
+            "cross_invocation_causal_dag: incomplete_until_axon_library_api",
+        ):
+            self._require_case_expectation(chain_case, expectation)
+
     def test_python_directory_identity_execute_shared_projection_cases(self) -> None:
         list_case = shared_case("directory-list-pagination.yaml")
         self._require_case_id(list_case, "directory/list_pagination")
