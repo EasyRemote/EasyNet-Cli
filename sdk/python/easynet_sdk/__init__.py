@@ -212,7 +212,6 @@ from .health import (
 from .ability_descriptor import (
     AbilityDescriptorRef,
     parse_ability_descriptor_ref,
-    validate_ability_descriptor_ref_shape,
 )
 from .identity import (
     AddressingClient,

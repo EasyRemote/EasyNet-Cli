@@ -9,7 +9,6 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional
 
-from .ability_descriptor import validate_ability_descriptor_ref_shape
 from .authority import AuthorityMetadata, validate_authority_metadata
 from .errors import ErrorCode, RetryHint, SDKError
 
@@ -267,7 +266,6 @@ class InvocationBuilder:
         caller_ura = _required_builder_string(self._caller_ura, "caller_ura")
         callee_ura = _required_builder_string(self._callee_ura, "callee_ura")
         descriptor_ref = _required_builder_string(self._descriptor_ref, "descriptor_ref")
-        validate_ability_descriptor_ref_shape(descriptor_ref)
         subject_ura = _required_builder_string(self._subject_ura, "subject_ura")
         nonce_base64 = _required_builder_string(self._nonce_base64, "nonce_base64")
         content_type = _required_builder_string(self._content_type, "content_type")

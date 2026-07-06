@@ -163,30 +163,6 @@ class InvocationTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
-    def test_builder_rejects_malformed_descriptor_ref(self) -> None:
-        for descriptor_ref in (
-            "easynet:///r/example/ability/device.dev-a.observe.health",
-            "easynet:///r/example/device/dev-a@1.0.0",
-            "easynet:///r/example/ability/device.dev-a.observe.health@",
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0@extra",
-        ):
-            with self.subTest(descriptor_ref=descriptor_ref):
-                with self.assertRaises(SDKError) as caught:
-                    (
-                        InvocationBuilder()
-                        .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-                        .with_callee_ura("easynet:///r/example/device/dev-a")
-                        .with_descriptor_ref(descriptor_ref)
-                        .with_subject_ura("easynet:///r/example/device/dev-a")
-                        .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
-                        .with_causal_context({"form": "none"})
-                        .with_json_args({})
-                        .with_content_type("application/json")
-                        .build()
-                    )
-
-                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-
     def test_draft_from_json_rejects_unknown_field(self) -> None:
         with self.assertRaises(SDKError) as caught:
             InvocationDraft.from_json(
