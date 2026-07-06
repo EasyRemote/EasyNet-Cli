@@ -132,6 +132,70 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	}
 }
 
+func TestRuntimeSigningTransportSignsStreamAndBidiDrafts(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+
+	var streamDraft map[string]any
+	var bidiDraft map[string]any
+	transport, err := NewRuntimeSigningTransport(RuntimeTransportFunc{
+		OpenStreamFunc: func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &streamDraft); err != nil {
+				t.Fatalf("decode signed stream draft: %v", err)
+			}
+			return StreamTransportFunc{}, []byte(`{"stream_id":"stream-1","state":"Opening"}`), nil
+		},
+		OpenBidiFunc: func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+			if err := json.Unmarshal(draftJSON, &bidiDraft); err != nil {
+				t.Fatalf("decode signed bidi draft: %v", err)
+			}
+			return BidiTransportFunc{}, []byte(`{"session_id":"bidi-1","state":"Opening"}`), nil
+		},
+	}, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+	client := NewRuntimeClientMust(t, transport)
+
+	stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	if stream.StreamID() != "stream-1" {
+		t.Fatalf("stream id = %q", stream.StreamID())
+	}
+	assertRuntimeSigningSignature(t, streamDraft)
+
+	session, err := client.OpenBidi(context.Background(), completeDraftForRuntimeTest(t), []BidiStreamDescriptor{
+		{StreamID: 1, ContentType: "application/json", Ordering: "ordered"},
+	})
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	if session.SessionID() != "bidi-1" {
+		t.Fatalf("session id = %q", session.SessionID())
+	}
+	assertRuntimeSigningSignature(t, bidiDraft)
+}
+
+func TestRuntimeSigningTransportRejectsInvalidConstruction(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	if _, err := NewRuntimeSigningTransport(nil, signer); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewRuntimeSigningTransport(nil) = %v, want %s", err, ErrInvalidArgument)
+	}
+	var transport *RuntimeSigningTransport
+	if _, err := transport.Invoke(context.Background(), []byte(`{}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("nil RuntimeSigningTransport.Invoke = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func NewRuntimeClientMust(t *testing.T, transport RuntimeTransport) *RuntimeClient {
 	t.Helper()
 	client, err := NewRuntimeClient(transport)
@@ -139,4 +203,15 @@ func NewRuntimeClientMust(t *testing.T, transport RuntimeTransport) *RuntimeClie
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
 	return client
+}
+
+func assertRuntimeSigningSignature(t *testing.T, draft map[string]any) {
+	t.Helper()
+	signature, ok := draft["caller_signature"].(map[string]any)
+	if !ok {
+		t.Fatalf("caller_signature missing from forwarded draft: %#v", draft)
+	}
+	if signature["algorithm"] != "ed25519" || signature["signature_base64"] != "c2lnbmF0dXJl" {
+		t.Fatalf("unexpected signature: %#v", signature)
+	}
 }

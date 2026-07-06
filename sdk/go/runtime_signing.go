@@ -30,66 +30,103 @@ func NewRuntimeSigningTransport(next RuntimeTransport, signer Signer) (*RuntimeS
 }
 
 func (t *RuntimeSigningTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
 	raw, err := t.signDraftJSON(draftJSON)
 	if err != nil {
 		return nil, err
 	}
-	return t.next.Invoke(ctx, raw)
+	return next.Invoke(ctx, raw)
 }
 
 func (t *RuntimeSigningTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, nil, err
+	}
 	raw, err := t.signDraftJSON(draftJSON)
 	if err != nil {
 		return nil, nil, err
 	}
-	return t.next.OpenStream(ctx, raw)
+	return next.OpenStream(ctx, raw)
 }
 
 func (t *RuntimeSigningTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, nil, err
+	}
 	raw, err := t.signDraftJSON(draftJSON)
 	if err != nil {
 		return nil, nil, err
 	}
-	return t.next.OpenBidi(ctx, raw, streamsJSON)
+	return next.OpenBidi(ctx, raw, streamsJSON)
 }
 
 func (t *RuntimeSigningTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
-	return t.next.Prepare(ctx, draftJSON, optionsJSON)
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	return next.Prepare(ctx, draftJSON, optionsJSON)
 }
 
 func (t *RuntimeSigningTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
-	return t.next.SubmitSigned(ctx, signedJSON)
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	return next.SubmitSigned(ctx, signedJSON)
 }
 
 func (t *RuntimeSigningTransport) AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error) {
-	return t.next.AwaitHandle(ctx, handleID)
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	return next.AwaitHandle(ctx, handleID)
 }
 
 func (t *RuntimeSigningTransport) CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
-	return t.next.CancelHandle(ctx, handleID, reason)
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	return next.CancelHandle(ctx, handleID, reason)
 }
 
 func (t *RuntimeSigningTransport) HandleEvents(ctx context.Context, handleID uint64) ([]byte, error) {
-	return t.next.HandleEvents(ctx, handleID)
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	return next.HandleEvents(ctx, handleID)
 }
 
 func (t *RuntimeSigningTransport) FreeHandle(ctx context.Context, handleID uint64) error {
-	return t.next.FreeHandle(ctx, handleID)
+	next, err := t.nextTransport()
+	if err != nil {
+		return err
+	}
+	return next.FreeHandle(ctx, handleID)
 }
 
 func (t *RuntimeSigningTransport) Close(ctx context.Context) error {
-	return t.next.Close(ctx)
+	next, err := t.nextTransport()
+	if err != nil {
+		return err
+	}
+	return next.Close(ctx)
 }
 
 func (t *RuntimeSigningTransport) signDraftJSON(raw []byte) ([]byte, error) {
-	if t == nil || t.next == nil {
-		return nil, invalidRuntimeClient("runtime signing transport is not initialized")
-	}
 	draft, err := NewInvocationDraftFromJSON(raw)
 	if err != nil {
 		return nil, err
 	}
-	signed, err := t.signer.SignInvocationDraft(draft)
+	signed, err := t.signer.signInvocationDraft(draft)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +135,13 @@ func (t *RuntimeSigningTransport) signDraftJSON(raw []byte) ([]byte, error) {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation draft: %v", err), err)
 	}
 	return out, nil
+}
+
+func (t *RuntimeSigningTransport) nextTransport() (RuntimeTransport, error) {
+	if t == nil || t.next == nil {
+		return nil, invalidRuntimeClient("runtime signing transport is not initialized")
+	}
+	return t.next, nil
 }
 
 func causalContextForInvocationDraft(value map[string]any) (CausalContext, error) {

@@ -386,11 +386,11 @@ func (s Signer) SignWithSignature(prepared PreparedInvocation, signature Invocat
 	return signed, nil
 }
 
-// SignInvocationDraft attaches a caller signature to a complete Invocation
+// signInvocationDraft attaches a caller signature to a complete Invocation
 // draft without consuming or mutating the input. Existing caller signatures are
 // preserved; this keeps browser/user pre-signed Invocations from being
 // re-signed by a backend or host process.
-func (s Signer) SignInvocationDraft(draft InvocationDraft) (InvocationDraft, error) {
+func (s Signer) signInvocationDraft(draft InvocationDraft) (InvocationDraft, error) {
 	if draft.CallerSignature() != nil {
 		return draft, nil
 	}
@@ -400,7 +400,7 @@ func (s Signer) SignInvocationDraft(draft InvocationDraft) (InvocationDraft, err
 	if s.provider == nil {
 		return InvocationDraft{}, invalidInvocation("signature provider is required", nil)
 	}
-	material, err := SigningMaterialForInvocationDraft(draft)
+	material, err := signingMaterialForInvocationDraft(draft)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
@@ -417,10 +417,10 @@ func (s Signer) SignInvocationDraft(draft InvocationDraft) (InvocationDraft, err
 	return signed, nil
 }
 
-// SigningMaterialForInvocationDraft projects SDK Invocation DTO fields into the
+// signingMaterialForInvocationDraft projects SDK Invocation DTO fields into the
 // canonical material callers sign. The byte layout is delegated to the Axon
 // canonical facade; this helper owns only DTO validation and projection.
-func SigningMaterialForInvocationDraft(draft InvocationDraft) (SigningMaterial, error) {
+func signingMaterialForInvocationDraft(draft InvocationDraft) (SigningMaterial, error) {
 	nonce, err := decodeBase64Field(draft.NonceBase64(), "nonce_base64")
 	if err != nil {
 		return SigningMaterial{}, err
