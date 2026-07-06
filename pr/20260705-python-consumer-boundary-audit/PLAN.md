@@ -17,6 +17,10 @@ Remove EasyRemote-specific public naming from the Python SDK cutover audit helpe
 - Rename `audit_easyremote_cutover` to `audit_consumer_boundary`.
 - Update package exports, conformance tests, cutover audit tests, and consumer acceptance tests.
 - Update SDK docs and parity notes to describe consumer boundary audit helpers.
+- Tighten DescriptorRef parsing detection so `partition("@")` and
+  `rpartition("@")` over `descriptor_ref` are rejected the same way as
+  `split("@")` and `rsplit("@")`. Consumers must use SDK/Axon projection helpers
+  instead of decomposing the descriptor grammar locally.
 
 ## Verification
 
@@ -27,3 +31,4 @@ Remove EasyRemote-specific public naming from the Python SDK cutover audit helpe
 - Go SDK tests.
 - SDK scaffold check.
 - Formatting, diff, and terminology scans for removed public product names.
+- Focused regression test for descriptor-ref `rpartition("@")` projection.

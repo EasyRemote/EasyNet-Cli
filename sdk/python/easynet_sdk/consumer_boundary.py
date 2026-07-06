@@ -608,7 +608,12 @@ def _is_descriptor_ref_assembly(node: ast.AST) -> bool:
 def _is_descriptor_ref_split(node: ast.AST) -> bool:
     if not isinstance(node, ast.Call):
         return False
-    if not isinstance(node.func, ast.Attribute) or node.func.attr not in {"split", "rsplit"}:
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in {
+        "partition",
+        "rpartition",
+        "rsplit",
+        "split",
+    }:
         return False
     if not node.args or not isinstance(node.args[0], ast.Constant) or node.args[0].value != "@":
         return False

@@ -386,6 +386,27 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
         self.assertIn("raw_addressing_helper", _rules(result))
         self.assertIn("raw_descriptor_ref_assembly", _rules(result))
 
+    def test_flags_descriptor_ref_partition_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "invocation.py").write_text(
+                textwrap.dedent(
+                    '''
+                    def project(descriptor_ref):
+                        ability_ura, separator, descriptor_version = (
+                            descriptor_ref.rpartition("@")
+                        )
+                        return ability_ura, descriptor_version
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_consumer_boundary(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_descriptor_ref_assembly", _rules(result))
+
     def test_flags_raw_publication_carrier_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
