@@ -1306,7 +1306,7 @@ func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage
 }
 
 func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {
-	code := NormalizeErrorCode(errorValue.GetCode())
+	code := runtimeFailureCode(errorValue.GetCode(), ErrAdmissionDenied)
 	if code == "" || code == ErrGeneric {
 		code = ErrAdmissionDenied
 	}

@@ -297,7 +297,7 @@ func missionInvocationFailureError(result InvocationResult) error {
 		return transportProfileError(missionProfile, "mission invocation failed", nil)
 	}
 	return withProfileErrorDetails(&SDKError{
-		Code:      NormalizeErrorCode(failure.Code()),
+		Code:      runtimeFailureCode(failure.Code(), ErrAdmissionDenied),
 		Stage:     failure.Stage(),
 		Retry:     RetryNever,
 		Retryable: failure.Retryable(),

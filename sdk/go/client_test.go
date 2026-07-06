@@ -70,8 +70,8 @@ func TestRequireABIReturnsTypedVersionMismatch(t *testing.T) {
 	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrVersionMismatch {
 		t.Fatalf("error code = %v, want %s", err, ErrVersionMismatch)
 	}
-	if !IsCode(err, ErrorVersionIncompatible) {
-		t.Fatalf("legacy version-incompatible request did not match canonical error")
+	if !IsCode(err, ErrVersionMismatch) {
+		t.Fatalf("canonical version-mismatch request did not match error")
 	}
 }
 
@@ -88,8 +88,8 @@ func TestFeatureDiscoveryWrapsTransportFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("FeatureDiscovery succeeded, want transport error")
 	}
-	if !IsCode(err, ErrorTransport) {
-		t.Fatalf("error code = %v, want %s", err, ErrorTransport)
+	if !IsCode(err, ErrTransport) {
+		t.Fatalf("error code = %v, want %s", err, ErrTransport)
 	}
 	if !errors.Is(err, down) {
 		t.Fatalf("transport cause not preserved")
@@ -112,8 +112,8 @@ func TestRequireABIMapsZeroDaemonABIToVersionMismatch(t *testing.T) {
 	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrVersionMismatch {
 		t.Fatalf("error code = %v, want %s", err, ErrVersionMismatch)
 	}
-	if !IsCode(err, ErrorVersionIncompatible) {
-		t.Fatalf("legacy version-incompatible request did not match canonical error")
+	if !IsCode(err, ErrVersionMismatch) {
+		t.Fatalf("canonical version-mismatch request did not match error")
 	}
 }
 
@@ -129,8 +129,8 @@ func TestFeatureDiscoveryRejectsMalformedJSON(t *testing.T) {
 	if err == nil {
 		t.Fatalf("FeatureDiscovery succeeded, want invalid argument")
 	}
-	if !IsCode(err, ErrorInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrorInvalidArgument)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -154,8 +154,8 @@ func TestClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatalf("FeatureDiscovery after close succeeded")
 	}
-	if !IsCode(err, ErrorInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrorInvalidArgument)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 	if transport.featureCalls != 0 {
 		t.Fatalf("feature discovery reached transport after close: %d calls", transport.featureCalls)
@@ -177,15 +177,15 @@ func TestClientCloseFailureIsTerminal(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Close succeeded, want transport error")
 	}
-	if !IsCode(err, ErrorTransport) || !errors.Is(err, down) {
+	if !IsCode(err, ErrTransport) || !errors.Is(err, down) {
 		t.Fatalf("close error not wrapped as transport cause: %v", err)
 	}
 	_, err = client.RequireABI(context.Background(), 4)
 	if err == nil {
 		t.Fatalf("RequireABI after failed close succeeded")
 	}
-	if !IsCode(err, ErrorInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrorInvalidArgument)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 	if transport.featureCalls != 0 {
 		t.Fatalf("require ABI reached transport after failed close: %d calls", transport.featureCalls)

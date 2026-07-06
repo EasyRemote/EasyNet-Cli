@@ -300,7 +300,7 @@ func receiptInvocationFailureError(result InvocationResult) error {
 			message = failure.Message()
 		}
 		if failure.Code() != "" {
-			code = NormalizeErrorCode(failure.Code())
+			code = runtimeFailureCode(failure.Code(), ErrAdmissionDenied)
 			details["runtime_code"] = failure.Code()
 		}
 		if failure.Stage() != "" {

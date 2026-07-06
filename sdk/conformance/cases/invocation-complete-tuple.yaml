@@ -14,4 +14,4 @@ steps:
   - action: prepare
 expect:
   result: error
-  error_code: InvalidArgument
+  error_code: INVALID_ARGUMENT

@@ -83,10 +83,10 @@ test("RuntimeClient delegates through injected transport and rejects closed use"
   );
 });
 
-test("typed daemon error JSON normalizes wire aliases", () => {
+test("typed daemon error JSON decodes canonical schema values", () => {
   const error = SDKError.fromJSON(
     JSON.stringify({
-      code: "DaemonDown",
+      code: "DAEMON_OFFLINE",
       stage: "transport",
       message: "daemon offline",
       retry: "safe",
@@ -97,4 +97,22 @@ test("typed daemon error JSON normalizes wire aliases", () => {
   assert.equal(error.code, ErrorCode.DAEMON_OFFLINE);
   assert.equal(error.retryable, true);
   assert.equal(error.details.profile, "runtime_core");
+});
+
+test("typed daemon error JSON rejects legacy code aliases", () => {
+  for (const code of ["InvalidArgument", "DaemonDown", "DAEMON_DOWN", "VersionIncompatible"]) {
+    assert.throws(
+      () =>
+        SDKError.fromJSON(
+          JSON.stringify({
+            code,
+            stage: "transport",
+            message: "legacy code",
+            retry: "never",
+            details: {},
+          }),
+        ),
+      (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+    );
+  }
 });

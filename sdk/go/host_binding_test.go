@@ -547,7 +547,7 @@ const hostStreamErrorFrameFixtureJSON = `{
   "seq": null,
   "value": null,
   "error": {
-    "code": "InvalidArgument",
+    "code": "INVALID_ARGUMENT",
     "stage": "host",
     "message": "bad input",
     "retry": "never",

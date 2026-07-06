@@ -4,7 +4,7 @@ import "testing"
 
 func TestDecodeDaemonErrorJSONDecodesFixtureShape(t *testing.T) {
 	err, decodeErr := DecodeDaemonErrorJSON([]byte(`{
-		"code": "InvalidArgument",
+		"code": "INVALID_ARGUMENT",
 		"stage": "prepare",
 		"message": "missing caller_ura",
 		"retry": "never",
@@ -64,44 +64,83 @@ func TestDecodeDaemonErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.T) 
 	}
 }
 
-func TestNormalizeErrorCodeCanonicalizesLegacyWireAliases(t *testing.T) {
+func TestParseErrorCodeAcceptsOnlyCanonicalSchemaValues(t *testing.T) {
 	cases := map[string]ErrorCode{
-		"DAEMON_DOWN":          ErrDaemonOffline,
-		"VERSION_INCOMPATIBLE": ErrVersionMismatch,
-		"ABILITY_FAILED":       ErrAdmissionDenied,
-		"NOT_FOUND":            ErrAbilityNotFound,
-		"PROTOCOL":             ErrProtocolMismatch,
-		"TRANSPORT":            ErrRouteUnavailable,
 		"DAEMON_OFFLINE":       ErrDaemonOffline,
 		"VERSION_MISMATCH":     ErrVersionMismatch,
+		"VERSION_INCOMPATIBLE": ErrVersionIncompatible,
 		"ADMISSION_DENIED":     ErrAdmissionDenied,
 		"ABILITY_NOT_FOUND":    ErrAbilityNotFound,
 		"PROTOCOL_MISMATCH":    ErrProtocolMismatch,
 		"ROUTE_UNAVAILABLE":    ErrRouteUnavailable,
+		"TRANSPORT":            ErrTransport,
 	}
 	for input, want := range cases {
-		if got := NormalizeErrorCode(input); got != want {
-			t.Fatalf("NormalizeErrorCode(%q) = %s, want %s", input, got, want)
+		got, err := ParseErrorCode(input)
+		if err != nil {
+			t.Fatalf("ParseErrorCode(%q): %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("ParseErrorCode(%q) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func TestDecodeDaemonErrorJSONRejectsLegacyCodeAliases(t *testing.T) {
+	for _, code := range []string{"InvalidArgument", "DaemonDown", "DAEMON_DOWN", "VersionIncompatible"} {
+		_, err := DecodeDaemonErrorJSON([]byte(`{
+			"code": "` + code + `",
+			"stage": "runtime",
+			"message": "legacy code",
+			"retry": "never",
+			"details": {}
+		}`))
+		if err == nil {
+			t.Fatalf("DecodeDaemonErrorJSON accepted legacy code %q", code)
+		}
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("legacy code %q error = %v, want %s", code, err, ErrInvalidArgument)
+		}
+	}
+}
+
+func TestRuntimeFailureCodePreservesDomainCodesAndRejectsLegacyAliases(t *testing.T) {
+	cases := map[string]ErrorCode{
+		"":                                ErrAdmissionDenied,
+		"TRANSPORT":                       ErrTransport,
+		"AXON_MEMBERSHIP_REQUIRED":        ErrorCode("AXON_MEMBERSHIP_REQUIRED"),
+		"TARGET_NOT_IN_PRESENCE_REGISTRY": ErrorCode("TARGET_NOT_IN_PRESENCE_REGISTRY"),
+		"InvalidArgument":                 ErrProtocolMismatch,
+		"DAEMON_DOWN":                     ErrProtocolMismatch,
+	}
+	for input, want := range cases {
+		if got := runtimeFailureCode(input, ErrAdmissionDenied); got != want {
+			t.Fatalf("runtimeFailureCode(%q) = %s, want %s", input, got, want)
 		}
 	}
 }
 
 func TestErrorClassForCodeProjectsStableClasses(t *testing.T) {
 	cases := map[ErrorCode]ErrorClass{
-		ErrInvalidArgument:  ErrorClassValidation,
-		ErrInvalidHandle:    ErrorClassHandle,
-		ErrNotInitialized:   ErrorClassLifecycle,
-		ErrDaemonOffline:    ErrorClassAvailability,
-		ErrPermissionDenied: ErrorClassPermission,
-		ErrAdmissionDenied:  ErrorClassAdmission,
-		ErrAbilityNotFound:  ErrorClassRouting,
-		ErrTimeout:          ErrorClassTimeout,
-		ErrCancelled:        ErrorClassCancellation,
-		ErrProtocolMismatch: ErrorClassProtocol,
-		ErrVersionMismatch:  ErrorClassVersion,
-		ErrControlOnly:      ErrorClassControl,
-		ErrNotImplemented:   ErrorClassUnsupported,
-		ErrGeneric:          ErrorClassGeneric,
+		ErrInvalidArgument:     ErrorClassValidation,
+		ErrInvalidHandle:       ErrorClassHandle,
+		ErrNotInitialized:      ErrorClassLifecycle,
+		ErrDaemonOffline:       ErrorClassAvailability,
+		ErrTransport:           ErrorClassAvailability,
+		ErrPermissionDenied:    ErrorClassPermission,
+		ErrAdmissionDenied:     ErrorClassAdmission,
+		ErrAbilityFailed:       ErrorClassAdmission,
+		ErrAbilityNotFound:     ErrorClassRouting,
+		ErrNotFound:            ErrorClassRouting,
+		ErrTimeout:             ErrorClassTimeout,
+		ErrCancelled:           ErrorClassCancellation,
+		ErrProtocolMismatch:    ErrorClassProtocol,
+		ErrProtocol:            ErrorClassProtocol,
+		ErrVersionMismatch:     ErrorClassVersion,
+		ErrVersionIncompatible: ErrorClassVersion,
+		ErrControlOnly:         ErrorClassControl,
+		ErrNotImplemented:      ErrorClassUnsupported,
+		ErrGeneric:             ErrorClassGeneric,
 	}
 	for code, want := range cases {
 		if got := ErrorClassForCode(code); got != want {
@@ -110,10 +149,10 @@ func TestErrorClassForCodeProjectsStableClasses(t *testing.T) {
 	}
 }
 
-func TestIsCodeMatchesCanonicalizedLegacyRequests(t *testing.T) {
+func TestIsCodeMatchesExactCanonicalRequests(t *testing.T) {
 	err := &SDKError{Code: ErrRouteUnavailable}
-	if !IsCode(err, ErrTransport) {
-		t.Fatalf("IsCode did not match legacy transport request")
+	if IsCode(err, ErrTransport) {
+		t.Fatalf("IsCode matched a different canonical code")
 	}
 	if !IsCode(err, ErrRouteUnavailable) {
 		t.Fatalf("IsCode did not match canonical route-unavailable request")

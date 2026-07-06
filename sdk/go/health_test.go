@@ -162,8 +162,8 @@ func TestRuntimeHealthWrapsTransportFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RuntimeHealth succeeded, want transport error")
 	}
-	if !IsCode(err, ErrorTransport) {
-		t.Fatalf("error code = %v, want %s", err, ErrorTransport)
+	if !IsCode(err, ErrTransport) {
+		t.Fatalf("error code = %v, want %s", err, ErrTransport)
 	}
 	if !errors.Is(err, down) {
 		t.Fatalf("transport cause not preserved")
@@ -182,7 +182,7 @@ func TestRuntimeHealthRejectsMalformedPayload(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RuntimeHealth succeeded, want invalid argument")
 	}
-	if !IsCode(err, ErrorInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrorInvalidArgument)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 }

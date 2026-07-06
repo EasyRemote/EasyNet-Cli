@@ -162,9 +162,7 @@ class SDKError(Exception):
 def is_code(error: BaseException, code: ErrorCode) -> bool:
     """Return whether *error* is an SDKError with the requested code."""
 
-    return isinstance(error, SDKError) and normalize_error_code(
-        error.code.value
-    ) == normalize_error_code(code.value)
+    return isinstance(error, SDKError) and error.code == code
 
 
 RuntimeError = SDKError
@@ -192,13 +190,13 @@ def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
             return ErrorClass.HANDLE
         case ErrorCode.NOT_INITIALIZED | ErrorCode.ALREADY_INIT:
             return ErrorClass.LIFECYCLE
-        case ErrorCode.DAEMON_OFFLINE:
+        case ErrorCode.DAEMON_OFFLINE | ErrorCode.TRANSPORT:
             return ErrorClass.AVAILABILITY
         case ErrorCode.PERMISSION_DENIED:
             return ErrorClass.PERMISSION
-        case ErrorCode.ADMISSION_DENIED:
+        case ErrorCode.ADMISSION_DENIED | ErrorCode.ABILITY_FAILED:
             return ErrorClass.ADMISSION
-        case ErrorCode.ABILITY_NOT_FOUND | ErrorCode.ROUTE_UNAVAILABLE:
+        case ErrorCode.ABILITY_NOT_FOUND | ErrorCode.ROUTE_UNAVAILABLE | ErrorCode.NOT_FOUND:
             return ErrorClass.ROUTING
         case ErrorCode.TIMEOUT:
             return ErrorClass.TIMEOUT
@@ -217,62 +215,12 @@ def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
 
 
 def normalize_error_code(code: str) -> ErrorCode:
-    """Map daemon/C ABI wire codes into the SDK taxonomy."""
+    """Parse the current canonical daemon error-code schema value."""
 
-    aliases = {
-        "InvalidArgument": ErrorCode.INVALID_ARGUMENT,
-        "INVALID_ARGUMENT": ErrorCode.INVALID_ARGUMENT,
-        "InvalidHandle": ErrorCode.INVALID_HANDLE,
-        "INVALID_HANDLE": ErrorCode.INVALID_HANDLE,
-        "NullPointer": ErrorCode.NULL_POINTER,
-        "NULL_POINTER": ErrorCode.NULL_POINTER,
-        "InvalidUTF8": ErrorCode.INVALID_UTF8,
-        "INVALID_UTF8": ErrorCode.INVALID_UTF8,
-        "NotInitialized": ErrorCode.NOT_INITIALIZED,
-        "NOT_INITIALIZED": ErrorCode.NOT_INITIALIZED,
-        "AlreadyInit": ErrorCode.ALREADY_INIT,
-        "ALREADY_INIT": ErrorCode.ALREADY_INIT,
-        "DaemonDown": ErrorCode.DAEMON_OFFLINE,
-        "DAEMON_DOWN": ErrorCode.DAEMON_OFFLINE,
-        "DAEMON_OFFLINE": ErrorCode.DAEMON_OFFLINE,
-        "PermissionDenied": ErrorCode.PERMISSION_DENIED,
-        "PERMISSION_DENIED": ErrorCode.PERMISSION_DENIED,
-        "AdmissionDenied": ErrorCode.ADMISSION_DENIED,
-        "ADMISSION_DENIED": ErrorCode.ADMISSION_DENIED,
-        "AbilityNotFound": ErrorCode.ABILITY_NOT_FOUND,
-        "ABILITY_NOT_FOUND": ErrorCode.ABILITY_NOT_FOUND,
-        "RouteUnavailable": ErrorCode.ROUTE_UNAVAILABLE,
-        "ROUTE_UNAVAILABLE": ErrorCode.ROUTE_UNAVAILABLE,
-        "Timeout": ErrorCode.TIMEOUT,
-        "TIMEOUT": ErrorCode.TIMEOUT,
-        "Cancelled": ErrorCode.CANCELLED,
-        "CANCELLED": ErrorCode.CANCELLED,
-        "InvalidInvocation": ErrorCode.INVALID_INVOCATION,
-        "INVALID_INVOCATION": ErrorCode.INVALID_INVOCATION,
-        "ProtocolMismatch": ErrorCode.PROTOCOL_MISMATCH,
-        "PROTOCOL_MISMATCH": ErrorCode.PROTOCOL_MISMATCH,
-        "VersionMismatch": ErrorCode.VERSION_MISMATCH,
-        "VERSION_MISMATCH": ErrorCode.VERSION_MISMATCH,
-        "VersionIncompatible": ErrorCode.VERSION_MISMATCH,
-        "VERSION_INCOMPATIBLE": ErrorCode.VERSION_MISMATCH,
-        "ControlOnly": ErrorCode.CONTROL_ONLY,
-        "CONTROL_ONLY": ErrorCode.CONTROL_ONLY,
-        "Transport": ErrorCode.ROUTE_UNAVAILABLE,
-        "TRANSPORT": ErrorCode.ROUTE_UNAVAILABLE,
-        "Protocol": ErrorCode.PROTOCOL_MISMATCH,
-        "PROTOCOL": ErrorCode.PROTOCOL_MISMATCH,
-        "NotFound": ErrorCode.ABILITY_NOT_FOUND,
-        "NOT_FOUND": ErrorCode.ABILITY_NOT_FOUND,
-        "AbilityFailed": ErrorCode.ADMISSION_DENIED,
-        "ABILITY_FAILED": ErrorCode.ADMISSION_DENIED,
-        "NotImplemented": ErrorCode.NOT_IMPLEMENTED,
-        "NOT_IMPLEMENTED": ErrorCode.NOT_IMPLEMENTED,
-        "Generic": ErrorCode.GENERIC,
-        "GENERIC": ErrorCode.GENERIC,
-    }
-    if code not in aliases:
-        raise _invalid_daemon_error(f"unknown daemon error code: {code}")
-    return aliases[code]
+    try:
+        return ErrorCode(code)
+    except ValueError as exc:
+        raise _invalid_daemon_error(f"unknown daemon error code: {code}") from exc
 
 
 def canonical_failure_code(code: str | None = None) -> ErrorCode:

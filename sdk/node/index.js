@@ -25,39 +25,6 @@ const ERROR_CODES = new Set([
   "GENERIC",
 ]);
 
-const ERROR_CODE_ALIASES = new Map([
-  ["InvalidArgument", "INVALID_ARGUMENT"],
-  ["InvalidHandle", "INVALID_HANDLE"],
-  ["NullPointer", "NULL_POINTER"],
-  ["InvalidUTF8", "INVALID_UTF8"],
-  ["NotInitialized", "NOT_INITIALIZED"],
-  ["AlreadyInit", "ALREADY_INIT"],
-  ["DaemonDown", "DAEMON_OFFLINE"],
-  ["DAEMON_DOWN", "DAEMON_OFFLINE"],
-  ["PermissionDenied", "PERMISSION_DENIED"],
-  ["AdmissionDenied", "ADMISSION_DENIED"],
-  ["AbilityNotFound", "ABILITY_NOT_FOUND"],
-  ["RouteUnavailable", "ROUTE_UNAVAILABLE"],
-  ["Timeout", "TIMEOUT"],
-  ["Cancelled", "CANCELLED"],
-  ["InvalidInvocation", "INVALID_INVOCATION"],
-  ["ProtocolMismatch", "PROTOCOL_MISMATCH"],
-  ["VersionMismatch", "VERSION_MISMATCH"],
-  ["VersionIncompatible", "VERSION_MISMATCH"],
-  ["VERSION_INCOMPATIBLE", "VERSION_MISMATCH"],
-  ["ControlOnly", "CONTROL_ONLY"],
-  ["Transport", "ROUTE_UNAVAILABLE"],
-  ["TRANSPORT", "ROUTE_UNAVAILABLE"],
-  ["Protocol", "PROTOCOL_MISMATCH"],
-  ["PROTOCOL", "PROTOCOL_MISMATCH"],
-  ["NotFound", "ABILITY_NOT_FOUND"],
-  ["NOT_FOUND", "ABILITY_NOT_FOUND"],
-  ["AbilityFailed", "ADMISSION_DENIED"],
-  ["ABILITY_FAILED", "ADMISSION_DENIED"],
-  ["NotImplemented", "NOT_IMPLEMENTED"],
-  ["Generic", "GENERIC"],
-]);
-
 export const ErrorCode = Object.freeze(
   Object.fromEntries([...ERROR_CODES].map((code) => [code, code])),
 );
@@ -513,11 +480,10 @@ function assertDraft(value) {
 
 function normalizeErrorCode(code) {
   const text = requiredWireString(code, "code");
-  const normalized = ERROR_CODE_ALIASES.get(text) ?? text;
-  if (!ERROR_CODES.has(normalized)) {
+  if (!ERROR_CODES.has(text)) {
     throw invalidDaemonError(`unknown daemon error code: ${text}`);
   }
-  return normalized;
+  return text;
 }
 
 function parseRetryHint(value) {

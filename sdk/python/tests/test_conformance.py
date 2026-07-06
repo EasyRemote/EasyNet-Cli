@@ -1345,7 +1345,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_action(complete_tuple_case, "remove_field")
         self._require_case_action(complete_tuple_case, "prepare")
         self._require_case_fixture(complete_tuple_case, "invocation.complete.v4.json")
-        self._require_case_expectation(complete_tuple_case, "error_code: InvalidArgument")
+        self._require_case_expectation(complete_tuple_case, "error_code: INVALID_ARGUMENT")
 
         draft = InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
         self.assertEqual(draft.caller_ura, "easynet:///r/example/agent/alice.sdk")
@@ -1780,7 +1780,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         not_submittable_case = shared_case("invocation-prepared-not-submittable.yaml")
         self._require_case_id(not_submittable_case, "invocation/prepared_not_submittable")
         self._require_case_action(not_submittable_case, "submit_prepared")
-        self._require_case_expectation(not_submittable_case, "error_code: InvalidArgument")
+        self._require_case_expectation(not_submittable_case, "error_code: INVALID_ARGUMENT")
         self.assertFalse(prepared.submit_ready())
 
         presigned_case = shared_case("invocation-presigned-submit.yaml")
@@ -2467,7 +2467,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             list_case,
             "agent_invocation_fixture: directory-list-agents-invocation.v4.json",
         )
-        self._require_case_expectation(list_case, "error_code: InvalidArgument")
+        self._require_case_expectation(list_case, "error_code: INVALID_ARGUMENT")
 
         directory = DirectoryClient(SharedDirectoryTransport())
 

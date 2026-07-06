@@ -257,7 +257,7 @@ func wrapHostBindingProviderError(message string, cause error) error {
 		return withProfileErrorDetails(sdkErr, hostBindingProfile)
 	}
 	return withProfileErrorDetails(&SDKError{
-		Code:      ErrRouteUnavailable,
+		Code:      ErrTransport,
 		Stage:     "provider",
 		Retry:     RetrySafe,
 		Retryable: RetryableForHint(RetrySafe),

@@ -2020,7 +2020,7 @@ HOST_ITEM_FRAME_PROJECTION = (
 
 HOST_ERROR_FRAME_PROJECTION = (
     b'{"frame_type":"error","seq":null,"value":null,'
-    b'"error":{"code":"InvalidArgument","stage":"host","message":"bad input",'
+    b'"error":{"code":"INVALID_ARGUMENT","stage":"host","message":"bad input",'
     b'"retry":"never","details":{}},"terminal":null,"output_hash":null}'
 )
 

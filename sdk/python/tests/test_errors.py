@@ -13,7 +13,7 @@ class ErrorTests(unittest.TestCase):
     def test_from_json_decodes_fixture_shape(self) -> None:
         error = SDKError.from_json(
             b"""{
-                "code": "InvalidArgument",
+                "code": "INVALID_ARGUMENT",
                 "stage": "prepare",
                 "message": "missing caller_ura",
                 "retry": "never",
@@ -53,14 +53,13 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.details["abi_symbol"], "ERR_TIMEOUT")
         self.assertEqual(error.error_class, ErrorClass.TIMEOUT)
 
-    def test_normalize_error_code_canonicalizes_legacy_wire_aliases(self) -> None:
+    def test_normalize_error_code_accepts_only_canonical_schema_values(self) -> None:
         cases = {
-            "DAEMON_DOWN": ErrorCode.DAEMON_OFFLINE,
-            "VERSION_INCOMPATIBLE": ErrorCode.VERSION_MISMATCH,
-            "ABILITY_FAILED": ErrorCode.ADMISSION_DENIED,
-            "NOT_FOUND": ErrorCode.ABILITY_NOT_FOUND,
-            "PROTOCOL": ErrorCode.PROTOCOL_MISMATCH,
-            "TRANSPORT": ErrorCode.ROUTE_UNAVAILABLE,
+            "VERSION_INCOMPATIBLE": ErrorCode.VERSION_INCOMPATIBLE,
+            "ABILITY_FAILED": ErrorCode.ABILITY_FAILED,
+            "NOT_FOUND": ErrorCode.NOT_FOUND,
+            "PROTOCOL": ErrorCode.PROTOCOL,
+            "TRANSPORT": ErrorCode.TRANSPORT,
             "DAEMON_OFFLINE": ErrorCode.DAEMON_OFFLINE,
             "VERSION_MISMATCH": ErrorCode.VERSION_MISMATCH,
             "ADMISSION_DENIED": ErrorCode.ADMISSION_DENIED,
@@ -72,19 +71,39 @@ class ErrorTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(normalize_error_code(raw), expected)
 
+    def test_from_json_rejects_legacy_error_code_aliases(self) -> None:
+        for code in ("InvalidArgument", "DaemonDown", "DAEMON_DOWN", "VersionIncompatible"):
+            with self.subTest(code=code):
+                with self.assertRaises(SDKError) as caught:
+                    SDKError.from_json(
+                        f"""{{
+                            "code": "{code}",
+                            "stage": "transport",
+                            "message": "legacy code",
+                            "retry": "never",
+                            "details": {{}}
+                        }}"""
+                    )
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_error_class_for_code_projects_stable_classes(self) -> None:
         cases = {
             ErrorCode.INVALID_ARGUMENT: ErrorClass.VALIDATION,
             ErrorCode.INVALID_HANDLE: ErrorClass.HANDLE,
             ErrorCode.NOT_INITIALIZED: ErrorClass.LIFECYCLE,
             ErrorCode.DAEMON_OFFLINE: ErrorClass.AVAILABILITY,
+            ErrorCode.TRANSPORT: ErrorClass.AVAILABILITY,
             ErrorCode.PERMISSION_DENIED: ErrorClass.PERMISSION,
             ErrorCode.ADMISSION_DENIED: ErrorClass.ADMISSION,
+            ErrorCode.ABILITY_FAILED: ErrorClass.ADMISSION,
             ErrorCode.ABILITY_NOT_FOUND: ErrorClass.ROUTING,
+            ErrorCode.NOT_FOUND: ErrorClass.ROUTING,
             ErrorCode.TIMEOUT: ErrorClass.TIMEOUT,
             ErrorCode.CANCELLED: ErrorClass.CANCELLATION,
             ErrorCode.PROTOCOL_MISMATCH: ErrorClass.PROTOCOL,
+            ErrorCode.PROTOCOL: ErrorClass.PROTOCOL,
             ErrorCode.VERSION_MISMATCH: ErrorClass.VERSION,
+            ErrorCode.VERSION_INCOMPATIBLE: ErrorClass.VERSION,
             ErrorCode.CONTROL_ONLY: ErrorClass.CONTROL,
             ErrorCode.NOT_IMPLEMENTED: ErrorClass.UNSUPPORTED,
             ErrorCode.GENERIC: ErrorClass.GENERIC,
@@ -93,7 +112,7 @@ class ErrorTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(error_class_for_code(code), expected)
 
-    def test_is_code_matches_canonicalized_legacy_requests(self) -> None:
+    def test_is_code_matches_exact_canonical_requests(self) -> None:
         error = SDKError(
             code=ErrorCode.ROUTE_UNAVAILABLE,
             stage="transport",
@@ -101,7 +120,7 @@ class ErrorTests(unittest.TestCase):
             message="route down",
         )
 
-        self.assertTrue(is_code(error, ErrorCode.TRANSPORT))
+        self.assertFalse(is_code(error, ErrorCode.TRANSPORT))
         self.assertTrue(is_code(error, ErrorCode.ROUTE_UNAVAILABLE))
 
     def test_from_json_rejects_invalid_retry_hint(self) -> None:

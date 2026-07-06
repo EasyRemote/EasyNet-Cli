@@ -12,4 +12,4 @@ steps:
   - action: submit_prepared
 expect:
   result: error
-  error_code: InvalidArgument
+  error_code: INVALID_ARGUMENT

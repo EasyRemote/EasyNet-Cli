@@ -27,4 +27,4 @@ expect:
   agent_invocation_fixture: directory-list-agents-invocation.v4.json
   max_page_size: 500
   oversized_limit_result: error
-  error_code: InvalidArgument
+  error_code: INVALID_ARGUMENT

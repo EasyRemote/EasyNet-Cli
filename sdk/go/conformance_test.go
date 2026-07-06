@@ -28,7 +28,7 @@ func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	requireCaseAction(t, completeTupleCase, "remove_field")
 	requireCaseAction(t, completeTupleCase, "prepare")
 	requireCaseFixture(t, completeTupleCase, "invocation.complete.v4.json")
-	requireCaseExpectation(t, completeTupleCase, "error_code: InvalidArgument")
+	requireCaseExpectation(t, completeTupleCase, "error_code: INVALID_ARGUMENT")
 
 	draft, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json"))
 	if err != nil {
@@ -577,7 +577,7 @@ func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing
 	notSubmittableCase := sharedCase(t, root, "invocation-prepared-not-submittable.yaml")
 	requireCaseID(t, notSubmittableCase, "invocation/prepared_not_submittable")
 	requireCaseAction(t, notSubmittableCase, "submit_prepared")
-	requireCaseExpectation(t, notSubmittableCase, "error_code: InvalidArgument")
+	requireCaseExpectation(t, notSubmittableCase, "error_code: INVALID_ARGUMENT")
 	if prepared.SubmitReady() {
 		t.Fatalf("shared PreparedInvocation crossed submit boundary")
 	}
@@ -1214,7 +1214,7 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	requireCaseExpectation(t, listCase, "max_page_size: 500")
 	requireCaseExpectation(t, listCase, "device_invocation_fixture: directory-list-devices-invocation.v4.json")
 	requireCaseExpectation(t, listCase, "agent_invocation_fixture: directory-list-agents-invocation.v4.json")
-	requireCaseExpectation(t, listCase, "error_code: InvalidArgument")
+	requireCaseExpectation(t, listCase, "error_code: INVALID_ARGUMENT")
 
 	directory, err := NewDirectoryClient(&sharedDirectoryTransport{
 		t:                           t,

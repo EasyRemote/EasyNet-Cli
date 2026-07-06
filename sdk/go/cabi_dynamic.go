@@ -204,7 +204,7 @@ func openCABIDynamicLibrary(path string) (unsafe.Pointer, string, error) {
 		}
 	}
 	return nil, "", &SDKError{
-		Code:      ErrRouteUnavailable,
+		Code:      ErrTransport,
 		Stage:     "cabi",
 		Retry:     RetryNever,
 		Retryable: false,

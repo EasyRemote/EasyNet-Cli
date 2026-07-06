@@ -36,7 +36,7 @@ type HealthClient struct {
 func NewHealthClient(transport HealthTransport) (*HealthClient, error) {
 	if transport == nil {
 		return nil, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -95,7 +95,7 @@ func (h RuntimeHealth) Ready() bool {
 func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error) {
 	if c == nil || c.transport == nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -104,7 +104,7 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 	}
 	if ctx == nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -114,7 +114,7 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 	raw, err := c.transport.RuntimeHealth(ctx)
 	if err != nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:      ErrRouteUnavailable,
+			Code:      ErrTransport,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),
@@ -129,7 +129,7 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 func (c *HealthClient) Diagnostics(ctx context.Context) (DiagnosticsReport, error) {
 	if c == nil || c.transport == nil {
 		return DiagnosticsReport{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -138,7 +138,7 @@ func (c *HealthClient) Diagnostics(ctx context.Context) (DiagnosticsReport, erro
 	}
 	if ctx == nil {
 		return DiagnosticsReport{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -158,7 +158,7 @@ func (c *HealthClient) Diagnostics(ctx context.Context) (DiagnosticsReport, erro
 	raw, err := transport.RuntimeDiagnostics(ctx)
 	if err != nil {
 		return DiagnosticsReport{}, &SDKError{
-			Code:      ErrRouteUnavailable,
+			Code:      ErrTransport,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),
@@ -183,7 +183,7 @@ func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return RuntimeHealth{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "decode",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -260,7 +260,7 @@ func decodeDiagnosticsReport(raw []byte) (DiagnosticsReport, error) {
 	var report DiagnosticsReport
 	if err := json.Unmarshal(raw, &report); err != nil {
 		return DiagnosticsReport{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "decode",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -308,7 +308,7 @@ func requiredHealthBool(fields map[string]json.RawMessage, name string) (bool, e
 
 func invalidHealthField(name string, message string) error {
 	return &SDKError{
-		Code:      ErrorInvalidArgument,
+		Code:      ErrInvalidArgument,
 		Stage:     "decode",
 		Retry:     RetryNever,
 		Retryable: RetryableForHint(RetryNever),

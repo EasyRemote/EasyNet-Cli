@@ -259,7 +259,7 @@ class WrapperRuntimeTransport(MemoryRuntimeTransport):
         failure = None
         if not self.ok:
             failure = {
-                "code": "AbilityFailed",
+                "code": "ABILITY_FAILED",
                 "stage": "runtime",
                 "message": "wrapper ability failed",
                 "retryable": False,
@@ -530,7 +530,7 @@ class WrapperClientTests(unittest.TestCase):
         )
         with self.assertRaises(SDKError) as caught:
             failed.transfer_file(file_transfer_request())
-        self.assertTrue(is_code(caught.exception, ErrorCode.ADMISSION_DENIED))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
 
         malformed = WrapperClient(
             RuntimeWrapperTransport(

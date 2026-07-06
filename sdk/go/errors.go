@@ -35,11 +35,6 @@ const (
 	ErrNotImplemented      ErrorCode = "NOT_IMPLEMENTED"
 	ErrGeneric             ErrorCode = "GENERIC"
 	ErrVersionIncompatible ErrorCode = "VERSION_INCOMPATIBLE"
-
-	ErrorInvalidArgument     = ErrInvalidArgument
-	ErrorDaemonDown          = ErrDaemonOffline
-	ErrorVersionIncompatible = ErrVersionIncompatible
-	ErrorTransport           = ErrTransport
 )
 
 // ErrorClass is a language-side grouping derived from canonical ErrorCode.
@@ -138,25 +133,25 @@ func RetryableForHint(retry RetryHint) bool {
 // IsCode reports whether err is an SDKError with the requested code.
 func IsCode(err error, code ErrorCode) bool {
 	var sdkErr *SDKError
-	return errors.As(err, &sdkErr) && NormalizeErrorCode(string(sdkErr.Code)) == NormalizeErrorCode(string(code))
+	return errors.As(err, &sdkErr) && sdkErr.Code == code
 }
 
-// ErrorClassForCode projects a canonical error code into a stable language class.
+// ErrorClassForCode projects an SDK error code into a stable language class.
 func ErrorClassForCode(code ErrorCode) ErrorClass {
-	switch NormalizeErrorCode(string(code)) {
+	switch code {
 	case ErrInvalidArgument, ErrNullPointer, ErrInvalidUTF8, ErrInvalidInvocation:
 		return ErrorClassValidation
 	case ErrInvalidHandle:
 		return ErrorClassHandle
 	case ErrNotInitialized, ErrAlreadyInit:
 		return ErrorClassLifecycle
-	case ErrDaemonOffline:
+	case ErrDaemonOffline, ErrTransport:
 		return ErrorClassAvailability
 	case ErrPermissionDenied:
 		return ErrorClassPermission
-	case ErrAdmissionDenied:
+	case ErrAdmissionDenied, ErrAbilityFailed:
 		return ErrorClassAdmission
-	case ErrAbilityNotFound, ErrRouteUnavailable:
+	case ErrAbilityNotFound, ErrRouteUnavailable, ErrNotFound:
 		return ErrorClassRouting
 	case ErrTimeout:
 		return ErrorClassTimeout
@@ -208,8 +203,12 @@ func DecodeDaemonErrorJSON(raw []byte) (*SDKError, error) {
 	if details == nil {
 		details = map[string]any{}
 	}
+	code, err := ParseErrorCode(dto.Code)
+	if err != nil {
+		return nil, err
+	}
 	return &SDKError{
-		Code:         NormalizeErrorCode(dto.Code),
+		Code:         code,
 		Stage:        dto.Stage,
 		Retry:        retry,
 		Retryable:    RetryableForHint(retry),
@@ -232,59 +231,107 @@ type daemonErrorDTO struct {
 	Details      map[string]any `json:"details"`
 }
 
-// NormalizeErrorCode maps daemon/C ABI wire codes into the SDK taxonomy.
-func NormalizeErrorCode(code string) ErrorCode {
+// ParseErrorCode validates the current canonical SDK error-code schema value.
+func ParseErrorCode(code string) (ErrorCode, error) {
 	switch code {
-	case "InvalidArgument", "INVALID_ARGUMENT":
-		return ErrInvalidArgument
-	case "InvalidHandle", "INVALID_HANDLE":
-		return ErrInvalidHandle
-	case "NullPointer", "NULL_POINTER":
-		return ErrNullPointer
-	case "InvalidUTF8", "INVALID_UTF8":
-		return ErrInvalidUTF8
-	case "NotInitialized", "NOT_INITIALIZED":
-		return ErrNotInitialized
-	case "AlreadyInit", "ALREADY_INIT":
-		return ErrAlreadyInit
-	case "DaemonDown", "DAEMON_DOWN", "DAEMON_OFFLINE":
-		return ErrDaemonOffline
-	case "PermissionDenied", "PERMISSION_DENIED":
-		return ErrPermissionDenied
-	case "AdmissionDenied", "ADMISSION_DENIED":
-		return ErrAdmissionDenied
-	case "AbilityNotFound", "ABILITY_NOT_FOUND":
-		return ErrAbilityNotFound
-	case "RouteUnavailable", "ROUTE_UNAVAILABLE":
-		return ErrRouteUnavailable
-	case "Timeout", "TIMEOUT":
-		return ErrTimeout
-	case "Cancelled", "CANCELLED":
-		return ErrCancelled
-	case "InvalidInvocation", "INVALID_INVOCATION":
-		return ErrInvalidInvocation
-	case "ProtocolMismatch", "PROTOCOL_MISMATCH":
-		return ErrProtocolMismatch
-	case "VersionMismatch", "VERSION_MISMATCH":
-		return ErrVersionMismatch
-	case "VersionIncompatible", "VERSION_INCOMPATIBLE":
-		return ErrVersionMismatch
-	case "ControlOnly", "CONTROL_ONLY":
-		return ErrControlOnly
-	case "Transport", "TRANSPORT":
-		return ErrRouteUnavailable
-	case "Protocol", "PROTOCOL":
-		return ErrProtocolMismatch
-	case "NotFound", "NOT_FOUND":
-		return ErrAbilityNotFound
-	case "AbilityFailed", "ABILITY_FAILED":
-		return ErrAdmissionDenied
-	case "NotImplemented", "NOT_IMPLEMENTED":
-		return ErrNotImplemented
-	case "Generic", "GENERIC":
-		return ErrGeneric
+	case "INVALID_ARGUMENT":
+		return ErrInvalidArgument, nil
+	case "INVALID_HANDLE":
+		return ErrInvalidHandle, nil
+	case "NULL_POINTER":
+		return ErrNullPointer, nil
+	case "INVALID_UTF8":
+		return ErrInvalidUTF8, nil
+	case "NOT_INITIALIZED":
+		return ErrNotInitialized, nil
+	case "ALREADY_INIT":
+		return ErrAlreadyInit, nil
+	case "DAEMON_OFFLINE":
+		return ErrDaemonOffline, nil
+	case "PERMISSION_DENIED":
+		return ErrPermissionDenied, nil
+	case "ADMISSION_DENIED":
+		return ErrAdmissionDenied, nil
+	case "ABILITY_NOT_FOUND":
+		return ErrAbilityNotFound, nil
+	case "ROUTE_UNAVAILABLE":
+		return ErrRouteUnavailable, nil
+	case "TIMEOUT":
+		return ErrTimeout, nil
+	case "CANCELLED":
+		return ErrCancelled, nil
+	case "INVALID_INVOCATION":
+		return ErrInvalidInvocation, nil
+	case "PROTOCOL_MISMATCH":
+		return ErrProtocolMismatch, nil
+	case "VERSION_MISMATCH":
+		return ErrVersionMismatch, nil
+	case "VERSION_INCOMPATIBLE":
+		return ErrVersionIncompatible, nil
+	case "CONTROL_ONLY":
+		return ErrControlOnly, nil
+	case "TRANSPORT":
+		return ErrTransport, nil
+	case "PROTOCOL":
+		return ErrProtocol, nil
+	case "NOT_FOUND":
+		return ErrNotFound, nil
+	case "ABILITY_FAILED":
+		return ErrAbilityFailed, nil
+	case "NOT_IMPLEMENTED":
+		return ErrNotImplemented, nil
+	case "GENERIC":
+		return ErrGeneric, nil
 	default:
-		return ErrorCode(code)
+		return "", invalidDaemonError(fmt.Sprintf("unknown daemon error code: %s", code))
+	}
+}
+
+func runtimeFailureCode(code string, fallback ErrorCode) ErrorCode {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return fallback
+	}
+	parsed, err := ParseErrorCode(code)
+	if err == nil {
+		return parsed
+	}
+	if isLegacyErrorCodeAlias(code) {
+		return ErrProtocolMismatch
+	}
+	return ErrorCode(code)
+}
+
+func isLegacyErrorCodeAlias(code string) bool {
+	switch code {
+	case "InvalidArgument",
+		"InvalidHandle",
+		"NullPointer",
+		"InvalidUTF8",
+		"NotInitialized",
+		"AlreadyInit",
+		"DaemonDown",
+		"DAEMON_DOWN",
+		"PermissionDenied",
+		"AdmissionDenied",
+		"AbilityNotFound",
+		"RouteUnavailable",
+		"Timeout",
+		"Cancelled",
+		"InvalidInvocation",
+		"ProtocolMismatch",
+		"VersionMismatch",
+		"VersionIncompatible",
+		"ControlOnly",
+		"Transport",
+		"Protocol",
+		"NotFound",
+		"AbilityFailed",
+		"NotImplemented",
+		"Generic":
+		return true
+	default:
+		return false
 	}
 }
 

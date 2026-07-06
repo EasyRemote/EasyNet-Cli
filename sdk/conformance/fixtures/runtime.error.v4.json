@@ -1,5 +1,5 @@
 {
-  "code": "InvalidArgument",
+  "code": "INVALID_ARGUMENT",
   "stage": "prepare",
   "message": "missing caller_ura",
   "retry": "never",

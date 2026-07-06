@@ -3,8 +3,6 @@ package easynet
 import (
 	"context"
 	"strings"
-
-	axonsdk "easynet.run/axon/sdk/go/easynet"
 )
 
 // AbilityDescriptorHints mirrors descriptor tool-annotation booleans that
@@ -62,18 +60,6 @@ func ProjectAbilityDescriptorRef(ctx context.Context, identity *IdentityClient, 
 		AbilityURA: projection.AbilityURA,
 		Version:    projection.DescriptorVersion,
 	}, nil
-}
-
-// ParseAbilityDescriptorRef projects a DescriptorRef through Axon's canonical
-// helper. SDK code that already has an IdentityClient should prefer
-// ProjectAbilityDescriptorRef or IdentityClient.ProjectDescriptorRef so daemon
-// profile transports remain the runtime boundary for live calls.
-func ParseAbilityDescriptorRef(raw string) (AbilityDescriptorRef, error) {
-	ref, err := axonsdk.ParseAbilityDescriptorRef(raw)
-	if err != nil {
-		return AbilityDescriptorRef{}, err
-	}
-	return AbilityDescriptorRef{Raw: ref.Raw, AbilityURA: ref.AbilityURA, Version: ref.Version}, nil
 }
 
 func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {

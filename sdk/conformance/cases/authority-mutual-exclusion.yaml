@@ -15,7 +15,7 @@ steps:
   - action: attach_ambiguous_authority_metadata
 expect:
   result: error
-  error_code: InvalidArgument
+  error_code: INVALID_ARGUMENT
   delegation_metadata_key: x-easynet-delegation
   session_authority_metadata_key: x-easynet-session-authority
   typed_delegation_projection: true

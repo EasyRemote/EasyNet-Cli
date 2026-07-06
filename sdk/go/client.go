@@ -39,7 +39,7 @@ type Client struct {
 func NewClient(transport DiscoveryTransport) (*Client, error) {
 	if transport == nil {
 		return nil, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -52,7 +52,7 @@ func NewClient(transport DiscoveryTransport) (*Client, error) {
 func (c *Client) discoveryTransport(ctx context.Context) (DiscoveryTransport, error) {
 	if c == nil {
 		return nil, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -61,7 +61,7 @@ func (c *Client) discoveryTransport(ctx context.Context) (DiscoveryTransport, er
 	}
 	if ctx == nil {
 		return nil, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -72,7 +72,7 @@ func (c *Client) discoveryTransport(ctx context.Context) (DiscoveryTransport, er
 	defer c.mu.Unlock()
 	if c.closed {
 		return nil, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -81,7 +81,7 @@ func (c *Client) discoveryTransport(ctx context.Context) (DiscoveryTransport, er
 	}
 	if c.transport == nil {
 		return nil, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -123,7 +123,7 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	raw, err := transport.FeatureDiscovery(ctx)
 	if err != nil {
 		return FeatureSet{}, &SDKError{
-			Code:      ErrRouteUnavailable,
+			Code:      ErrTransport,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),
@@ -134,7 +134,7 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	var features FeatureSet
 	if err := json.Unmarshal(raw, &features); err != nil {
 		return FeatureSet{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "decode",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -155,7 +155,7 @@ func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 func (c *Client) Close(ctx context.Context) error {
 	if c == nil {
 		return &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -164,7 +164,7 @@ func (c *Client) Close(ctx context.Context) error {
 	}
 	if ctx == nil {
 		return &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -183,7 +183,7 @@ func (c *Client) Close(ctx context.Context) error {
 
 	if transport == nil {
 		return &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),
@@ -192,7 +192,7 @@ func (c *Client) Close(ctx context.Context) error {
 	}
 	if err := transport.Close(ctx); err != nil {
 		return &SDKError{
-			Code:      ErrRouteUnavailable,
+			Code:      ErrTransport,
 			Stage:     "transport",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),
@@ -208,7 +208,7 @@ func (c *Client) Close(ctx context.Context) error {
 func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, error) {
 	if expected == 0 {
 		return FeatureSet{}, &SDKError{
-			Code:      ErrorInvalidArgument,
+			Code:      ErrInvalidArgument,
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: RetryableForHint(RetryNever),

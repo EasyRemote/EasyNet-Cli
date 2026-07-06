@@ -866,7 +866,7 @@ class ReceiptTests(unittest.TestCase):
     def test_summary_decodes_typed_error_and_null_output(self) -> None:
         summary = ReceiptSummary.from_json(
             b'{"state":"failed","verified":false,"output":null,'
-            b'"error":{"code":"InvalidArgument","stage":"runtime",'
+            b'"error":{"code":"INVALID_ARGUMENT","stage":"runtime",'
             b'"message":"bad receipt","retry":"never",'
             b'"details":{"field":"receipt_ura"}},"metadata":{}}'
         )

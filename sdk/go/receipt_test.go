@@ -534,7 +534,7 @@ func TestReceiptChainDelegatesContinuityProjection(t *testing.T) {
 }
 
 func TestReceiptSummaryDecodesTypedErrorAndNullOutput(t *testing.T) {
-	summary, err := NewReceiptSummaryFromJSON([]byte(`{"state":"failed","verified":false,"output":null,"error":{"code":"InvalidArgument","stage":"runtime","message":"bad receipt","retry":"never","details":{"field":"receipt_ura"}},"metadata":{}}`))
+	summary, err := NewReceiptSummaryFromJSON([]byte(`{"state":"failed","verified":false,"output":null,"error":{"code":"INVALID_ARGUMENT","stage":"runtime","message":"bad receipt","retry":"never","details":{"field":"receipt_ura"}},"metadata":{}}`))
 	if err != nil {
 		t.Fatalf("NewReceiptSummaryFromJSON: %v", err)
 	}

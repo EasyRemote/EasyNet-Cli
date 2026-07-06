@@ -182,7 +182,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             adapter.invoke(complete_draft())
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.ADMISSION_DENIED))
+        self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
         self.assertEqual(caught.exception.message, "ability failed")
 
     def test_connect_owns_runtime_connection_lifecycle(self) -> None:
