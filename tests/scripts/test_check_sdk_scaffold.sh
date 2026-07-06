@@ -20,6 +20,7 @@ make_sandbox() {
   cp "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" "$dir/tools/scripts/check-backend-sdk-only-boundary.sh"
   cp "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" "$dir/tools/scripts/check-backend-route-family-coverage.sh"
   cp "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" "$dir/tools/scripts/check-easyremote-sdk-boundary.sh"
+  cp "$ROOT/tools/scripts/check-sdk-cutover-readiness.sh" "$dir/tools/scripts/check-sdk-cutover-readiness.sh"
   cp "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" "$dir/tools/scripts/check-sdk-parity-matrix.sh"
   cp "$ROOT/PROJECT_STRUCTURE.md" "$dir/PROJECT_STRUCTURE.md"
 }
