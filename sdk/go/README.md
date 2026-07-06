@@ -17,6 +17,7 @@ unary invoke, stream/bidi callback, prepare/sign/submit-handle,
 await/cancel/events/free-handle adapters, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
 detach/open-runtime/connect-local/open-runtime-profiles state seams,
+control-discovery-backed RuntimeConnection endpoint resolution,
 RuntimeProfileBundle factories for Runtime Core-backed Directory, Receipt,
 Publication, Mission, Admin + Gateway, Events, Surface, Compatibility, and
 Wrapper clients, schema-backed SDK error projection
@@ -67,7 +68,8 @@ Invocation carriers plus model, chat, stream, file, and file-delete projection
 seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, Runtime Core stream/bidi session entry points, transport-backed helper
-close state seams, and record projections. Direct UDS transport,
+close state seams, and record projections. Direct daemon UDS RuntimeConnection
+endpoint discovery exists; concrete direct UDS unary/stream/bidi transport,
 Axon-backed receipt verification,
 concrete publication/host-binding
 carriers, concrete Admin trust/session carriers,

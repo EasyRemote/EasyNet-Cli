@@ -143,7 +143,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   runtime-health, unary invoke, stream/bidi callback, prepare/sign/submit-handle,
   await/cancel/events/free-handle adapters, runtime connection
   state, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
-  detach/open-runtime/connect-local state seams, runtime health readiness facts,
+  detach/open-runtime/connect-local state seams, control-discovery-backed
+  RuntimeConnection endpoint resolution, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, prepared/signed Invocation DTOs,
   local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
@@ -154,7 +155,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
   transport seams plus `RuntimeProfileBundle` factories for Runtime Core-backed
   profile clients with stable per-profile error source refs; direct Go daemon
-  UDS unary/stream/bidi transport, remaining profile conformance action
+  UDS endpoint discovery exists, while concrete direct UDS unary/stream/bidi
+  transport, remaining profile conformance action
   execution, and backend source cutover violations remain incomplete before
   backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
