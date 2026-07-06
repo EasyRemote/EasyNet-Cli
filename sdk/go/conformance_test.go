@@ -1744,6 +1744,7 @@ func TestGoEventsFacadeExecutesSharedSessionStreamConformanceCase(t *testing.T) 
 	requireCaseExpectation(t, eventsCase, "explicit_session_id_required: true")
 	requireCaseExpectation(t, eventsCase, "product_session_ura_parsing_allowed: false")
 	requireCaseExpectation(t, eventsCase, "resume_cursor_sequence_maps_to_since_seq: true")
+	requireCaseExpectation(t, eventsCase, "other_event_streams: provider_backed")
 
 	events, err := NewEventClient(&sharedEventsTransport{
 		t:                                  t,

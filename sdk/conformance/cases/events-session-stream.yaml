@@ -18,4 +18,4 @@ expect:
   explicit_session_id_required: true
   product_session_ura_parsing_allowed: false
   resume_cursor_sequence_maps_to_since_seq: true
-  other_event_streams: scaffold_only
+  other_event_streams: provider_backed

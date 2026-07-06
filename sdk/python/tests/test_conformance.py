@@ -2891,6 +2891,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             events_case, "resume_cursor_sequence_maps_to_since_seq: true"
         )
+        self._require_case_expectation(
+            events_case, "other_event_streams: provider_backed"
+        )
 
         events = EventClient(SharedEventsTransport())
         subscription = events.build_session_subscription_invocation(
