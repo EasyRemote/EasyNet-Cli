@@ -578,12 +578,126 @@ impl PreparedInvocation {
         signature: CallerSignatureMaterial,
     ) -> Result<SignedInvocation> {
         signature.validate()?;
-        let signer_id = self.signing_material.signer_policy.signer_id.clone();
+        let policy = self.signing_material.signer_policy.clone();
+        let signer_id = if policy.signer_id.trim().is_empty() {
+            signature.key_id_hint.clone()
+        } else {
+            policy.signer_id.clone()
+        };
+        if signer_id.trim().is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "signed invocation signer id must not be empty".to_string(),
+            ));
+        }
         Ok(SignedInvocation {
             prepared: self,
             signature,
             signer_id,
+            policy,
         })
+    }
+
+    /// Ask a daemon-owned local signer to attach signature material
+    /// under the prepared local-daemon signing policy.
+    pub fn sign_with_local_daemon_signer<S>(self, signer: &S) -> Result<SignedInvocation>
+    where
+        S: LocalDaemonInvocationSigner + ?Sized,
+    {
+        let policy = self.signing_material.signer_policy();
+        if policy.mode != SignerPolicyMode::LocalDaemonSigning {
+            return Err(DaemonError::InvalidInvocation(
+                "local daemon signing requires signer policy mode local_daemon_signing".to_string(),
+            ));
+        }
+        if policy.signer_id.trim().is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "local daemon signing requires signer policy signer_id".to_string(),
+            ));
+        }
+        if policy.policy_ref.trim().is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "local daemon signing requires signer policy policy_ref".to_string(),
+            ));
+        }
+        let signature = signer.sign_local_daemon_invocation(&self)?;
+        self.sign_with_caller_signature(signature)
+    }
+}
+
+/// Daemon-owned signer seam for the `Prepared -> Signed`
+/// local-daemon transition.
+#[cfg(feature = "axon-pb")]
+pub trait LocalDaemonInvocationSigner {
+    fn sign_local_daemon_invocation(
+        &self,
+        prepared: &PreparedInvocation,
+    ) -> Result<CallerSignatureMaterial>;
+}
+
+/// Keyring-backed local daemon signer. It signs only the canonical
+/// material already produced by `PreparedInvocation`.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+pub struct KeyringLocalDaemonInvocationSigner {
+    keyring: std::sync::Arc<crate::daemon::keyring::KeyringHandle>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl KeyringLocalDaemonInvocationSigner {
+    pub fn new(keyring: std::sync::Arc<crate::daemon::keyring::KeyringHandle>) -> Self {
+        Self { keyring }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalDaemonInvocationSigner for KeyringLocalDaemonInvocationSigner {
+    fn sign_local_daemon_invocation(
+        &self,
+        prepared: &PreparedInvocation,
+    ) -> Result<CallerSignatureMaterial> {
+        let policy = prepared.signing_material().signer_policy();
+        let key_id = policy.signer_id.strip_prefix("signer-").ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "local daemon signer_id must use signer-{key_id}".to_string(),
+            )
+        })?;
+        let tuple = prepared.tuple();
+        let entry = self.keyring.find_entry_by_id(key_id).ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "local daemon signer key was not present in daemon key inventory".to_string(),
+            )
+        })?;
+        if entry.status != crate::daemon::keyring::store::KeyStatus::Active {
+            return Err(DaemonError::InvalidInvocation(
+                "local daemon signer key must be active".to_string(),
+            ));
+        }
+        if entry.bound_subject.as_deref() != Some(tuple.caller_ura.as_str()) {
+            return Err(DaemonError::InvalidInvocation(
+                "local daemon signer key owner does not match invocation caller".to_string(),
+            ));
+        }
+        let expected_policy_ref = crate::protocol::identity_contract::signer_policy_ref(
+            &tuple.caller_ura,
+            key_id,
+            &entry.public_key_b64,
+        );
+        if policy.policy_ref != expected_policy_ref {
+            return Err(DaemonError::InvalidInvocation(
+                "local daemon signer policy_ref does not match daemon key inventory".to_string(),
+            ));
+        }
+        let signature = self
+            .keyring
+            .sign(key_id, prepared.signing_material().canonical_bytes())
+            .map_err(|err| {
+                DaemonError::InvalidInvocation(format!("local daemon signing failed: {err}"))
+            })?;
+        Ok(CallerSignatureMaterial::new(
+            "ed25519",
+            signature.to_vec(),
+            policy.signer_id.clone(),
+        ))
     }
 }
 
@@ -706,6 +820,7 @@ pub struct SignedInvocation {
     prepared: PreparedInvocation,
     signature: CallerSignatureMaterial,
     signer_id: String,
+    policy: SignerPolicy,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -720,6 +835,10 @@ impl SignedInvocation {
 
     pub fn signer_id(&self) -> &str {
         &self.signer_id
+    }
+
+    pub fn policy(&self) -> &SignerPolicy {
+        &self.policy
     }
 
     pub(crate) fn into_daemon_invocation(self) -> DaemonInvocation {
@@ -1157,5 +1276,157 @@ mod tests {
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.signature, vec![0x7a; 64]);
         assert_eq!(signature.key_id_hint, "caller-key");
+    }
+
+    #[test]
+    fn sdk_signed_invocation_preserves_signer_policy_proof() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let prepared = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .nonce([0x13; 16])
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap()
+        .prepare(PrepareOptions {
+            expires_in: Duration::from_secs(60),
+            signer_id: Some("signer-alice-key-1".to_string()),
+            policy_ref: Some("daemon-key-inventory:sha256:test-policy".to_string()),
+            local_daemon_signing: true,
+        })
+        .unwrap();
+
+        let signed = prepared
+            .sign_with_caller_signature(CallerSignatureMaterial::new(
+                "ed25519",
+                vec![0x7b; 64],
+                "caller-key",
+            ))
+            .unwrap();
+
+        assert_eq!(signed.signer_id(), "signer-alice-key-1");
+        assert_eq!(signed.policy().mode.as_str(), "local_daemon_signing");
+        assert_eq!(
+            signed.policy().policy_ref,
+            "daemon-key-inventory:sha256:test-policy"
+        );
+        assert!(signed.policy().expires_at_unix_ms > 0);
+    }
+
+    #[test]
+    fn sdk_signed_invocation_rejects_missing_signer_id() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let prepared = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .nonce([0x14; 16])
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap()
+        .prepare(PrepareOptions::default())
+        .unwrap();
+
+        let err = prepared
+            .sign_with_caller_signature(CallerSignatureMaterial::new("ed25519", vec![0x7c; 64], ""))
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("signer id"));
+    }
+
+    #[test]
+    fn sdk_local_daemon_signer_uses_keyring_inventory() {
+        let temp = tempfile::tempdir().unwrap();
+        let keyring = std::sync::Arc::new(
+            crate::daemon::keyring::KeyringHandle::open_or_create(
+                temp.path().join("keyring.json"),
+                "test-pass",
+            )
+            .unwrap(),
+        );
+        let caller = "easynet:///r/acme/device/dev-a";
+        let entry = keyring
+            .create_entry("agent_signing", Some(caller.to_string()))
+            .unwrap();
+        let signer_id = format!("signer-{}", entry.key_id);
+        let policy_ref = crate::protocol::identity_contract::signer_policy_ref(
+            caller,
+            &entry.key_id,
+            &entry.public_key_b64,
+        );
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let prepared = DaemonInvocation::builder(caller, &hub, &observe_ref, caller)
+            .unwrap()
+            .nonce([0x15; 16])
+            .args_json(&serde_json::json!({"probe": true}))
+            .unwrap()
+            .build_draft()
+            .unwrap()
+            .prepare(PrepareOptions {
+                expires_in: Duration::from_secs(60),
+                signer_id: Some(signer_id.clone()),
+                policy_ref: Some(policy_ref.clone()),
+                local_daemon_signing: true,
+            })
+            .unwrap();
+
+        let signer = KeyringLocalDaemonInvocationSigner::new(keyring);
+        let signed = prepared.sign_with_local_daemon_signer(&signer).unwrap();
+
+        assert_eq!(signed.signer_id(), signer_id);
+        assert_eq!(signed.signature().algorithm, "ed25519");
+        assert_eq!(signed.signature().signature.len(), 64);
+        assert_eq!(signed.signature().key_id_hint, signer_id);
+        assert_eq!(signed.policy().policy_ref, policy_ref);
+        assert_eq!(signed.policy().mode.as_str(), "local_daemon_signing");
+    }
+
+    #[test]
+    fn sdk_local_daemon_signer_rejects_policy_ref_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let keyring = std::sync::Arc::new(
+            crate::daemon::keyring::KeyringHandle::open_or_create(
+                temp.path().join("keyring.json"),
+                "test-pass",
+            )
+            .unwrap(),
+        );
+        let caller = "easynet:///r/acme/device/dev-a";
+        let entry = keyring
+            .create_entry("agent_signing", Some(caller.to_string()))
+            .unwrap();
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let prepared = DaemonInvocation::builder(caller, &hub, &observe_ref, caller)
+            .unwrap()
+            .nonce([0x16; 16])
+            .args_json(&serde_json::json!({"probe": true}))
+            .unwrap()
+            .build_draft()
+            .unwrap()
+            .prepare(PrepareOptions {
+                expires_in: Duration::from_secs(60),
+                signer_id: Some(format!("signer-{}", entry.key_id)),
+                policy_ref: Some("daemon-key-inventory:sha256:wrong".to_string()),
+                local_daemon_signing: true,
+            })
+            .unwrap();
+
+        let signer = KeyringLocalDaemonInvocationSigner::new(keyring);
+        let err = prepared.sign_with_local_daemon_signer(&signer).unwrap_err();
+
+        assert!(format!("{err}").contains("policy_ref"));
     }
 }

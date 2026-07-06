@@ -4614,6 +4614,7 @@ fn prepared_invocation_json(prepared: &crate::daemon::PreparedInvocation) -> ser
 #[cfg(feature = "axon-pb")]
 fn signed_invocation_json(signed: &crate::daemon::SignedInvocation) -> serde_json::Value {
     use base64::Engine;
+    let policy = signed.policy();
     serde_json::json!({
         "signer_id": signed.signer_id(),
         "prepared": {
@@ -4621,6 +4622,12 @@ fn signed_invocation_json(signed: &crate::daemon::SignedInvocation) -> serde_jso
             "descriptor_ref": signed.prepared().descriptor_ref(),
             "canonical_hash_hex": signed.prepared().canonical_hash_hex(),
             "expires_at_unix_ms": signed.prepared().expires_at_unix_ms(),
+        },
+        "policy": {
+            "mode": policy.mode.as_str(),
+            "signer_id": policy.signer_id.as_str(),
+            "policy_ref": policy.policy_ref.as_str(),
+            "expires_at_unix_ms": policy.expires_at_unix_ms,
         },
         "signature": {
             "algorithm": signed.signature().algorithm.as_str(),
@@ -5619,6 +5626,10 @@ mod tests {
             serde_json::from_str(CStr::from_ptr(signed_json_ptr).to_str().unwrap()).unwrap()
         };
         unsafe { crate::ffi::strings::easynet_string_free(signed_json_ptr) };
+        assert_eq!(signed_json["signer_id"], "browser-key");
+        assert_eq!(signed_json["policy"]["mode"], "caller_signing");
+        assert_eq!(signed_json["policy"]["signer_id"], "browser-key");
+        assert_eq!(signed_json["policy"]["policy_ref"], "policy/local");
         assert_eq!(signed_json["signature"]["algorithm"], "ed25519");
         assert_eq!(signed_json["signature"]["key_id_hint"], "caller-key");
 

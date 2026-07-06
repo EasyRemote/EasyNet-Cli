@@ -107,7 +107,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_signing.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; live daemon keyring signing execution policy cutover remains incomplete."
+      "remaining": "SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; daemon-core keyring-backed local signing now preserves signer policy proof on SignedInvocation. C ABI local-sign execution and Go/Python live daemon keyring transport cutover remain incomplete."
     },
     {
       "capability_id": "unary_invoke",

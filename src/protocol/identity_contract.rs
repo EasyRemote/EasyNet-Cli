@@ -398,7 +398,7 @@ fn public_key_key_id(public_key_base64: &str) -> Result<String, IdentitySdkError
     Ok(format!("ed25519:{}", hex::encode(&digest[..16])))
 }
 
-fn signer_policy_ref(owner_ura: &str, key_id: &str, public_key_base64: &str) -> String {
+pub(crate) fn signer_policy_ref(owner_ura: &str, key_id: &str, public_key_base64: &str) -> String {
     let mut hasher = sha2::Sha256::new();
     hasher.update(owner_ura.as_bytes());
     hasher.update(b"\0");
