@@ -58,6 +58,32 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	}
 }
 
+func TestPublicGoSDKDoesNotHandParseDescriptorRefs(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || strings.HasPrefix(filepath.ToSlash(path), "internal/axonpb/") ||
+			!strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(body)
+		for _, needle := range []string{`LastIndex(`, `Split(`, `SplitN(`, `Cut(`} {
+			if strings.Contains(text, needle) && strings.Contains(text, `"@"`) {
+				t.Fatalf("%s appears to hand-parse DescriptorRef grammar with %s; use Axon/Identity DescriptorRef helpers", path, needle)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk SDK package: %v", err)
+	}
+}
+
 func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	base := filepath.Base(path)
 	if base != "direct_runtime.go" {

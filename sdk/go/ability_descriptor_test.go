@@ -1,6 +1,9 @@
 package easynet
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestProjectAbilityDescriptorMergesNestedDescriptorWithTopLevelOverride(t *testing.T) {
 	projection := ProjectAbilityDescriptor(map[string]any{
@@ -60,5 +63,52 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 	}
 	if projection.InputSchema["type"] != "object" {
 		t.Fatalf("input schema = %#v", projection.InputSchema)
+	}
+}
+
+func TestProjectAbilityDescriptorRefDelegatesToIdentityClient(t *testing.T) {
+	transport := &memoryIdentityTransport{
+		descriptorJSON: `{
+			"kind":"descriptor_ref",
+			"valid":true,
+			"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",
+			"descriptor_version":"1.0.0",
+			"profile":"easynet-strict-v2",
+			"components":{},
+			"metadata":{"grammar_owner":"axon"}
+		}`,
+	}
+	identity, err := NewIdentityClient(transport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+
+	ref, err := ProjectAbilityDescriptorRef(
+		context.Background(),
+		identity,
+		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("ProjectAbilityDescriptorRef: %v", err)
+	}
+
+	if ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" || ref.Version != "1.0.0" {
+		t.Fatalf("descriptor projection = %#v", ref)
+	}
+	if transport.seenRequest["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		t.Fatalf("descriptor projection request = %#v", transport.seenRequest)
+	}
+}
+
+func TestParseAbilityDescriptorRefUsesCanonicalAxonProjection(t *testing.T) {
+	ref, err := ParseAbilityDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+	if err != nil {
+		t.Fatalf("ParseAbilityDescriptorRef: %v", err)
+	}
+	if ref.Raw != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" ||
+		ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
+		ref.Version != "1.0.0" {
+		t.Fatalf("descriptor ref projection = %#v", ref)
 	}
 }

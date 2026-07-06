@@ -1,6 +1,7 @@
 package easynet
 
 import (
+	"context"
 	"strings"
 
 	axonsdk "easynet.run/axon/sdk/go/easynet"
@@ -30,14 +31,43 @@ type AbilityDescriptorProjection struct {
 	Metadata    map[string]any
 }
 
-// AbilityDescriptorRef is the canonical descriptor identity
-// `ability_ura@version`.
+// AbilityDescriptorRef is the SDK DTO projection of a descriptor identity.
+// DescriptorRef grammar and canonicalization are owned by Axon behind the
+// daemon/Identity profile boundary; this value object only carries the
+// projected fields.
 type AbilityDescriptorRef struct {
 	Raw        string
 	AbilityURA string
 	Version    string
 }
 
+// ProjectAbilityDescriptorRef projects a DescriptorRef through the
+// Axon-delegated Identity facade.
+func ProjectAbilityDescriptorRef(ctx context.Context, identity *IdentityClient, raw string) (AbilityDescriptorRef, error) {
+	if identity == nil {
+		return AbilityDescriptorRef{}, invalidProfileClient(directoryIdentityProfile, "identity client is required for descriptor_ref projection")
+	}
+	projection, err := identity.ProjectDescriptorRef(ctx, DescriptorRefRequest{DescriptorRef: raw})
+	if err != nil {
+		return AbilityDescriptorRef{}, err
+	}
+	if projection.Kind != "descriptor_ref" ||
+		strings.TrimSpace(projection.DescriptorRef) == "" ||
+		strings.TrimSpace(projection.AbilityURA) == "" ||
+		strings.TrimSpace(projection.DescriptorVersion) == "" {
+		return AbilityDescriptorRef{}, invalidProfilePayload(directoryIdentityProfile, "descriptor_ref projection is incomplete", nil)
+	}
+	return AbilityDescriptorRef{
+		Raw:        projection.DescriptorRef,
+		AbilityURA: projection.AbilityURA,
+		Version:    projection.DescriptorVersion,
+	}, nil
+}
+
+// ParseAbilityDescriptorRef projects a DescriptorRef through Axon's canonical
+// helper. SDK code that already has an IdentityClient should prefer
+// ProjectAbilityDescriptorRef or IdentityClient.ProjectDescriptorRef so daemon
+// profile transports remain the runtime boundary for live calls.
 func ParseAbilityDescriptorRef(raw string) (AbilityDescriptorRef, error) {
 	ref, err := axonsdk.ParseAbilityDescriptorRef(raw)
 	if err != nil {
