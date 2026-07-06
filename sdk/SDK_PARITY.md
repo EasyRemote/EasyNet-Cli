@@ -35,7 +35,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal projection adapters and bounded backpressure conformance remain incomplete. |
 | bidi | Runtime Core | provider-backed | provider-backed | Concrete product wrapper stream adapters remain incomplete. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
-| receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt and single-invocation chain signature verification exist for full Axon audit bundles; cross-invocation DAG verification and RFC-007 receipt URA construction remain incomplete. |
+| receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus single-invocation chain signature and parent-receipt closure verification exist for full Axon audit bundles; cross-invocation causal DAG verification and RFC-007 receipt URA construction remain incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
 | mission | Mission | provider-backed | provider-backed | Daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete. |
@@ -163,7 +163,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   invocation-history list/get/trace read-model methods, optional C ABI v4
   concrete transport for fetch/list/get/trace/project/verify/verify-chain/
   causal-ref over Runtime Core invoke, explicit daemon/Axon projection provider
-  seams for Runtime-backed project/verify/verify-chain/causal-ref, and close
+  seams for Runtime-backed project/verify/verify-chain/causal-ref,
+  Axon-backed single-invocation parent-receipt closure projection, and close
   state seams over opaque receipt refs; cross-invocation DAG cryptographic
   verification, receipt URA construction after RFC-007, and backend
   history/metrics cutover remain incomplete.
@@ -302,8 +303,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Runtime Core invoke, and close state seams over opaque receipt refs.
   EasyRemote receipt summary verification, hash-chain continuity, and
   parent-receipt-anchored Context child dispatch now delegate to SDK Receipt.
-  Axon-backed cryptographic verification and receipt URA construction after
-  RFC-007 remain incomplete.
+  Axon-backed full-receipt verification now covers single receipts,
+  single-invocation signature chains, and receipt-level parent closure for full
+  Axon audit bundles; cross-invocation causal DAG verification and receipt URA
+  construction after RFC-007 remain incomplete.
 - Python Publication facade exposes `PublicationClient` resource-ref,
   package-validation, direct C ABI-backed deploy execution through Runtime Core invoke,
   C ABI-backed plugin install through the daemon plugin installer,

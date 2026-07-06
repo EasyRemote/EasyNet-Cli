@@ -81,3 +81,7 @@ library API exists.
 - PASS: `cargo fmt --check`
 - PASS: `git diff --check`
 - PASS: `git diff -- docs/spec/daemon-sdk-requirements-v1.md` produced no diff.
+- Updated `sdk/SDK_PARITY.md` receipt status to record Axon-backed
+  single-invocation parent-receipt closure projection while keeping
+  cross-invocation causal DAG verification and RFC-007 receipt URA construction
+  as explicit remaining work.

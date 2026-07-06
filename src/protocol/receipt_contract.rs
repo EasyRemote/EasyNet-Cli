@@ -30,12 +30,12 @@
 // submit path for returned carriers; Axon remains the verifier authority for
 // full cryptographic receipt verification.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use easynet_axon::invocation::{
     canonical_receipt_bytes_with_hosted, verify_receipt_signature_with_hosted, AxonError,
-    CalleeSignature, KeyResolver, ReceiptJson,
+    CalleeSignature, EntityRef, KeyResolver, ReceiptJson,
 };
 use ed25519_dalek::VerifyingKey;
 use serde_json::{json, Map, Value};
@@ -335,6 +335,8 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
     let mut reason = String::new();
     let mut invocation_id: Option<String> = None;
     let mut previous_hash_hex: Option<String> = None;
+    let mut verified_hashes = Vec::with_capacity(receipts.len());
+    let mut parent_edges = Vec::new();
 
     for (position, receipt_value) in receipts.iter().enumerate() {
         let item = AxonReceiptChainItem::from_value(receipt_value)?;
@@ -414,6 +416,11 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
         if item_verified {
             previous_hash_hex = Some(verification.self_hash_hex.clone());
         }
+        let parent_hashes = receipt_parent_hashes(&receipt)?;
+        for parent_hash in &parent_hashes {
+            parent_edges.push((position, parent_hash.clone()));
+        }
+        verified_hashes.push(item_verified.then_some(verification.self_hash_hex.clone()));
         items.push(json!({
             "index": position,
             "receipt_ura": receipt_ura,
@@ -434,8 +441,35 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
                 "receipt_type": receipt.receipt_type,
                 "state": receipt.state,
                 "signature_algorithm": verification.signature_algorithm,
+                "parent_receipt_count": parent_hashes.len(),
             },
         }));
+    }
+    let parent_dag = verify_parent_receipt_closure(&verified_hashes, &parent_edges);
+    if !parent_dag.ok {
+        verified = false;
+        if reason.is_empty() {
+            reason = parent_dag.reason.clone();
+        }
+        if let Some(position) = parent_dag.position {
+            if let Some(item) = items.get_mut(position).and_then(Value::as_object_mut) {
+                if item
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .is_empty()
+                {
+                    item.insert(
+                        "reason".to_string(),
+                        Value::String(parent_dag.reason.clone()),
+                    );
+                }
+                item.insert("verified".to_string(), Value::Bool(false));
+                if let Some(metadata) = item.get_mut("metadata").and_then(Value::as_object_mut) {
+                    metadata.insert("parent_dag_closed".to_string(), Value::Bool(false));
+                }
+            }
+        }
     }
 
     let root_receipt_ura = items
@@ -462,8 +496,8 @@ fn project_axon_receipt_chain_verification(input: &Value) -> Result<Option<Value
             "source": "axon",
             "assurance": "cryptographic",
             "verifier": "easynet_axon::invocation::verify_receipt_signature_with_hosted",
-            "chain_projection": "single_invocation_signature_chain",
-            "dag_verified": false,
+            "chain_projection": "single_invocation_signature_chain_with_parent_closure",
+            "parent_dag_closed": parent_dag.ok,
         },
     })))
 }
@@ -481,11 +515,156 @@ fn verify_axon_receipt_signature(
         key_id_hint: String::new(),
     };
     verify_receipt_signature_with_hosted(&body, hosted, &signature, resolver)?;
+    validate_axon_receipt_subject_ref(receipt)?;
     let canonical = canonical_receipt_bytes_with_hosted(&body, hosted);
     Ok(AxonReceiptVerification {
         self_hash_hex: hex::encode(Sha256::digest(canonical)),
         signature_algorithm: algorithm,
     })
+}
+
+fn validate_axon_receipt_subject_ref(receipt: &ReceiptJson) -> Result<(), AxonError> {
+    let Some(claimed_json) = receipt.subject_ref.as_ref() else {
+        return Ok(());
+    };
+    let claimed = claimed_json.to_entity_ref()?;
+    let subject = receipt.subject_binding.to_subject()?;
+    let expected = EntityRef::try_from_subject_identity(&subject)?;
+    if claimed != expected {
+        return Err(AxonError::invalid_argument(format!(
+            "subject_ref_mismatch:claimed_{}_expected_{}",
+            claimed.ura, expected.ura
+        )));
+    }
+    Ok(())
+}
+
+fn receipt_parent_hashes(receipt: &ReceiptJson) -> Result<Vec<String>, ReceiptError> {
+    receipt
+        .parent_receipts
+        .iter()
+        .map(|parent| {
+            let hash = parent
+                .receipt_hash_hex
+                .strip_prefix("sha256:")
+                .unwrap_or(&parent.receipt_hash_hex)
+                .to_ascii_lowercase();
+            validate_hash_hex(&hash)?;
+            Ok(hash)
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ParentDagCheck {
+    ok: bool,
+    reason: String,
+    position: Option<usize>,
+}
+
+fn verify_parent_receipt_closure(
+    receipt_hashes: &[Option<String>],
+    parent_edges: &[(usize, String)],
+) -> ParentDagCheck {
+    let receipt_hashes = match receipt_hashes
+        .iter()
+        .enumerate()
+        .map(|(position, hash)| match hash {
+            Some(hash) => Ok(hash.clone()),
+            None => Err(ParentDagCheck {
+                ok: false,
+                reason: format!("parent_receipt_unverified:index_{position}"),
+                position: Some(position),
+            }),
+        })
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(receipt_hashes) => receipt_hashes,
+        Err(err) => return err,
+    };
+
+    let hash_to_position = receipt_hashes
+        .iter()
+        .enumerate()
+        .map(|(position, hash)| (hash.clone(), position))
+        .collect::<BTreeMap<_, _>>();
+    if hash_to_position.len() != receipt_hashes.len() {
+        return ParentDagCheck {
+            ok: false,
+            reason: "duplicate receipt hash in Axon chain".to_string(),
+            position: None,
+        };
+    }
+
+    let mut graph = BTreeMap::<usize, Vec<usize>>::new();
+    for (position, parent_hash) in parent_edges {
+        let Some(parent_position) = hash_to_position.get(parent_hash).copied() else {
+            return ParentDagCheck {
+                ok: false,
+                reason: format!("parent_receipt_missing:index_{position}:hash_{parent_hash}"),
+                position: Some(*position),
+            };
+        };
+        if parent_position == *position {
+            return ParentDagCheck {
+                ok: false,
+                reason: format!("parent_receipt_self_cycle:index_{position}"),
+                position: Some(*position),
+            };
+        }
+        graph.entry(*position).or_default().push(parent_position);
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for position in 0..receipt_hashes.len() {
+        let result = dfs_parent_receipt_graph(position, &graph, &mut visiting, &mut visited);
+        if !result.ok {
+            return result;
+        }
+    }
+    ParentDagCheck {
+        ok: true,
+        reason: String::new(),
+        position: None,
+    }
+}
+
+fn dfs_parent_receipt_graph(
+    position: usize,
+    graph: &BTreeMap<usize, Vec<usize>>,
+    visiting: &mut BTreeSet<usize>,
+    visited: &mut BTreeSet<usize>,
+) -> ParentDagCheck {
+    if visited.contains(&position) {
+        return ParentDagCheck {
+            ok: true,
+            reason: String::new(),
+            position: None,
+        };
+    }
+    if !visiting.insert(position) {
+        return ParentDagCheck {
+            ok: false,
+            reason: format!("parent_receipt_cycle_detected:index_{position}"),
+            position: Some(position),
+        };
+    }
+    if let Some(parents) = graph.get(&position) {
+        for parent in parents {
+            let result = dfs_parent_receipt_graph(*parent, graph, visiting, visited);
+            if !result.ok {
+                return result;
+            }
+        }
+    }
+    visiting.remove(&position);
+    visited.insert(position);
+    ParentDagCheck {
+        ok: true,
+        reason: String::new(),
+        position: None,
+    }
 }
 
 struct AxonReceiptVerification {
@@ -1095,8 +1274,16 @@ mod tests {
         assert_eq!(verification["receipt_count"], 2);
         assert_eq!(verification["items"][0]["verified"], true);
         assert_eq!(verification["items"][1]["continuous"], true);
+        assert_eq!(
+            verification["items"][1]["metadata"]["parent_receipt_count"],
+            1
+        );
         assert_eq!(verification["metadata"]["assurance"], "cryptographic");
-        assert_eq!(verification["metadata"]["dag_verified"], false);
+        assert_eq!(
+            verification["metadata"]["chain_projection"],
+            "single_invocation_signature_chain_with_parent_closure"
+        );
+        assert_eq!(verification["metadata"]["parent_dag_closed"], true);
     }
 
     #[test]
@@ -1129,6 +1316,50 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("callee_signature_invalid"));
+    }
+
+    #[test]
+    fn project_chain_verification_rejects_missing_parent_receipt() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let first = signed_axon_receipt_value(&signing_key, 0, [0u8; 32], "accepted", "accepted");
+        let first_hash = axon_receipt_hash(&first);
+        let second = signed_axon_receipt_value_with_parents(
+            &signing_key,
+            1,
+            first_hash,
+            "terminal",
+            "completed",
+            vec![easynet_axon::invocation::ReceiptRef {
+                receipt_hash: [9u8; 32],
+                receipt_ura: "easynet:///r/example/receipt/missing-parent".to_string(),
+            }],
+        );
+
+        let verification = project_receipt_chain_verification(&json!({
+            "receipts": [
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt": first
+                },
+                {
+                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/1",
+                    "receipt": second
+                }
+            ],
+            "public_keys": {
+                "easynet:///r/example/agent/alice.worker": hex::encode(signing_key.verifying_key().to_bytes())
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], false);
+        assert_eq!(verification["continuous"], true);
+        assert_eq!(verification["items"][1]["verified"], false);
+        assert_eq!(verification["metadata"]["parent_dag_closed"], false);
+        assert!(verification["reason"]
+            .as_str()
+            .unwrap()
+            .contains("parent_receipt_missing"));
     }
 
     #[test]
@@ -1238,8 +1469,17 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
         let first = signed_axon_receipt_value(&signing_key, 0, [0u8; 32], "accepted", "accepted");
         let first_hash = axon_receipt_hash(&first);
-        let second =
-            signed_axon_receipt_value(&signing_key, 1, first_hash, "terminal", "completed");
+        let second = signed_axon_receipt_value_with_parents(
+            &signing_key,
+            1,
+            first_hash,
+            "terminal",
+            "completed",
+            vec![easynet_axon::invocation::ReceiptRef {
+                receipt_hash: first_hash,
+                receipt_ura: "easynet:///r/example/receipt/inv-axon/0".to_string(),
+            }],
+        );
         (
             vec![first, second],
             hex::encode(signing_key.verifying_key().to_bytes()),
@@ -1267,9 +1507,28 @@ mod tests {
         receipt_type: &str,
         state: &str,
     ) -> Value {
+        signed_axon_receipt_value_with_parents(
+            signing_key,
+            index,
+            prev_receipt_hash,
+            receipt_type,
+            state,
+            Vec::new(),
+        )
+    }
+
+    fn signed_axon_receipt_value_with_parents(
+        signing_key: &ed25519_dalek::SigningKey,
+        index: u64,
+        prev_receipt_hash: [u8; 32],
+        receipt_type: &str,
+        state: &str,
+        parent_receipts: Vec<easynet_axon::invocation::ReceiptRef>,
+    ) -> Value {
         use easynet_axon::invocation::axiom::{AuthorityBinding, InvocationUsage};
         use easynet_axon::invocation::bundle::{
             AuthorityJson, CausalJson, IdentityJson, InvocationAuthorityProofJson, ReceiptJson,
+            ReceiptRefJson,
         };
         use easynet_axon::invocation::{
             sign_receipt, AgentIdentity, CausalContext, EntityRef, EntityRefKind,
@@ -1305,7 +1564,7 @@ mod tests {
             authority_proof,
             input_hash: [3u8; 32],
             output_hash: [4u8; 32],
-            parent_receipts: Vec::new(),
+            parent_receipts,
         };
         let body = ReceiptBody {
             index,
@@ -1367,7 +1626,15 @@ mod tests {
             ),
             input_hash_hex: hex::encode(body.proof_facts.input_hash),
             output_hash_hex: hex::encode(body.proof_facts.output_hash),
-            parent_receipts: Vec::new(),
+            parent_receipts: body
+                .proof_facts
+                .parent_receipts
+                .iter()
+                .map(|receipt_ref| ReceiptRefJson {
+                    receipt_hash_hex: hex::encode(receipt_ref.receipt_hash),
+                    receipt_ura: receipt_ref.receipt_ura.clone(),
+                })
+                .collect(),
         };
 
         serde_json::to_value(receipt).unwrap()
