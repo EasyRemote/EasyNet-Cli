@@ -19,6 +19,7 @@ sdk/conformance/
     c-abi-action-adapter-report.json
     go-action-adapter-report.json
     python-action-adapter-report.json
+    node-action-adapter-report.json
 ```
 
 Cases are declarative. Fixtures are golden DTO payloads validated against
@@ -64,9 +65,10 @@ A language runner must:
   record, repository-local evidence, and an evidence kind owned by the report
   language.
 
-Rust, C ABI, Go, and Python facade tests must consume shared cases from
-`sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
-shipped local DTO/actions and projection-only profile behavior, including
+Rust, C ABI, Go, Python, and any shipped P1 seam report such as Node must
+consume shared cases from `sdk/conformance/cases` and shared fixtures from
+`sdk/conformance/fixtures` for shipped local DTO/actions and projection-only
+profile behavior, including
 Runtime Core, Directory + Identity, Mission, Admin + Gateway, Publication,
 Events, Surface, Compatibility, Receipt, Host Binding, and Wrapper profile
 adapters. Inline samples may remain as focused unit tests, but they do not
@@ -79,6 +81,7 @@ cargo run --bin sdk-conformance-runner -- --language rust --adapter-report sdk/c
 cargo run --bin sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language go --adapter-report sdk/conformance/runner/go-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language python --adapter-report sdk/conformance/runner/python-action-adapter-report.json --format jsonl
+cargo run --bin sdk-conformance-runner -- --language node --adapter-report sdk/conformance/runner/node-action-adapter-report.json --format jsonl
 cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh
@@ -97,7 +100,7 @@ Future runners should add:
 ```text
 cd sdk/go && go test ./...
 cd sdk/python && python3 -m unittest discover -s tests
-npm test --workspace sdk/node
+npm test --prefix sdk/node
 ./gradlew :sdk:java:test
 swift test --package-path sdk/swift
 ```

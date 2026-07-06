@@ -8,6 +8,9 @@ import {
   ErrorCode,
   IdentityClient,
   InvocationBuilder,
+  ReceiptChain,
+  ReceiptClient,
+  ReceiptRef,
   RuntimeClient,
   SDKError,
 } from "../index.js";
@@ -31,6 +34,14 @@ const directoryBase = () => ({
   nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
   causal_context: { form: "none" },
 });
+
+const receiptFetch = () => ({
+  ...directoryBase(),
+  descriptor_ref: "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  invocation_ura: "easynet:///r/example/resource/invocation.inv-1",
+});
+
+const receiptHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 test("feature discovery decodes canonical Runtime Core facts", async () => {
   const client = new Client({
@@ -387,4 +398,137 @@ test("DirectoryClient exposes subscription as StreamHandle seam", async () => {
     phases.push(event.phase);
   }
   assert.deepEqual(phases, ["live", "terminal"]);
+});
+
+test("ReceiptClient delegates fetch, projection, and causal refs without verification claims", async () => {
+  const seen = [];
+  const receipt = new ReceiptClient({
+    fetch: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "fetch", request });
+      return JSON.stringify({
+        receipt_ura: request.invocation_ura,
+        invocation_id: "inv-1",
+        state: "completed",
+        verified: false,
+        metadata: { profile: "receipt" },
+      });
+    },
+    project: (receiptJSON) => {
+      const request = JSON.parse(Buffer.from(receiptJSON).toString("utf8"));
+      seen.push({ method: "project", request });
+      return JSON.stringify({
+        receipt_ura: request.receipt_ura,
+        invocation_id: request.invocation_id,
+        state: "completed",
+        verified: false,
+        metadata: {},
+      });
+    },
+    verify: (receiptJSON) => {
+      const request = JSON.parse(Buffer.from(receiptJSON).toString("utf8"));
+      seen.push({ method: "verify", request });
+      return JSON.stringify({
+        verified: false,
+        receipt_ura: request.receipt_ura,
+        method: "provider_required",
+        reason: "summary_only",
+        metadata: {},
+      });
+    },
+    causalRef: (receiptJSON) => {
+      const request = JSON.parse(Buffer.from(receiptJSON).toString("utf8"));
+      seen.push({ method: "causal", request });
+      return JSON.stringify({
+        causal_ref: `receipt:${request.receipt_ura}`,
+        receipt_ura: request.receipt_ura,
+        receipt_hash_hex: request.receipt_hash_hex,
+        causal_context: {
+          form: "receipt",
+          receipt_ura: request.receipt_ura,
+          receipt_hash_hex: request.receipt_hash_hex,
+        },
+        verified: false,
+        metadata: {},
+      });
+    },
+  });
+
+  const fetched = await receipt.fetch(receiptFetch());
+  assert.equal(fetched.verified, false);
+
+  const ref = new ReceiptRef({
+    receipt_ura: "easynet:///r/example/resource/receipt.inv-1",
+    receipt_hash_hex: receiptHash,
+    invocation_id: "inv-1",
+  });
+  const projected = await receipt.project(ref.toJSON());
+  const verified = await receipt.verify(ref.toJSON());
+  const causal = await ref.causalContext(receipt);
+
+  assert.equal(projected.verified, false);
+  assert.equal(verified.verified, false);
+  assert.equal(causal.receipt_hash_hex, receiptHash);
+  assert.deepEqual(seen.map((item) => item.method), ["fetch", "project", "verify", "causal"]);
+});
+
+test("ReceiptClient delegates carriers, history, and chain verification", async () => {
+  const seen = [];
+  const draftJSON = completeDraft().build().toJSONString();
+  const receipt = new ReceiptClient({
+    fetch: () => JSON.stringify({ verified: false, metadata: {} }),
+    buildFetchInvocation: (requestJSON) => {
+      seen.push({ method: "build_fetch", request: JSON.parse(Buffer.from(requestJSON).toString("utf8")) });
+      return draftJSON;
+    },
+    buildListHistoryInvocation: (requestJSON) => {
+      seen.push({ method: "build_list", request: JSON.parse(Buffer.from(requestJSON).toString("utf8")) });
+      return draftJSON;
+    },
+    listHistory: (requestJSON) => {
+      seen.push({ method: "list", request: JSON.parse(Buffer.from(requestJSON).toString("utf8")) });
+      return JSON.stringify({ profile: "receipt", items: [] });
+    },
+    getTrace: (requestJSON) => {
+      seen.push({ method: "trace", request: JSON.parse(Buffer.from(requestJSON).toString("utf8")) });
+      return JSON.stringify({ profile: "receipt", trace: [] });
+    },
+    verifyChain: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "chain", request });
+      return JSON.stringify({
+        verified: false,
+        continuous: true,
+        method: "provider_projection",
+        receipt_count: request.receipts.length,
+        metadata: request.metadata ?? {},
+      });
+    },
+  });
+
+  const built = await receipt.buildFetchInvocation(receiptFetch());
+  await receipt.buildListHistoryInvocation({ ...directoryBase(), arguments: { limit: 1 } });
+  const listed = await receipt.listHistory({ ...directoryBase(), arguments: { limit: 1 } });
+  const trace = await receipt.getTrace({ ...directoryBase(), arguments: { invocation_id: "inv-1" } });
+  const chain = new ReceiptChain([
+    { receipt_ura: "easynet:///r/example/resource/receipt.inv-1", receipt_hash_hex: receiptHash },
+  ]);
+  const verification = await chain.verifyContinuity(receipt, { source: "test" });
+
+  assert.equal(built.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+  assert.equal(listed.profile, "receipt");
+  assert.equal(trace.profile, "receipt");
+  assert.equal(verification.receipt_count, 1);
+  assert.equal(seen.at(-1).request.receipts[0].receipt_hash_hex, receiptHash);
+});
+
+test("ReceiptRef rejects fabricated or malformed receipt anchors", () => {
+  assert.throws(
+    () => new ReceiptRef({ receipt_hash_hex: receiptHash }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  assert.throws(
+    () => new ReceiptRef({ receipt_ura: "easynet:///r/example/resource/receipt.inv-1", receipt_hash_hex: "abc" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
 });

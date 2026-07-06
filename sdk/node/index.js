@@ -39,6 +39,7 @@ export const RetryHint = Object.freeze({
 export const DEFAULT_DIRECTORY_PAGE_SIZE = 50;
 export const MAX_DIRECTORY_PAGE_SIZE = 500;
 export const DIRECTORY_IDENTITY_PROFILE = "directory_identity";
+export const RECEIPT_PROFILE = "receipt";
 
 export class SDKError extends Error {
   constructor({
@@ -346,6 +347,170 @@ export class DirectoryClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("directory client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class ReceiptRef {
+  constructor(fields) {
+    const value = objectValue(fields, "receipt ref");
+    this.receiptURA = cleanRequiredString(value.receipt_ura, "receipt_ura");
+    this.receiptHashHex = normalizeReceiptHashHex(value.receipt_hash_hex, "receipt_hash_hex");
+    this.invocationId = cleanOptionalString(value.invocation_id ?? "", "invocation_id");
+    this.prevReceiptHashHex = value.prev_receipt_hash_hex
+      ? normalizeReceiptHashHex(value.prev_receipt_hash_hex, "prev_receipt_hash_hex")
+      : "";
+    this.index = optionalNonNegativeInteger(value.index, "index");
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new ReceiptRef(parseJSON(raw, "receipt ref"));
+  }
+
+  toJSON() {
+    const value = {
+      receipt_ura: this.receiptURA,
+      receipt_hash_hex: this.receiptHashHex,
+    };
+    if (this.invocationId) {
+      value.invocation_id = this.invocationId;
+    }
+    if (this.prevReceiptHashHex) {
+      value.prev_receipt_hash_hex = this.prevReceiptHashHex;
+    }
+    if (this.index !== null) {
+      value.index = this.index;
+    }
+    if (Object.keys(this.metadata).length > 0) {
+      value.metadata = this.metadata;
+    }
+    return value;
+  }
+
+  toJSONString() {
+    return JSON.stringify(this.toJSON());
+  }
+
+  async causalContext(client) {
+    if (!client || typeof client.causalContext !== "function") {
+      throw invalidReceipt("receipt client is required");
+    }
+    return client.causalContext(this.toJSON());
+  }
+}
+
+export class ReceiptChain {
+  constructor(receipts) {
+    if (!Array.isArray(receipts) || receipts.length === 0) {
+      throw invalidReceipt("receipt chain requires at least one receipt");
+    }
+    this.receipts = receipts.map((receipt) =>
+      receipt instanceof ReceiptRef ? receipt : new ReceiptRef(receipt),
+    );
+  }
+
+  toJSON() {
+    return this.receipts.map((receipt) => receipt.toJSON());
+  }
+
+  async verifyContinuity(client, metadata = {}) {
+    if (!client || typeof client.verifyChain !== "function") {
+      throw invalidReceipt("receipt client is required");
+    }
+    return client.verifyChain({ receipts: this.toJSON(), metadata });
+  }
+}
+
+export class ReceiptClient {
+  constructor(transport) {
+    if (!transport || typeof transport.fetch !== "function") {
+      throw invalidSDK("receipt transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async fetch(request) {
+    const payload = receiptFetchRequest(request);
+    return callJSON(this.requireOpen(), "fetch", payload, "receipt fetch");
+  }
+
+  async buildFetchInvocation(request) {
+    const payload = receiptFetchRequest(request);
+    return InvocationDraft.fromJSON(
+      await callRaw(this.requireOpen(), "buildFetchInvocation", payload),
+    );
+  }
+
+  async buildListHistoryInvocation(request) {
+    return this.buildHistoryInvocation("buildListHistoryInvocation", request);
+  }
+
+  async buildGetHistoryInvocation(request) {
+    return this.buildHistoryInvocation("buildGetHistoryInvocation", request);
+  }
+
+  async buildTraceInvocation(request) {
+    return this.buildHistoryInvocation("buildTraceInvocation", request);
+  }
+
+  async buildHistoryInvocation(method, request) {
+    return InvocationDraft.fromJSON(
+      await callRaw(this.requireOpen(), method, receiptHistoryRequest(request)),
+    );
+  }
+
+  async listHistory(request) {
+    return callJSON(this.requireOpen(), "listHistory", receiptHistoryRequest(request), "receipt list history");
+  }
+
+  async getHistory(request) {
+    return callJSON(this.requireOpen(), "getHistory", receiptHistoryRequest(request), "receipt get history");
+  }
+
+  async getTrace(request) {
+    return callJSON(this.requireOpen(), "getTrace", receiptHistoryRequest(request), "receipt trace");
+  }
+
+  async project(receiptJSON) {
+    return parseJSON(await callReceiptJSON(this.requireOpen(), "project", receiptJSON), "receipt projection");
+  }
+
+  async verify(receiptJSON) {
+    return parseJSON(await callReceiptJSON(this.requireOpen(), "verify", receiptJSON), "receipt verification");
+  }
+
+  async verifyChain(request) {
+    const payload = receiptChainRequest(request);
+    return callJSON(this.requireOpen(), "verifyChain", payload, "receipt chain verification");
+  }
+
+  async causalRef(receiptJSON) {
+    return parseJSON(await callReceiptJSON(this.requireOpen(), "causalRef", receiptJSON), "receipt causal ref");
+  }
+
+  async causalContext(receiptJSON) {
+    const ref = await this.causalRef(receiptJSON);
+    return objectValue(ref.causal_context, "causal_context");
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("receipt client is closed");
     }
     return this.transport;
   }
@@ -752,12 +917,23 @@ export class BidiSession {
 }
 
 function callJSON(transport, method, payload, label) {
+  return Promise.resolve(callRaw(transport, method, payload)).then((raw) =>
+    parseJSON(raw, label),
+  );
+}
+
+function callRaw(transport, method, payload) {
   if (typeof transport[method] !== "function") {
     throw invalidSDK(`${method} transport function is required`);
   }
-  return Promise.resolve(transport[method](Buffer.from(JSON.stringify(payload)))).then((raw) =>
-    parseJSON(raw, label),
-  );
+  return Promise.resolve(transport[method](Buffer.from(JSON.stringify(payload))));
+}
+
+function callReceiptJSON(transport, method, receiptJSON) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  return Promise.resolve(transport[method](jsonPayloadBytes(receiptJSON, "receipt JSON")));
 }
 
 function identityRequest(value, allowed) {
@@ -791,6 +967,139 @@ function directoryBaseFields() {
     "cursor",
     "metadata",
   ];
+}
+
+function receiptCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "timeout_ms",
+    "metadata",
+  ];
+}
+
+function receiptFetchRequest(value) {
+  const payload = requestObject(
+    value,
+    [
+      "caller_ura",
+      "callee_ura",
+      "descriptor_ref",
+      "subject_ura",
+      "descriptor_version",
+      "nonce_base64",
+      "causal_context",
+      "invocation_ura",
+      "request_id",
+      "trace_id",
+      "metadata",
+    ],
+    "receipt fetch request",
+  );
+  cleanRequiredString(payload.caller_ura, "caller_ura");
+  cleanRequiredString(payload.callee_ura, "callee_ura");
+  cleanRequiredString(payload.descriptor_ref, "descriptor_ref");
+  cleanRequiredString(payload.subject_ura, "subject_ura");
+  cleanRequiredString(payload.descriptor_version, "descriptor_version");
+  cleanRequiredString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (!payload.invocation_ura && !payload.request_id && !payload.trace_id) {
+    throw invalidReceipt("exactly one receipt fetch selector is required");
+  }
+  const selectors = [payload.invocation_ura, payload.request_id, payload.trace_id].filter(Boolean);
+  if (selectors.length !== 1) {
+    throw invalidReceipt("exactly one receipt fetch selector is required");
+  }
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function receiptHistoryRequest(value) {
+  const payload = requestObject(
+    value,
+    [...receiptCarrierBaseFields(), "arguments"],
+    "receipt history request",
+  );
+  validateReceiptCarrierBase(payload);
+  if (payload.arguments !== undefined) {
+    objectValue(payload.arguments, "arguments");
+  }
+  return payload;
+}
+
+function validateReceiptCarrierBase(payload) {
+  cleanRequiredString(payload.caller_ura, "caller_ura");
+  cleanRequiredString(payload.callee_ura, "callee_ura");
+  cleanRequiredString(payload.subject_ura, "subject_ura");
+  cleanRequiredString(payload.descriptor_version, "descriptor_version");
+  cleanRequiredString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (
+    payload.timeout_ms !== undefined &&
+    (!Number.isInteger(payload.timeout_ms) || payload.timeout_ms < 0)
+  ) {
+    throw invalidReceipt("timeout_ms must be non-negative");
+  }
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+}
+
+function receiptChainRequest(value) {
+  const payload = requestObject(value, ["receipts", "metadata"], "receipt chain request");
+  if (!Array.isArray(payload.receipts) || payload.receipts.length === 0) {
+    throw invalidReceipt("receipts must be a non-empty array");
+  }
+  payload.receipts = payload.receipts.map((receipt) =>
+    receipt instanceof ReceiptRef ? receipt.toJSON() : new ReceiptRef(receipt).toJSON(),
+  );
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function jsonPayloadBytes(value, field) {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    if (value.length === 0) {
+      throw invalidReceipt(`${field} is required`);
+    }
+    return Buffer.from(value);
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw invalidReceipt(`${field} is required`);
+    }
+    return Buffer.from(value);
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Buffer.from(JSON.stringify(value));
+  }
+  throw invalidReceipt(`${field} must be bytes, string, or object`);
+}
+
+function normalizeReceiptHashHex(value, field) {
+  const text = cleanRequiredString(value, field).toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(text)) {
+    throw invalidReceipt(`${field} must be 64 lowercase hex characters`);
+  }
+  return text;
+}
+
+function optionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidReceipt(`${field} must be a non-negative integer`);
+  }
+  return value;
 }
 
 function validateDirectoryBase(payload, requireLimit) {
@@ -1035,7 +1344,16 @@ function terminalToken(value) {
     return false;
   }
   const token = value.toLowerCase().replace(/[^a-z]/g, "");
-  return ["terminal", "closed", "completed", "failed", "cancelled", "canceled", "timedout", "done"].includes(token);
+  return [
+    "terminal",
+    "closed",
+    "completed",
+    "failed",
+    "cancelled",
+    "canceled",
+    "timedout",
+    "done",
+  ].includes(token);
 }
 
 function invalidSDK(message) {
@@ -1053,6 +1371,16 @@ function invalidDirectory(message) {
     stage: "directory",
     retry: RetryHint.NEVER,
     source: DIRECTORY_IDENTITY_PROFILE,
+    message,
+  });
+}
+
+function invalidReceipt(message) {
+  return new SDKError({
+    code: ErrorCode.INVALID_ARGUMENT,
+    stage: "receipt",
+    retry: RetryHint.NEVER,
+    source: RECEIPT_PROFILE,
     message,
   });
 }

@@ -419,10 +419,6 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_conformance.py"
-        },
-        {
-          "kind": "static_gate",
-          "ref_path": "tools/scripts/check-easyremote-sdk-boundary.sh"
         }
       ],
       "message": null

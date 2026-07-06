@@ -13,6 +13,7 @@
       "additionalProperties": false,
       "required": [
         "runtime_core",
+        "authority",
         "receipt",
         "directory_identity",
         "publication",
@@ -26,6 +27,7 @@
       ],
       "properties": {
         "runtime_core": {"type": "string", "enum": ["partial", "available", "cutover_ready"]},
+        "authority": {"type": "string"},
         "receipt": {"type": "string"},
         "directory_identity": {"type": "string"},
         "publication": {"type": "string"},
@@ -70,6 +72,7 @@
         "compatibility_file_adapters",
         "wrapper_carriers",
         "wrapper_record_projection",
+        "authority_metadata_core",
         "invocation_builder_handles",
         "invocation_handle_observation",
         "stream_bidi_lifecycle",
@@ -106,6 +109,7 @@
         "compatibility_file_adapters": {"type": "boolean"},
         "wrapper_carriers": {"type": "boolean"},
         "wrapper_record_projection": {"type": "boolean"},
+        "authority_metadata_core": {"type": "boolean"},
         "invocation_builder_handles": {"type": "boolean"},
         "invocation_handle_observation": {"type": "boolean"},
         "stream_bidi_lifecycle": {"type": "boolean"},

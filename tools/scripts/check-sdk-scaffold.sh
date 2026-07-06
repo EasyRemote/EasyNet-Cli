@@ -241,6 +241,7 @@ for path in \
   sdk/conformance/runner/c-abi-action-adapter-report.json \
   sdk/conformance/runner/go-action-adapter-report.json \
   sdk/conformance/runner/python-action-adapter-report.json \
+  sdk/conformance/runner/node-action-adapter-report.json \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/_cabi.py \
@@ -305,6 +306,7 @@ validate_json_file sdk/conformance/runner/rust-action-adapter-report.json
 validate_json_file sdk/conformance/runner/c-abi-action-adapter-report.json
 validate_json_file sdk/conformance/runner/go-action-adapter-report.json
 validate_json_file sdk/conformance/runner/python-action-adapter-report.json
+validate_json_file sdk/conformance/runner/node-action-adapter-report.json
 
 schema_files=(
   invocation.schema.json

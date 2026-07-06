@@ -10,9 +10,7 @@ export declare const RetryHint: Readonly<{
 export declare const DEFAULT_DIRECTORY_PAGE_SIZE: 50;
 export declare const MAX_DIRECTORY_PAGE_SIZE: 500;
 export declare const DIRECTORY_IDENTITY_PROFILE: "directory_identity";
-export declare const DEFAULT_DIRECTORY_PAGE_SIZE: 50;
-export declare const MAX_DIRECTORY_PAGE_SIZE: 500;
-export declare const DIRECTORY_IDENTITY_PROFILE: "directory_identity";
+export declare const RECEIPT_PROFILE: "receipt";
 
 export interface SDKErrorOptions {
   code: string;
@@ -58,47 +56,6 @@ export class Client {
   constructor(transport: DiscoveryTransport);
   featureDiscovery(): Promise<FeatureSet>;
   requireABI(expected: number): Promise<FeatureSet>;
-  close(): Promise<void>;
-}
-
-export interface IdentityTransport {
-  projectDescriptorRef(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  buildDescriptorRef?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  ownerAbilityURA?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  resourceURA?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  close?(): Promise<void> | void;
-}
-
-export class IdentityClient {
-  constructor(transport: IdentityTransport);
-  projectDescriptorRef(request: Record<string, unknown>): Promise<Record<string, unknown>>;
-  buildDescriptorRef(request: Record<string, unknown>): Promise<Record<string, unknown>>;
-  canonicalAbilityDescriptorRef(value: string, descriptorVersion?: string): Promise<string>;
-  abilityURAFromDescriptorRef(descriptorRef: string): Promise<string>;
-  ownerAbilityURA(ownerURA: string, abilityName: string): Promise<string>;
-  ownerAbilityDescriptorRef(ownerURA: string, abilityName: string, descriptorVersion: string): Promise<string>;
-  resourceURA(ownerURA: string, path: string): Promise<string>;
-  close(): Promise<void>;
-}
-
-export interface DirectoryTransport {
-  resolve(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  listDevices?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  listAgents?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  listAbilities?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  buildDirectorySubscriptionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  subscribeDirectory?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
-  close?(): Promise<void> | void;
-}
-
-export class DirectoryClient {
-  constructor(transport: DirectoryTransport);
-  resolve(query: Record<string, unknown>): Promise<Record<string, unknown>>;
-  listDevices(query: Record<string, unknown>): Promise<Record<string, unknown>>;
-  listAgents(query: Record<string, unknown>): Promise<Record<string, unknown>>;
-  listAbilities(query: Record<string, unknown>): Promise<Record<string, unknown>>;
-  buildDirectorySubscriptionInvocation(request: Record<string, unknown>): Promise<Record<string, unknown>>;
-  subscribeDirectory(request: Record<string, unknown>): Promise<StreamHandle>;
   close(): Promise<void>;
 }
 
@@ -210,6 +167,96 @@ export class DirectoryClient {
   listAbilities(query: AbilityQuery): Promise<Record<string, unknown>>;
   buildDirectorySubscriptionInvocation(request: DirectorySubscriptionRequest): Promise<Record<string, unknown>>;
   subscribeDirectory(request: DirectorySubscriptionRequest): Promise<StreamHandle>;
+  close(): Promise<void>;
+}
+
+export interface ReceiptTransport {
+  fetch(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildFetchInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildListHistoryInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildGetHistoryInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildTraceInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listHistory?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  getHistory?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  getTrace?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  project?(receiptJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  verify?(receiptJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  verifyChain?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  causalRef?(receiptJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export interface ReceiptFetchRequest {
+  caller_ura: string;
+  callee_ura: string;
+  descriptor_ref: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  invocation_ura?: string;
+  request_id?: string;
+  trace_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReceiptHistoryReadRequest {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  timeout_ms?: number;
+  arguments?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReceiptRefFields {
+  receipt_ura: string;
+  receipt_hash_hex: string;
+  invocation_id?: string;
+  prev_receipt_hash_hex?: string;
+  index?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export class ReceiptRef {
+  receiptURA: string;
+  receiptHashHex: string;
+  invocationId: string;
+  prevReceiptHashHex: string;
+  index: number | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: ReceiptRefFields);
+  static fromJSON(raw: Uint8Array | string): ReceiptRef;
+  toJSON(): ReceiptRefFields;
+  toJSONString(): string;
+  causalContext(client: ReceiptClient): Promise<Record<string, unknown>>;
+}
+
+export class ReceiptChain {
+  receipts: ReceiptRef[];
+  constructor(receipts: Array<ReceiptRef | ReceiptRefFields>);
+  toJSON(): ReceiptRefFields[];
+  verifyContinuity(client: ReceiptClient, metadata?: Record<string, unknown>): Promise<Record<string, unknown>>;
+}
+
+export class ReceiptClient {
+  constructor(transport: ReceiptTransport);
+  fetch(request: ReceiptFetchRequest): Promise<Record<string, unknown>>;
+  buildFetchInvocation(request: ReceiptFetchRequest): Promise<InvocationDraft>;
+  buildListHistoryInvocation(request: ReceiptHistoryReadRequest): Promise<InvocationDraft>;
+  buildGetHistoryInvocation(request: ReceiptHistoryReadRequest): Promise<InvocationDraft>;
+  buildTraceInvocation(request: ReceiptHistoryReadRequest): Promise<InvocationDraft>;
+  listHistory(request: ReceiptHistoryReadRequest): Promise<Record<string, unknown>>;
+  getHistory(request: ReceiptHistoryReadRequest): Promise<Record<string, unknown>>;
+  getTrace(request: ReceiptHistoryReadRequest): Promise<Record<string, unknown>>;
+  project(receiptJSON: Uint8Array | string | Record<string, unknown>): Promise<Record<string, unknown>>;
+  verify(receiptJSON: Uint8Array | string | Record<string, unknown>): Promise<Record<string, unknown>>;
+  verifyChain(request: { receipts: Array<ReceiptRef | ReceiptRefFields>; metadata?: Record<string, unknown> }): Promise<Record<string, unknown>>;
+  causalRef(receiptJSON: Uint8Array | string | Record<string, unknown>): Promise<Record<string, unknown>>;
+  causalContext(receiptJSON: Uint8Array | string | Record<string, unknown>): Promise<Record<string, unknown>>;
   close(): Promise<void>;
 }
 

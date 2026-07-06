@@ -11,7 +11,7 @@ method spelling.
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers, including authority signing-material and metadata-materialization core helpers |
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
-| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core and Directory + Identity DTO/client lifecycle over injected transports; daemon providers and remaining profile clients unsupported |
+| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core, Directory + Identity, and Receipt DTO/client lifecycle over injected transports; daemon providers and remaining profile clients unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
 | Swift | P1 | macOS/iOS-adjacent clients | unsupported |
 
@@ -489,14 +489,17 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   shared case. The aggregate cutover readiness gate now runs EasyRemote and
   backend product test smokes; non-P0 language adapter reports and per-route
   live product smoke evidence remain incomplete.
-- Node/TypeScript now exposes Runtime Core and Directory + Identity seams with
-  feature discovery, typed errors, Invocation draft construction, RuntimeClient
-  transport delegation, stream/bidi lifecycle handles, async iteration,
-  `AbortSignal` cancellation, DirectoryClient read-model resolve/list/subscribe
-  methods, IdentityClient URA/DescriptorRef projection methods, TypeScript
-  declarations, and a scaffold-backed test gate. It is not provider-backed:
-  daemon transports, remaining profile clients, conformance action-adapter
-  reports, and package stability remain incomplete.
+- Node/TypeScript now exposes Runtime Core, Directory + Identity, and Receipt
+  seams with feature discovery, typed errors, Invocation draft construction,
+  RuntimeClient transport delegation, stream/bidi lifecycle handles, async
+  iteration, `AbortSignal` cancellation, DirectoryClient read-model
+  resolve/list/subscribe methods, IdentityClient URA/DescriptorRef projection
+  methods, ReceiptClient fetch/projection/verification/causal-ref/history
+  methods, opaque ReceiptRef/ReceiptChain helpers, TypeScript declarations, and
+  a scaffold-backed test gate plus a shared Node action-adapter report for
+  MEMC and Receipt seam cases. It is not provider-backed: daemon transports,
+  remaining profile clients, Axon-backed receipt verification, and package
+  stability remain incomplete.
 
 ## Capability States
 

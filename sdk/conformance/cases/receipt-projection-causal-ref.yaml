@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Receipt projection normalizes summary DTOs, refuses to claim summary-only cryptographic verification, and builds causal refs only from explicit opaque receipt URA plus hash facts.
 steps:
   - action: project_receipt_summary

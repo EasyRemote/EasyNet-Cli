@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "language": "node",
+  "adapter_kind": "node_facade_conformance_tests",
+  "records": [
+    {
+      "case_id": "memc/consumer_coverage",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "memc/no_core_bloat",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "memc/profile_exclusivity",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "receipt/fetch_carrier",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "receipt/projection_causal_ref",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

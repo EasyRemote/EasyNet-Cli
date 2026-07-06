@@ -684,6 +684,8 @@ fn load_schema_with_local_refs(
     let schema_path = root.join("sdk/schemas").join(schema);
     let mut value: Value = read_json_file(&schema_path)?;
     inline_local_schema_refs(root, &mut value, stack)?;
+    let schema_root = value.clone();
+    inline_internal_schema_refs(&mut value, &schema_root)?;
     stack.remove(schema);
     Ok(value)
 }
@@ -722,6 +724,47 @@ fn inline_local_schema_refs(
         Value::Array(values) => {
             for nested in values {
                 inline_local_schema_refs(root, nested, stack)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn inline_internal_schema_refs(value: &mut Value, schema_root: &Value) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            if let Some(raw_ref) = object.get("$ref").and_then(Value::as_str) {
+                if let Some(pointer) = raw_ref.strip_prefix('#') {
+                    let mut referenced = schema_root
+                        .pointer(pointer)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("unresolved schema reference `{raw_ref}`"))?;
+                    if object.len() > 1 {
+                        let siblings = object
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != "$ref")
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<Vec<_>>();
+                        let Some(referenced_object) = referenced.as_object_mut() else {
+                            anyhow::bail!("referenced schema `{raw_ref}` is not an object");
+                        };
+                        for (key, value) in siblings {
+                            referenced_object.insert(key, value);
+                        }
+                    }
+                    *value = referenced;
+                    inline_internal_schema_refs(value, schema_root)?;
+                    return Ok(());
+                }
+            }
+            for nested in object.values_mut() {
+                inline_internal_schema_refs(nested, schema_root)?;
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                inline_internal_schema_refs(nested, schema_root)?;
             }
         }
         _ => {}
@@ -1188,6 +1231,7 @@ expect:
                 "python",
                 "sdk/conformance/runner/python-action-adapter-report.json",
             ),
+            ("node", "sdk/conformance/runner/node-action-adapter-report.json"),
         ] {
             let report = root.join(report);
             let records = run_manifest(root, language, Some(&report))
