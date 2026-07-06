@@ -126,6 +126,7 @@ class ConsumerBoundaryAuditor:
         violations.extend(_audit_publication_carrier_semantics(relative, text))
         violations.extend(_audit_admin_carrier_semantics(relative, text))
         violations.extend(_audit_mission_carrier_semantics(relative, text))
+        violations.extend(_audit_raw_ura_shape_literals(relative, text))
         violations.extend(_audit_addressing_semantics(relative, text))
         return tuple(violations)
 
@@ -541,6 +542,78 @@ _RAW_ADDRESSING_HELPER_NAMES = {
     "ability_ura_from_descriptor_ref",
     "project_descriptor_ref",
 }
+_RAW_URA_SHAPE_LITERALS = {
+    "/agent/",
+    "/ability/",
+    "/device/",
+    "/hub/",
+}
+_RAW_URA_SHAPE_METHODS = {
+    "endswith",
+    "find",
+    "index",
+    "partition",
+    "replace",
+    "rpartition",
+    "rsplit",
+    "split",
+    "startswith",
+}
+
+
+def _audit_raw_ura_shape_literals(
+    path: str, text: str
+) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        markers = sorted(_raw_ura_shape_markers(node))
+        if not markers:
+            continue
+        violations.append(
+            BoundaryViolation(
+                path=path,
+                rule="raw_ura_shape_literal",
+                detail=", ".join(markers),
+                line=getattr(node, "lineno", 1),
+            )
+        )
+    return tuple(violations)
+
+
+def _raw_ura_shape_markers(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Compare):
+        if any(
+            isinstance(op, (ast.In, ast.NotIn, ast.Eq, ast.NotEq))
+            for op in node.ops
+        ):
+            return _string_constants_in(node) & _RAW_URA_SHAPE_LITERALS
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in _RAW_URA_SHAPE_METHODS:
+            return _string_constants_in_args(node.args) & _RAW_URA_SHAPE_LITERALS
+    return set()
+
+
+def _string_constants_in(node: ast.AST) -> set[str]:
+    return {
+        child.value
+        for child in ast.walk(node)
+        if isinstance(child, ast.Constant) and isinstance(child.value, str)
+    }
+
+
+def _string_constants_in_args(nodes: Iterable[ast.AST]) -> set[str]:
+    values: set[str] = set()
+    for node in nodes:
+        values.update(_string_constants_in(node))
+    return values
 
 
 def _audit_addressing_semantics(path: str, text: str) -> tuple[BoundaryViolation, ...]:

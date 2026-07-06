@@ -4178,7 +4178,11 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "prev_receipt_hash_self_hash_compare",
         ):
             self._require_case_literal(receipt_case, f"- {forbidden}")
-        self._require_case_literal(no_codec_case, "- raw_invocation_json_codec")
+        for forbidden in (
+            "raw_invocation_json_codec",
+            "raw_ura_shape_literal",
+        ):
+            self._require_case_literal(no_codec_case, f"- {forbidden}")
 
         causal_case = shared_case("python-easyremote-context-causal.yaml")
         self._require_case_id(causal_case, "python/easyremote_context_causal")

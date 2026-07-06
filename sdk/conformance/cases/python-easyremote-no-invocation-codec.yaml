@@ -19,6 +19,7 @@ expect:
     - ReceiptSummary
   forbidden_codec_markers:
     - raw_invocation_json_codec
+    - raw_ura_shape_literal
     - axon_pb2
     - caller_ura_json_dump
     - descriptor_ref_json_dump

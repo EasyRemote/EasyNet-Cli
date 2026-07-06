@@ -439,6 +439,30 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("raw_descriptor_ref_assembly", _rules(result))
 
+    def test_flags_raw_ura_shape_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "_addressing.py").write_text(
+                textwrap.dedent(
+                    '''
+                    def is_agent(value):
+                        return "/agent/" in value
+
+                    def ability_owner(value):
+                        return value.split("/ability/", 1)[0]
+
+                    def is_device_or_hub(value):
+                        return "/device/" in value or value.find("/hub/") >= 0
+                    '''
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_consumer_boundary(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_ura_shape_literal", _rules(result))
+
     def test_flags_raw_publication_carrier_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -581,14 +605,15 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
             (root / "docs_only.py").write_text(
                 textwrap.dedent(
                     '''
-                    """Mentions easynet_daemon_start and dlopen in prose only."""
+                    """Mentions easynet_daemon_start, dlopen, and /agent/ in prose only."""
 
                     # ctypes.CDLL("libeasynet_cli.dylib")
                     # symbol = "easynet_runtime_invoke"
+                    # if "/ability/" in value: pass
                     from easynet_sdk import RuntimeClient
 
                     def use(client: RuntimeClient) -> None:
-                        """References easynet_last_error in documentation."""
+                        """References easynet_last_error and /device/ in documentation."""
                         client.close()
                     '''
                 ),
