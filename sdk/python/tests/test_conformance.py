@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from typing import Mapping
 
 from easynet_sdk import (
     AbilityQuery,
@@ -53,6 +54,7 @@ from easynet_sdk import (
     EventClient,
     EventCursor,
     EventDropReportInput,
+    EventFilter,
     EventFrame,
     EventProjectionInput,
     EventTerminalInput,
@@ -3411,6 +3413,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             events_case, "device_history_system_ability: events.device.history"
         )
         self._require_case_expectation(
+            events_case, "typed_event_filter: provider_backed"
+        )
+        self._require_case_expectation(
+            events_case, "event_filter_lowers_to_daemon_args: true"
+        )
+        self._require_case_expectation(
             events_case, "sdk_local_event_bus_allowed: false"
         )
         self._require_case_expectation(
@@ -3431,6 +3439,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "events.device.subscribe",
         )
         self.assertEqual(device_subscription.args["resume_cursor"], "device:2")
+        self.assertEqual(
+            device_subscription.args["device_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
         self.assertEqual(
             invocation_subscription.metadata["system_ability"],
             "events.invocation.subscribe",
@@ -5095,6 +5107,7 @@ def shared_events_device_subscription_request() -> EventsDeviceSubscriptionReque
         base=shared_events_carrier_base(
             "events-device-subscription-request.v4.json"
         ),
+        filter=shared_events_filter(decoded),
         stream=decoded.get("stream", ""),
         device_ura=decoded.get("device_ura", ""),
         resume_cursor=EventCursor(cursor["stream"], cursor["sequence"]) if cursor else None,
@@ -5115,6 +5128,7 @@ def shared_events_invocation_subscription_request() -> EventsInvocationSubscript
         base=shared_events_carrier_base(
             "events-invocation-subscription-request.v4.json"
         ),
+        filter=shared_events_filter(decoded),
         stream=decoded.get("stream", ""),
         invocation_id=decoded.get("invocation_id", ""),
         resume_cursor=EventCursor(cursor["stream"], cursor["sequence"]) if cursor else None,
@@ -5129,6 +5143,7 @@ def shared_events_device_event_list_request() -> EventsDeviceEventListRequest:
     decoded = json.loads(shared_fixture("events-device-event-list-request.v4.json"))
     return EventsDeviceEventListRequest(
         base=shared_events_carrier_base("events-device-event-list-request.v4.json"),
+        filter=shared_events_filter(decoded),
         device_ura=decoded.get("device_ura", ""),
         cursor=decoded.get("cursor", ""),
         limit=decoded.get("limit", 50),
@@ -5137,6 +5152,22 @@ def shared_events_device_event_list_request() -> EventsDeviceEventListRequest:
 
 def shared_events_device_event_list_request_json() -> bytes:
     return shared_events_device_event_list_request().to_json_bytes()
+
+
+def shared_events_filter(decoded: Mapping[str, object]) -> EventFilter | None:
+    raw = decoded.get("filter")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise AssertionError("shared events filter fixture must be an object")
+    return EventFilter(
+        realm=str(raw.get("realm", "")),
+        owner_ura=str(raw.get("owner_ura", "")),
+        device_ura=str(raw.get("device_ura", "")),
+        agent_ura=str(raw.get("agent_ura", "")),
+        session_id=str(raw.get("session_id", "")),
+        invocation_id=str(raw.get("invocation_id", "")),
+    )
 
 
 def shared_events_projection_input() -> EventProjectionInput:

@@ -40,7 +40,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
 | mission | Mission | provider-backed | provider-backed | SDK plan rendering, Runtime Core-backed Mission execution/event stream adapters, and complete child Invocation fact conformance exist; daemon-side child Invocation execution, scheduler policy, and backend automation cutover remain incomplete outside the SDK facade. |
 | admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
-| events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
+| events | Events | provider-backed | provider-backed | Typed event filters now lower into daemon subscription/history args; broader daemon live filtering, external SSE/WebSocket fanout, and product cutovers remain incomplete. |
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
 | compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
 | wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade. |
@@ -107,9 +107,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   execution, scheduler/retry policy, and backend automation cutover remain
   incomplete.
 - Events Directory/device/invocation stream carrier guardrails, session stream
-  carrier guardrails, DirectoryEvent/drop/terminal projection guardrails, and
-  bounded device event history carrier/page guardrails exist for Rust/C ABI over
-  daemon-owned abilities; daemon-side live filtering, backend SSE/WebSocket
+  carrier guardrails, DirectoryEvent/drop/terminal projection guardrails, typed
+  event-filter normalization into daemon subscription/history args, and bounded
+  device event history carrier/page guardrails exist for Rust/C ABI over
+  daemon-owned abilities; broader daemon live filtering, backend SSE/WebSocket
   fanout, and product cutovers remain incomplete.
 - Admin + Gateway carrier/status guardrails exist for Rust/C ABI over daemon
   `agent.list/start/stop/refresh`, `session.list`, `session.create/delete`,
@@ -221,8 +222,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   explicit daemon `session_id` rather than product `session_ura`, Runtime
   Core-backed bounded device event history execution, explicit daemon-owned
   projection provider seams for Runtime-backed directory/drop/terminal frames,
-  plus `EventFrame` cursor, resume-token, drop-report, terminal projection
-  seams, and close state seams; daemon-side filtering and backend SSE/WebSocket
+  typed `EventFilter` normalization into daemon subscription/history args, plus
+  `EventFrame` cursor, resume-token, drop-report, terminal projection seams, and
+  close state seams; broader daemon live filtering and backend SSE/WebSocket
   cutover remain incomplete.
 - Go Surface facade exposes `SurfaceClient` page list/create/delete/manifest
   Invocation carrier builders plus `SurfacePageRecord`, `SurfacePagePage`,
@@ -412,10 +414,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 - Python Events facade exposes `EventClient` directory/device/session/invocation
   subscription Invocation carrier builders, C ABI-backed directory/device/session/invocation
   subscription execution through Runtime Core open_stream, plus `EventFrame`
-  cursor, resume-token, drop-report, terminal projection seams, and C ABI-backed
-  bounded device event history execution through Runtime Core invoke plus close
-  state seams; daemon-side filtering, backend SSE/WebSocket fanout, and product
-  cutovers remain incomplete.
+  cursor, resume-token, drop-report, terminal projection seams, typed
+  `EventFilter` normalization into daemon subscription/history args, and
+  C ABI-backed bounded device event history execution through Runtime Core
+  invoke plus close state seams; broader daemon live filtering, backend
+  SSE/WebSocket fanout, and product cutovers remain incomplete.
 - Python Surface facade exposes `SurfaceClient` page list/create/delete/manifest/health
   Invocation carrier builders, C ABI-backed page list/create/delete/manifest/health
   execution through Runtime Core, plus `SurfacePageRecord`, `SurfacePagePage`,

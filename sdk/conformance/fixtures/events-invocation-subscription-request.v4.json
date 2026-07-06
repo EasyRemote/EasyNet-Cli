@@ -8,6 +8,9 @@
     "form": "none"
   },
   "stream": "invocation",
+  "filter": {
+    "invocation_id": "inv-1"
+  },
   "invocation_id": "inv-1",
   "resume_cursor": {
     "stream": "invocation",

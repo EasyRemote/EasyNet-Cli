@@ -38,8 +38,8 @@ use serde_json::{json, Map, Value};
 
 use crate::core::ura;
 use crate::protocol::sdk_contract::{
-    build_system_invocation, object, optional_string, required_string, validate_ura,
-    SdkContractError,
+    build_system_invocation, object, optional_string, optional_string_field, required_string,
+    validate_ura, SdkContractError,
 };
 
 const EVENTS_PROFILE: &str = "events";
@@ -92,13 +92,14 @@ pub(crate) fn build_invocation_subscription_invocation(
 pub(crate) fn build_device_event_history_invocation(request: &Value) -> Result<Value, EventsError> {
     let obj = object(request, "EventsDeviceEventListRequest")?;
     let controls = PageControls::from_request(obj)?;
+    let filter = EventFilter::from_request(obj)?;
     let mut args = Map::new();
     args.insert(
         "stream".to_string(),
         Value::String(DEVICE_STREAM.to_string()),
     );
     args.insert("limit".to_string(), Value::Number(controls.limit.into()));
-    if let Some(device_ura) = optional_string(obj, "device_ura") {
+    if let Some(device_ura) = filter.device_ura {
         validate_device_ura(&device_ura, "device_ura")?;
         args.insert("device_ura".to_string(), Value::String(device_ura));
     }
@@ -246,6 +247,7 @@ pub(crate) fn project_drop_report(input: &Value) -> Result<Value, EventsError> {
 
 fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
     validate_stream_field(obj, DIRECTORY_STREAM)?;
+    let filter = EventFilter::from_request(obj)?;
     let mut args = Map::new();
     args.insert(
         "stream".to_string(),
@@ -256,15 +258,21 @@ fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, Events
         Value::String(DIRECTORY_ABILITY.to_string()),
     );
 
-    if let Some(realm) = optional_string(obj, "realm") {
+    if let Some(realm) = filter.realm {
         validate_token(&realm, "realm")?;
         args.insert("realm".to_string(), Value::String(realm));
     }
-    for field in ["owner_ura", "device_ura", "agent_ura"] {
-        if let Some(value) = optional_string(obj, field) {
-            validate_ura(&value, field)?;
-            args.insert(field.to_string(), Value::String(value));
-        }
+    if let Some(owner_ura) = filter.owner_ura {
+        validate_ura(&owner_ura, "owner_ura")?;
+        args.insert("owner_ura".to_string(), Value::String(owner_ura));
+    }
+    if let Some(device_ura) = filter.device_ura {
+        validate_device_ura(&device_ura, "device_ura")?;
+        args.insert("device_ura".to_string(), Value::String(device_ura));
+    }
+    if let Some(agent_ura) = filter.agent_ura {
+        validate_ura(&agent_ura, "agent_ura")?;
+        args.insert("agent_ura".to_string(), Value::String(agent_ura));
     }
     if let Some(value) = obj.get("resume_cursor").filter(|value| !value.is_null()) {
         let cursor = EventCursor::parse(value, "resume_cursor")?;
@@ -287,16 +295,19 @@ fn directory_subscription_args(obj: &Map<String, Value>) -> Result<Value, Events
 
 fn device_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
     validate_stream_field(obj, DEVICE_STREAM)?;
+    let filter = EventFilter::from_request(obj)?;
     let mut args = subscription_common_args(obj, DEVICE_STREAM, DEVICE_SUBSCRIBE_ABILITY)?;
-    if let Some(device_ura) = optional_string(obj, "device_ura") {
+    if let Some(device_ura) = filter.device_ura {
         validate_device_ura(&device_ura, "device_ura")?;
         args.insert("device_ura".to_string(), Value::String(device_ura));
     }
-    for field in ["owner_ura", "agent_ura"] {
-        if let Some(value) = optional_string(obj, field) {
-            validate_ura(&value, field)?;
-            args.insert(field.to_string(), Value::String(value));
-        }
+    if let Some(owner_ura) = filter.owner_ura {
+        validate_ura(&owner_ura, "owner_ura")?;
+        args.insert("owner_ura".to_string(), Value::String(owner_ura));
+    }
+    if let Some(agent_ura) = filter.agent_ura {
+        validate_ura(&agent_ura, "agent_ura")?;
+        args.insert("agent_ura".to_string(), Value::String(agent_ura));
     }
     Ok(Value::Object(args))
 }
@@ -313,8 +324,10 @@ fn session_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsEr
             "session.attach requires explicit daemon session_id".to_string(),
         ));
     }
-    let session_id =
-        optional_string(obj, "session_id").ok_or(EventsError::MissingField("session_id"))?;
+    let filter = EventFilter::from_request(obj)?;
+    let session_id = filter
+        .session_id
+        .ok_or(EventsError::MissingField("session_id"))?;
     validate_token(&session_id, "session_id")?;
     let mut args = Map::new();
     args.insert("session_id".to_string(), Value::String(session_id));
@@ -331,12 +344,86 @@ fn session_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsEr
 
 fn invocation_subscription_args(obj: &Map<String, Value>) -> Result<Value, EventsError> {
     validate_stream_field(obj, INVOCATION_STREAM)?;
-    let invocation_id =
-        optional_string(obj, "invocation_id").ok_or(EventsError::MissingField("invocation_id"))?;
+    let filter = EventFilter::from_request(obj)?;
+    let invocation_id = filter
+        .invocation_id
+        .ok_or(EventsError::MissingField("invocation_id"))?;
     validate_token(&invocation_id, "invocation_id")?;
     let mut args = subscription_common_args(obj, INVOCATION_STREAM, INVOCATION_SUBSCRIBE_ABILITY)?;
     args.insert("invocation_id".to_string(), Value::String(invocation_id));
     Ok(Value::Object(args))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct EventFilter {
+    realm: Option<String>,
+    owner_ura: Option<String>,
+    device_ura: Option<String>,
+    agent_ura: Option<String>,
+    session_id: Option<String>,
+    invocation_id: Option<String>,
+}
+
+impl EventFilter {
+    fn from_request(obj: &Map<String, Value>) -> Result<Self, EventsError> {
+        let nested = match obj.get("filter") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(filter)) => {
+                for key in filter.keys() {
+                    if !matches!(
+                        key.as_str(),
+                        "realm"
+                            | "owner_ura"
+                            | "device_ura"
+                            | "agent_ura"
+                            | "session_id"
+                            | "invocation_id"
+                    ) {
+                        return Err(EventsError::InvalidField(
+                            "filter",
+                            format!("unsupported event filter field {key:?}"),
+                        ));
+                    }
+                }
+                Some(filter)
+            }
+            Some(_) => {
+                return Err(EventsError::InvalidField(
+                    "filter",
+                    "must be an object or null".to_string(),
+                ))
+            }
+        };
+        Ok(Self {
+            realm: merged_filter_string(obj, nested, "realm")?,
+            owner_ura: merged_filter_string(obj, nested, "owner_ura")?,
+            device_ura: merged_filter_string(obj, nested, "device_ura")?,
+            agent_ura: merged_filter_string(obj, nested, "agent_ura")?,
+            session_id: merged_filter_string(obj, nested, "session_id")?,
+            invocation_id: merged_filter_string(obj, nested, "invocation_id")?,
+        })
+    }
+}
+
+fn merged_filter_string(
+    obj: &Map<String, Value>,
+    nested: Option<&Map<String, Value>>,
+    field: &'static str,
+) -> Result<Option<String>, EventsError> {
+    let top = optional_string_field(obj, field)?;
+    let nested = nested
+        .map(|filter| optional_string_field(filter, field))
+        .transpose()?
+        .flatten();
+    if let (Some(top), Some(nested)) = (&top, &nested) {
+        if top != nested {
+            return Err(EventsError::InvalidField(
+                field,
+                "top-level field conflicts with filter field".to_string(),
+            ));
+        }
+    }
+    Ok(nested.or(top))
 }
 
 fn subscription_common_args(
@@ -1092,6 +1179,48 @@ mod tests {
         assert_eq!(
             carrier["descriptor_ref"],
             "easynet:///r/example/ability/device.dev-a.events.device.subscribe@1.0.0"
+        );
+    }
+
+    #[test]
+    fn events_filter_lowers_to_daemon_args() {
+        let request = base_request(json!({
+            "stream": "device",
+            "filter": {
+                "device_ura": "easynet:///r/example/device/dev-a",
+                "agent_ura": "easynet:///r/example/agent/alice.main"
+            },
+            "resume_cursor": {"stream": "device", "sequence": 2}
+        }));
+
+        let carrier = build_device_subscription_invocation(&request).unwrap();
+
+        assert_eq!(
+            carrier["args"]["device_ura"],
+            "easynet:///r/example/device/dev-a"
+        );
+        assert_eq!(
+            carrier["args"]["agent_ura"],
+            "easynet:///r/example/agent/alice.main"
+        );
+        assert!(carrier["args"].as_object().unwrap().get("filter").is_none());
+    }
+
+    #[test]
+    fn events_filter_conflict_fails_closed() {
+        let request = base_request(json!({
+            "stream": "device",
+            "device_ura": "easynet:///r/example/device/dev-a",
+            "filter": {
+                "device_ura": "easynet:///r/example/device/dev-b"
+            }
+        }));
+
+        let err = build_device_subscription_invocation(&request).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "invalid field device_ura: top-level field conflicts with filter field"
         );
     }
 

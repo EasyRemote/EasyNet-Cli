@@ -74,8 +74,47 @@ class EventCursor:
 
 
 @dataclass(frozen=True)
+class EventFilter:
+    """Typed Events profile filter carrier lowered into daemon ability args."""
+
+    realm: str = ""
+    owner_ura: str = ""
+    device_ura: str = ""
+    agent_ura: str = ""
+    session_id: str = ""
+    invocation_id: str = ""
+
+    def normalized_with(self, top_level: Mapping[str, str]) -> "EventFilter":
+        values = {
+            "realm": self.realm,
+            "owner_ura": self.owner_ura,
+            "device_ura": self.device_ura,
+            "agent_ura": self.agent_ura,
+            "session_id": self.session_id,
+            "invocation_id": self.invocation_id,
+        }
+        normalized: dict[str, str] = {}
+        for key, raw in values.items():
+            value = raw.strip()
+            if value != raw:
+                raise _invalid_events(f"{key} must not contain surrounding whitespace")
+            top_raw = top_level.get(key) or ""
+            top = top_raw.strip()
+            if top != top_raw:
+                raise _invalid_events(f"{key} must not contain surrounding whitespace")
+            if top and value and top != value:
+                raise _invalid_events(f"{key} conflicts with filter field")
+            if key in {"realm", "session_id", "invocation_id"} and any(
+                ch.isspace() for ch in value
+            ):
+                raise _invalid_events(f"{key} must not contain whitespace")
+            normalized[key] = value or top
+        return EventFilter(**normalized)
+
+@dataclass(frozen=True)
 class EventsSubscriptionRequest:
     base: EventsCarrierBase
+    filter: Optional[EventFilter] = None
     realm: str = ""
     owner_ura: str = ""
     device_ura: str = ""
@@ -93,23 +132,49 @@ class EventsSubscriptionRequest:
         stream = self.stream or expected_stream
         if stream != expected_stream:
             raise _invalid_events("event subscription stream mismatch")
+        event_filter = _normalized_event_filter(
+            self.filter,
+            {
+                "realm": self.realm,
+                "owner_ura": self.owner_ura,
+                "device_ura": self.device_ura,
+                "agent_ura": self.agent_ura,
+                "session_id": self.session_id,
+                "invocation_id": self.invocation_id,
+            },
+        )
         if expected_stream == _SESSION_STREAM:
             if self.session_ura:
                 raise _invalid_events(
                     "session_ura cannot be converted into daemon session_id"
                 )
-            if not self.session_id:
+            if not event_filter.session_id:
                 raise _invalid_events("session_id is required")
+        if expected_stream == _INVOCATION_STREAM and not event_filter.invocation_id:
+            raise _invalid_events("invocation_id is required")
         value = self.base.to_json_dict()
         value["stream"] = stream
+        if self.filter is not None:
+            value["filter"] = {
+                key: raw
+                for key, raw in {
+                    "realm": event_filter.realm,
+                    "owner_ura": event_filter.owner_ura,
+                    "device_ura": event_filter.device_ura,
+                    "agent_ura": event_filter.agent_ura,
+                    "session_id": event_filter.session_id,
+                    "invocation_id": event_filter.invocation_id,
+                }.items()
+                if raw
+            }
         for key, raw in (
-            ("realm", self.realm),
-            ("owner_ura", self.owner_ura),
-            ("device_ura", self.device_ura),
-            ("agent_ura", self.agent_ura),
-            ("session_id", self.session_id),
+            ("realm", event_filter.realm),
+            ("owner_ura", event_filter.owner_ura),
+            ("device_ura", event_filter.device_ura),
+            ("agent_ura", event_filter.agent_ura),
+            ("session_id", event_filter.session_id),
             ("session_ura", self.session_ura),
-            ("invocation_id", self.invocation_id),
+            ("invocation_id", event_filter.invocation_id),
         ):
             if raw:
                 if raw.strip() != raw:
@@ -143,14 +208,21 @@ InvocationEventQuery = EventsInvocationSubscriptionRequest
 @dataclass(frozen=True)
 class EventsDeviceEventListRequest:
     base: EventsCarrierBase
+    filter: Optional[EventFilter] = None
     device_ura: str = ""
     limit: int = 0
     cursor: str = ""
 
     def to_json_bytes(self) -> bytes:
+        event_filter = _normalized_event_filter(
+            self.filter,
+            {"device_ura": self.device_ura},
+        )
         value = self.base.to_json_dict()
+        if self.filter is not None and event_filter.device_ura:
+            value["filter"] = {"device_ura": event_filter.device_ura}
         for key, raw in (
-            ("device_ura", self.device_ura),
+            ("device_ura", event_filter.device_ura),
             ("cursor", self.cursor),
         ):
             if raw:
@@ -624,6 +696,22 @@ def _copy_optional_event_projection_fields(value: object, output: dict[str, obje
         raw = getattr(value, key)
         if raw is not None and raw != "":
             output[key] = raw
+
+
+def _normalized_event_filter(
+    event_filter: Optional[EventFilter],
+    top_level: Mapping[str, str],
+) -> EventFilter:
+    if event_filter is None:
+        return EventFilter(**{key: value for key, value in top_level.items() if key in {
+            "realm",
+            "owner_ura",
+            "device_ura",
+            "agent_ura",
+            "session_id",
+            "invocation_id",
+        }})
+    return event_filter.normalized_with(top_level)
 
 
 def _validate_base(base: EventsCarrierBase) -> None:

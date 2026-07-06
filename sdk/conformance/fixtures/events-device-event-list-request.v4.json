@@ -7,6 +7,9 @@
   "causal_context": {
     "form": "none"
   },
+  "filter": {
+    "device_ura": "easynet:///r/example/device/dev-a"
+  },
   "device_ura": "easynet:///r/example/device/dev-a",
   "limit": 50,
   "metadata": {

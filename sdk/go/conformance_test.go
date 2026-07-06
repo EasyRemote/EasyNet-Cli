@@ -2080,6 +2080,8 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 	requireCaseExpectation(t, eventsCase, "device_stream_system_ability: events.device.subscribe")
 	requireCaseExpectation(t, eventsCase, "invocation_stream_system_ability: events.invocation.subscribe")
 	requireCaseExpectation(t, eventsCase, "device_history_system_ability: events.device.history")
+	requireCaseExpectation(t, eventsCase, "typed_event_filter: provider_backed")
+	requireCaseExpectation(t, eventsCase, "event_filter_lowers_to_daemon_args: true")
 	requireCaseExpectation(t, eventsCase, "sdk_local_event_bus_allowed: false")
 	requireCaseExpectation(t, eventsCase, "daemon_side_filtering_backend_cutover: incomplete")
 
@@ -2103,7 +2105,8 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 	if deviceSubscription.Metadata()["system_ability"] != "events.device.subscribe" {
 		t.Fatalf("unexpected device subscription invocation: %#v", deviceSubscription)
 	}
-	if args := deviceSubscription.JSONArgs().(map[string]any); args["resume_cursor"] != "device:2" {
+	if args := deviceSubscription.JSONArgs().(map[string]any); args["resume_cursor"] != "device:2" ||
+		args["device_ura"] != "easynet:///r/example/device/dev-a" {
 		t.Fatalf("unexpected device subscription args: %#v", args)
 	}
 

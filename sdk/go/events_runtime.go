@@ -26,6 +26,7 @@ var eventsCarrierArgKeys = map[string]struct{}{
 	"nonce_base64":       {},
 	"causal_context":     {},
 	"metadata":           {},
+	"filter":             {},
 }
 
 // EventsRuntimeTransport lowers Events profile requests into Runtime Core
@@ -330,8 +331,12 @@ func decodeEventsSubscriptionForRuntime(requestJSON []byte, expected EventStream
 	if err != nil {
 		return EventsSubscriptionRequest{}, nil, err
 	}
+	normalizedJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return EventsSubscriptionRequest{}, nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("encode normalized events subscription: %v", err), err)
+	}
 	var payload map[string]any
-	if err := json.Unmarshal(requestJSON, &payload); err != nil {
+	if err := json.Unmarshal(normalizedJSON, &payload); err != nil {
 		return EventsSubscriptionRequest{}, nil, invalidProfilePayload(eventsProfile, fmt.Sprintf("decode events subscription payload: %v", err), err)
 	}
 	if payload == nil {

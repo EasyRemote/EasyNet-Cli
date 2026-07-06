@@ -22,6 +22,13 @@
     "nonce_base64": {"type": "string", "minLength": 1},
     "causal_context": {"type": "object"},
     "stream": {"const": "device"},
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "device_ura": {"type": "string", "minLength": 1}
+      }
+    },
     "device_ura": {"type": "string", "minLength": 1},
     "resume_cursor": {
       "oneOf": [

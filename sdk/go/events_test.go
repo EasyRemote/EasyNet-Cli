@@ -141,6 +141,52 @@ func TestEventsBuildsDirectorySubscriptionInvocation(t *testing.T) {
 	}
 }
 
+func TestEventsFilterNormalizesIntoSubscriptionRequest(t *testing.T) {
+	transport := &memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON}
+	client, err := NewEventClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		Stream:            EventStreamDevice,
+		Filter: &EventFilter{
+			DeviceURA: "easynet:///r/example/device/dev-a",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := transport.seen["build_device_subscription"]
+	if _, ok := seen["filter"].(map[string]any); !ok {
+		t.Fatalf("typed event filter missing from request JSON: %#v", seen)
+	}
+	if seen["device_ura"] != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("filter did not normalize to top-level daemon arg field: %#v", seen)
+	}
+}
+
+func TestEventsFilterConflictFailsClosed(t *testing.T) {
+	client, err := NewEventClient(&memoryEventTransport{invocation: eventsDirectorySubscriptionInvocationJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+		EventsCarrierBase: eventsBaseForTest(),
+		Stream:            EventStreamDevice,
+		DeviceURA:         "easynet:///r/example/device/dev-a",
+		Filter: &EventFilter{
+			DeviceURA: "easynet:///r/example/device/dev-b",
+		},
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestEventsProjectsFramesAndStream(t *testing.T) {
 	cursor, err := NewEventCursor("directory", 8)
 	if err != nil {

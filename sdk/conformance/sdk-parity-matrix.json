@@ -247,7 +247,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_events.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete."
+      "remaining": "Typed event filters now lower into daemon subscription/history args; broader daemon live filtering, external SSE/WebSocket fanout, and product cutovers remain incomplete."
     },
     {
       "capability_id": "surface",

@@ -29,6 +29,8 @@ expect:
   device_stream_system_ability: events.device.subscribe
   invocation_stream_system_ability: events.invocation.subscribe
   device_history_system_ability: events.device.history
+  typed_event_filter: provider_backed
+  event_filter_lowers_to_daemon_args: true
   runtime_core_stream_open_required: true
   runtime_core_invoke_required: true
   sdk_local_event_bus_allowed: false

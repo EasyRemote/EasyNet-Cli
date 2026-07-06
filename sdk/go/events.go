@@ -68,6 +68,7 @@ func (c EventCursor) ResumeToken() string {
 type EventsSubscriptionRequest struct {
 	EventsCarrierBase
 	Stream              EventStreamKind `json:"stream,omitempty"`
+	Filter              *EventFilter    `json:"filter,omitempty"`
 	Realm               string          `json:"realm,omitempty"`
 	OwnerURA            string          `json:"owner_ura,omitempty"`
 	DeviceURA           string          `json:"device_ura,omitempty"`
@@ -91,9 +92,21 @@ type InvocationEventQuery = EventsInvocationSubscriptionRequest
 // EventsDeviceEventListRequest requests a bounded historical device-event page.
 type EventsDeviceEventListRequest struct {
 	EventsCarrierBase
-	DeviceURA string `json:"device_ura,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	Cursor    string `json:"cursor,omitempty"`
+	Filter    *EventFilter `json:"filter,omitempty"`
+	DeviceURA string       `json:"device_ura,omitempty"`
+	Limit     int          `json:"limit,omitempty"`
+	Cursor    string       `json:"cursor,omitempty"`
+}
+
+// EventFilter is the typed Events profile filter carrier. It normalizes into
+// daemon ability args; SDK facades never post-filter live event frames.
+type EventFilter struct {
+	Realm        string `json:"realm,omitempty"`
+	OwnerURA     string `json:"owner_ura,omitempty"`
+	DeviceURA    string `json:"device_ura,omitempty"`
+	AgentURA     string `json:"agent_ura,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	InvocationID string `json:"invocation_id,omitempty"`
 }
 
 // EventProjectionInput asks the daemon contract to project one raw directory event.
@@ -599,6 +612,16 @@ func normalizeEventsDeviceEventListRequest(req EventsDeviceEventListRequest) (Ev
 	if err := validateEventsCarrierBase(req.EventsCarrierBase); err != nil {
 		return EventsDeviceEventListRequest{}, err
 	}
+	filter, err := normalizeEventFilter(req.Filter, map[string]string{
+		"device_ura": req.DeviceURA,
+	})
+	if err != nil {
+		return EventsDeviceEventListRequest{}, err
+	}
+	req.Filter = filter
+	if filter != nil && filter.DeviceURA != "" {
+		req.DeviceURA = filter.DeviceURA
+	}
 	for field, value := range map[string]string{
 		"device_ura": req.DeviceURA,
 		"cursor":     req.Cursor,
@@ -628,6 +651,26 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 	}
 	if err := validateEventsCarrierBase(req.EventsCarrierBase); err != nil {
 		return EventsSubscriptionRequest{}, err
+	}
+	filter, err := normalizeEventFilter(req.Filter, map[string]string{
+		"realm":         req.Realm,
+		"owner_ura":     req.OwnerURA,
+		"device_ura":    req.DeviceURA,
+		"agent_ura":     req.AgentURA,
+		"session_id":    req.SessionID,
+		"invocation_id": req.InvocationID,
+	})
+	if err != nil {
+		return EventsSubscriptionRequest{}, err
+	}
+	req.Filter = filter
+	if filter != nil {
+		req.Realm = coalesceString(req.Realm, filter.Realm)
+		req.OwnerURA = coalesceString(req.OwnerURA, filter.OwnerURA)
+		req.DeviceURA = coalesceString(req.DeviceURA, filter.DeviceURA)
+		req.AgentURA = coalesceString(req.AgentURA, filter.AgentURA)
+		req.SessionID = coalesceString(req.SessionID, filter.SessionID)
+		req.InvocationID = coalesceString(req.InvocationID, filter.InvocationID)
 	}
 	for field, value := range map[string]string{
 		"realm":         req.Realm,
@@ -661,11 +704,56 @@ func normalizeEventsSubscriptionRequest(req EventsSubscriptionRequest, expected 
 			return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "session_id must not contain whitespace", nil)
 		}
 	}
+	if expected == EventStreamInvocation && req.InvocationID == "" {
+		return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "invocation_id is required", nil)
+	}
 	if req.HeartbeatIntervalMS != 0 &&
 		(req.HeartbeatIntervalMS < MinEventHeartbeatIntervalMS || req.HeartbeatIntervalMS > MaxEventHeartbeatIntervalMS) {
 		return EventsSubscriptionRequest{}, invalidProfilePayload(eventsProfile, "heartbeat_interval_ms exceeds bounds", nil)
 	}
 	return req, nil
+}
+
+func normalizeEventFilter(filter *EventFilter, topLevel map[string]string) (*EventFilter, error) {
+	if filter == nil {
+		return nil, nil
+	}
+	normalized := *filter
+	values := map[string]*string{
+		"realm":         &normalized.Realm,
+		"owner_ura":     &normalized.OwnerURA,
+		"device_ura":    &normalized.DeviceURA,
+		"agent_ura":     &normalized.AgentURA,
+		"session_id":    &normalized.SessionID,
+		"invocation_id": &normalized.InvocationID,
+	}
+	for field, value := range values {
+		trimmed := strings.TrimSpace(*value)
+		if trimmed != *value {
+			return nil, invalidProfilePayload(eventsProfile, field+" must not contain surrounding whitespace", nil)
+		}
+		if top := strings.TrimSpace(topLevel[field]); top != "" && trimmed != "" && top != trimmed {
+			return nil, invalidProfilePayload(eventsProfile, field+" conflicts with filter field", nil)
+		}
+		*value = trimmed
+	}
+	for field, value := range map[string]string{
+		"realm":         normalized.Realm,
+		"session_id":    normalized.SessionID,
+		"invocation_id": normalized.InvocationID,
+	} {
+		if strings.ContainsAny(value, " \t\r\n") {
+			return nil, invalidProfilePayload(eventsProfile, field+" must not contain whitespace", nil)
+		}
+	}
+	return &normalized, nil
+}
+
+func coalesceString(primary string, fallback string) string {
+	if primary != "" {
+		return primary
+	}
+	return fallback
 }
 
 func validateEventsCarrierBase(base EventsCarrierBase) error {

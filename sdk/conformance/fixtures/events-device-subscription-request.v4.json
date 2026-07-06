@@ -8,6 +8,9 @@
     "form": "none"
   },
   "stream": "device",
+  "filter": {
+    "device_ura": "easynet:///r/example/device/dev-a"
+  },
   "device_ura": "easynet:///r/example/device/dev-a",
   "resume_cursor": {
     "stream": "device",

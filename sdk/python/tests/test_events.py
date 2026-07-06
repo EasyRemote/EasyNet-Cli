@@ -9,6 +9,7 @@ from easynet_sdk.events import (
     EventClient,
     EventCursor,
     EventDropReportInput,
+    EventFilter,
     EventProjectionInput,
     EventTerminalInput,
     EventsCarrierBase,
@@ -292,6 +293,43 @@ class EventClientTests(unittest.TestCase):
         self.assertEqual(cursor["stream"], "directory")
         self.assertEqual(cursor["sequence"], 7)
         self.assertNotIn("token", cursor)
+
+    def test_event_filter_normalizes_into_subscription_request(self) -> None:
+        transport = MemoryEventTransport()
+        client = EventClient(transport)
+
+        client.build_device_subscription_invocation(
+            EventsDeviceSubscriptionRequest(
+                events_base(),
+                stream="device",
+                filter=EventFilter(device_ura="easynet:///r/example/device/dev-a"),
+            )
+        )
+
+        seen = transport.seen["build_device_subscription"]
+        self.assertEqual(
+            seen["filter"]["device_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(
+            seen["device_ura"],
+            "easynet:///r/example/device/dev-a",
+        )
+
+    def test_event_filter_conflict_fails_closed(self) -> None:
+        client = EventClient(MemoryEventTransport())
+
+        with self.assertRaises(SDKError) as caught:
+            client.build_device_subscription_invocation(
+                EventsDeviceSubscriptionRequest(
+                    events_base(),
+                    stream="device",
+                    device_ura="easynet:///r/example/device/dev-a",
+                    filter=EventFilter(device_ura="easynet:///r/example/device/dev-b"),
+                )
+            )
+
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
     def test_projects_frames_and_stream(self) -> None:
         client = EventClient(MemoryEventTransport())

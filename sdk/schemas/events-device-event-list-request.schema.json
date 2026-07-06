@@ -20,6 +20,13 @@
     "descriptor_version": {"type": "string", "minLength": 1},
     "nonce_base64": {"type": "string", "minLength": 1},
     "causal_context": {"type": "object"},
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "device_ura": {"type": "string", "minLength": 1}
+      }
+    },
     "device_ura": {"type": "string", "minLength": 1},
     "cursor": {
       "oneOf": [
