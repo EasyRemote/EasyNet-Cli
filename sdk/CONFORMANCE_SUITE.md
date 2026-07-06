@@ -87,6 +87,7 @@ bash tools/scripts/check-backend-route-family-coverage.sh
 bash tools/scripts/check-sdk-parity-matrix.sh
 bash tools/scripts/check-sdk-ura-naming.sh
 bash tools/scripts/check-sdk-product-smokes.sh
+bash tools/scripts/python-sdk-live-smoke.sh
 bash tools/scripts/check-sdk-cutover-readiness.sh
 ```
 

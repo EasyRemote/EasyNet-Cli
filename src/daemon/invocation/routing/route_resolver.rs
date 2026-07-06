@@ -94,8 +94,8 @@ pub(crate) struct LocalRuntimeAbility {
 /// The daemon takes this snapshot at the (already async) resolver call
 /// sites via [`LocalRuntimeAuthoritySnapshot::capture`], then hands
 /// ownership to the synchronous resolver. Membership is exact: a public
-/// name resolves only when the runtime registers the matching local
-/// dispatch key, which is the literal D105 "owner device has a matching
+/// name resolves only when the runtime registers the matching canonical
+/// Ability URA, which is the literal D105 "owner device has a matching
 /// runtime-local dispatch binding" gate.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LocalRuntimeAuthoritySnapshot {

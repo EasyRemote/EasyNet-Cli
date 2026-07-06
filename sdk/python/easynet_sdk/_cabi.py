@@ -14,7 +14,7 @@ import queue as queue_module
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .directory import DirectorySubscription, DirectorySubscriptionCursor
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
@@ -2815,11 +2815,16 @@ class _CABIStreamTransport:
     callback_token: int
     inbox: "_CallbackInbox"
     _terminal_action_done: bool = False
+    _next_sequence: int = 1
 
     def recv(self, timeout: float | None = None) -> bytes:
         if self._terminal_action_done:
             raise _closed_error("stream transport is closed")
-        return self.inbox.recv(timeout)
+        return _project_cabi_ordered_event(
+            self.inbox.recv(timeout),
+            self._allocate_sequence,
+            use_observed_sequence=True,
+        )
 
     def cancel(self, reason: str) -> bytes:
         if not self._terminal_action_done:
@@ -2846,6 +2851,14 @@ class _CABIStreamTransport:
         self._terminal_action_done = True
         self.owner._remove_stream(self.stream_id, self.callback_token)
 
+    def _allocate_sequence(self, observed: int | None) -> int:
+        if observed is not None and observed > 0:
+            self._next_sequence = max(self._next_sequence, observed + 1)
+            return observed
+        sequence = self._next_sequence
+        self._next_sequence += 1
+        return sequence
+
 
 @dataclass
 class _CABIBidiTransport:
@@ -2854,6 +2867,7 @@ class _CABIBidiTransport:
     callback_token: int
     inbox: "_CallbackInbox"
     _terminal_action_done: bool = False
+    _next_sequence: int = 1
 
     def send(self, frame_json: bytes) -> bytes:
         if self._terminal_action_done:
@@ -2866,7 +2880,11 @@ class _CABIBidiTransport:
     def recv(self, timeout: float | None = None) -> bytes:
         if self._terminal_action_done:
             raise _closed_error("bidi transport is closed")
-        return self.inbox.recv(timeout)
+        return _project_cabi_ordered_event(
+            self.inbox.recv(timeout),
+            self._allocate_sequence,
+            use_observed_sequence=False,
+        )
 
     def close_send(self) -> bytes:
         if self._terminal_action_done:
@@ -2904,6 +2922,59 @@ class _CABIBidiTransport:
                 "reason": reason,
             }
         )
+
+    def _allocate_sequence(self, observed: int | None) -> int:
+        if observed is not None and observed > 0:
+            self._next_sequence = max(self._next_sequence, observed + 1)
+            return observed
+        sequence = self._next_sequence
+        self._next_sequence += 1
+        return sequence
+
+
+def _project_cabi_ordered_event(
+    raw: bytes,
+    allocate_sequence: Callable[[int | None], int],
+    *,
+    use_observed_sequence: bool,
+) -> bytes:
+    try:
+        event = _json_object(raw, "C ABI callback frame")
+    except SDKError:
+        return raw
+    observed = event.get("sequence")
+    sequence = (
+        observed
+        if use_observed_sequence
+        and isinstance(observed, int)
+        and not isinstance(observed, bool)
+        else None
+    )
+    event["sequence"] = allocate_sequence(sequence)
+    if "payload_base64" not in event and "data_base64" in event:
+        event["payload_base64"] = event.get("data_base64")
+    state = event.get("state")
+    if isinstance(state, int) and not isinstance(state, bool):
+        event["state"] = _axon_invocation_state_name(state)
+    if "error" not in event and ("code" in event or "message" in event):
+        event["error"] = {
+            "code": _string_or_empty(event.get("code")),
+            "message": _string_or_empty(event.get("message")),
+        }
+    return _json_bytes(event)
+
+
+def _axon_invocation_state_name(state: int) -> str:
+    return {
+        1: "Accepted",
+        2: "Admitted",
+        3: "Dispatched",
+        4: "Running",
+        5: "Completed",
+        6: "Failed",
+        7: "TimedOut",
+        8: "Cancelled",
+    }.get(state, str(state))
 
 
 @dataclass

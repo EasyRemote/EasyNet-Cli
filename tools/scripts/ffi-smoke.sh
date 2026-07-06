@@ -102,6 +102,20 @@ lib.easynet_daemon_invocation_endpoint.argtypes = [ctypes.c_uint64, ctypes.POINT
 lib.easynet_daemon_open_client.restype = ctypes.c_int32
 lib.easynet_daemon_open_client.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
 
+lib.easynet_identity_build_descriptor_ref.restype = ctypes.c_int32
+lib.easynet_identity_build_descriptor_ref.argtypes = [
+    ctypes.c_uint64,
+    ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_char_p),
+]
+
+lib.easynet_publication_build_resource_ref.restype = ctypes.c_int32
+lib.easynet_publication_build_resource_ref.argtypes = [
+    ctypes.c_uint64,
+    ctypes.c_char_p,
+    ctypes.POINTER(ctypes.c_char_p),
+]
+
 lib.easynet_invocation_invoke.restype = ctypes.c_int32
 lib.easynet_invocation_invoke.argtypes = [
     ctypes.c_uint64,
@@ -189,8 +203,8 @@ def wait_until(label, predicate, timeout_s=5.0, detail=None):
 def seed_hermetic_identity():
     state_dir = os.path.join(smoke_home, ".easynet")
     os.makedirs(state_dir, exist_ok=True)
-    realm = "ffi-smoke"
-    node_id = "device-a"
+    realm = "cli"
+    node_id = "local"
     invocation_socket = "~/.easynet/custom-invocation.sock"
     device_ura = f"easynet:///r/{realm}/device/{node_id}"
     credentials_path = os.path.join(state_dir, "credentials.json")
@@ -202,6 +216,7 @@ def seed_hermetic_identity():
                 "hub_endpoint": "https://127.0.0.1:50443",
                 "realm": realm,
                 "username": "ffi-smoke-user",
+                "user_id": "ffi-smoke-user-id",
             },
             f,
             indent=2,
@@ -238,7 +253,7 @@ added_at_unix_ms = 0
 try:
     # 1. ABI version sanity.
     ver = lib.easynet_abi_version()
-    assert ver == 2, f"unexpected ABI version: {ver}"
+    assert ver == 4, f"unexpected ABI version: {ver}"
     print(f"[ffi-smoke] ABI version: {ver}")
 
     # 2. Daemon lifecycle ABI preflight. Malformed config fails
@@ -270,9 +285,9 @@ try:
     config = {
         "mode": "device",
         "realm": realm,
-        "node_id": node_id,
+        "device_id": node_id,
         "daemon_bin": daemon_bin,
-        "detach": False,
+        "detached": False,
         "log_path": os.path.join(smoke_home, ".easynet", "ffi-smoke-daemon.log"),
         "env": {
             "HOME": smoke_home,
@@ -315,14 +330,47 @@ try:
     invocation = {
         "caller_ura": self_device_ura,
         "callee_ura": self_device_ura,
-        "ability": "observe.health",
+        "descriptor_ref": "",
         "subject_ura": self_device_ura,
         "nonce_base64": base64.b64encode(bytes(range(1, 17))).decode("ascii"),
         "causal_context": {"form": "none"},
+        "content_type": "application/json",
         "args": {"smoke": "ffi-happy-path"},
     }
+    def descriptor_ref(ability):
+        request = {
+            "owner_ura": self_device_ura,
+            "ability_name": ability,
+            "descriptor_version": "1.0.0",
+        }
+        out_ptr = ctypes.c_char_p()
+        assert_ok(
+            lib.easynet_identity_build_descriptor_ref(
+                init_handle.value,
+                json.dumps(request).encode("utf-8"),
+                ctypes.byref(out_ptr),
+            ),
+            f"easynet_identity_build_descriptor_ref {ability}",
+        )
+        projection = json.loads(cstr_value(out_ptr))
+        return projection["descriptor_ref"]
+
+    def resource_ref(path, capability):
+        request = {"path": path, "capability": capability}
+        out_ptr = ctypes.c_char_p()
+        assert_ok(
+            lib.easynet_publication_build_resource_ref(
+                init_handle.value,
+                json.dumps(request).encode("utf-8"),
+                ctypes.byref(out_ptr),
+            ),
+            f"easynet_publication_build_resource_ref {capability}",
+        )
+        return json.loads(cstr_value(out_ptr))
+
     def invoke_health(handle, label, nonce_start):
         request = dict(invocation)
+        request["descriptor_ref"] = descriptor_ref("observe.health")
         request["nonce_base64"] = base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii")
         out_ptr = ctypes.c_char_p()
         rc = lib.easynet_invocation_invoke(
@@ -333,14 +381,15 @@ try:
         assert_ok(rc, label)
         response = json.loads(cstr_value(out_ptr))
         assert response["ok"] is True, response
-        assert response["ability"] == "observe.health", response
-        assert response["result_content_type"] == "application/json", response
-        assert response["result_json"]["status"] == "healthy", response
-        assert response["result_json"]["echo"]["smoke"] == "ffi-happy-path", response
+        assert response["tuple"]["descriptor_ref"] == descriptor_ref("observe.health"), response
+        assert response["terminal_state"] == "Completed", response
+        assert response["output_content_type"] == "application/json", response
+        assert response["output_json"]["status"] == "healthy", response
+        assert response["output_json"]["echo"]["smoke"] == "ffi-happy-path", response
 
     def invoke_json(handle, label, ability, args, nonce_start):
         request = dict(invocation)
-        request["ability"] = ability
+        request["descriptor_ref"] = descriptor_ref(ability)
         request["nonce_base64"] = base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii")
         request["args"] = args
         out_ptr = ctypes.c_char_p()
@@ -352,9 +401,10 @@ try:
         assert_ok(rc, label)
         response = json.loads(cstr_value(out_ptr))
         assert response["ok"] is True, response
-        assert response["ability"] == ability, response
-        assert response["result_content_type"] == "application/json", response
-        return response["result_json"]
+        assert response["tuple"]["descriptor_ref"] == descriptor_ref(ability), response
+        assert response["terminal_state"] == "Completed", response
+        assert response["output_content_type"] == "application/json", response
+        return response["output_json"]
 
     invoke_health(client_from_daemon.value, "easynet_invocation_invoke daemon-open-client", 1)
     invoke_health(init_handle.value, "easynet_invocation_invoke init-handle", 17)
@@ -375,10 +425,12 @@ try:
     stream_frames = []
     @STREAM_CALLBACK
     def on_stream_chunk(_user_data, frame_json):
+        if not frame_json:
+            return
         stream_frames.append(json.loads(frame_json.decode("utf-8")))
 
     stream_invocation = dict(invocation)
-    stream_invocation["ability"] = "browser.capture_viewport"
+    stream_invocation["descriptor_ref"] = descriptor_ref("browser.capture_viewport")
     stream_invocation["nonce_base64"] = base64.b64encode(bytes(range(49, 65))).decode("ascii")
     stream_invocation["args"] = {"session_ura": session_ura}
     stream_id = ctypes.c_uint64(0)
@@ -422,9 +474,12 @@ try:
     with open(download_path, "wb") as f:
         f.write(download_bytes)
     bidi_invocation = dict(invocation)
-    bidi_invocation["ability"] = "fs.transfer"
+    bidi_invocation["descriptor_ref"] = descriptor_ref("fs.transfer")
     bidi_invocation["nonce_base64"] = base64.b64encode(bytes(range(65, 81))).decode("ascii")
-    bidi_invocation["args"] = {"mode": "download", "path": download_path}
+    bidi_invocation["args"] = {
+        "mode": "download",
+        "resource_ref": resource_ref(download_path, "read"),
+    }
     bidi_invocation["bidi_streams"] = [
         {"stream_id": 1, "content_type": "application/octet-stream", "ordering": "STRICT"}
     ]

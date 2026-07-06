@@ -59,6 +59,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
   run_gate "product smoke self-test" bash "$SELF_DIR/check-sdk-product-smokes.sh" --self-test
+  run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
 
   easyremote_good="$tmp/EasyRemoteGood"
   backend_bad="$tmp/EasyNetBad"
@@ -89,6 +90,7 @@ run_gate "EasyRemote SDK boundary" bash "$SELF_DIR/check-easyremote-sdk-boundary
 run_gate "backend route-family coverage" bash "$SELF_DIR/check-backend-route-family-coverage.sh" || status=1
 run_gate "backend SDK-only boundary" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" "$BACKEND_ROOT" || status=1
 run_gate "product smokes" bash "$SELF_DIR/check-sdk-product-smokes.sh" || status=1
+run_gate "Python SDK live smoke" bash "$SELF_DIR/python-sdk-live-smoke.sh" || status=1
 
 if [[ "$status" -eq 0 ]]; then
   echo "SDK cutover readiness ok"

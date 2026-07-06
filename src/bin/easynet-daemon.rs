@@ -286,6 +286,18 @@ async fn main() -> anyhow::Result<()> {
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
     let hub_published_abilities = HubPublishedAbilityStore::new();
+    let authority_context = match config::load_credentials() {
+        Ok(creds) => Some(
+            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id),
+            )?,
+        ),
+        Err(_) if daemon_config.mode() == DaemonMode::Hub => None,
+        Err(err) => return Err(anyhow::anyhow!(
+            "daemon ability registry requires paired credentials in {} mode: {err}",
+            daemon_config.mode().as_str()
+        )),
+    };
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -323,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
             loaders: None,
             pages_identity,
             local_runtime: Some(Arc::clone(&local_runtime)),
-            authority_context: None,
+            authority_context,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
             shared_stores: ability_catalog::RegistrySharedStores::new(Arc::clone(
                 &hub_published_abilities,

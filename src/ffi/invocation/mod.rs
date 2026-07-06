@@ -1760,7 +1760,7 @@ fn invoke_with_axon_pb(
         }
     };
 
-    let invocation = match spec.clone().into_daemon_invocation() {
+    let invocation = match spec.into_daemon_invocation() {
         Ok(invocation) => invocation,
         Err(err) => {
             return record_invocation_error(
@@ -1769,6 +1769,8 @@ fn invoke_with_axon_pb(
             );
         }
     };
+    let tuple_json = invocation_json(&invocation);
+    let tuple = invocation.clone().into_draft().inspect_tuple();
 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
@@ -1790,7 +1792,7 @@ fn invoke_with_axon_pb(
         Err(err) => return ffi_daemon_error("easynet_invocation_invoke", err),
     };
 
-    if let Some(err) = response.error {
+    if let Some(err) = response.error.as_ref() {
         return record_invocation_error(
             ERR_ABILITY_FAILED,
             format!(
@@ -1800,7 +1802,10 @@ fn invoke_with_axon_pb(
         );
     }
 
-    let output = invocation_output_json(&spec, response);
+    let output = invocation_result_json_with_tuple(
+        invocation_result_from_invoke_response(tuple, response),
+        tuple_json,
+    );
     let json = match serde_json::to_string(&output) {
         Ok(json) => json,
         Err(err) => {
@@ -3543,6 +3548,7 @@ async fn run_stream_reader(
     cancel: tokio_util::sync::CancellationToken,
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
+    let mut next_error_sequence = 1;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -3550,6 +3556,7 @@ async fn run_stream_reader(
                 Ok(Some(chunk)) => {
                     let terminal = chunk.terminal;
                     let sequence = chunk.sequence;
+                    next_error_sequence = sequence.saturating_add(1).max(1);
                     let bytes = stream_chunk_json(chunk).to_string().into_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
@@ -3563,7 +3570,7 @@ async fn run_stream_reader(
                 }
                 Ok(None) => break,
                 Err(status) => {
-                    let bytes = stream_status_error_json(status).to_string().into_bytes();
+                    let bytes = stream_status_error_json(status, next_error_sequence).to_string().into_bytes();
                     let _ = tx.send(bytes).await;
                     break;
                 }
@@ -3580,6 +3587,7 @@ async fn run_bidi_down_reader(
     cancel: tokio_util::sync::CancellationToken,
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
+    let mut next_error_sequence = 1;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -3587,6 +3595,7 @@ async fn run_bidi_down_reader(
                 Ok(Some(frame)) => {
                     let terminal = bidi_down_frame_is_terminal(&frame);
                     let sequence = frame.sequence;
+                    next_error_sequence = sequence.saturating_add(1).max(1);
                     let bytes = bidi_down_frame_json(frame).to_string().into_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
@@ -3600,7 +3609,8 @@ async fn run_bidi_down_reader(
                 }
                 Ok(None) => break,
                 Err(status) => {
-                    let bytes = stream_status_error_json(status).to_string().into_bytes();
+                    let bytes =
+                        stream_status_error_json(status, next_error_sequence).to_string().into_bytes();
                     let _ = tx.send(bytes).await;
                     break;
                 }
@@ -4570,36 +4580,6 @@ fn decode_hash(
 }
 
 #[cfg(feature = "axon-pb")]
-fn invocation_output_json(
-    spec: &InvocationJson,
-    response: easynet_axon::pb::axon::v1::InvokeResponse,
-) -> serde_json::Value {
-    use base64::Engine;
-    let result_base64 = base64::engine::general_purpose::STANDARD.encode(&response.result);
-    let result_json = if response.result_content_type == "application/json" {
-        serde_json::from_slice::<serde_json::Value>(&response.result).ok()
-    } else {
-        None
-    };
-    serde_json::json!({
-        "ok": true,
-        "caller_ura": spec.caller_ura,
-        "callee_ura": spec.callee_ura,
-        "descriptor_ref": spec.descriptor_ref,
-        "subject_ura": spec.subject_ura,
-        "nonce_base64": base64::engine::general_purpose::STANDARD.encode(spec.nonce),
-        "state": response.state,
-        "selected_node_id": response.selected_node_id,
-        "scheduling_reason": response.scheduling_reason,
-        "elapsed_ms": response.elapsed_ms,
-        "result_content_type": response.result_content_type,
-        "result_base64": result_base64,
-        "result_json": result_json,
-        "admission_receipt": response.admission_receipt.as_ref().map(receipt_summary_json),
-    })
-}
-
-#[cfg(feature = "axon-pb")]
 fn invocation_tuple_json(tuple: &crate::daemon::InvocationTuple) -> serde_json::Value {
     serde_json::json!({
         "caller_ura": tuple.caller_ura,
@@ -4736,7 +4716,40 @@ fn signed_invocation_json(signed: &crate::daemon::SignedInvocation) -> serde_jso
 }
 
 #[cfg(feature = "axon-pb")]
+fn invocation_result_from_invoke_response(
+    tuple: crate::daemon::InvocationTuple,
+    response: easynet_axon::pb::axon::v1::InvokeResponse,
+) -> crate::daemon::InvocationResult {
+    crate::daemon::InvocationResult {
+        tuple,
+        terminal_state: axon_state_name_from_i32(response.state),
+        output_content_type: response.result_content_type,
+        output: response.result,
+        selected_node_id: response.selected_node_id,
+        scheduling_reason: response.scheduling_reason,
+        elapsed_ms: response.elapsed_ms.max(0) as u64,
+        receipt: response
+            .admission_receipt
+            .as_ref()
+            .map(crate::daemon::ReceiptSummary::from_wire),
+        error: response
+            .error
+            .as_ref()
+            .map(crate::daemon::RuntimeErrorSummary::from_wire),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 fn invocation_result_json(result: crate::daemon::InvocationResult) -> serde_json::Value {
+    let tuple_json = invocation_tuple_json(&result.tuple);
+    invocation_result_json_with_tuple(result, tuple_json)
+}
+
+#[cfg(feature = "axon-pb")]
+fn invocation_result_json_with_tuple(
+    result: crate::daemon::InvocationResult,
+    tuple_json: serde_json::Value,
+) -> serde_json::Value {
     use base64::Engine;
     let output_json = if result.output_content_type == "application/json" {
         serde_json::from_slice::<serde_json::Value>(&result.output).ok()
@@ -4745,7 +4758,7 @@ fn invocation_result_json(result: crate::daemon::InvocationResult) -> serde_json
     };
     serde_json::json!({
         "ok": result.error.is_none(),
-        "tuple": invocation_tuple_json(&result.tuple),
+        "tuple": tuple_json,
         "terminal_state": result.terminal_state,
         "output_content_type": result.output_content_type,
         "output_base64": base64::engine::general_purpose::STANDARD.encode(&result.output),
@@ -4910,7 +4923,30 @@ fn terminal_phase_for_result(result: &crate::daemon::InvocationResult) -> Invoca
 
 #[cfg(feature = "axon-pb")]
 fn axon_state_wire_string(state: easynet_axon::invocation::InvocationState) -> String {
-    state.to_wire_i32().to_string()
+    axon_state_name_from_i32(state.to_wire_i32())
+}
+
+#[cfg(feature = "axon-pb")]
+fn axon_state_name_from_i32(state: i32) -> String {
+    if state == easynet_axon::invocation::InvocationState::Accepted.to_wire_i32() {
+        "Accepted".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::Admitted.to_wire_i32() {
+        "Admitted".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::Dispatched.to_wire_i32() {
+        "Dispatched".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::Running.to_wire_i32() {
+        "Running".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::Completed.to_wire_i32() {
+        "Completed".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::Failed.to_wire_i32() {
+        "Failed".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::TimedOut.to_wire_i32() {
+        "TimedOut".to_string()
+    } else if state == easynet_axon::invocation::InvocationState::Cancelled.to_wire_i32() {
+        "Cancelled".to_string()
+    } else {
+        state.to_string()
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4999,10 +5035,11 @@ fn stream_chunk_json(chunk: easynet_axon::pb::axon::v1::InvokeStreamChunk) -> se
 }
 
 #[cfg(feature = "axon-pb")]
-fn stream_status_error_json(status: tonic::Status) -> serde_json::Value {
+fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json::Value {
     serde_json::json!({
         "ok": false,
         "event": "error",
+        "sequence": sequence.max(1),
         "code": format!("{:?}", status.code()),
         "message": status.message(),
         "terminal": true,

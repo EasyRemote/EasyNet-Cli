@@ -198,6 +198,7 @@ for path in \
   tools/scripts/check-sdk-parity-matrix.sh \
   tools/scripts/check-sdk-product-smokes.sh \
   tools/scripts/check-sdk-ura-naming.sh \
+  tools/scripts/python-sdk-live-smoke.sh \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
@@ -575,6 +576,7 @@ bash "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" --self-test >/dev/nu
 bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-product-smokes.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-ura-naming.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/python-sdk-live-smoke.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"

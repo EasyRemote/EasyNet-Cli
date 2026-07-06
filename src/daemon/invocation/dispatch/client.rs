@@ -390,7 +390,7 @@ pub struct ReceiptSummary {
 }
 
 impl ReceiptSummary {
-    fn from_wire(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Self {
+    pub(crate) fn from_wire(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Self {
         Self {
             index: receipt.index,
             invocation_id: receipt.invocation_id.clone(),
@@ -417,7 +417,7 @@ pub struct RuntimeErrorSummary {
 }
 
 impl RuntimeErrorSummary {
-    fn from_wire(error: &easynet_axon::pb::axon::v1::Error) -> Self {
+    pub(crate) fn from_wire(error: &easynet_axon::pb::axon::v1::Error) -> Self {
         Self {
             code: error.code.clone(),
             stage: "runtime".to_string(),
