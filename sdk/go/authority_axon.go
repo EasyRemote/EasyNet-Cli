@@ -2,16 +2,25 @@ package easynet
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"time"
 
 	axonsdk "easynet.run/axon/sdk/go/easynet"
 )
 
-// DelegationProofRaw is Axon's canonical raw delegation-proof encoding.
-type DelegationProofRaw = axonsdk.DelegationProofRaw
+// DelegationProofRaw is the SDK facade for Axon's canonical raw
+// delegation-proof encoding.
+type DelegationProofRaw struct {
+	Payload   json.RawMessage `json:"payload"`
+	Signature string          `json:"signature"`
+}
 
-// SessionAuthorityRaw is Axon's canonical raw session-authority encoding.
-type SessionAuthorityRaw = axonsdk.SessionAuthorityRaw
+// SessionAuthorityRaw is the SDK facade for Axon's canonical raw
+// session-authority encoding.
+type SessionAuthorityRaw struct {
+	Payload   json.RawMessage `json:"payload"`
+	Signature string          `json:"signature"`
+}
 
 // CanonicalPayload returns the canonical authority payload bytes signed by the
 // delegated issuer.

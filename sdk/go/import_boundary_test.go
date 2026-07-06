@@ -110,6 +110,33 @@ func TestPublicGoSDKDoesNotOwnURAGrammar(t *testing.T) {
 	}
 }
 
+func TestPublicGoSDKDoesNotAliasAxonBridgeTypes(t *testing.T) {
+	for _, path := range []string{"invoke_remote.go", "ura.go"} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(body)
+		for _, needle := range []string{
+			"type JSONByteSlice = axonsdk.",
+			"type InvokeRemoteContentEnvelope = axonsdk.",
+			"type OriginCallerClaim = axonsdk.",
+			"type InvokeRemoteUpRequest = axonsdk.",
+			"type InvokeRemoteDownChunk = axonsdk.",
+			"type InvokeRemoteDownResult = axonsdk.",
+			"type InvokeRemoteDownFrame = axonsdk.",
+			"type DelegationProofRaw = axonsdk.",
+			"type SessionAuthorityRaw = axonsdk.",
+			"type Ura = axonsdk.",
+			"type ParsedURA = axonsdk.",
+		} {
+			if strings.Contains(text, needle) {
+				t.Fatalf("%s exposes Axon public alias %q; keep SDK DTOs local and convert internally", path, needle)
+			}
+		}
+	}
+}
+
 func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	base := filepath.Base(path)
 	if base != "direct_runtime.go" {
