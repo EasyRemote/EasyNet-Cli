@@ -400,6 +400,22 @@
       "message": null
     },
     {
+      "case_id": "receipt/axon_chain_verification",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        },
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/receipt_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "receipt/projection_causal_ref",
       "profile": "receipt",
       "status": "passed",

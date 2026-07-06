@@ -11,6 +11,7 @@ run_validator() {
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -71,6 +72,16 @@ PROVIDER_BACKED_REQUIRED_EVIDENCE = {
         "python": "sdk/python/tests/test_wrappers.py",
     },
 }
+ACTION_ADAPTER_REPORTS = {
+    "go": os.environ.get(
+        "EASYNET_SDK_PARITY_GO_REPORT",
+        "sdk/conformance/runner/go-action-adapter-report.json",
+    ),
+    "python": os.environ.get(
+        "EASYNET_SDK_PARITY_PYTHON_REPORT",
+        "sdk/conformance/runner/python-action-adapter-report.json",
+    ),
+}
 
 
 def fail(message: str) -> None:
@@ -104,6 +115,76 @@ def repo_ref_exists(ref: str) -> bool:
     except ValueError:
         return False
     return path.exists()
+
+
+def load_json_repo_ref(ref: str, field: str) -> object:
+    path = (repo / ref).resolve()
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        fail(f"{field}_outside_repo:{ref}")
+    if not path.exists():
+        fail(f"missing_{field}:{ref}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"invalid_{field}:{ref}:{exc}")
+
+
+def load_shared_case_metadata(ref: str) -> tuple[str, set[str]]:
+    path = (repo / ref).resolve()
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        fail(f"shared_case_outside_repo:{ref}")
+    if not path.exists():
+        fail(f"missing_shared_case:{ref}")
+    case_id = ""
+    required_for: set[str] = set()
+    in_required_for = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if line.startswith("id:"):
+            case_id = require_string(line.split(":", 1)[1], f"{ref}.id")
+            in_required_for = False
+            continue
+        if line.startswith("required_for:"):
+            in_required_for = True
+            continue
+        if in_required_for:
+            if line.startswith("  - "):
+                required_for.add(require_string(line[4:], f"{ref}.required_for"))
+                continue
+            if stripped and not line.startswith(" "):
+                in_required_for = False
+    if not case_id:
+        fail(f"missing_shared_case_id:{ref}")
+    if not required_for:
+        fail(f"missing_shared_case_required_for:{ref}")
+    return case_id, required_for
+
+
+def load_action_adapter_report(language: str) -> dict[str, dict[str, object]]:
+    report_ref = ACTION_ADAPTER_REPORTS[language]
+    report = load_json_repo_ref(report_ref, f"{language}_action_adapter_report")
+    if not isinstance(report, dict):
+        fail(f"invalid_{language}_action_adapter_report")
+    if report.get("schema_version") != 1:
+        fail(f"{language}_action_adapter_report_schema_version")
+    if report.get("language") != language:
+        fail(f"{language}_action_adapter_report_language")
+    records = report.get("records")
+    if not isinstance(records, list):
+        fail(f"{language}_action_adapter_report_missing_records")
+    by_case: dict[str, dict[str, object]] = {}
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            fail(f"{language}_action_adapter_report_invalid_record:{index}")
+        case_id = require_string(record.get("case_id"), f"{language}.report.case_id")
+        if case_id in by_case:
+            fail(f"{language}_action_adapter_report_duplicate_case:{case_id}")
+        by_case[case_id] = record
+    return by_case
 
 
 def validate_evidence(owner: str, status: str, evidence: object) -> None:
@@ -140,6 +221,29 @@ def require_provider_backed_evidence(row_id: str, row: dict[str, object]) -> Non
         refs = {item.get("ref") for item in evidence if isinstance(item, dict)}
         if required_ref not in refs:
             fail(f"provider_backed_without_runtime_evidence:{row_id}:{language}:{required_ref}")
+
+
+def require_provider_backed_action_reports(
+    row_id: str,
+    row: dict[str, object],
+    shared_cases: list[tuple[str, set[str]]],
+    action_reports: dict[str, dict[str, dict[str, object]]],
+) -> None:
+    for language in LANGUAGES:
+        state = row[language]
+        if not isinstance(state, dict):
+            fail(f"missing_language_state:{row_id}:{language}")
+        if state.get("status") != "provider-backed":
+            continue
+        for case_id, required_for in shared_cases:
+            if language not in required_for:
+                continue
+            record = action_reports[language].get(case_id)
+            if record is None:
+                fail(f"provider_backed_missing_action_report:{row_id}:{language}:{case_id}")
+            status = require_string(record.get("status"), f"{language}.report.{case_id}.status")
+            if status != "passed":
+                fail(f"provider_backed_action_report_not_passed:{row_id}:{language}:{case_id}:{status}")
 
 
 def validate_language_status(row_id: str, row: dict[str, object]) -> tuple[str, str]:
@@ -217,6 +321,10 @@ if len(capabilities) != len(REQUIRED_CAPABILITIES):
     fail(f"capability_count:{len(capabilities)}_want_{len(REQUIRED_CAPABILITIES)}")
 
 seen: set[str] = set()
+action_reports = {
+    language: load_action_adapter_report(language)
+    for language in LANGUAGES
+}
 for row in capabilities:
     if not isinstance(row, dict):
         fail("invalid_capability_row")
@@ -231,11 +339,13 @@ for row in capabilities:
     for token in FORBIDDEN_CAPABILITY_TOKENS:
         if token in product_surface:
             fail(f"product_specific_capability:{row_id}:{token}")
-    for ref in require_string_list(row.get("shared_cases"), f"{row_id}.shared_cases"):
-        if not repo_ref_exists(ref):
-            fail(f"missing_shared_case:{row_id}:{ref}")
+    shared_case_metadata = [
+        load_shared_case_metadata(ref)
+        for ref in require_string_list(row.get("shared_cases"), f"{row_id}.shared_cases")
+    ]
     validate_language_status(row_id, row)
     require_provider_backed_evidence(row_id, row)
+    require_provider_backed_action_reports(row_id, row, shared_case_metadata, action_reports)
 
 missing = sorted(set(REQUIRED_CAPABILITIES) - seen)
 if missing:
@@ -274,13 +384,14 @@ PY
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
-  tmp="$(mktemp -d)"
+  mkdir -p "$REPO_ROOT/target"
+  tmp="$(mktemp -d "$REPO_ROOT/target/sdk-parity-self-test.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
 
   cp "$DEFAULT_MATRIX" "$tmp/good.json"
   run_validator "$tmp/good.json" >/dev/null
 
-  python3 - "$DEFAULT_MATRIX" "$tmp/missing.json" "$tmp/status.json" "$tmp/cutover.json" "$tmp/product.json" "$tmp/provider.json" <<'PY'
+  python3 - "$DEFAULT_MATRIX" "$tmp/missing.json" "$tmp/status.json" "$tmp/cutover.json" "$tmp/product.json" "$tmp/provider.json" "$tmp/go-report-missing.json" <<'PY'
 from __future__ import annotations
 
 import json
@@ -294,6 +405,7 @@ status = Path(sys.argv[3])
 cutover = Path(sys.argv[4])
 product = Path(sys.argv[5])
 provider = Path(sys.argv[6])
+go_report_missing = Path(sys.argv[7])
 
 matrix = json.loads(source.read_text(encoding="utf-8"))
 
@@ -324,6 +436,14 @@ for row in with_missing_provider_evidence["capabilities"]:
         ]
         break
 provider.write_text(json.dumps(with_missing_provider_evidence), encoding="utf-8")
+
+repo_root = source.resolve().parents[2]
+go_report = json.loads((repo_root / "sdk/conformance/runner/go-action-adapter-report.json").read_text(encoding="utf-8"))
+go_report["records"] = [
+    record for record in go_report["records"]
+    if record["case_id"] != "receipt/axon_chain_verification"
+]
+go_report_missing.write_text(json.dumps(go_report), encoding="utf-8")
 PY
 
   if run_validator "$tmp/missing.json" >"$tmp/missing.out" 2>&1; then
@@ -355,6 +475,12 @@ PY
     exit 1
   fi
   grep -Fq "provider_backed_without_runtime_evidence" "$tmp/provider.out"
+
+  if EASYNET_SDK_PARITY_GO_REPORT="$tmp/go-report-missing.json" run_validator "$tmp/good.json" >"$tmp/report.out" 2>&1; then
+    echo "self-test expected missing action-adapter report fixture to fail" >&2
+    exit 1
+  fi
+  grep -Fq "provider_backed_missing_action_report" "$tmp/report.out"
 
   echo "check-sdk-parity-matrix self-test ok"
   exit 0

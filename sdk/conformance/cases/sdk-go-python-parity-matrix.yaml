@@ -11,6 +11,7 @@ steps:
   - action: require_status_taxonomy
   - action: require_all_p0_daemon_sdk_capabilities
   - action: require_evidence_refs
+  - action: require_provider_backed_action_reports
   - action: require_gap_reason_for_status_mismatch
   - action: reject_false_cutover_ready
 expect:
@@ -21,5 +22,6 @@ expect:
   product_boundary_count: 2
   missing_capability: false
   invalid_status: false
+  provider_backed_action_reports: passed
   product_specific_capability: false
   false_cutover_ready: false

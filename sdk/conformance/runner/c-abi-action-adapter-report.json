@@ -200,6 +200,13 @@
       "message": null
     },
     {
+      "case_id": "receipt/axon_chain_verification",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [{"kind": "c_abi_test", "ref_path": "src/ffi/receipt/mod.rs"}],
+      "message": null
+    },
+    {
       "case_id": "receipt/projection_causal_ref",
       "profile": "receipt",
       "status": "passed",

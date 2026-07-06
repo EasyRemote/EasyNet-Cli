@@ -344,6 +344,7 @@ func TestGoSDKExecutesSharedParityMatrixConformanceCase(t *testing.T) {
 		"require_status_taxonomy",
 		"require_all_p0_daemon_sdk_capabilities",
 		"require_evidence_refs",
+		"require_provider_backed_action_reports",
 		"require_gap_reason_for_status_mismatch",
 		"reject_false_cutover_ready",
 	} {
@@ -353,6 +354,7 @@ func TestGoSDKExecutesSharedParityMatrixConformanceCase(t *testing.T) {
 	requireCaseExpectation(t, parityCase, "product_boundary_count: 2")
 	requireCaseExpectation(t, parityCase, "missing_capability: false")
 	requireCaseExpectation(t, parityCase, "invalid_status: false")
+	requireCaseExpectation(t, parityCase, "provider_backed_action_reports: passed")
 	requireCaseExpectation(t, parityCase, "product_specific_capability: false")
 	requireCaseExpectation(t, parityCase, "false_cutover_ready: false")
 

@@ -4346,6 +4346,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "require_status_taxonomy",
             "require_all_p0_daemon_sdk_capabilities",
             "require_evidence_refs",
+            "require_provider_backed_action_reports",
             "require_gap_reason_for_status_mismatch",
             "reject_false_cutover_ready",
         ):
@@ -4355,6 +4356,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "product_boundary_count: 2",
             "missing_capability: false",
             "invalid_status: false",
+            "provider_backed_action_reports: passed",
             "product_specific_capability: false",
             "false_cutover_ready: false",
         ):

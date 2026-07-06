@@ -412,6 +412,22 @@
       "message": null
     },
     {
+      "case_id": "receipt/axon_chain_verification",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        },
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_receipt.py"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "receipt/projection_causal_ref",
       "profile": "receipt",
       "status": "passed",

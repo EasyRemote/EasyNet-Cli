@@ -193,6 +193,13 @@
       "message": null
     },
     {
+      "case_id": "receipt/axon_chain_verification",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [{"kind": "rust_test", "ref_path": "src/protocol/receipt_contract.rs"}],
+      "message": null
+    },
+    {
       "case_id": "receipt/projection_causal_ref",
       "profile": "receipt",
       "status": "passed",
