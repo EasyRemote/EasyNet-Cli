@@ -355,9 +355,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   EAL rendering/child Invocation fact conformance projection, plus
   EasyRemote `sign=True` signed unary dispatch over SDK Runtime Core
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
-  gates, and product Invocation direct daemon UDS unary/server-stream/bidi transport plus
-  explicit direct-runtime prepare/submit/handle delegation is available through
-  the SDK facade, while live daemon keyring policy, daemon-backed
+  gates, and SDK-internal direct daemon UDS unary/server-stream/bidi transport plus
+  explicit direct-runtime prepare/submit/handle delegation is available only
+  through Runtime Core SDK facades, while live daemon keyring policy, daemon-backed
   MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover and RFC-007 receipt URA construction remain
   incomplete.

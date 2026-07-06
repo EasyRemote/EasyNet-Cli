@@ -43,11 +43,6 @@ DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
 _DIRECT_BIDI_EOF = object()
 
-invoke_pb2: Any = _invoke_pb2
-invoke_pb2_grpc: Any = _invoke_pb2_grpc
-types_pb2: Any = _types_pb2
-
-
 @dataclass
 class DirectDaemonRuntimeConnector:
     """RuntimeConnector for direct daemon Invocation gRPC over UDS."""
@@ -157,7 +152,7 @@ class DirectDaemonRuntimeTransport:
         handle_transport: RuntimeTransport | None = None,
     ) -> None:
         self._channel = channel
-        self._stub = invoke_pb2_grpc.InvocationStub(channel)
+        self._stub = _invoke_pb2_grpc.InvocationStub(channel)
         self._endpoint = endpoint
         self._invoke_timeout_seconds = invoke_timeout_seconds
         self._handle_transport = handle_transport
@@ -526,9 +521,9 @@ class DirectDaemonBidiTransport:
             self._require_send_open()
             sequence = self._last_up_sequence + 1
             self._put_outbound(
-                invoke_pb2.InvokeBidiUp(
+                _invoke_pb2.InvokeBidiUp(
                     sequence=sequence,
-                    control=invoke_pb2.BidiControl(eof=True),
+                    control=_invoke_pb2.BidiControl(eof=True),
                 )
             )
             self._last_up_sequence = sequence
@@ -658,20 +653,20 @@ def _stream_chunk_terminal(chunk: Any) -> bool:
 
 def _draft_to_invoke_request(draft: InvocationDraft) -> Any:
     fields = _invoke_request_fields(draft)
-    return invoke_pb2.InvokeRequest(**fields)
+    return _invoke_pb2.InvokeRequest(**fields)
 
 
 def _draft_to_stream_request(draft: InvocationDraft) -> Any:
     fields = _invoke_request_fields(draft)
-    return invoke_pb2.InvokeServerStreamRequest(**fields)
+    return _invoke_pb2.InvokeServerStreamRequest(**fields)
 
 
 def _draft_to_bidi_open_frame(draft: InvocationDraft, streams: list[Any]) -> Any:
     fields = _invoke_request_fields(draft)
-    return invoke_pb2.InvokeBidiUp(
+    return _invoke_pb2.InvokeBidiUp(
         sequence=0,
         mac=_bidi_open_mac(draft),
-        envelope_open=invoke_pb2.EnvelopeOpen(
+        envelope_open=_invoke_pb2.EnvelopeOpen(
             envelope=fields["envelope"],
             target=_bidi_target(draft),
             initial_args=fields["arguments"],
@@ -686,11 +681,11 @@ def _draft_to_bidi_open_frame(draft: InvocationDraft, streams: list[Any]) -> Any
 def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
     content_type = draft.content_type
     return {
-        "envelope": types_pb2.Envelope(
+        "envelope": _types_pb2.Envelope(
             request_id=f"req-{secrets.token_hex(16)}",
             caller=_agent_identity(draft.caller_ura),
             callee=_agent_identity(draft.callee_ura),
-            subject=types_pb2.SubjectIdentity(
+            subject=_types_pb2.SubjectIdentity(
                 ura=draft.subject_ura,
                 profile=DEFAULT_URA_PROFILE,
             ),
@@ -702,7 +697,7 @@ def _invoke_request_fields(draft: InvocationDraft) -> dict[str, object]:
         "arguments": _arguments(draft),
         "content_type": content_type,
         "metadata": _metadata(draft.metadata),
-        "content_envelope": types_pb2.ContentEnvelope(
+        "content_envelope": _types_pb2.ContentEnvelope(
             content_type=content_type,
             encoding="identity",
         ),
@@ -752,7 +747,7 @@ def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
             )
         seen.add(stream_id)
         result.append(
-            invoke_pb2.StreamDescriptor(
+            _invoke_pb2.StreamDescriptor(
                 stream_id=stream_id,
                 content_type=_optional_string(item.get("content_type"), "content_type")
                 or "",
@@ -765,7 +760,7 @@ def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
 
 
 def _bidi_target(draft: InvocationDraft) -> Any:
-    return types_pb2.InvocationTarget(ability_name=draft.descriptor_ref)
+    return _types_pb2.InvocationTarget(ability_name=draft.descriptor_ref)
 
 
 def _bidi_open_mac(draft: InvocationDraft) -> bytes:
@@ -833,20 +828,20 @@ def _stream_chunk_json(chunk: Any) -> bytes:
 def _bidi_frame_to_up(frame: BidiFrame) -> Any:
     kind = frame.kind
     if kind in {"data", "binary_chunk", "chunk"}:
-        return invoke_pb2.InvokeBidiUp(
+        return _invoke_pb2.InvokeBidiUp(
             sequence=frame.sequence,
-            binary_chunk=invoke_pb2.BinaryChunk(
+            binary_chunk=_invoke_pb2.BinaryChunk(
                 stream_id=frame.stream_id,
                 data=_bidi_payload_bytes(frame),
             ),
         )
     if kind in {"eof", "close_send"}:
-        return invoke_pb2.InvokeBidiUp(
+        return _invoke_pb2.InvokeBidiUp(
             sequence=frame.sequence,
-            control=invoke_pb2.BidiControl(eof=True),
+            control=_invoke_pb2.BidiControl(eof=True),
         )
     if kind == "control":
-        return invoke_pb2.InvokeBidiUp(
+        return _invoke_pb2.InvokeBidiUp(
             sequence=frame.sequence,
             control=_bidi_control(frame.payload_json),
         )
@@ -878,24 +873,24 @@ def _bidi_control(payload: object) -> Any:
             retry=RetryHint.NEVER,
         )
     if payload.get("eof") is True:
-        return invoke_pb2.BidiControl(eof=True)
+        return _invoke_pb2.BidiControl(eof=True)
     resize = payload.get("pty_resize")
     if isinstance(resize, Mapping):
-        return invoke_pb2.BidiControl(
-            pty_resize=invoke_pb2.PtyResize(
+        return _invoke_pb2.BidiControl(
+            pty_resize=_invoke_pb2.PtyResize(
                 cols=_required_positive_int(resize, "cols"),
                 rows=_required_positive_int(resize, "rows"),
             )
         )
     signal = payload.get("pty_signal")
     if isinstance(signal, Mapping):
-        return invoke_pb2.BidiControl(
-            pty_signal=invoke_pb2.PtySignal(signal=_required_int(signal, "signal"))
+        return _invoke_pb2.BidiControl(
+            pty_signal=_invoke_pb2.PtySignal(signal=_required_int(signal, "signal"))
         )
     media = payload.get("media_pts")
     if isinstance(media, Mapping):
-        return invoke_pb2.BidiControl(
-            media_pts=invoke_pb2.MediaTimestamp(
+        return _invoke_pb2.BidiControl(
+            media_pts=_invoke_pb2.MediaTimestamp(
                 stream_id=_required_positive_int(media, "stream_id"),
                 pts=_required_non_negative_int(media, "pts"),
             )
@@ -1024,14 +1019,14 @@ def _axon_failure(error: Any, stage: str) -> dict[str, object]:
 
 
 def _agent_identity(ura: str) -> Any:
-    return types_pb2.AgentIdentity(ura=ura, profile=DEFAULT_URA_PROFILE)
+    return _types_pb2.AgentIdentity(ura=ura, profile=DEFAULT_URA_PROFILE)
 
 
 def _caller_signature(draft: InvocationDraft) -> Any:
     signature = draft.caller_signature
     if signature is None:
         return None
-    return types_pb2.CallerSignature(
+    return _types_pb2.CallerSignature(
         algorithm=signature.algorithm,
         signature=_base64_decode(
             signature.signature_base64,
@@ -1066,20 +1061,20 @@ def _causal_context(value: Mapping[str, object]) -> Any:
         value.get("kind"), "causal_context.kind"
     )
     if form in (None, "", "none", "empty", "null"):
-        return types_pb2.CausalContext(none=types_pb2.Empty())
+        return _types_pb2.CausalContext(none=_types_pb2.Empty())
     if form == "scalar":
-        return types_pb2.CausalContext(scalar=_receipt_ref(value))
+        return _types_pb2.CausalContext(scalar=_receipt_ref(value))
     if form == "list":
         prior = value.get("prior", [])
         if not isinstance(prior, list):
             raise _invalid_causal_context("causal_context.prior must be an array")
-        return types_pb2.CausalContext(
-            list=types_pb2.ReceiptList(prior=[_receipt_ref(item) for item in prior])
+        return _types_pb2.CausalContext(
+            list=_types_pb2.ReceiptList(prior=[_receipt_ref(item) for item in prior])
         )
     if form == "merkle":
         root_hex = _required_string(value, "root_hex")
-        return types_pb2.CausalContext(
-            merkle=types_pb2.MerkleRoot(
+        return _types_pb2.CausalContext(
+            merkle=_types_pb2.MerkleRoot(
                 root=_hex_decode(root_hex, "root_hex"),
                 proof_ura=_required_string(value, "proof_ura"),
             )
@@ -1091,7 +1086,7 @@ def _receipt_ref(value: object) -> Any:
     if not isinstance(value, Mapping):
         raise _invalid_causal_context("causal receipt ref must be an object")
     receipt_hash_hex = _required_string(value, "receipt_hash_hex")
-    return types_pb2.ReceiptRef(
+    return _types_pb2.ReceiptRef(
         receipt_hash=_hex_decode(receipt_hash_hex, "receipt_hash_hex"),
         receipt_ura=_required_string(value, "receipt_ura"),
     )
@@ -1145,21 +1140,21 @@ def _response_error_code(code: str) -> ErrorCode:
 
 def _state_name(value: int) -> str:
     names = {
-        types_pb2.INVOCATION_STATE_ACCEPTED: "Accepted",
-        types_pb2.INVOCATION_STATE_ADMITTED: "Admitted",
-        types_pb2.INVOCATION_STATE_DISPATCHED: "Dispatched",
-        types_pb2.INVOCATION_STATE_RUNNING: "Running",
-        types_pb2.INVOCATION_STATE_COMPLETED: "Completed",
-        types_pb2.INVOCATION_STATE_FAILED: "Failed",
-        types_pb2.INVOCATION_STATE_TIMED_OUT: "TimedOut",
-        types_pb2.INVOCATION_STATE_CANCELLED: "Cancelled",
+        _types_pb2.INVOCATION_STATE_ACCEPTED: "Accepted",
+        _types_pb2.INVOCATION_STATE_ADMITTED: "Admitted",
+        _types_pb2.INVOCATION_STATE_DISPATCHED: "Dispatched",
+        _types_pb2.INVOCATION_STATE_RUNNING: "Running",
+        _types_pb2.INVOCATION_STATE_COMPLETED: "Completed",
+        _types_pb2.INVOCATION_STATE_FAILED: "Failed",
+        _types_pb2.INVOCATION_STATE_TIMED_OUT: "TimedOut",
+        _types_pb2.INVOCATION_STATE_CANCELLED: "Cancelled",
     }
     return names.get(value, "Unspecified")
 
 
 def _error_stage(value: int) -> str:
     try:
-        name = types_pb2.ErrorStage.Name(value)
+        name = _types_pb2.ErrorStage.Name(value)
     except ValueError:
         return "direct_runtime.invoke"
     return name.removeprefix("ERROR_STAGE_").lower() or "direct_runtime.invoke"

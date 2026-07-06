@@ -32,6 +32,11 @@ _FORBIDDEN_DEPENDENCY_NAMES = {
     "libeasynet-cli",
 }
 _LEGACY_TRANSPORT_PACKAGE = "_transport"
+_SDK_DIRECT_RUNTIME_MODULE = _SDK_MODULE + ".direct_runtime"
+_DIRECT_RUNTIME_SYMBOLS = {
+    "DirectDaemonRuntimeConnector",
+    "DirectDaemonRuntimeTransport",
+}
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,7 @@ class ConsumerBoundaryAuditor:
         violations: list[BoundaryViolation] = []
         violations.extend(_audit_legacy_transport_path(relative))
         violations.extend(_audit_imports(relative, text))
+        violations.extend(_audit_direct_runtime_internals(relative, text))
         violations.extend(_audit_raw_ffi_markers(relative, text))
         violations.extend(_audit_raw_abi_symbols(relative, text))
         violations.extend(_audit_invocation_codec(relative, text))
@@ -179,9 +185,19 @@ def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
                             line=node.lineno,
                         )
                     )
+                if _is_sdk_direct_runtime_module(alias.name):
+                    violations.append(
+                        BoundaryViolation(
+                            path=path,
+                            rule="sdk_internal_runtime_transport",
+                            detail=alias.name,
+                            line=node.lineno,
+                        )
+                    )
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             root = module.split(".", 1)[0]
+            direct_runtime_module = _is_sdk_direct_runtime_module(module)
             if root in {"ctypes", _RAW_AXON_MODULE} or _is_raw_axon_module(module):
                 violations.append(
                     BoundaryViolation(
@@ -200,12 +216,30 @@ def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
                         line=node.lineno,
                     )
                 )
+            if direct_runtime_module:
+                violations.append(
+                    BoundaryViolation(
+                        path=path,
+                        rule="sdk_internal_runtime_transport",
+                        detail=module,
+                        line=node.lineno,
+                    )
+                )
             for alias in node.names:
                 if _is_legacy_transport_module(alias.name, level=node.level):
                     violations.append(
                         BoundaryViolation(
                             path=path,
                             rule="raw_transport_module",
+                            detail=alias.name,
+                            line=node.lineno,
+                        )
+                    )
+                if not direct_runtime_module and alias.name in _DIRECT_RUNTIME_SYMBOLS:
+                    violations.append(
+                        BoundaryViolation(
+                            path=path,
+                            rule="sdk_internal_runtime_transport",
                             detail=alias.name,
                             line=node.lineno,
                         )
@@ -243,6 +277,33 @@ def _audit_raw_abi_symbols(path: str, text: str) -> tuple[BoundaryViolation, ...
                     path=path,
                     rule="raw_c_abi_symbol",
                     detail=symbol,
+                    line=getattr(node, "lineno", 1),
+                )
+            )
+    return tuple(violations)
+
+
+def _audit_direct_runtime_internals(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        name = ""
+        if isinstance(node, ast.Name):
+            name = node.id
+        elif isinstance(node, ast.Attribute):
+            name = node.attr
+        if name in _DIRECT_RUNTIME_SYMBOLS:
+            violations.append(
+                BoundaryViolation(
+                    path=path,
+                    rule="sdk_internal_runtime_transport",
+                    detail=name,
                     line=getattr(node, "lineno", 1),
                 )
             )
@@ -879,6 +940,12 @@ def _invocation_dict_fields(node: ast.Dict) -> set[str]:
 
 def _is_raw_axon_module(module: str) -> bool:
     return module == "axon" or module.startswith("axon.") or "axon_pb2" in module
+
+
+def _is_sdk_direct_runtime_module(module: str) -> bool:
+    return module == _SDK_DIRECT_RUNTIME_MODULE or module.startswith(
+        _SDK_DIRECT_RUNTIME_MODULE + "."
+    )
 
 
 def _is_legacy_transport_module(module: str, *, level: int = 0) -> bool:

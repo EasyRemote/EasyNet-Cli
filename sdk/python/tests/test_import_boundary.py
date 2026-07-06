@@ -2,6 +2,7 @@ from pathlib import Path
 import unittest
 
 import easynet_sdk
+import easynet_sdk.direct_runtime as direct_runtime
 
 
 class ImportBoundaryTests(unittest.TestCase):
@@ -42,6 +43,18 @@ class ImportBoundaryTests(unittest.TestCase):
         exported = set(getattr(easynet_sdk, "__all__", ()))
         leaked = sorted(name for name in exported if name.startswith("EasyRemote"))
         self.assertEqual(leaked, [])
+
+    def test_python_sdk_root_does_not_export_direct_runtime_internals(self) -> None:
+        exported = set(getattr(easynet_sdk, "__all__", ()))
+        self.assertNotIn("DirectDaemonRuntimeConnector", exported)
+        self.assertNotIn("DirectDaemonRuntimeTransport", exported)
+        self.assertFalse(hasattr(easynet_sdk, "DirectDaemonRuntimeConnector"))
+        self.assertFalse(hasattr(easynet_sdk, "DirectDaemonRuntimeTransport"))
+
+    def test_direct_runtime_does_not_export_axon_protobuf_modules(self) -> None:
+        self.assertFalse(hasattr(direct_runtime, "invoke_pb2"))
+        self.assertFalse(hasattr(direct_runtime, "invoke_pb2_grpc"))
+        self.assertFalse(hasattr(direct_runtime, "types_pb2"))
 
 
 if __name__ == "__main__":

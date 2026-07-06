@@ -4315,6 +4315,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         for forbidden in (
             "raw_invocation_json_codec",
             "raw_ura_shape_literal",
+            "easynet_sdk.direct_runtime",
+            "DirectDaemonRuntimeTransport",
         ):
             self._require_case_literal(no_codec_case, f"- {forbidden}")
 
@@ -4342,6 +4344,41 @@ class SharedConformanceFixtureTests(unittest.TestCase):
 
                     def call(client: AbilityInvocationClient, draft: InvocationDraft):
                         return client.invoke(draft)
+                    """
+                ),
+                encoding="utf-8",
+            )
+            result = audit_consumer_boundary(root)
+        self.assertTrue(result.ok)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "client.py").write_text(
+                textwrap.dedent(
+                    """
+                    from easynet_sdk.direct_runtime import DirectDaemonRuntimeTransport
+
+                    transport = DirectDaemonRuntimeTransport
+                    """
+                ),
+                encoding="utf-8",
+            )
+            result = audit_consumer_boundary(root)
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "sdk_internal_runtime_transport",
+            {violation.rule for violation in result.violations},
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "client.py").write_text(
+                textwrap.dedent(
+                    """
+                    from easynet_sdk import DaemonInvocationTransport
+
+                    def connect():
+                        return DaemonInvocationTransport.connect_direct()
                     """
                 ),
                 encoding="utf-8",

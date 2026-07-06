@@ -155,10 +155,6 @@ from .directory import (
     ResolvedRef,
     ResolveQuery,
 )
-from .direct_runtime import (
-    DirectDaemonRuntimeConnector,
-    DirectDaemonRuntimeTransport,
-)
 from .errors import (
     ErrorClass,
     ErrorCode,
@@ -531,8 +527,6 @@ __all__ = [
     "DaemonBidiChannel",
     "DaemonFrameStream",
     "DaemonInvocationTransport",
-    "DirectDaemonRuntimeConnector",
-    "DirectDaemonRuntimeTransport",
     "InvocationResultAdapter",
     "DaemonLifecycleState",
     "DaemonMode",
