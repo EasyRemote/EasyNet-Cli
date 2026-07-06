@@ -100,6 +100,18 @@
       "message": null
     },
     {
+      "case_id": "host_binding/codec_hash",
+      "profile": "host_binding",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "memc/consumer_coverage",
       "profile": "memc",
       "status": "passed",

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const ERROR_CODES = new Set([
   "INVALID_ARGUMENT",
   "INVALID_HANDLE",
@@ -43,6 +45,11 @@ export const RECEIPT_PROFILE = "receipt";
 export const PUBLICATION_PROFILE = "publication";
 export const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50;
 export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
+export const HOST_BINDING_PROFILE = "host_binding";
+export const HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json";
+export const HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value))";
+export const HOST_STREAM_EMPTY_OUTPUT_HASH =
+  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 export class SDKError extends Error {
   constructor({
@@ -604,6 +611,341 @@ export class PublicationClient {
       throw invalidSDK("publication client is closed");
     }
     return this.transport;
+  }
+}
+
+export class HostStreamHashState {
+  constructor(fields) {
+    const value = objectValue(fields, "host stream hash state");
+    this.algorithm = requiredHostBindingString(value.algorithm, "algorithm");
+    if (this.algorithm !== HOST_STREAM_HASH_ALGORITHM) {
+      throw invalidHostBinding("invalid host stream hash algorithm");
+    }
+    this.outputHash = normalizeHostOutputHash(value.output_hash, "output_hash");
+    this.frames = hostNonNegativeInteger(value.frames, "frames");
+    this.lastSeq = hostOptionalNonNegativeInteger(value.last_seq, "last_seq");
+    this.canonicalJSON = cleanOptionalString(value.canonical_json ?? "", "canonical_json");
+    validateHostHashState(this);
+  }
+
+  static initial() {
+    return new HostStreamHashState({
+      algorithm: HOST_STREAM_HASH_ALGORITHM,
+      output_hash: HOST_STREAM_EMPTY_OUTPUT_HASH,
+      frames: 0,
+      last_seq: null,
+    });
+  }
+
+  static fromJSON(raw) {
+    return new HostStreamHashState(parseJSON(raw, "host stream hash state"));
+  }
+
+  toJSON() {
+    const value = {
+      algorithm: this.algorithm,
+      output_hash: this.outputHash,
+      frames: this.frames,
+      last_seq: this.lastSeq,
+    };
+    if (this.canonicalJSON) {
+      value.canonical_json = this.canonicalJSON;
+    }
+    return value;
+  }
+}
+
+export class LocalHostBindingTransport {
+  constructor(descriptorRefCanonicalizer) {
+    this.descriptorRefCanonicalizer = descriptorRefCanonicalizer;
+    this.closed = false;
+  }
+
+  async buildHostStreamBinding(requestJSON) {
+    this.requireOpen();
+    const request = hostBindingRequest(parseJSON(requestJSON, "host stream binding request"));
+    const descriptorRef = await this.canonicalDescriptorRef(request.descriptor_ref);
+    request.descriptor_ref = descriptorRef;
+    validateHostStreamBindingRequest(request);
+    const cleanup = objectValue(request.cleanup ?? {}, "cleanup");
+    const readiness = objectValue(
+      request.readiness ?? { state: "declared", checked: false, endpoint_ready: null },
+      "readiness",
+    );
+    const metadata = {
+      ...objectValue(request.metadata ?? {}, "metadata"),
+      profile: HOST_BINDING_PROFILE,
+      frame_schema: HOST_STREAM_FRAME_SCHEMA,
+      hash_algorithm: HOST_STREAM_HASH_ALGORITHM,
+    };
+    return JSON.stringify({
+      binding_id: request.binding_id,
+      descriptor_ref: request.descriptor_ref,
+      endpoint: request.endpoint,
+      frame_schema: request.frame_schema,
+      cleanup,
+      timeout_ms: request.timeout_ms ?? null,
+      readiness,
+      lifecycle: {
+        endpoint_owner: "product_host",
+        process_owner: "product_host",
+        frame_contract_owner: "daemon_sdk",
+      },
+      metadata,
+    });
+  }
+
+  async decodeRequest(envelopeJSON) {
+    this.requireOpen();
+    const envelope = parseJSON(envelopeJSON, "host stream envelope");
+    const request = objectValue(envelope.request, "request");
+    return JSON.stringify({
+      function: requiredHostBindingString(request.fn, "fn"),
+      args: Object.hasOwn(request, "args") ? request.args : null,
+      call_id: requiredHostBindingString(request.call_id, "call_id"),
+      caller: requiredHostBindingString(request.caller, "caller"),
+      parent_receipt: request.parent_receipt ?? null,
+      metadata: {
+        wire: "host_stream_request_v1",
+        frame_contract_owner: "daemon_sdk",
+      },
+    });
+  }
+
+  async encodeItem(requestJSON) {
+    this.requireOpen();
+    const request = objectValue(parseJSON(requestJSON, "host stream item request"), "host stream item request");
+    const seq = hostNonNegativeInteger(request.seq, "seq");
+    return JSON.stringify({
+      frame_type: "item",
+      seq,
+      value: Object.hasOwn(request, "value") ? request.value : null,
+      error: null,
+      terminal: null,
+      output_hash: null,
+    });
+  }
+
+  async encodeError(requestJSON) {
+    this.requireOpen();
+    const request = objectValue(parseJSON(requestJSON, "host stream error request"), "host stream error request");
+    const error = objectValue(request.error, "error");
+    return JSON.stringify({
+      frame_type: "error",
+      seq: null,
+      value: null,
+      error,
+      terminal: null,
+      output_hash: null,
+    });
+  }
+
+  async encodeTerminal(requestJSON) {
+    this.requireOpen();
+    const request = objectValue(parseJSON(requestJSON, "host stream terminal request"), "host stream terminal request");
+    const summary = hostStreamTerminalSummary(request.summary);
+    return JSON.stringify({
+      frame_type: "terminal",
+      seq: summary.frames,
+      value: null,
+      error: null,
+      terminal: summary,
+      output_hash: summary.output_hash,
+    });
+  }
+
+  async foldOutputHash(requestJSON) {
+    this.requireOpen();
+    const request = objectValue(parseJSON(requestJSON, "host stream hash fold request"), "host stream hash fold request");
+    const state = request.state instanceof HostStreamHashState
+      ? request.state
+      : new HostStreamHashState(objectValue(request.state, "state"));
+    const seq = hostNonNegativeInteger(request.seq, "seq");
+    validateHostHashFold(state, seq);
+    const canonicalJSON = canonicalJSONString(request.value);
+    const outputHash = foldHostOutputHash(state.outputHash, seq, canonicalJSON);
+    return JSON.stringify({
+      algorithm: HOST_STREAM_HASH_ALGORITHM,
+      output_hash: outputHash,
+      frames: state.frames + 1,
+      last_seq: seq,
+      canonical_json: canonicalJSON,
+    });
+  }
+
+  async close() {
+    this.closed = true;
+  }
+
+  requireOpen() {
+    if (this.closed) {
+      throw invalidHostBinding("host binding transport is closed");
+    }
+  }
+
+  async canonicalDescriptorRef(descriptorRef) {
+    if (typeof this.descriptorRefCanonicalizer !== "function") {
+      throw invalidHostBinding("descriptor_ref canonicalizer is required");
+    }
+    const canonical = await this.descriptorRefCanonicalizer(descriptorRef);
+    return requiredHostBindingString(canonical, "descriptor_ref");
+  }
+}
+
+export class HostBindingClient {
+  constructor(transport, lifecycleProvider = null) {
+    if (
+      !transport ||
+      typeof transport.buildHostStreamBinding !== "function" ||
+      typeof transport.decodeRequest !== "function" ||
+      typeof transport.encodeItem !== "function" ||
+      typeof transport.encodeError !== "function" ||
+      typeof transport.encodeTerminal !== "function" ||
+      typeof transport.foldOutputHash !== "function"
+    ) {
+      throw invalidSDK("host binding transport is required");
+    }
+    this.transport = transport;
+    this.lifecycleProvider = lifecycleProvider;
+    this.closed = false;
+  }
+
+  async buildHostStreamBinding(request) {
+    const payload = hostBindingRequest(request);
+    return callJSON(this.requireOpen(), "buildHostStreamBinding", payload, "host stream binding");
+  }
+
+  async decodeRequest(envelope) {
+    const payload = hostStreamEnvelope(envelope);
+    return callJSON(this.requireOpen(), "decodeRequest", payload, "host stream request");
+  }
+
+  async encodeItem(seq, value) {
+    hostNonNegativeInteger(seq, "seq");
+    return callJSON(this.requireOpen(), "encodeItem", { seq, value }, "host stream item frame");
+  }
+
+  async encodeError(error) {
+    return callJSON(this.requireOpen(), "encodeError", { error: hostBindingErrorDTO(error) }, "host stream error frame");
+  }
+
+  async encodeTerminal(summary) {
+    return callJSON(
+      this.requireOpen(),
+      "encodeTerminal",
+      { summary: hostStreamTerminalSummary(summary) },
+      "host stream terminal frame",
+    );
+  }
+
+  async foldOutputHash(state, seq, value) {
+    const hashState = state instanceof HostStreamHashState ? state : new HostStreamHashState(state);
+    hostNonNegativeInteger(seq, "seq");
+    validateHostHashFold(hashState, seq);
+    return HostStreamHashState.fromJSON(
+      await callRaw(this.requireOpen(), "foldOutputHash", {
+        state: hashState.toJSON(),
+        seq,
+        value,
+      }),
+    );
+  }
+
+  openLifecycle(binding, provider = null) {
+    if (!binding || typeof binding !== "object") {
+      throw invalidHostBinding("host stream binding is required");
+    }
+    const resolved = provider ?? this.lifecycleProvider;
+    if (!resolved) {
+      throw invalidHostBinding("host stream lifecycle provider is required");
+    }
+    return new HostStreamLifecycleController(binding, resolved);
+  }
+
+  async checkReadiness(binding, provider = null) {
+    return this.openLifecycle(binding, provider).checkReadiness();
+  }
+
+  async cleanup(binding, provider = null) {
+    return this.openLifecycle(binding, provider).cleanup();
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("host binding client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class HostStreamLifecycleController {
+  constructor(binding, provider) {
+    this.binding = binding;
+    this.provider = provider;
+    this.state = "declared";
+    this.readiness = null;
+    this.cleanupResult = null;
+  }
+
+  async checkReadiness() {
+    if (["cleaning", "cleaned", "closed"].includes(this.state)) {
+      throw invalidHostBinding("host stream lifecycle is not readable");
+    }
+    this.state = "checking";
+    if (!this.provider || typeof this.provider.checkReadiness !== "function") {
+      this.state = "failed";
+      throw invalidHostBinding("readiness provider is required");
+    }
+    const readiness = objectValue(await this.provider.checkReadiness(this.binding), "readiness");
+    requiredHostBindingString(readiness.state, "state");
+    if (readiness.checked !== undefined && typeof readiness.checked !== "boolean") {
+      this.state = "failed";
+      throw invalidHostBinding("readiness.checked must be boolean");
+    }
+    this.readiness = readiness;
+    this.state = readiness.state === "ready" ? "ready" : "not_ready";
+    return readiness;
+  }
+
+  async cleanup() {
+    if (this.state === "cleaned") {
+      return this.cleanupResult;
+    }
+    if (this.state === "closed") {
+      throw invalidHostBinding("host stream lifecycle is closed");
+    }
+    if (!this.provider || typeof this.provider.cleanup !== "function") {
+      this.state = "failed";
+      throw invalidHostBinding("cleanup provider is required");
+    }
+    this.state = "cleaning";
+    const cleanup = objectValue(await this.provider.cleanup(this.binding), "cleanup");
+    requiredHostBindingString(cleanup.mode, "mode");
+    this.cleanupResult = cleanup;
+    this.state = "cleaned";
+    return cleanup;
+  }
+
+  close() {
+    if (this.state === "closed") {
+      return;
+    }
+    if (this.state !== "cleaned") {
+      throw invalidHostBinding("host stream lifecycle must be cleaned before close");
+    }
+    this.state = "closed";
   }
 }
 
@@ -1349,6 +1691,229 @@ function isAbsolutePath(value) {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
+function hostBindingRequest(value) {
+  const payload = hostObject(value, "host stream binding request");
+  hostRejectUnknownFields(payload, [
+    "binding_id",
+    "descriptor_ref",
+    "endpoint",
+    "frame_schema",
+    "cleanup",
+    "timeout_ms",
+    "readiness",
+    "metadata",
+  ]);
+  validateHostStreamBindingRequest(payload);
+  if (payload.cleanup !== undefined && payload.cleanup !== null) {
+    objectValue(payload.cleanup, "cleanup");
+  }
+  if (payload.readiness !== undefined && payload.readiness !== null) {
+    objectValue(payload.readiness, "readiness");
+  }
+  if (payload.metadata !== undefined && payload.metadata !== null) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function validateHostStreamBindingRequest(payload) {
+  requiredHostBindingString(payload.binding_id, "binding_id");
+  requiredHostBindingString(payload.descriptor_ref, "descriptor_ref");
+  const endpoint = requiredHostBindingString(payload.endpoint, "endpoint");
+  if (!isAbsoluteHostEndpoint(endpoint)) {
+    throw invalidHostBinding("host stream endpoint must be absolute");
+  }
+  if (payload.frame_schema !== HOST_STREAM_FRAME_SCHEMA) {
+    throw invalidHostBinding("frame_schema must be host-stream-frame.schema.json");
+  }
+  if (
+    payload.timeout_ms !== undefined &&
+    payload.timeout_ms !== null &&
+    (!Number.isInteger(payload.timeout_ms) || payload.timeout_ms < 0)
+  ) {
+    throw invalidHostBinding("timeout_ms must be non-negative or null");
+  }
+}
+
+function hostStreamEnvelope(value) {
+  const envelope = hostObject(value, "host stream envelope");
+  hostRejectUnknownFields(envelope, ["request"]);
+  const request = hostObject(envelope.request, "request");
+  hostRejectUnknownFields(request, ["fn", "args", "call_id", "caller", "parent_receipt"]);
+  requiredHostBindingString(request.fn, "fn");
+  requiredHostBindingString(request.call_id, "call_id");
+  requiredHostBindingString(request.caller, "caller");
+  return { request };
+}
+
+function hostStreamTerminalSummary(value) {
+  const summary = hostObject(value, "summary");
+  hostRejectUnknownFields(summary, ["output_hash", "frames", "metadata"]);
+  const outputHash = normalizeHostOutputHash(summary.output_hash, "output_hash");
+  const frames = hostNonNegativeInteger(summary.frames, "frames");
+  const projected = {
+    output_hash: outputHash,
+    frames,
+    metadata: objectValue(summary.metadata ?? {}, "metadata"),
+  };
+  return projected;
+}
+
+function hostBindingErrorDTO(error) {
+  if (error instanceof SDKError) {
+    return {
+      code: error.code,
+      stage: error.stage || "host_binding",
+      message: error.message,
+      retry: error.retry || RetryHint.NEVER,
+      source: error.source || null,
+      invocation_id: error.invocationId || null,
+      receipt_ura: error.receiptURA || null,
+      details: error.details ?? {},
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      code: ErrorCode.GENERIC,
+      stage: "host_binding",
+      message: error.message,
+      retry: RetryHint.NEVER,
+      details: {},
+    };
+  }
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const value = objectValue(error, "error");
+    requiredHostBindingString(value.code, "code");
+    requiredHostBindingString(value.stage, "stage");
+    requiredHostBindingString(value.retry, "retry");
+    requiredHostBindingString(value.message ?? "host binding error", "message");
+    return {
+      ...value,
+      details: objectValue(value.details ?? {}, "details"),
+    };
+  }
+  throw invalidHostBinding("error is required");
+}
+
+function hostObject(value, field) {
+  try {
+    return objectValue(value, field);
+  } catch (error) {
+    if (error instanceof SDKError) {
+      throw invalidHostBinding(`${field} must be an object`);
+    }
+    throw error;
+  }
+}
+
+function requiredHostBindingString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidHostBinding(`${field} is required`);
+  }
+  return value;
+}
+
+function hostNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidHostBinding(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function hostOptionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return hostNonNegativeInteger(value, field);
+}
+
+function normalizeHostOutputHash(value, field) {
+  const text = requiredHostBindingString(value, field);
+  if (!/^sha256:[0-9a-f]{64}$/.test(text)) {
+    throw invalidHostBinding(`${field} must use sha256:<64 lowercase hex> form`);
+  }
+  return text;
+}
+
+function validateHostHashState(state) {
+  if (state.frames === 0) {
+    if (state.lastSeq !== null) {
+      throw invalidHostBinding("host stream hash state cannot have last_seq when frames is zero");
+    }
+    return;
+  }
+  if (state.lastSeq !== state.frames - 1) {
+    throw invalidHostBinding("host stream hash state last_seq must match frames");
+  }
+}
+
+function validateHostHashFold(state, seq) {
+  validateHostHashState(state);
+  if (seq !== state.frames) {
+    throw invalidHostBinding("host stream hash sequence gap");
+  }
+}
+
+function canonicalJSONString(value) {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw invalidHostBinding("host stream frame is not valid JSON");
+    }
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJSONString(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    const parts = [];
+    for (const key of keys) {
+      const item = value[key];
+      if (item === undefined || typeof item === "function" || typeof item === "symbol") {
+        throw invalidHostBinding("host stream frame is not valid JSON");
+      }
+      parts.push(`${JSON.stringify(key)}:${canonicalJSONString(item)}`);
+    }
+    return `{${parts.join(",")}}`;
+  }
+  throw invalidHostBinding("host stream frame is not valid JSON");
+}
+
+function foldHostOutputHash(previousOutputHash, seq, canonicalJSON) {
+  const hashHex = normalizeHostOutputHash(previousOutputHash, "previous output_hash").slice("sha256:".length);
+  const previous = Buffer.from(hashHex, "hex");
+  const seqBytes = Buffer.alloc(8);
+  seqBytes.writeBigUInt64BE(BigInt(seq));
+  const digest = createHash("sha256")
+    .update(previous)
+    .update(seqBytes)
+    .update(Buffer.from(canonicalJSON, "utf8"))
+    .digest("hex");
+  return `sha256:${digest}`;
+}
+
+function isAbsoluteHostEndpoint(endpoint) {
+  return endpoint.startsWith("/") || endpoint.startsWith("unix:///");
+}
+
+function hostRejectUnknownFields(value, allowed) {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) {
+      throw invalidHostBinding(`${key} is not a host_binding field`);
+    }
+  }
+}
+
 function jsonPayloadBytes(value, field) {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     if (value.length === 0) {
@@ -1675,6 +2240,16 @@ function invalidPublication(message) {
     stage: "publication",
     retry: RetryHint.NEVER,
     source: PUBLICATION_PROFILE,
+    message,
+  });
+}
+
+function invalidHostBinding(message) {
+  return new SDKError({
+    code: ErrorCode.INVALID_ARGUMENT,
+    stage: "host_binding",
+    retry: RetryHint.NEVER,
+    source: HOST_BINDING_PROFILE,
     message,
   });
 }

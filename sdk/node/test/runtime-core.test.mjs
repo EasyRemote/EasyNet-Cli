@@ -6,8 +6,14 @@ import {
   DEFAULT_DIRECTORY_PAGE_SIZE,
   DirectoryClient,
   ErrorCode,
+  HOST_STREAM_EMPTY_OUTPUT_HASH,
+  HOST_STREAM_FRAME_SCHEMA,
+  HOST_STREAM_HASH_ALGORITHM,
+  HostBindingClient,
+  HostStreamHashState,
   IdentityClient,
   InvocationBuilder,
+  LocalHostBindingTransport,
   PublicationClient,
   ReceiptChain,
   ReceiptClient,
@@ -74,6 +80,15 @@ const publicationDraftJSON = (descriptorRef) =>
     .withMetadata({ profile: "publication" })
     .build()
     .toJSONString();
+
+const hostBindingRequest = () => ({
+  binding_id: "binding-weather-1",
+  descriptor_ref: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+  endpoint: "/tmp/easynet-weather.sock",
+  frame_schema: HOST_STREAM_FRAME_SCHEMA,
+  cleanup: { mode: "unlink_socket" },
+  timeout_ms: 30000,
+});
 
 test("feature discovery decodes canonical Runtime Core facts", async () => {
   const client = new Client({
@@ -802,5 +817,157 @@ test("PublicationClient rejects incomplete carriers and local resource fabricati
   await assert.rejects(
     () => publication.buildLocalResourceRef({ path: "/tmp/easynet/pkg", capability: "read" }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("HostBindingClient local transport builds binding and codec frames", async () => {
+  const calls = [];
+  const transport = new LocalHostBindingTransport((descriptorRef) => {
+    calls.push(`canonical:${descriptorRef}`);
+    return descriptorRef;
+  });
+  const client = new HostBindingClient(transport);
+
+  const binding = await client.buildHostStreamBinding(hostBindingRequest());
+  const request = await client.decodeRequest({
+    request: {
+      fn: "weather.stream",
+      args: { city: "Singapore" },
+      call_id: "call-weather-1",
+      caller: "easynet:///r/example/user/alice",
+    },
+  });
+  const item = await client.encodeItem(0, { token: "hello" });
+  const error = await client.encodeError(
+    new SDKError({
+      code: ErrorCode.GENERIC,
+      stage: "host_binding",
+      retry: "never",
+      message: "boom",
+      details: {},
+    }),
+  );
+  const plainError = await client.encodeError(new Error("plain boom"));
+  const terminal = await client.encodeTerminal({
+    output_hash: "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15",
+    frames: 1,
+  });
+
+  assert.equal(binding.binding_id, "binding-weather-1");
+  assert.equal(binding.lifecycle.frame_contract_owner, "daemon_sdk");
+  assert.equal(binding.metadata.hash_algorithm, HOST_STREAM_HASH_ALGORITHM);
+  assert.equal(request.function, "weather.stream");
+  assert.deepEqual(request.args, { city: "Singapore" });
+  assert.equal(item.frame_type, "item");
+  assert.equal(item.seq, 0);
+  assert.equal(item.output_hash, null);
+  assert.equal(error.frame_type, "error");
+  assert.equal(error.error.code, ErrorCode.GENERIC);
+  assert.equal(plainError.error.code, ErrorCode.GENERIC);
+  assert.equal(plainError.error.message, "plain boom");
+  assert.equal(terminal.frame_type, "terminal");
+  assert.equal(terminal.output_hash, terminal.terminal.output_hash);
+  assert.deepEqual(calls, ["canonical:easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0"]);
+});
+
+test("HostBindingClient folds output hash and rejects corrupted state", async () => {
+  const client = new HostBindingClient(
+    new LocalHostBindingTransport((descriptorRef) => descriptorRef),
+  );
+  const initial = HostStreamHashState.initial();
+  assert.equal(initial.outputHash, HOST_STREAM_EMPTY_OUTPUT_HASH);
+
+  const folded = await client.foldOutputHash(initial, 0, { token: "hello" });
+  assert.equal(folded.outputHash, "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15");
+  assert.equal(folded.canonicalJSON, "{\"token\":\"hello\"}");
+  assert.equal(folded.lastSeq, 0);
+
+  await assert.rejects(
+    () => client.foldOutputHash(initial, 2, { token: "skip" }),
+    (error) => error instanceof SDKError && error.source === "host_binding",
+  );
+  assert.throws(
+    () =>
+      new HostStreamHashState({
+        algorithm: HOST_STREAM_HASH_ALGORITHM,
+        output_hash: HOST_STREAM_EMPTY_OUTPUT_HASH,
+        frames: 0,
+        last_seq: 0,
+      }),
+    (error) => error instanceof SDKError && error.source === "host_binding",
+  );
+  assert.throws(
+    () =>
+      new HostStreamHashState({
+        algorithm: HOST_STREAM_HASH_ALGORITHM,
+        output_hash: folded.toJSON().output_hash,
+        frames: 3,
+        last_seq: 0,
+      }),
+    (error) => error instanceof SDKError && error.source === "host_binding",
+  );
+});
+
+test("HostBinding lifecycle provider is explicit and cleanup is idempotent", async () => {
+  const providerCalls = [];
+  const provider = {
+    checkReadiness(binding) {
+      providerCalls.push(`readiness:${binding.binding_id}`);
+      return { state: "ready", checked: true, endpoint_ready: true };
+    },
+    cleanup(binding) {
+      providerCalls.push(`cleanup:${binding.binding_id}`);
+      return { mode: "unlink_socket", cleaned: true };
+    },
+  };
+  const client = new HostBindingClient(
+    new LocalHostBindingTransport((descriptorRef) => descriptorRef),
+    provider,
+  );
+  const binding = await client.buildHostStreamBinding(hostBindingRequest());
+  const lifecycle = client.openLifecycle(binding);
+  const readiness = await lifecycle.checkReadiness();
+  const cleanup = await lifecycle.cleanup();
+  const cleanupAgain = await lifecycle.cleanup();
+
+  assert.equal(readiness.state, "ready");
+  assert.equal(cleanup.mode, "unlink_socket");
+  assert.equal(cleanupAgain, cleanup);
+  assert.equal(lifecycle.state, "cleaned");
+  assert.deepEqual(providerCalls, ["readiness:binding-weather-1", "cleanup:binding-weather-1"]);
+  lifecycle.close();
+  assert.equal(lifecycle.state, "closed");
+});
+
+test("HostBinding rejects descriptor, endpoint, schema, and hash drift", async () => {
+  const client = new HostBindingClient(new LocalHostBindingTransport());
+  await assert.rejects(
+    () => client.buildHostStreamBinding(hostBindingRequest()),
+    (error) => error instanceof SDKError && error.source === "host_binding",
+  );
+  const canonicalClient = new HostBindingClient(
+    new LocalHostBindingTransport((descriptorRef) => descriptorRef),
+  );
+  await assert.rejects(
+    () => canonicalClient.buildHostStreamBinding({ ...hostBindingRequest(), endpoint: "relative.sock" }),
+    (error) => error instanceof SDKError && error.source === "host_binding",
+  );
+  await assert.rejects(
+    () => canonicalClient.buildHostStreamBinding({ ...hostBindingRequest(), frame_schema: "drift.schema.json" }),
+    (error) => error instanceof SDKError && error.source === "host_binding",
+  );
+  await assert.rejects(
+    () =>
+      canonicalClient.foldOutputHash(
+        {
+          algorithm: HOST_STREAM_HASH_ALGORITHM,
+          output_hash: "sha256:ABC",
+          frames: 0,
+          last_seq: null,
+        },
+        0,
+        { token: "hello" },
+      ),
+    (error) => error instanceof SDKError && error.source === "host_binding",
   );
 });

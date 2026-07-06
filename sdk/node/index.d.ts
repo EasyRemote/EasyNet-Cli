@@ -14,6 +14,10 @@ export declare const RECEIPT_PROFILE: "receipt";
 export declare const PUBLICATION_PROFILE: "publication";
 export declare const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: 50;
 export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
+export declare const HOST_BINDING_PROFILE: "host_binding";
+export declare const HOST_STREAM_FRAME_SCHEMA: "host-stream-frame.schema.json";
+export declare const HOST_STREAM_HASH_ALGORITHM: "sha256(prev_hash || seq_be || canonical_json(value))";
+export declare const HOST_STREAM_EMPTY_OUTPUT_HASH: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 export interface SDKErrorOptions {
   code: string;
@@ -368,6 +372,118 @@ export class PublicationClient {
   buildUnpublishInvocation(request: UnpublishAbilityRequest): Promise<InvocationDraft>;
   unpublishAbility(request: UnpublishAbilityRequest): Promise<Record<string, unknown>>;
   close(): Promise<void>;
+}
+
+export interface HostStreamBindingRequest {
+  binding_id: string;
+  descriptor_ref: string;
+  endpoint: string;
+  frame_schema: "host-stream-frame.schema.json";
+  cleanup?: Record<string, unknown> | null;
+  timeout_ms?: number | null;
+  readiness?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface HostStreamBinding {
+  binding_id: string;
+  descriptor_ref: string;
+  endpoint: string;
+  frame_schema: "host-stream-frame.schema.json";
+  cleanup: Record<string, unknown>;
+  timeout_ms: number | null;
+  readiness: Record<string, unknown>;
+  lifecycle: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export interface HostStreamEnvelope {
+  request: {
+    fn: string;
+    args?: unknown;
+    call_id: string;
+    caller: string;
+    parent_receipt?: unknown;
+  };
+}
+
+export interface HostStreamTerminalSummary {
+  output_hash: string;
+  frames: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface HostStreamHashStateFields {
+  algorithm: string;
+  output_hash: string;
+  frames: number;
+  last_seq: number | null;
+  canonical_json?: string;
+}
+
+export class HostStreamHashState {
+  algorithm: string;
+  outputHash: string;
+  frames: number;
+  lastSeq: number | null;
+  canonicalJSON: string;
+  constructor(fields: HostStreamHashStateFields);
+  static initial(): HostStreamHashState;
+  static fromJSON(raw: Uint8Array | string): HostStreamHashState;
+  toJSON(): HostStreamHashStateFields;
+}
+
+export interface HostBindingTransport {
+  buildHostStreamBinding(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  decodeRequest(envelopeJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  encodeItem(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  encodeError(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  encodeTerminal(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  foldOutputHash(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export type HostBindingDescriptorRefCanonicalizer = (descriptorRef: string) => Promise<string> | string;
+
+export class LocalHostBindingTransport {
+  constructor(descriptorRefCanonicalizer?: HostBindingDescriptorRefCanonicalizer);
+  buildHostStreamBinding(requestJSON: Uint8Array | string): Promise<string>;
+  decodeRequest(envelopeJSON: Uint8Array | string): Promise<string>;
+  encodeItem(requestJSON: Uint8Array | string): Promise<string>;
+  encodeError(requestJSON: Uint8Array | string): Promise<string>;
+  encodeTerminal(requestJSON: Uint8Array | string): Promise<string>;
+  foldOutputHash(requestJSON: Uint8Array | string): Promise<string>;
+  close(): Promise<void>;
+}
+
+export interface HostStreamLifecycleProvider {
+  checkReadiness(binding: HostStreamBinding): Promise<Record<string, unknown>> | Record<string, unknown>;
+  cleanup(binding: HostStreamBinding): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
+export class HostBindingClient {
+  constructor(transport: HostBindingTransport, lifecycleProvider?: HostStreamLifecycleProvider | null);
+  buildHostStreamBinding(request: HostStreamBindingRequest): Promise<HostStreamBinding>;
+  decodeRequest(envelope: HostStreamEnvelope): Promise<Record<string, unknown>>;
+  encodeItem(seq: number, value: unknown): Promise<Record<string, unknown>>;
+  encodeError(error: Error | SDKError | Record<string, unknown>): Promise<Record<string, unknown>>;
+  encodeTerminal(summary: HostStreamTerminalSummary): Promise<Record<string, unknown>>;
+  foldOutputHash(state: HostStreamHashState | HostStreamHashStateFields, seq: number, value: unknown): Promise<HostStreamHashState>;
+  openLifecycle(binding: HostStreamBinding, provider?: HostStreamLifecycleProvider | null): HostStreamLifecycleController;
+  checkReadiness(binding: HostStreamBinding, provider?: HostStreamLifecycleProvider | null): Promise<Record<string, unknown>>;
+  cleanup(binding: HostStreamBinding, provider?: HostStreamLifecycleProvider | null): Promise<Record<string, unknown>>;
+  close(): Promise<void>;
+}
+
+export class HostStreamLifecycleController {
+  binding: HostStreamBinding;
+  state: string;
+  readiness: Record<string, unknown> | null;
+  cleanupResult: Record<string, unknown> | null;
+  constructor(binding: HostStreamBinding, provider: HostStreamLifecycleProvider);
+  checkReadiness(): Promise<Record<string, unknown>>;
+  cleanup(): Promise<Record<string, unknown>>;
+  close(): void;
 }
 
 export interface InvocationDraftFields {

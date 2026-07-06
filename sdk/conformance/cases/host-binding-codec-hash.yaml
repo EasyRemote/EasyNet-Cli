@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: HostBindingClient builds typed host-stream bindings, decodes daemon envelopes, encodes shared item/error/terminal frames, folds output hashes, and drives readiness/cleanup lifecycle providers with daemon-owned semantics.
 steps:
   - action: build_host_stream_binding
