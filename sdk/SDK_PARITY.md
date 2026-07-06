@@ -151,10 +151,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
-  transport seams plus direct daemon UDS unary/stream/bidi transports and Python
-  profile clients with stable per-profile error source refs; remaining profile
-  conformance action execution and backend source cutover violations remain
-  incomplete before backend cutover.
+  transport seams plus `RuntimeProfileBundle` factories for Runtime Core-backed
+  profile clients with stable per-profile error source refs; direct Go daemon
+  UDS unary/stream/bidi transport, remaining profile conformance action
+  execution, and backend source cutover violations remain incomplete before
+  backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, Runtime Core-backed directory
   subscription streams, directory subscription state seams, and close state

@@ -16,7 +16,10 @@ C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health,
 unary invoke, stream/bidi callback, prepare/sign/submit-handle,
 await/cancel/events/free-handle adapters, runtime connection state, runtime health readiness
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
-detach/open-runtime/connect-local state seams, schema-backed SDK error projection
+detach/open-runtime/connect-local/open-runtime-profiles state seams,
+RuntimeProfileBundle factories for Runtime Core-backed Directory, Receipt,
+Publication, Admin + Gateway, Events, Surface, Compatibility, and Wrapper
+clients, schema-backed SDK error projection
 with stable error classes and profile source-ref accessors, complete Invocation
 draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, local Ed25519 signer provider over daemon/Axon
