@@ -196,6 +196,7 @@ for path in \
   tools/scripts/check-easyremote-sdk-boundary.sh \
   tools/scripts/check-sdk-cutover-readiness.sh \
   tools/scripts/check-sdk-parity-matrix.sh \
+  tools/scripts/check-sdk-product-smokes.sh \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
@@ -571,6 +572,7 @@ bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-sdk-product-smokes.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md
 require_literal src/bin/sdk-conformance-runner.rs "ConformanceResultRecord"

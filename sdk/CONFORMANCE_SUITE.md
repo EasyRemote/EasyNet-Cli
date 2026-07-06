@@ -85,6 +85,8 @@ bash tools/scripts/check-sdk-scaffold.sh
 bash tools/scripts/check-backend-sdk-only-boundary.sh "$EASYNET_BACKEND_ROOT"
 bash tools/scripts/check-backend-route-family-coverage.sh
 bash tools/scripts/check-sdk-parity-matrix.sh
+bash tools/scripts/check-sdk-product-smokes.sh
+bash tools/scripts/check-sdk-cutover-readiness.sh
 ```
 
 Future runners should add:

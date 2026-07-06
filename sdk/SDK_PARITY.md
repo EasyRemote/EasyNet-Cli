@@ -44,7 +44,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
 | compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
 | wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade. |
-| conformance runner | SDK Parity | provider-backed | provider-backed | Non-P0 language action-adapter reports and external product cutover smokes remain incomplete outside the Go/Python SDK parity gate. |
+| conformance runner | SDK Parity | provider-backed | provider-backed | Non-P0 language action-adapter reports and per-route live product smoke evidence remain incomplete outside the Go/Python SDK parity gate. |
 
 ## Known Gaps
 
@@ -485,8 +485,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   carrier/projection behavior, Host Binding codec/hash behavior, Receipt
   projection, and Wrapper record projection. The shared conformance runner now
   validates Rust/C ABI/Go/Python action-adapter reports against every required
-  shared case, while non-P0 language adapter reports and external product
-  cutover smokes remain incomplete.
+  shared case. The aggregate cutover readiness gate now runs EasyRemote and
+  backend product test smokes; non-P0 language adapter reports and per-route
+  live product smoke evidence remain incomplete.
 
 ## Capability States
 
