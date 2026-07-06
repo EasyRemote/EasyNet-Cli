@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional, Protocol
 
 from .errors import ErrorCode, RetryHint, SDKError
-from .identity import SignerHandle
+from .identity import SignerHandle, _signer_handle_provenance_error
 from .invocation import InvocationDraft, InvocationSignature
 
 
@@ -373,6 +373,9 @@ def _validate_signer_handle(handle: SignerHandle) -> None:
         raise _invalid_prepared("signer handle key_id is required")
     if handle.owner_ura.strip() == "":
         raise _invalid_prepared("signer handle owner_ura is required")
+    error = _signer_handle_provenance_error(handle)
+    if error:
+        raise _invalid_prepared(error)
 
 
 def _validate_prepared_policy(

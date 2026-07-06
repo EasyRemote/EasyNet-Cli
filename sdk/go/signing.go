@@ -577,6 +577,9 @@ func validateExpectedPublicKey(actualBase64 string, expectedBase64 string, sourc
 }
 
 func validateSignerHandle(handle SignerHandle) error {
+	if strings.TrimSpace(handle.Profile) != directoryIdentityProfile {
+		return invalidInvocation("signer handle profile must be directory_identity", nil)
+	}
 	if strings.TrimSpace(handle.SignerID) == "" {
 		return invalidInvocation("signer handle signer_id is required", nil)
 	}
@@ -592,7 +595,55 @@ func validateSignerHandle(handle SignerHandle) error {
 	if handle.Metadata == nil {
 		return invalidInvocation("signer handle metadata is required", nil)
 	}
+	if strings.ToLower(strings.TrimSpace(handle.Algorithm)) != "ed25519" {
+		return invalidInvocation("signer handle algorithm must be ed25519", nil)
+	}
+	if !isDaemonSignerSource(handle.Metadata["source"]) {
+		return invalidInvocation("signer handle source must be daemon key inventory", nil)
+	}
+	mode, ok := handle.Policy["mode"].(string)
+	if !ok || !isDaemonSignerMode(mode) {
+		return invalidInvocation("signer handle policy mode is not supported", nil)
+	}
+	usageString, ok := handle.Policy["usage"].(string)
+	if !ok || !isInvocationSigningUsage(usageString) {
+		return invalidInvocation("signer handle policy usage is not supported", nil)
+	}
+	if policySignerID, ok := handle.Policy["signer_id"].(string); ok && strings.TrimSpace(policySignerID) != "" && policySignerID != handle.SignerID {
+		return invalidInvocation("signer handle policy.signer_id must match signer_id", nil)
+	}
 	return nil
+}
+
+func isDaemonSignerSource(value any) bool {
+	source, ok := value.(string)
+	if !ok {
+		return false
+	}
+	switch strings.TrimSpace(source) {
+	case "daemon_keyring", "daemon_key_inventory", "identity.list_user_pubkeys", "identity.signer", "daemon.identity.signer":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDaemonSignerMode(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "local_daemon_signing":
+		return true
+	default:
+		return false
+	}
+}
+
+func isInvocationSigningUsage(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "invocation.sign":
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePreparedPolicy(prepared PreparedInvocation, handle SignerHandle) error {

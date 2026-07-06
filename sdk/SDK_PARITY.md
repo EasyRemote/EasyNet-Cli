@@ -30,7 +30,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
 | typed errors | Runtime Core | provider-backed | provider-backed | P1 language error classes and package-level source refs remain incomplete. |
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
-| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | Daemon-owned signer acquisition and keyring policy cutover remain incomplete. |
+| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | Daemon-owned signer-handle provenance guardrails exist; live signer acquisition/keyring policy cutover remains incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; concrete product wrapper stream adapters remain incomplete outside the daemon SDK. |
@@ -77,8 +77,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   carrier/resolved-ref projection guardrails, Directory subscribe stream
   guardrails for Go/Python, C ABI `directory.subscribe` carrier/projection
   symbols, Identity URA/DescriptorRef projection guardrails, and identity
-  signing-key register/list/revoke builder/projection guardrails exist; signer
-  construction and broader external language-facade cutovers remain incomplete.
+  signing-key register/list/revoke builder/projection guardrails plus
+  signer-handle provenance/policy guardrails exist; live signer acquisition and
+  broader external language-facade cutovers remain incomplete.
 - Publication ResourceRef/package validation/plugin install/deploy-unpublish
   carrier and lifecycle guardrails exist for Rust/C ABI; Go now executes
   list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
@@ -278,8 +279,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   `canonical_ability_descriptor_ref`, and `project_descriptor_ref` helper
   facades plus an `AbilityAddress` projection for owner/subject facts consumed
   by generic host addressing, `IdentityClient` descriptor, identity, ResourceRef,
-  signing-key lifecycle and signer-handle projection seams, and close state
-  seams; Python now has private C ABI v4 identity projection, profile carrier
+  signing-key lifecycle, signer-handle projection/provenance guardrails, and
+  close state seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, plus C ABI-backed signing-key register/list/revoke
   execution through daemon identity abilities and signer-handle projection from
@@ -350,7 +351,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
   gates, and product Invocation direct daemon UDS unary/server-stream/bidi transport plus
   explicit direct-runtime prepare/submit/handle delegation is available through
-  the SDK facade, while daemon-owned signer acquisition/keyring policy, daemon-backed
+  the SDK facade, while live daemon-owned signer acquisition/keyring policy, daemon-backed
   MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover and RFC-007 receipt URA construction remain
   incomplete.

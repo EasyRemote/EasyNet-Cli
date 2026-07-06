@@ -1514,6 +1514,39 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_action(local_signing_case, "local_daemon_sign")
         self._require_case_expectation(local_signing_case, "public_object: SignedInvocation")
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_profile: directory_identity"
+        )
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_policy_mode: local_daemon_signing"
+        )
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_policy_usage: invocation.sign"
+        )
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_source: daemon_key_inventory"
+        )
+        self._require_case_expectation(
+            local_signing_case, "forged_signer_handle_rejected: true"
+        )
+        signer_handle = shared_signer_handle()
+        forged_handle = SignerHandle(
+            profile=signer_handle.profile,
+            signer_id=signer_handle.signer_id,
+            owner_ura=signer_handle.owner_ura,
+            key_id=signer_handle.key_id,
+            algorithm=signer_handle.algorithm,
+            policy=signer_handle.policy,
+            metadata={"source": "product_local_fixture"},
+        )
+        with self.assertRaises(SDKError):
+            Signer.from_signature(
+                forged_handle,
+                InvocationSignature(
+                    algorithm="ed25519",
+                    signature_base64="c2lnbmF0dXJl",
+                ),
+            ).sign(prepared)
         local_signed = Signer.from_signature(
             shared_signer_handle(),
             InvocationSignature(

@@ -240,6 +240,78 @@ class SigningTests(unittest.TestCase):
         self.assertEqual(provider.material, prepared.signing_material)
         self.assertEqual(provider.handle, handle)
 
+    def test_signer_rejects_forged_handle_provenance(self) -> None:
+        class MemorySignatureProvider:
+            def sign(self, material, handle):
+                return InvocationSignature(
+                    algorithm="",
+                    signature_base64="c2lnbmF0dXJl",
+                )
+
+        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
+        handle = signer_handle()
+        forged_source = SignerHandle(
+            profile=handle.profile,
+            signer_id=handle.signer_id,
+            owner_ura=handle.owner_ura,
+            key_id=handle.key_id,
+            algorithm=handle.algorithm,
+            policy=handle.policy,
+            metadata={"source": "product_local_fixture"},
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            Signer(handle=forged_source, provider=MemorySignatureProvider()).sign(prepared)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        forged_policy = SignerHandle(
+            profile=handle.profile,
+            signer_id=handle.signer_id,
+            owner_ura=handle.owner_ura,
+            key_id=handle.key_id,
+            algorithm=handle.algorithm,
+            policy={"mode": "caller_signing", "usage": "invocation.sign"},
+            metadata=handle.metadata,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            Signer(handle=forged_policy, provider=MemorySignatureProvider()).sign(prepared)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        missing_usage = SignerHandle(
+            profile=handle.profile,
+            signer_id=handle.signer_id,
+            owner_ura=handle.owner_ura,
+            key_id=handle.key_id,
+            algorithm=handle.algorithm,
+            policy={"mode": "local_daemon_signing"},
+            metadata=handle.metadata,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            Signer(handle=missing_usage, provider=MemorySignatureProvider()).sign(prepared)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        mismatched_signer_id = SignerHandle(
+            profile=handle.profile,
+            signer_id=handle.signer_id,
+            owner_ura=handle.owner_ura,
+            key_id=handle.key_id,
+            algorithm=handle.algorithm,
+            policy={
+                "mode": "local_daemon_signing",
+                "usage": "invocation.sign",
+                "signer_id": "other-signer",
+            },
+            metadata=handle.metadata,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            Signer(handle=mismatched_signer_id, provider=MemorySignatureProvider()).sign(
+                prepared
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     @unittest.skipUnless(CRYPTOGRAPHY_AVAILABLE, "cryptography is not installed")
     def test_ed25519_provider_signs_daemon_canonical_bytes(self) -> None:
         seed = bytes([0x11]) * 32

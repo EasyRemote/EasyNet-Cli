@@ -350,6 +350,50 @@ func TestIdentitySigningKeyLifecycleAndSignerHandle(t *testing.T) {
 	}
 }
 
+func TestIdentitySignerHandleRejectsForgedSource(t *testing.T) {
+	_, err := NewSignerHandleFromJSON([]byte(`{
+		"profile":"directory_identity",
+		"signer_id":"signer-forged",
+		"owner_ura":"easynet:///r/example/agent/alice.sdk",
+		"key_id":"alice-key-1",
+		"algorithm":"ed25519",
+		"policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
+		"metadata":{"source":"product_local_fixture"}
+	}`))
+	if err == nil {
+		t.Fatalf("NewSignerHandleFromJSON accepted forged source")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+
+	_, err = NewSignerHandleFromJSON([]byte(`{
+		"profile":"directory_identity",
+		"signer_id":"signer-alice-key-1",
+		"owner_ura":"easynet:///r/example/agent/alice.sdk",
+		"key_id":"alice-key-1",
+		"algorithm":"ed25519",
+		"policy":{"mode":"local_daemon_signing","usage":"invocation.sign","signer_id":"other-signer"},
+		"metadata":{"source":"daemon_keyring"}
+	}`))
+	if err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSignerHandleFromJSON accepted mismatched policy signer_id: %v", err)
+	}
+
+	_, err = NewSignerHandleFromJSON([]byte(`{
+		"profile":"directory_identity",
+		"signer_id":"signer-alice-key-1",
+		"owner_ura":"easynet:///r/example/agent/alice.sdk",
+		"key_id":"alice-key-1",
+		"algorithm":"ed25519",
+		"policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
+		"metadata":{"source":"daemon_keyring","public_key_base64":"c2hvcnQ="}
+	}`))
+	if err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSignerHandleFromJSON accepted invalid public key: %v", err)
+	}
+}
+
 func TestIdentitySigningKeyLifecycleRejectsInvalidInputs(t *testing.T) {
 	client, err := NewIdentityClient(&memoryIdentityTransport{keyJSON: signingKeyRecordJSON, revokeJSON: signingKeyRevokeJSON})
 	if err != nil {

@@ -28,7 +28,8 @@ methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
 read-model pages, Runtime Core-backed directory subscription streams, directory
 subscription state seams, and close state seams plus
 IdentityClient descriptor/resource projection, Axon-delegated
-URA/DescriptorRef helper seams, signing-key lifecycle, and signer-handle seams.
+URA/DescriptorRef helper seams, signing-key lifecycle, and signer-handle
+provenance/policy guardrails.
 It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref projection,
 invocation-history list/get/trace read-model methods, explicit daemon/Axon
 projection provider seams for Runtime-backed project/verify/verify-chain/causal-ref,

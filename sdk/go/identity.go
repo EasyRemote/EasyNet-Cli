@@ -576,7 +576,39 @@ func NewSignerHandleFromJSON(raw []byte) (SignerHandle, error) {
 		signer.Algorithm == "" || signer.Policy == nil || signer.Metadata == nil {
 		return SignerHandle{}, invalidProfilePayload(directoryIdentityProfile, "invalid signer handle projection", nil)
 	}
+	if err := validateSignerHandleProjection(signer); err != nil {
+		return SignerHandle{}, err
+	}
 	return signer, nil
+}
+
+func validateSignerHandleProjection(handle SignerHandle) error {
+	if handle.Profile != directoryIdentityProfile {
+		return invalidProfilePayload(directoryIdentityProfile, "signer handle profile must be directory_identity", nil)
+	}
+	if err := validateSignerHandle(handle); err != nil {
+		return invalidProfilePayload(directoryIdentityProfile, "invalid signer handle projection", err)
+	}
+	if strings.ToLower(strings.TrimSpace(handle.Algorithm)) != "ed25519" {
+		return invalidProfilePayload(directoryIdentityProfile, "signer handle algorithm must be ed25519", nil)
+	}
+	mode, ok := handle.Policy["mode"].(string)
+	if !ok || mode != "local_daemon_signing" {
+		return invalidProfilePayload(directoryIdentityProfile, "signer handle policy.mode must be local_daemon_signing", nil)
+	}
+	usage, ok := handle.Policy["usage"].(string)
+	if !ok || usage != "invocation.sign" {
+		return invalidProfilePayload(directoryIdentityProfile, "signer handle policy.usage must be invocation.sign", nil)
+	}
+	if policySignerID, ok := handle.Policy["signer_id"].(string); ok && policySignerID != "" && policySignerID != handle.SignerID {
+		return invalidProfilePayload(directoryIdentityProfile, "signer handle policy.signer_id must match signer_id", nil)
+	}
+	if publicKey, ok := handle.Metadata["public_key_base64"].(string); ok && publicKey != "" {
+		if err := validateEd25519PublicKey(publicKey); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func marshalSigningKeyRegistrationRequest(req SigningKeyRegistrationRequest) ([]byte, error) {

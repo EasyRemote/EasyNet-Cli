@@ -11,6 +11,7 @@ from easynet_sdk import (
     IdentityProjectionRequest,
     LocalResourceRefRequest,
     SDKError,
+    SignerHandle,
     SignerRequest,
     SigningKeyListRequest,
     SigningKeyRegistrationRequest,
@@ -558,6 +559,49 @@ class IdentityTests(unittest.TestCase):
         )
         self.assertEqual(signer.signer_id, "signer-alice-key-1")
         self.assertEqual(signer.algorithm, "ed25519")
+
+    def test_signer_handle_rejects_forged_source(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            SignerHandle.from_json(
+                b"""{
+                    "profile":"directory_identity",
+                    "signer_id":"signer-forged",
+                    "owner_ura":"easynet:///r/example/agent/alice.sdk",
+                    "key_id":"alice-key-1",
+                    "algorithm":"ed25519",
+                    "policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
+                    "metadata":{"source":"product_local_fixture"}
+                }"""
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as caught:
+            SignerHandle.from_json(
+                b"""{
+                    "profile":"directory_identity",
+                    "signer_id":"signer-alice-key-1",
+                    "owner_ura":"easynet:///r/example/agent/alice.sdk",
+                    "key_id":"alice-key-1",
+                    "algorithm":"ed25519",
+                    "policy":{"mode":"local_daemon_signing","usage":"invocation.sign","signer_id":"other-signer"},
+                    "metadata":{"source":"daemon_keyring"}
+                }"""
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as caught:
+            SignerHandle.from_json(
+                b"""{
+                    "profile":"directory_identity",
+                    "signer_id":"signer-alice-key-1",
+                    "owner_ura":"easynet:///r/example/agent/alice.sdk",
+                    "key_id":"alice-key-1",
+                    "algorithm":"ed25519",
+                    "policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
+                    "metadata":{"source":"daemon_keyring","public_key_base64":"c2hvcnQ="}
+                }"""
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_signing_key_lifecycle_rejects_invalid_inputs(self) -> None:
         client = IdentityClient(MemoryIdentityTransport())

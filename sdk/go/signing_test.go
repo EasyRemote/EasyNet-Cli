@@ -272,6 +272,33 @@ func TestSignerProviderSignsWithDaemonAuthorizedHandle(t *testing.T) {
 	}
 }
 
+func TestSignerRejectsForgedHandleProvenance(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	handle := signerHandle("")
+	handle.Metadata = map[string]any{"source": "product_local_fixture"}
+	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSigner forged source error = %v, want InvalidArgument", err)
+	}
+
+	handle = signerHandle("")
+	handle.Policy = map[string]any{"mode": "caller_signing", "usage": "invocation.sign"}
+	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSigner forged policy error = %v, want InvalidArgument", err)
+	}
+
+	handle = signerHandle("")
+	handle.Policy = map[string]any{"mode": "local_daemon_signing"}
+	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSigner missing usage error = %v, want InvalidArgument", err)
+	}
+
+	handle = signerHandle("")
+	handle.Policy["signer_id"] = "other-signer"
+	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSigner signer_id mismatch error = %v, want InvalidArgument", err)
+	}
+}
+
 func TestEd25519ProviderSignsDaemonCanonicalBytes(t *testing.T) {
 	seed := bytes.Repeat([]byte{0x11}, ed25519.SeedSize)
 	publicKeyBase64 := ed25519PublicKeyBase64(seed)

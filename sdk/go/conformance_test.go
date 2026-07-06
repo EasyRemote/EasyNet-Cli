@@ -480,6 +480,16 @@ func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing
 	requireCaseID(t, localSigningCase, "invocation/local_daemon_signing_boundary")
 	requireCaseAction(t, localSigningCase, "local_daemon_sign")
 	requireCaseExpectation(t, localSigningCase, "public_object: SignedInvocation")
+	requireCaseExpectation(t, localSigningCase, "signer_handle_profile: directory_identity")
+	requireCaseExpectation(t, localSigningCase, "signer_handle_policy_mode: local_daemon_signing")
+	requireCaseExpectation(t, localSigningCase, "signer_handle_policy_usage: invocation.sign")
+	requireCaseExpectation(t, localSigningCase, "signer_handle_source: daemon_key_inventory")
+	requireCaseExpectation(t, localSigningCase, "forged_signer_handle_rejected: true")
+	forgedHandle := signerHandle("")
+	forgedHandle.Metadata = map[string]any{"source": "product_local_fixture"}
+	if _, err := NewSigner(forgedHandle, NewStaticSignatureProvider(sharedInvocationSignature())); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("forged signer handle error = %v, want %s", err, ErrInvalidArgument)
+	}
 	if !signed.SubmitReady() || signed.Prepared().SubmitReady() {
 		t.Fatalf("local signing did not produce SignedInvocation boundary")
 	}

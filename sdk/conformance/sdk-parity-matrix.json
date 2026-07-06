@@ -107,7 +107,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_signing.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Daemon-owned signer acquisition and keyring policy cutover remain incomplete."
+      "remaining": "Daemon-owned signer-handle provenance guardrails exist; live signer acquisition/keyring policy cutover remains incomplete."
     },
     {
       "capability_id": "unary_invoke",

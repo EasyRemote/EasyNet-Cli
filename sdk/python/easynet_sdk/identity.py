@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, TypeVar, runtime_checkable
@@ -433,7 +435,7 @@ class SignerHandle:
     @classmethod
     def from_json(cls, raw: bytes | str) -> "SignerHandle":
         decoded = _json_object(raw, "signer handle")
-        return cls(
+        handle = cls(
             profile=_required_string(decoded, "profile"),
             signer_id=_required_string(decoded, "signer_id"),
             owner_ura=_required_string(decoded, "owner_ura"),
@@ -442,6 +444,52 @@ class SignerHandle:
             policy=_required_mapping(decoded, "policy"),
             metadata=_required_mapping(decoded, "metadata"),
         )
+        error = _signer_handle_provenance_error(handle)
+        if error:
+            raise _invalid_identity(error)
+        return handle
+
+
+def _signer_handle_provenance_error(handle: SignerHandle) -> str:
+    if handle.profile.strip() != _PROFILE:
+        return "signer handle profile must be directory_identity"
+    source = handle.metadata.get("source")
+    if not isinstance(source, str) or source.strip() not in {
+        "daemon_keyring",
+        "daemon_key_inventory",
+        "identity.list_user_pubkeys",
+        "identity.signer",
+        "daemon.identity.signer",
+    }:
+        return "signer handle source must be daemon key inventory"
+    mode = handle.policy.get("mode")
+    if not isinstance(mode, str) or mode.strip() != "local_daemon_signing":
+        return "signer handle policy mode is not supported"
+    usage = handle.policy.get("usage")
+    if not isinstance(usage, str) or usage.strip() != "invocation.sign":
+        return "signer handle policy usage is not supported"
+    policy_signer_id = handle.policy.get("signer_id")
+    if (
+        isinstance(policy_signer_id, str)
+        and policy_signer_id.strip()
+        and policy_signer_id != handle.signer_id
+    ):
+        return "signer handle policy.signer_id must match signer_id"
+    if handle.algorithm.strip().lower() != "ed25519":
+        return "signer handle algorithm must be ed25519"
+    public_key = handle.metadata.get("public_key_base64")
+    if public_key is not None:
+        if not isinstance(public_key, str) or not _is_ed25519_public_key(public_key):
+            return "signer handle public_key_base64 must be a 32-byte Ed25519 public key"
+    return ""
+
+
+def _is_ed25519_public_key(value: str) -> bool:
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return len(decoded) == 32
 
 
 @runtime_checkable
