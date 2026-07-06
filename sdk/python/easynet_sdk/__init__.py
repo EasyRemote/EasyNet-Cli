@@ -159,7 +159,16 @@ from .direct_runtime import (
     DirectDaemonRuntimeConnector,
     DirectDaemonRuntimeTransport,
 )
-from .errors import ErrorCode, RetryHint, RuntimeError, SDKError, is_code
+from .errors import (
+    ErrorClass,
+    ErrorCode,
+    RetryHint,
+    RuntimeError,
+    SDKError,
+    error_class_for_code,
+    is_code,
+    profile_source_ref,
+)
 from .environment import SdkEnvironment, default_environment
 from .events import (
     DEFAULT_EVENT_PAGE_SIZE,
@@ -554,6 +563,7 @@ __all__ = [
     "DeviceSession",
     "DeviceSessionPage",
     "Endpoints",
+    "ErrorClass",
     "ErrorCode",
     "Ed25519SignatureProvider",
     "EventClient",
@@ -808,7 +818,9 @@ __all__ = [
     "device_ura",
     "discover_daemon",
     "hub_ura",
+    "error_class_for_code",
     "is_code",
+    "profile_source_ref",
     "owner_ability_descriptor_ref",
     "owner_ability_ura",
     "owner_ura_for_ability",

@@ -349,6 +349,9 @@ func TestPublicationProfileErrorsIncludeSourceRefs(t *testing.T) {
 	if details["source_ref"] != "go_sdk.profile.publication" {
 		t.Fatalf("source_ref detail = %#v", details["source_ref"])
 	}
+	if details["reason"] != "resource_ref_path_must_be_absolute" {
+		t.Fatalf("reason detail = %#v", details["reason"])
+	}
 	if transport.seenRequest != nil {
 		t.Fatalf("transport called for invalid request: %#v", transport.seenRequest)
 	}

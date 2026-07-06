@@ -321,7 +321,9 @@ func (c *PublicationClient) BuildLocalResourceRef(ctx context.Context, req Local
 		return ResourceRef{}, invalidProfilePayload(publicationProfile, "path and capability are required", nil)
 	}
 	if !filepath.IsAbs(req.Path) {
-		return ResourceRef{}, invalidProfilePayload(publicationProfile, "absolute resource path is required", nil)
+		return ResourceRef{}, invalidProfilePayloadWithDetails(publicationProfile, "absolute resource path is required", map[string]any{
+			"reason": "resource_ref_path_must_be_absolute",
+		}, nil)
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {

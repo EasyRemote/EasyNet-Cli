@@ -42,6 +42,26 @@ const (
 	ErrorTransport           = ErrTransport
 )
 
+// ErrorClass is a language-side grouping derived from canonical ErrorCode.
+type ErrorClass string
+
+const (
+	ErrorClassValidation   ErrorClass = "validation"
+	ErrorClassHandle       ErrorClass = "handle"
+	ErrorClassLifecycle    ErrorClass = "lifecycle"
+	ErrorClassAvailability ErrorClass = "availability"
+	ErrorClassPermission   ErrorClass = "permission"
+	ErrorClassAdmission    ErrorClass = "admission"
+	ErrorClassRouting      ErrorClass = "routing"
+	ErrorClassTimeout      ErrorClass = "timeout"
+	ErrorClassCancellation ErrorClass = "cancellation"
+	ErrorClassProtocol     ErrorClass = "protocol"
+	ErrorClassVersion      ErrorClass = "version"
+	ErrorClassControl      ErrorClass = "control"
+	ErrorClassUnsupported  ErrorClass = "unsupported"
+	ErrorClassGeneric      ErrorClass = "generic"
+)
+
 // RetryHint describes whether a failed operation may be retried.
 type RetryHint string
 
@@ -83,6 +103,30 @@ func (e *SDKError) Unwrap() error {
 	return e.Cause
 }
 
+// Class returns the stable language-side error grouping for this SDK error.
+func (e *SDKError) Class() ErrorClass {
+	if e == nil {
+		return ErrorClassGeneric
+	}
+	return ErrorClassForCode(e.Code)
+}
+
+// Profile returns the profile detail attached to profile-originated SDK errors.
+func (e *SDKError) Profile() string {
+	if e == nil {
+		return ""
+	}
+	return detailString(e.Details, "profile")
+}
+
+// SourceRef returns the stable language/package source reference for this error.
+func (e *SDKError) SourceRef() string {
+	if e == nil {
+		return ""
+	}
+	return detailString(e.Details, "source_ref")
+}
+
 // RuntimeError is the Runtime Core error projection required by the daemon SDK.
 type RuntimeError = SDKError
 
@@ -95,6 +139,40 @@ func RetryableForHint(retry RetryHint) bool {
 func IsCode(err error, code ErrorCode) bool {
 	var sdkErr *SDKError
 	return errors.As(err, &sdkErr) && NormalizeErrorCode(string(sdkErr.Code)) == NormalizeErrorCode(string(code))
+}
+
+// ErrorClassForCode projects a canonical error code into a stable language class.
+func ErrorClassForCode(code ErrorCode) ErrorClass {
+	switch NormalizeErrorCode(string(code)) {
+	case ErrInvalidArgument, ErrNullPointer, ErrInvalidUTF8, ErrInvalidInvocation:
+		return ErrorClassValidation
+	case ErrInvalidHandle:
+		return ErrorClassHandle
+	case ErrNotInitialized, ErrAlreadyInit:
+		return ErrorClassLifecycle
+	case ErrDaemonOffline:
+		return ErrorClassAvailability
+	case ErrPermissionDenied:
+		return ErrorClassPermission
+	case ErrAdmissionDenied:
+		return ErrorClassAdmission
+	case ErrAbilityNotFound, ErrRouteUnavailable:
+		return ErrorClassRouting
+	case ErrTimeout:
+		return ErrorClassTimeout
+	case ErrCancelled:
+		return ErrorClassCancellation
+	case ErrProtocolMismatch, ErrProtocol:
+		return ErrorClassProtocol
+	case ErrVersionMismatch, ErrVersionIncompatible:
+		return ErrorClassVersion
+	case ErrControlOnly:
+		return ErrorClassControl
+	case ErrNotImplemented:
+		return ErrorClassUnsupported
+	default:
+		return ErrorClassGeneric
+	}
 }
 
 // DecodeDaemonErrorJSON decodes the shared sdk/schemas/error.schema.json DTO.
@@ -219,9 +297,18 @@ func profileErrorDetails(profile string, details map[string]any) map[string]any 
 		value["profile"] = profile
 	}
 	if _, ok := value["source_ref"]; !ok {
-		value["source_ref"] = "go_sdk.profile." + profile
+		value["source_ref"] = ProfileSourceRef(profile)
 	}
 	return value
+}
+
+// ProfileSourceRef returns the stable Go package source reference for a profile.
+func ProfileSourceRef(profile string) string {
+	clean := strings.TrimSpace(profile)
+	if clean == "" {
+		return ""
+	}
+	return "go_sdk.profile." + clean
 }
 
 func withProfileErrorDetails(err error, profile string) error {
@@ -240,6 +327,17 @@ func invalidProfileClient(profile string, message string) error {
 
 func invalidProfilePayload(profile string, message string, cause error) error {
 	return withProfileErrorDetails(invalidRuntimePayload(message, cause), profile)
+}
+
+func invalidProfilePayloadWithDetails(profile string, message string, details map[string]any, cause error) error {
+	err := invalidRuntimePayload(message, cause)
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		return err
+	}
+	copy := *sdkErr
+	copy.Details = profileErrorDetails(profile, details)
+	return &copy
 }
 
 func transportProfileError(profile string, message string, cause error) error {
@@ -270,4 +368,15 @@ func optionalString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func detailString(details map[string]any, key string) string {
+	if details == nil {
+		return ""
+	}
+	value, ok := details[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
 }

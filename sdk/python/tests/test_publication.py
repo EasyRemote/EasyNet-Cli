@@ -618,6 +618,22 @@ class PublicationTests(unittest.TestCase):
         assert transport.seen_request is not None
         self.assertEqual(transport.seen_request["path"], "/tmp/easynet-weather-package")
 
+    def test_build_resource_ref_validation_error_has_machine_reason(self) -> None:
+        transport = MemoryPublicationTransport()
+        client = PublicationClient(transport)
+
+        with self.assertRaises(SDKError) as caught:
+            client.build_local_resource_ref(
+                LocalResourceRefRequest(path="relative", capability="read")
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(
+            caught.exception.details["reason"],
+            "resource_ref_path_must_be_absolute",
+        )
+        self.assertIsNone(transport.seen_request)
+
     def test_deploy_and_build_deploy_invocation(self) -> None:
         transport = MemoryPublicationTransport()
         client = PublicationClient(transport)

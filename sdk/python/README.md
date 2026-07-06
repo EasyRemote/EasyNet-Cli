@@ -25,7 +25,8 @@ state, runtime health readiness facts, DaemonHandle lifecycle
 status/endpoints/invocation-endpoint lookup/start/attach/discover/stop/detach/open-runtime/connect-local
 state seams, SDK-owned `DaemonStartProjection` and
 `DaemonLifecycleFacade` start-wire/status/open-client projection,
-schema-backed SDK error projection, complete
+schema-backed SDK error projection with stable error classes and profile
+source-ref accessors, complete
 Invocation draft construction, AbilityInvocationClient descriptor-delegated
 complete tuple build/invoke/stream/bidi convenience facade plus generic ability
 target build/invoke/stream/bidi/prepare/prepare-and-sign helpers and explicit

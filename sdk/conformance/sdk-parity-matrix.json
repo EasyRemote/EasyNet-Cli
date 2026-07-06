@@ -79,7 +79,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_errors.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "P1 language error classes and package-level source refs remain incomplete."
+      "remaining": "Go/Python expose stable error classes and package-level source refs; non-P0 language bindings and package stability gates remain incomplete."
     },
     {
       "capability_id": "complete_invocation_draft",

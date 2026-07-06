@@ -59,6 +59,9 @@ func TestDecodeDaemonErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.T) 
 	if err.Details["abi_symbol"] != "ERR_TIMEOUT" {
 		t.Fatalf("details not preserved: %#v", err.Details)
 	}
+	if err.Class() != ErrorClassTimeout {
+		t.Fatalf("class = %s, want %s", err.Class(), ErrorClassTimeout)
+	}
 }
 
 func TestNormalizeErrorCodeCanonicalizesLegacyWireAliases(t *testing.T) {
@@ -79,6 +82,30 @@ func TestNormalizeErrorCodeCanonicalizesLegacyWireAliases(t *testing.T) {
 	for input, want := range cases {
 		if got := NormalizeErrorCode(input); got != want {
 			t.Fatalf("NormalizeErrorCode(%q) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func TestErrorClassForCodeProjectsStableClasses(t *testing.T) {
+	cases := map[ErrorCode]ErrorClass{
+		ErrInvalidArgument:  ErrorClassValidation,
+		ErrInvalidHandle:    ErrorClassHandle,
+		ErrNotInitialized:   ErrorClassLifecycle,
+		ErrDaemonOffline:    ErrorClassAvailability,
+		ErrPermissionDenied: ErrorClassPermission,
+		ErrAdmissionDenied:  ErrorClassAdmission,
+		ErrAbilityNotFound:  ErrorClassRouting,
+		ErrTimeout:          ErrorClassTimeout,
+		ErrCancelled:        ErrorClassCancellation,
+		ErrProtocolMismatch: ErrorClassProtocol,
+		ErrVersionMismatch:  ErrorClassVersion,
+		ErrControlOnly:      ErrorClassControl,
+		ErrNotImplemented:   ErrorClassUnsupported,
+		ErrGeneric:          ErrorClassGeneric,
+	}
+	for code, want := range cases {
+		if got := ErrorClassForCode(code); got != want {
+			t.Fatalf("ErrorClassForCode(%s) = %s, want %s", code, got, want)
 		}
 	}
 }
@@ -150,5 +177,27 @@ func TestProfileErrorDetailsPreservesCallerRefs(t *testing.T) {
 	}
 	if details["operation"] != "run_file" {
 		t.Fatalf("operation detail not preserved: %#v", details)
+	}
+}
+
+func TestSDKErrorProfileAndSourceRefAccessors(t *testing.T) {
+	err := &SDKError{
+		Code: ErrInvalidArgument,
+		Details: profileErrorDetails("publication", map[string]any{
+			"reason": "resource_ref_namespace_reserved",
+		}),
+	}
+
+	if err.Profile() != "publication" {
+		t.Fatalf("profile = %q", err.Profile())
+	}
+	if err.SourceRef() != "go_sdk.profile.publication" {
+		t.Fatalf("source ref = %q", err.SourceRef())
+	}
+	if err.Class() != ErrorClassValidation {
+		t.Fatalf("class = %s", err.Class())
+	}
+	if ProfileSourceRef(" publication ") != "go_sdk.profile.publication" {
+		t.Fatalf("profile source helper mismatch")
 	}
 }

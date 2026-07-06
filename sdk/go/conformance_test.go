@@ -243,9 +243,14 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	requireCaseID(t, profileErrorCase, "error/profile_source_refs")
 	requireCaseAction(t, profileErrorCase, "trigger_profile_validation_error")
 	requireCaseAction(t, profileErrorCase, "inspect_error_details")
+	requireCaseAction(t, profileErrorCase, "inspect_error_class")
+	requireCaseAction(t, profileErrorCase, "inspect_package_source_ref")
 	requireCaseExpectation(t, profileErrorCase, "profile: publication")
+	requireCaseExpectation(t, profileErrorCase, "error_class: validation")
 	requireCaseExpectation(t, profileErrorCase, "go_source_ref: go_sdk.profile.publication")
+	requireCaseExpectation(t, profileErrorCase, "go_package_source_ref: go_sdk.profile.publication")
 	requireCaseExpectation(t, profileErrorCase, "top_level_schema_change: false")
+	requireCaseExpectation(t, profileErrorCase, "existing_details_preserved: true")
 
 	publication, err := NewPublicationClient(&sharedPublicationTransport{
 		resourceJSON: sharedFixture(t, root, "resource-ref.local-fs.v4.json"),
@@ -260,12 +265,28 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("shared profile validation error = %v, want %s", err, ErrInvalidArgument)
 	}
+	sdkErr = nil
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("shared profile validation error type = %T", err)
+	}
+	if sdkErr.Class() != ErrorClassValidation {
+		t.Fatalf("shared profile validation class = %s", sdkErr.Class())
+	}
+	if sdkErr.Profile() != publicationProfile {
+		t.Fatalf("profile accessor = %#v, want %s", sdkErr.Profile(), publicationProfile)
+	}
+	if sdkErr.SourceRef() != ProfileSourceRef(publicationProfile) {
+		t.Fatalf("source ref accessor = %#v", sdkErr.SourceRef())
+	}
 	details := sdkErrorDetails(t, err)
 	if details["profile"] != publicationProfile {
 		t.Fatalf("profile detail = %#v, want %s", details["profile"], publicationProfile)
 	}
 	if details["source_ref"] != "go_sdk.profile.publication" {
 		t.Fatalf("source_ref detail = %#v", details["source_ref"])
+	}
+	if details["reason"] != "resource_ref_path_must_be_absolute" {
+		t.Fatalf("existing profile error detail not preserved: %#v", details)
 	}
 }
 

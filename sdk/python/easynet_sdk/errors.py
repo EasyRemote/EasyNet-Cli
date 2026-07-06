@@ -37,6 +37,25 @@ class ErrorCode(StrEnum):
     GENERIC = "GENERIC"
 
 
+class ErrorClass(StrEnum):
+    """Language-side grouping derived from canonical ErrorCode."""
+
+    VALIDATION = "validation"
+    HANDLE = "handle"
+    LIFECYCLE = "lifecycle"
+    AVAILABILITY = "availability"
+    PERMISSION = "permission"
+    ADMISSION = "admission"
+    ROUTING = "routing"
+    TIMEOUT = "timeout"
+    CANCELLATION = "cancellation"
+    PROTOCOL = "protocol"
+    VERSION = "version"
+    CONTROL = "control"
+    UNSUPPORTED = "unsupported"
+    GENERIC = "generic"
+
+
 class RetryHint(StrEnum):
     """Retry classification for SDK errors."""
 
@@ -66,6 +85,24 @@ class SDKError(Exception):
 
     def __str__(self) -> str:
         return f"{self.code}: {self.message}" if self.message else str(self.code)
+
+    @property
+    def error_class(self) -> ErrorClass:
+        """Stable language-side grouping for this SDK error."""
+
+        return error_class_for_code(self.code)
+
+    @property
+    def profile(self) -> str:
+        """Profile detail attached to profile-originated SDK errors."""
+
+        return _detail_string(self.details, "profile")
+
+    @property
+    def source_ref(self) -> str:
+        """Stable package source reference attached to this SDK error."""
+
+        return _detail_string(self.details, "source_ref")
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> Optional["SDKError"]:
@@ -137,6 +174,46 @@ def retryable_for_hint(retry: RetryHint) -> bool:
     """Return the explicit retryability represented by a retry hint."""
 
     return retry in {RetryHint.SAFE, RetryHint.AFTER_BACKOFF}
+
+
+def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
+    """Project a canonical error code into a stable language class."""
+
+    normalized = normalize_error_code(code.value if isinstance(code, ErrorCode) else code)
+    match normalized:
+        case (
+            ErrorCode.INVALID_ARGUMENT
+            | ErrorCode.NULL_POINTER
+            | ErrorCode.INVALID_UTF8
+            | ErrorCode.INVALID_INVOCATION
+        ):
+            return ErrorClass.VALIDATION
+        case ErrorCode.INVALID_HANDLE:
+            return ErrorClass.HANDLE
+        case ErrorCode.NOT_INITIALIZED | ErrorCode.ALREADY_INIT:
+            return ErrorClass.LIFECYCLE
+        case ErrorCode.DAEMON_OFFLINE:
+            return ErrorClass.AVAILABILITY
+        case ErrorCode.PERMISSION_DENIED:
+            return ErrorClass.PERMISSION
+        case ErrorCode.ADMISSION_DENIED:
+            return ErrorClass.ADMISSION
+        case ErrorCode.ABILITY_NOT_FOUND | ErrorCode.ROUTE_UNAVAILABLE:
+            return ErrorClass.ROUTING
+        case ErrorCode.TIMEOUT:
+            return ErrorClass.TIMEOUT
+        case ErrorCode.CANCELLED:
+            return ErrorClass.CANCELLATION
+        case ErrorCode.PROTOCOL_MISMATCH | ErrorCode.PROTOCOL:
+            return ErrorClass.PROTOCOL
+        case ErrorCode.VERSION_MISMATCH | ErrorCode.VERSION_INCOMPATIBLE:
+            return ErrorClass.VERSION
+        case ErrorCode.CONTROL_ONLY:
+            return ErrorClass.CONTROL
+        case ErrorCode.NOT_IMPLEMENTED:
+            return ErrorClass.UNSUPPORTED
+        case _:
+            return ErrorClass.GENERIC
 
 
 def normalize_error_code(code: str) -> ErrorCode:
@@ -234,11 +311,20 @@ def profile_error_details(
 
     value = dict(details or {})
     value.setdefault("profile", profile)
-    value.setdefault("source_ref", source_ref or f"python_sdk.profile.{profile}")
+    value.setdefault("source_ref", source_ref or profile_source_ref(profile))
     for key, ref_value in refs.items():
         if ref_value is not None and ref_value != "":
             value.setdefault(key, ref_value)
     return value
+
+
+def profile_source_ref(profile: str) -> str:
+    """Return the stable Python package source reference for a profile."""
+
+    clean = profile.strip()
+    if not clean:
+        return ""
+    return f"python_sdk.profile.{clean}"
 
 
 def _retry_hint(value: str) -> RetryHint:
@@ -275,3 +361,8 @@ def _invalid_daemon_error(message: str) -> SDKError:
         retryable=False,
         message=message,
     )
+
+
+def _detail_string(details: Mapping[str, object], key: str) -> str:
+    value = details.get(key)
+    return value if isinstance(value, str) else ""

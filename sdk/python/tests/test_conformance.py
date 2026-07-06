@@ -44,6 +44,7 @@ from easynet_sdk import (
     DirectorySubscriptionCursor,
     DirectorySubscriptionRequest,
     InvocationObjectAdapter,
+    ErrorClass,
     ErrorCode,
     EventClient,
     EventCursor,
@@ -141,6 +142,7 @@ from easynet_sdk import (
     ValidatePairingRequest,
     audit_consumer_boundary,
     build_receipt_fetch_invocation,
+    profile_source_ref,
 )
 
 
@@ -1363,12 +1365,22 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             profile_error_case, "trigger_profile_validation_error"
         )
         self._require_case_action(profile_error_case, "inspect_error_details")
+        self._require_case_action(profile_error_case, "inspect_error_class")
+        self._require_case_action(profile_error_case, "inspect_package_source_ref")
         self._require_case_expectation(profile_error_case, "profile: publication")
+        self._require_case_expectation(profile_error_case, "error_class: validation")
         self._require_case_expectation(
             profile_error_case, "python_source_ref: python_sdk.profile.publication"
         )
         self._require_case_expectation(
+            profile_error_case,
+            "python_package_source_ref: python_sdk.profile.publication",
+        )
+        self._require_case_expectation(
             profile_error_case, "top_level_schema_change: false"
+        )
+        self._require_case_expectation(
+            profile_error_case, "existing_details_preserved: true"
         )
 
         publication = PublicationClient(SharedPublicationTransport())
@@ -1377,10 +1389,20 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 LocalResourceRefRequest("tmp/easynet-weather-package", "read")
             )
         self.assertEqual(profile_caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertEqual(profile_caught.exception.error_class, ErrorClass.VALIDATION)
+        self.assertEqual(profile_caught.exception.profile, "publication")
+        self.assertEqual(
+            profile_caught.exception.source_ref,
+            profile_source_ref("publication"),
+        )
         self.assertEqual(profile_caught.exception.details["profile"], "publication")
         self.assertEqual(
             profile_caught.exception.details["source_ref"],
             "python_sdk.profile.publication",
+        )
+        self.assertEqual(
+            profile_caught.exception.details["reason"],
+            "resource_ref_path_must_be_absolute",
         )
 
     def test_python_runtime_core_executes_shared_invocation_signing_conformance_cases(self) -> None:

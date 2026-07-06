@@ -12,11 +12,16 @@ steps:
     required_detail: profile
   - action: inspect_error_details
     required_detail: source_ref
+  - action: inspect_error_class
+  - action: inspect_package_source_ref
 expect:
   result: profile_error_source_ref_observed
   error_code: INVALID_ARGUMENT
+  error_class: validation
   profile: publication
   python_source_ref: python_sdk.profile.publication
   go_source_ref: go_sdk.profile.publication
+  python_package_source_ref: python_sdk.profile.publication
+  go_package_source_ref: go_sdk.profile.publication
   top_level_schema_change: false
   existing_details_preserved: true

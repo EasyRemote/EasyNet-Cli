@@ -1,7 +1,12 @@
 import unittest
 
-from easynet_sdk import ErrorCode, RetryHint, SDKError, is_code
-from easynet_sdk.errors import normalize_error_code, profile_error_details
+from easynet_sdk import ErrorClass, ErrorCode, RetryHint, SDKError, is_code
+from easynet_sdk.errors import (
+    error_class_for_code,
+    normalize_error_code,
+    profile_error_details,
+    profile_source_ref,
+)
 
 
 class ErrorTests(unittest.TestCase):
@@ -46,6 +51,7 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.invocation_id, "inv-1")
         self.assertEqual(error.receipt_ura, "easynet:///r/example/receipt/opaque")
         self.assertEqual(error.details["abi_symbol"], "ERR_TIMEOUT")
+        self.assertEqual(error.error_class, ErrorClass.TIMEOUT)
 
     def test_normalize_error_code_canonicalizes_legacy_wire_aliases(self) -> None:
         cases = {
@@ -65,6 +71,27 @@ class ErrorTests(unittest.TestCase):
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(normalize_error_code(raw), expected)
+
+    def test_error_class_for_code_projects_stable_classes(self) -> None:
+        cases = {
+            ErrorCode.INVALID_ARGUMENT: ErrorClass.VALIDATION,
+            ErrorCode.INVALID_HANDLE: ErrorClass.HANDLE,
+            ErrorCode.NOT_INITIALIZED: ErrorClass.LIFECYCLE,
+            ErrorCode.DAEMON_OFFLINE: ErrorClass.AVAILABILITY,
+            ErrorCode.PERMISSION_DENIED: ErrorClass.PERMISSION,
+            ErrorCode.ADMISSION_DENIED: ErrorClass.ADMISSION,
+            ErrorCode.ABILITY_NOT_FOUND: ErrorClass.ROUTING,
+            ErrorCode.TIMEOUT: ErrorClass.TIMEOUT,
+            ErrorCode.CANCELLED: ErrorClass.CANCELLATION,
+            ErrorCode.PROTOCOL_MISMATCH: ErrorClass.PROTOCOL,
+            ErrorCode.VERSION_MISMATCH: ErrorClass.VERSION,
+            ErrorCode.CONTROL_ONLY: ErrorClass.CONTROL,
+            ErrorCode.NOT_IMPLEMENTED: ErrorClass.UNSUPPORTED,
+            ErrorCode.GENERIC: ErrorClass.GENERIC,
+        }
+        for code, expected in cases.items():
+            with self.subTest(code=code):
+                self.assertEqual(error_class_for_code(code), expected)
 
     def test_is_code_matches_canonicalized_legacy_requests(self) -> None:
         error = SDKError(
@@ -123,6 +150,25 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(details["profile"], "custom")
         self.assertEqual(details["source_ref"], "custom.source")
         self.assertEqual(details["operation"], "run_file")
+
+    def test_sdk_error_profile_and_source_ref_accessors(self) -> None:
+        error = SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="publication",
+            retry=RetryHint.NEVER,
+            message="invalid resource ref",
+            details=profile_error_details(
+                "publication",
+                details={"reason": "resource_ref_namespace_reserved"},
+            ),
+        )
+
+        self.assertEqual(error.profile, "publication")
+        self.assertEqual(error.source_ref, "python_sdk.profile.publication")
+        self.assertEqual(error.error_class, ErrorClass.VALIDATION)
+        self.assertEqual(
+            profile_source_ref(" publication "), "python_sdk.profile.publication"
+        )
 
 
 if __name__ == "__main__":

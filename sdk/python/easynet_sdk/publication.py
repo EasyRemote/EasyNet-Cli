@@ -1037,7 +1037,10 @@ class PublicationClient:
     def build_local_resource_ref(self, request: LocalResourceRefRequest) -> ResourceRef:
         self._require_open()
         if not os.path.isabs(request.path):
-            raise _invalid_publication("absolute resource path is required")
+            raise _invalid_publication(
+                "absolute resource path is required",
+                reason="resource_ref_path_must_be_absolute",
+            )
         try:
             raw = self.transport.build_resource_ref(request.to_json_bytes())
         except SDKError:

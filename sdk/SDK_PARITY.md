@@ -28,7 +28,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | daemon start/attach/discover/stop/detach | Runtime Core | provider-backed | provider-backed | External product repositories still need lower-layer deletion gates before their own cutover claims. |
 | runtime connection state | Runtime Core | provider-backed | provider-backed | Remote TCP/TLS daemon endpoint policy is still outside the stable SDK gate. |
 | runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
-| typed errors | Runtime Core | provider-backed | provider-backed | P1 language error classes and package-level source refs remain incomplete. |
+| typed errors | Runtime Core | provider-backed | provider-backed | Go/Python expose stable error classes and package-level source refs; non-P0 language bindings and package stability gates remain incomplete. |
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition and signer-handle provenance guardrails exist; live daemon keyring policy cutover remains incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
@@ -52,9 +52,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   await/cancel/events/free handles for unary submit; live event streaming
   remains incomplete.
 - C ABI now exposes schema-shaped typed error JSON for ABI return codes; Python
-  and Go profile facades now attach stable `profile`/`source_ref` details and
-  execute the shared `error/profile_source_refs` conformance case, while broader
-  non-P0 language facade error classes and source refs remain incomplete.
+  and Go profile facades now expose stable `ErrorClass`, profile/source-ref
+  accessors, package-level profile source refs, and execute the shared
+  `error/profile_source_refs` conformance case, while broader non-P0 language
+  bindings remain incomplete.
 - Backend SDK-only import-ban enforcement now has a shared `backend/import_ban`
   conformance case and executable scanner gate; the sibling EasyNet backend
   still reports raw Axon, generated Axon protobuf, and direct daemon transport
