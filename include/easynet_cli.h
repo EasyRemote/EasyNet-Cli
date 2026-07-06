@@ -274,6 +274,12 @@ int32_t easynet_invocation_sign_prepared(
     char **out_signed_json
 );
 
+int32_t easynet_invocation_sign_prepared_local(
+    EasynetPreparedInvocationId prepared_id,
+    EasynetSignedInvocationId *out_signed_id,
+    char **out_signed_json
+);
+
 int32_t easynet_invocation_submit_signed(
     EasynetHandle handle,
     EasynetSignedInvocationId signed_id,

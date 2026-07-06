@@ -741,6 +741,16 @@ pub fn default_passphrase_path() -> PathBuf {
     home_relative(DEFAULT_PASSPHRASE_REL)
 }
 
+/// Open the daemon SDK's default keyring for local signing.
+pub fn open_default_keyring_handle() -> anyhow::Result<std::sync::Arc<handle::KeyringHandle>> {
+    let path = store::default_keyring_path()?;
+    let (passphrase, _) = load_or_create_passphrase()?;
+    Ok(std::sync::Arc::new(handle::KeyringHandle::open_or_create(
+        path,
+        &passphrase,
+    )?))
+}
+
 /// Resolve the keyring master-key passphrase, generating and
 /// persisting one on first use.
 ///

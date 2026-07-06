@@ -24,6 +24,7 @@ typedef int32_t (*easynet_runtime_diagnostics_fn)(uint64_t handle, char **out_di
 typedef int32_t (*easynet_invocation_invoke_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
 typedef int32_t (*easynet_invocation_prepare_fn)(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json);
 typedef int32_t (*easynet_invocation_sign_prepared_fn)(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json);
+typedef int32_t (*easynet_invocation_sign_prepared_local_fn)(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json);
 typedef int32_t (*easynet_invocation_submit_signed_handle_fn)(uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json);
 typedef int32_t (*easynet_invocation_handle_await_fn)(uint64_t handle, uint64_t invocation_handle_id, char **out_result_json);
 typedef int32_t (*easynet_invocation_handle_cancel_fn)(uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json);
@@ -107,6 +108,10 @@ static int32_t easynet_runtime_call_prepare(void *fn, uint64_t handle, const cha
 
 static int32_t easynet_runtime_call_sign_prepared(void *fn, uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json) {
 	return ((easynet_invocation_sign_prepared_fn)fn)(prepared_id, signature_json, out_signed_id, out_signed_json);
+}
+
+static int32_t easynet_runtime_call_sign_prepared_local(void *fn, uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json) {
+	return ((easynet_invocation_sign_prepared_local_fn)fn)(prepared_id, out_signed_id, out_signed_json);
 }
 
 static int32_t easynet_runtime_call_submit_signed_handle(void *fn, uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json) {
@@ -197,6 +202,7 @@ type cabiRuntimeSymbols struct {
 	invocationInvoke   unsafe.Pointer
 	invocationPrepare  unsafe.Pointer
 	signPrepared       unsafe.Pointer
+	signPreparedLocal  unsafe.Pointer
 	submitSignedHandle unsafe.Pointer
 	handleAwait        unsafe.Pointer
 	handleCancel       unsafe.Pointer
@@ -706,13 +712,12 @@ func (t *CABIRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []by
 	if err != nil {
 		return nil, err
 	}
-	key, signatureJSON, err := signedInvocationCABIFields(signedJSON)
+	fields, err := signedInvocationCABIFields(signedJSON)
 	if err != nil {
 		return nil, err
 	}
 	t.mu.Lock()
-	preparedID := t.preparedIDs[key]
-	delete(t.preparedIDs, key)
+	preparedID := t.preparedIDs[fields.key]
 	t.mu.Unlock()
 	if preparedID == 0 {
 		return nil, &SDKError{
@@ -725,20 +730,26 @@ func (t *CABIRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []by
 	}
 	var signedID C.uint64_t
 	var ignored *C.char
-	code := int32(cabiWithCString(signatureJSON, func(cSignature *C.char) C.int32_t {
-		return C.easynet_runtime_call_sign_prepared(t.symbols.signPrepared, C.uint64_t(preparedID), cSignature, &signedID, &ignored)
-	}))
+	var code int32
+	if fields.localDaemonSigning {
+		code = int32(C.easynet_runtime_call_sign_prepared_local(t.symbols.signPreparedLocal, C.uint64_t(preparedID), &signedID, &ignored))
+	} else {
+		code = int32(cabiWithCString(fields.signatureJSON, func(cSignature *C.char) C.int32_t {
+			return C.easynet_runtime_call_sign_prepared(t.symbols.signPrepared, C.uint64_t(preparedID), cSignature, &signedID, &ignored)
+		}))
+	}
 	if ignored != nil {
 		_ = cabiTakeCString(t.symbols.stringFree, ignored)
 	}
 	if code != 0 {
-		_ = t.freePreparedID(preparedID)
-		return nil, t.lastErrorOrCode(code, "C ABI invocation sign prepared failed")
+		return nil, t.lastErrorOrCode(code, "C ABI invocation sign prepared transition failed")
 	}
 	if signedID == 0 {
-		_ = t.freePreparedID(preparedID)
 		return nil, invalidCABIHandle("C ABI sign returned an invalid signed handle")
 	}
+	t.mu.Lock()
+	delete(t.preparedIDs, fields.key)
+	t.mu.Unlock()
 	var outHandle C.uint64_t
 	var out *C.char
 	code = int32(C.easynet_runtime_call_submit_signed_handle(t.symbols.submitSignedHandle, C.uint64_t(handle), signedID, &outHandle, &out))
@@ -1152,6 +1163,7 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		{"easynet_invocation_invoke", &symbols.invocationInvoke},
 		{"easynet_invocation_prepare", &symbols.invocationPrepare},
 		{"easynet_invocation_sign_prepared", &symbols.signPrepared},
+		{"easynet_invocation_sign_prepared_local", &symbols.signPreparedLocal},
 		{"easynet_invocation_submit_signed_handle", &symbols.submitSignedHandle},
 		{"easynet_invocation_handle_await", &symbols.handleAwait},
 		{"easynet_invocation_handle_cancel", &symbols.handleCancel},
@@ -1341,28 +1353,61 @@ func preparedKeyFromJSON(raw []byte) (string, error) {
 	return preparedKeyFromMap(decoded)
 }
 
-func signedInvocationCABIFields(raw []byte) (string, []byte, error) {
+type cabiSignedInvocationFields struct {
+	key                string
+	signatureJSON      []byte
+	localDaemonSigning bool
+}
+
+func signedInvocationCABIFields(raw []byte) (cabiSignedInvocationFields, error) {
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return "", nil, invalidRuntimePayload(fmt.Sprintf("decode signed invocation: %v", err), err)
+		return cabiSignedInvocationFields{}, invalidRuntimePayload(fmt.Sprintf("decode signed invocation: %v", err), err)
 	}
 	prepared, ok := decoded["prepared"].(map[string]any)
 	if !ok {
-		return "", nil, invalidRuntimePayload("signed invocation prepared object is required", nil)
-	}
-	signature, ok := decoded["signature"].(map[string]any)
-	if !ok {
-		return "", nil, invalidRuntimePayload("signed invocation signature object is required", nil)
+		return cabiSignedInvocationFields{}, invalidRuntimePayload("signed invocation prepared object is required", nil)
 	}
 	key, err := preparedKeyFromMap(prepared)
 	if err != nil {
-		return "", nil, err
+		return cabiSignedInvocationFields{}, err
+	}
+	localSigning, err := signedInvocationUsesLocalDaemonSigning(decoded)
+	if err != nil {
+		return cabiSignedInvocationFields{}, err
+	}
+	if localSigning {
+		return cabiSignedInvocationFields{key: key, localDaemonSigning: true}, nil
+	}
+	signature, ok := decoded["signature"].(map[string]any)
+	if !ok {
+		return cabiSignedInvocationFields{}, invalidRuntimePayload("signed invocation signature object is required", nil)
 	}
 	signatureJSON, err := json.Marshal(signature)
 	if err != nil {
-		return "", nil, invalidRuntimePayload(fmt.Sprintf("encode signed invocation signature: %v", err), err)
+		return cabiSignedInvocationFields{}, invalidRuntimePayload(fmt.Sprintf("encode signed invocation signature: %v", err), err)
 	}
-	return key, signatureJSON, nil
+	return cabiSignedInvocationFields{key: key, signatureJSON: signatureJSON}, nil
+}
+
+func signedInvocationUsesLocalDaemonSigning(decoded map[string]any) (bool, error) {
+	value, ok := decoded["policy"]
+	if !ok || value == nil {
+		return false, nil
+	}
+	policy, ok := value.(map[string]any)
+	if !ok {
+		return false, invalidRuntimePayload("signed invocation policy object is required", nil)
+	}
+	mode, ok := policy["mode"]
+	if !ok || mode == nil {
+		return false, nil
+	}
+	modeString, ok := mode.(string)
+	if !ok {
+		return false, invalidRuntimePayload("signed invocation policy mode must be a string", nil)
+	}
+	return modeString == "local_daemon_signing", nil
 }
 
 func mergeBidiStreamsForCABI(draftJSON []byte, streamsJSON []byte) ([]byte, error) {

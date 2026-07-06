@@ -118,18 +118,32 @@ func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 		t.Fatalf("prepared key = %q, want prep-1", key)
 	}
 
-	key, signatureJSON, err := signedInvocationCABIFields([]byte(`{
+	fields, err := signedInvocationCABIFields([]byte(`{
 		"prepared":{"request_id":"req-2"},
 		"signature":{"algorithm":"ed25519","signature_base64":"abc"}
 	}`))
 	if err != nil {
 		t.Fatalf("signedInvocationCABIFields failed: %v", err)
 	}
-	if key != "req-2" {
-		t.Fatalf("signed prepared key = %q, want req-2", key)
+	if fields.key != "req-2" {
+		t.Fatalf("signed prepared key = %q, want req-2", fields.key)
 	}
-	if string(signatureJSON) != `{"algorithm":"ed25519","signature_base64":"abc"}` {
-		t.Fatalf("signature JSON = %s", signatureJSON)
+	if string(fields.signatureJSON) != `{"algorithm":"ed25519","signature_base64":"abc"}` {
+		t.Fatalf("signature JSON = %s", fields.signatureJSON)
+	}
+	if fields.localDaemonSigning {
+		t.Fatalf("localDaemonSigning = true, want false")
+	}
+
+	localFields, err := signedInvocationCABIFields([]byte(`{
+		"prepared":{"request_id":"req-local"},
+		"policy":{"mode":"local_daemon_signing","signer_id":"signer-alice-key-1"}
+	}`))
+	if err != nil {
+		t.Fatalf("signedInvocationCABIFields local failed: %v", err)
+	}
+	if localFields.key != "req-local" || !localFields.localDaemonSigning || len(localFields.signatureJSON) != 0 {
+		t.Fatalf("local fields = %#v", localFields)
 	}
 }
 
@@ -338,6 +352,10 @@ int32_t easynet_invocation_prepare(uint64_t handle, const char *invocation_json,
 }
 int32_t easynet_invocation_sign_prepared(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json) {
 	(void)prepared_id; (void)signature_json; (void)out_signed_id; (void)out_signed_json;
+	return 10;
+}
+int32_t easynet_invocation_sign_prepared_local(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json) {
+	(void)prepared_id; (void)out_signed_id; (void)out_signed_json;
 	return 10;
 }
 int32_t easynet_invocation_submit_signed_handle(uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json) {

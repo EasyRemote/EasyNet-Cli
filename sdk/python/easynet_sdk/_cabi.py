@@ -387,6 +387,12 @@ class CLILibrary:
             ctypes.c_char_p(signature_json),
         )
 
+    def invocation_sign_prepared_local(self, prepared_id: int) -> tuple[int, bytes]:
+        return self._call_output_with_id(
+            self._raw.easynet_invocation_sign_prepared_local,
+            ctypes.c_uint64(prepared_id),
+        )
+
     def invocation_submit_signed_handle(
         self, handle: int, signed_id: int
     ) -> tuple[int, bytes]:
@@ -662,6 +668,12 @@ class CLILibrary:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._raw.easynet_invocation_sign_prepared.restype = ctypes.c_int32
+        self._raw.easynet_invocation_sign_prepared_local.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_invocation_sign_prepared_local.restype = ctypes.c_int32
         self._raw.easynet_invocation_submit_signed_handle.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
@@ -2587,7 +2599,7 @@ class CABIRuntimeTransport:
         signed = _json_object(signed_json, "signed invocation")
         prepared = _required_object(signed, "prepared")
         key = _prepared_key(prepared)
-        prepared_c_id = self._prepared_ids.pop(key, None)
+        prepared_c_id = self._prepared_ids.get(key)
         if prepared_c_id is None:
             raise SDKError(
                 code=ErrorCode.INVALID_HANDLE,
@@ -2595,12 +2607,17 @@ class CABIRuntimeTransport:
                 retry=RetryHint.NEVER,
                 message="prepared invocation handle is not owned by this transport",
             )
-        signature_json = json.dumps(
-            _required_object(signed, "signature"),
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-        signed_c_id, _ = self.lib.invocation_sign_prepared(prepared_c_id, signature_json)
+        if _signed_invocation_uses_local_daemon_signing(signed):
+            signed_c_id, _ = self.lib.invocation_sign_prepared_local(prepared_c_id)
+        else:
+            signature_json = json.dumps(
+                _required_object(signed, "signature"),
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            signed_c_id, _ = self.lib.invocation_sign_prepared(
+                prepared_c_id, signature_json
+            )
         if signed_c_id <= 0:
             raise SDKError(
                 code=ErrorCode.INVALID_HANDLE,
@@ -2608,6 +2625,7 @@ class CABIRuntimeTransport:
                 retry=RetryHint.NEVER,
                 message="C ABI sign returned an invalid signed handle",
             )
+        self._prepared_ids.pop(key, None)
         try:
             _, submitted_json = self.lib.invocation_submit_signed_handle(
                 self._require_open(), signed_c_id
@@ -3504,6 +3522,32 @@ def _prepared_key(decoded: dict[str, object]) -> str:
         retry=RetryHint.NEVER,
         message="prepared_id or request_id is required",
     )
+
+
+def _signed_invocation_uses_local_daemon_signing(
+    decoded: dict[str, object],
+) -> bool:
+    policy = decoded.get("policy")
+    if policy is None:
+        return False
+    if not isinstance(policy, dict):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="sdk",
+            retry=RetryHint.NEVER,
+            message="policy must be an object",
+        )
+    mode = policy.get("mode")
+    if mode is None:
+        return False
+    if not isinstance(mode, str):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="sdk",
+            retry=RetryHint.NEVER,
+            message="policy.mode must be a string",
+        )
+    return mode == "local_daemon_signing"
 
 
 def _profile_stream_protocol_error(message: str, details: object) -> SDKError:

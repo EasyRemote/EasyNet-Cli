@@ -720,6 +720,45 @@ pub unsafe extern "C" fn easynet_invocation_sign_prepared(
     }
 }
 
+/// Locally sign a prepared Invocation with the daemon SDK keyring.
+///
+/// # Safety
+/// output pointers must be non-null caller-owned pointers.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_invocation_sign_prepared_local(
+    prepared_id: PreparedInvocationId,
+    out_signed_id: *mut SignedInvocationId,
+    out_signed_json: *mut *mut c_char,
+) -> i32 {
+    if out_signed_id.is_null() {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_sign_prepared_local: out_signed_id pointer is null",
+        );
+    }
+    if out_signed_json.is_null() {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_invocation_sign_prepared_local: out_signed_json pointer is null",
+        );
+    }
+    unsafe {
+        *out_signed_id = 0;
+        *out_signed_json = std::ptr::null_mut();
+    }
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = prepared_id;
+        record_invocation_feature_disabled("easynet_invocation_sign_prepared_local")
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        sign_prepared_local_with_axon_pb(prepared_id, out_signed_id, out_signed_json)
+    }
+}
+
 /// Submit a signed Invocation through the daemon runtime endpoint.
 ///
 /// # Safety
@@ -967,14 +1006,12 @@ pub extern "C" fn easynet_invocation_handle_free(
                 clear_last_error();
                 EASYNET_OK
             }
-            Err(RegistryOwnerMismatch) => {
-                record_invocation_error(
-                    ERR_INVALID_HANDLE,
-                    format!(
-                        "easynet_invocation_handle_free: invocation handle {invocation_handle_id} does not belong to handle {handle}"
-                    ),
-                )
-            }
+            Err(RegistryOwnerMismatch) => record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_free: invocation handle {invocation_handle_id} does not belong to handle {handle}"
+                ),
+            ),
         }
     }
 }
@@ -1391,14 +1428,12 @@ pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
                 clear_last_error();
                 EASYNET_OK
             }
-            Err(RegistryOwnerMismatch) => {
-                record_invocation_error(
-                    ERR_INVALID_HANDLE,
-                    format!(
-                        "easynet_invocation_bidi_cancel: bidi session {bidi_id} does not belong to handle {handle}"
-                    ),
-                )
-            }
+            Err(RegistryOwnerMismatch) => record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_bidi_cancel: bidi session {bidi_id} does not belong to handle {handle}"
+                ),
+            ),
         }
     }
 }
@@ -1892,6 +1927,69 @@ fn sign_prepared_with_axon_pb(
         return record_invocation_error(
             ERR_GENERIC,
             "easynet_invocation_sign_prepared: out-of-memory allocating signed JSON",
+        );
+    }
+    let id = insert_signed(signed);
+    unsafe {
+        *out_signed_id = id;
+        *out_signed_json = ptr;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn sign_prepared_local_with_axon_pb(
+    prepared_id: PreparedInvocationId,
+    out_signed_id: *mut SignedInvocationId,
+    out_signed_json: *mut *mut c_char,
+) -> i32 {
+    let prepared = match get_prepared(prepared_id) {
+        Some(prepared) => prepared,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_sign_prepared_local: prepared handle {prepared_id} is not registered"
+                ),
+            );
+        }
+    };
+    let keyring = match crate::daemon::keyring::open_default_keyring_handle() {
+        Ok(keyring) => keyring,
+        Err(err) => {
+            return record_invocation_error(
+                ERR_PERMISSION_DENIED,
+                format!(
+                    "easynet_invocation_sign_prepared_local: open daemon keyring failed: {err}"
+                ),
+            );
+        }
+    };
+    let signer = crate::daemon::KeyringLocalDaemonInvocationSigner::new(keyring);
+    let signed = match prepared.sign_with_local_daemon_signer(&signer) {
+        Ok(signed) => signed,
+        Err(err) => {
+            return record_invocation_error(
+                ERR_INVALID_ARG,
+                format!("easynet_invocation_sign_prepared_local: {err}"),
+            );
+        }
+    };
+    let Some(_) = remove_prepared(prepared_id) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!(
+                "easynet_invocation_sign_prepared_local: prepared handle {prepared_id} disappeared"
+            ),
+        );
+    };
+    let json = signed_invocation_json(&signed).to_string();
+    let ptr = alloc_output_cstring(json);
+    if ptr.is_null() {
+        return record_invocation_error(
+            ERR_GENERIC,
+            "easynet_invocation_sign_prepared_local: out-of-memory allocating signed JSON",
         );
     }
     let id = insert_signed(signed);
@@ -3163,7 +3261,7 @@ fn restore_builder(builder_id: InvocationBuilderId, builder: InvocationBuilderSt
     lock_builder_entries(builder_registry()).insert(builder_id, builder);
 }
 
-#[cfg(all(test, feature = "axon-pb"))]
+#[cfg(feature = "axon-pb")]
 fn get_prepared(prepared_id: PreparedInvocationId) -> Option<crate::daemon::PreparedInvocation> {
     if prepared_id == 0 {
         return None;
@@ -5052,7 +5150,8 @@ fn protocol_error_json(error: &easynet_axon::pb::axon::v1::Error) -> serde_json:
 mod tests {
     use super::*;
     use crate::ffi::client::handle::{alloc, test_session};
-    use std::ffi::{c_void, CStr, CString};
+    use std::ffi::{c_void, CStr, CString, OsString};
+    use std::path::PathBuf;
 
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
@@ -5081,6 +5180,61 @@ mod tests {
             .to_string(),
         )
         .unwrap()
+    }
+
+    fn with_isolated_default_keyring<F>(f: F)
+    where
+        F: FnOnce(PathBuf),
+    {
+        struct EnvRestore {
+            home: Option<OsString>,
+            config: Option<OsString>,
+            passphrase: Option<OsString>,
+        }
+
+        impl Drop for EnvRestore {
+            fn drop(&mut self) {
+                match self.home.take() {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+                match self.config.take() {
+                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+                match self.passphrase.take() {
+                    Some(value) => std::env::set_var("EASYNET_KEYRING_PASSPHRASE", value),
+                    None => std::env::remove_var("EASYNET_KEYRING_PASSPHRASE"),
+                }
+            }
+        }
+
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let config = temp.path().join("config");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+
+        let _restore = EnvRestore {
+            home: std::env::var_os("HOME"),
+            config: std::env::var_os("XDG_CONFIG_HOME"),
+            passphrase: std::env::var_os("EASYNET_KEYRING_PASSPHRASE"),
+        };
+
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_CONFIG_HOME", &config);
+        std::env::set_var(
+            "EASYNET_KEYRING_PASSPHRASE",
+            "test-local-daemon-signing-passphrase",
+        );
+
+        let keyring_path = crate::daemon::keyring::store::default_keyring_path().unwrap();
+        f(keyring_path);
     }
 
     fn valid_bidi_invocation_json() -> CString {
@@ -5648,6 +5802,143 @@ mod tests {
         assert!(duplicate_signed_json_ptr.is_null());
         assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
         assert!(get_signed(signed_id).is_none());
+    }
+
+    #[test]
+    fn invocation_sign_prepared_local_uses_default_daemon_keyring() {
+        with_isolated_default_keyring(|_| {
+            let keyring = crate::daemon::keyring::open_default_keyring_handle().unwrap();
+            let caller = "easynet:///r/acme/device/dev-a";
+            let entry = keyring
+                .create_entry("agent_signing", Some(caller.to_string()))
+                .unwrap();
+            let signer_id = format!("signer-{}", entry.key_id);
+            let policy_ref = crate::protocol::identity_contract::signer_policy_ref(
+                caller,
+                &entry.key_id,
+                &entry.public_key_b64,
+            );
+            let (handle, _session) = alloc(test_session());
+            let raw = CString::new(canonical_invocation_json(serde_json::json!({
+                "caller_ura": caller,
+                "subject_ura": caller,
+                "args": {"probe": true}
+            })))
+            .unwrap();
+            let options = CString::new(
+                serde_json::json!({
+                    "expires_in_ms": 60_000,
+                    "signer_id": signer_id,
+                    "policy_ref": policy_ref,
+                    "local_daemon_signing": true
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let mut prepared_id: PreparedInvocationId = 0;
+            let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+            let prepare_code = unsafe {
+                easynet_invocation_prepare(
+                    handle,
+                    raw.as_ptr(),
+                    options.as_ptr(),
+                    &mut prepared_id,
+                    &mut prepared_json_ptr,
+                )
+            };
+            assert_eq!(prepare_code, EASYNET_OK);
+            assert_ne!(prepared_id, 0);
+            unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+
+            let mut signed_id: SignedInvocationId = 0;
+            let mut signed_json_ptr: *mut c_char = std::ptr::null_mut();
+            let sign_code = unsafe {
+                easynet_invocation_sign_prepared_local(
+                    prepared_id,
+                    &mut signed_id,
+                    &mut signed_json_ptr,
+                )
+            };
+
+            assert_eq!(sign_code, EASYNET_OK);
+            assert_ne!(signed_id, 0);
+            assert!(get_prepared(prepared_id).is_none());
+            assert!(get_signed(signed_id).is_some());
+            let signed_json: serde_json::Value = unsafe {
+                serde_json::from_str(CStr::from_ptr(signed_json_ptr).to_str().unwrap()).unwrap()
+            };
+            unsafe { crate::ffi::strings::easynet_string_free(signed_json_ptr) };
+            assert_eq!(signed_json["policy"]["mode"], "local_daemon_signing");
+            assert_eq!(signed_json["policy"]["signer_id"], signer_id);
+            assert_eq!(signed_json["policy"]["policy_ref"], policy_ref);
+            assert_eq!(signed_json["signature"]["algorithm"], "ed25519");
+            assert_eq!(signed_json["signature"]["key_id_hint"], signer_id);
+            assert!(signed_json["signature"]["signature_base64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()));
+            assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
+            crate::ffi::client::handle::release(handle);
+        });
+    }
+
+    #[test]
+    fn invocation_sign_prepared_local_failure_preserves_prepared_handle() {
+        with_isolated_default_keyring(|_| {
+            let keyring = crate::daemon::keyring::open_default_keyring_handle().unwrap();
+            let caller = "easynet:///r/acme/device/dev-a";
+            let entry = keyring
+                .create_entry("agent_signing", Some(caller.to_string()))
+                .unwrap();
+            let signer_id = format!("signer-{}", entry.key_id);
+            let (handle, _session) = alloc(test_session());
+            let raw = CString::new(canonical_invocation_json(serde_json::json!({
+                "caller_ura": caller,
+                "subject_ura": caller,
+                "args": {"probe": true}
+            })))
+            .unwrap();
+            let options = CString::new(
+                serde_json::json!({
+                    "expires_in_ms": 60_000,
+                    "signer_id": signer_id,
+                    "policy_ref": "daemon-key-inventory:sha256:wrong",
+                    "local_daemon_signing": true
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let mut prepared_id: PreparedInvocationId = 0;
+            let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+            let prepare_code = unsafe {
+                easynet_invocation_prepare(
+                    handle,
+                    raw.as_ptr(),
+                    options.as_ptr(),
+                    &mut prepared_id,
+                    &mut prepared_json_ptr,
+                )
+            };
+            assert_eq!(prepare_code, EASYNET_OK);
+            unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+
+            let mut signed_id: SignedInvocationId = 99;
+            let mut signed_json_ptr: *mut c_char = std::ptr::dangling_mut();
+            let sign_code = unsafe {
+                easynet_invocation_sign_prepared_local(
+                    prepared_id,
+                    &mut signed_id,
+                    &mut signed_json_ptr,
+                )
+            };
+
+            assert_eq!(sign_code, ERR_INVALID_ARG);
+            assert_eq!(signed_id, 0);
+            assert!(signed_json_ptr.is_null());
+            assert!(get_prepared(prepared_id).is_some());
+            assert_typed_last_error("INVALID_ARGUMENT", ERR_INVALID_ARG, "policy_ref");
+            assert_eq!(easynet_prepared_invocation_free(prepared_id), EASYNET_OK);
+            crate::ffi::client::handle::release(handle);
+        });
     }
 
     #[test]

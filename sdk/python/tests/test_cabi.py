@@ -233,6 +233,9 @@ class FakeRawCABI:
         self.easynet_invocation_sign_prepared = FakeSymbol(
             self._invocation_sign_prepared
         )
+        self.easynet_invocation_sign_prepared_local = FakeSymbol(
+            self._invocation_sign_prepared_local
+        )
         self.easynet_invocation_submit_signed_handle = FakeSymbol(
             self._invocation_submit_signed_handle
         )
@@ -961,6 +964,27 @@ class FakeRawCABI:
             b'"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"},'
             b'"signature":{"algorithm":"ed25519","signature_base64":'
             b'"c2lnbmF0dXJl","key_id_hint":"caller-key"}}',
+        )
+
+    def _invocation_sign_prepared_local(
+        self, prepared_id, out_signed_id, out_ptr
+    ) -> int:
+        self.runtime_requests.append(
+            (
+                "sign_prepared_local",
+                {"prepared_id": int(prepared_id.value)},
+            )
+        )
+        out_signed_id._obj.value = 212
+        return self._write(
+            out_ptr,
+            b'{"signer_id":"signer-alice-key-1","prepared":{"prepared_id":'
+            b'"prepared-example-1","request_id":"","descriptor_ref":'
+            b'"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"},'
+            b'"policy":{"mode":"local_daemon_signing","signer_id":'
+            b'"signer-alice-key-1","policy_ref":"daemon-key-inventory:sha256:test-policy"},'
+            b'"signature":{"algorithm":"ed25519","signature_base64":'
+            b'"bG9jYWwtc2lnbmF0dXJl","key_id_hint":"signer-alice-key-1"}}',
         )
 
     def _invocation_submit_signed_handle(
@@ -4803,6 +4827,43 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(prepared.request_id, "req-current-1")
         self.assertEqual(prepared.prepared_id, "")
         self.assertEqual(handle.handle_id, 303)
+        self.assertEqual(raw.prepared_frees, [])
+
+    def test_runtime_transport_uses_local_daemon_signing_transition(self) -> None:
+        raw = FakeRawCABI()
+        raw.prepare_payload = (
+            CURRENT_ABI_PREPARED.replace(
+                b'"mode": "caller_signing"',
+                b'"mode": "local_daemon_signing"',
+            )
+            .replace(b'"signer_id": "browser-key"', b'"signer_id": "signer-alice-key-1"')
+            .replace(
+                b'"policy_ref": "policy/local"',
+                b'"policy_ref": "daemon-key-inventory:sha256:test-policy"',
+            )
+        )
+        lib = CLILibrary(raw)
+        client = RuntimeClient(CABIRuntimeTransport(lib, handle=7))
+
+        prepared, _ = client.prepare(
+            complete_draft(), PrepareOptions(local_daemon_signing=True)
+        )
+        signed = prepared.sign_with_caller_signature(
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+                key_id_hint="signer-alice-key-1",
+            )
+        )
+        handle = client.submit_signed(signed)
+
+        self.assertEqual(handle.handle_id, 303)
+        self.assertEqual(
+            [kind for kind, _ in raw.runtime_requests if kind != "health"],
+            ["prepare", "sign_prepared_local", "submit_signed_handle"],
+        )
+        self.assertEqual(raw.runtime_requests[1][1], {"prepared_id": 101})
+        self.assertEqual(raw.runtime_requests[2][1]["signed_id"], 212)
         self.assertEqual(raw.prepared_frees, [])
 
     def test_runtime_transport_rejects_foreign_signed_dto(self) -> None:

@@ -9,6 +9,10 @@ The existing `PreparedInvocation` already carries `SigningMaterial` with a
 policy when transitioning from prepared to signed. That made the object
 submit-ready without preserving the proof field required by the SPEC.
 
-This slice fixes the state object first. Live daemon keyring execution can then
-plug into the same transition and return a `SignedInvocation` with the same
-policy-proof shape.
+This slice exposes the daemon-owned local signing transition through C ABI:
+
+`Prepared -> sign_prepared_local -> Signed`
+
+Language C ABI transports do not sign locally when the signed envelope carries
+`policy.mode = local_daemon_signing`; they ask libeasynet_cli to consume the
+prepared handle through the local signing transition.

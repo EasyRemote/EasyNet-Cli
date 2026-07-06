@@ -76,19 +76,20 @@ pub mod receipts;
 pub mod routing;
 pub mod streams;
 
-pub use crate::daemon::boot::invocation::{start_daemon_invocation_transport, SessionShutdown};
+pub use crate::daemon::boot::invocation::{SessionShutdown, start_daemon_invocation_transport};
 pub use admission::admission_facade::AdmissionFacade;
 pub use admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 pub use admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 pub use admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 pub use bidi::invoke_remote_initiator::{
-    invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
-    ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+    ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID, InvokeRemoteDown, InvokeRemoteFrame,
+    InvokeRemoteUp, SessionDispatch, invoke_remote,
 };
 pub use dispatch::daemon_invocation_service::DaemonInvocationService;
-pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
+pub use dispatch::invocation_wire::{DEFAULT_URA_PROFILE, ProtoEnvelope};
 pub use dispatch::{
     CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy,
-    SignerPolicyMode, SigningMaterial,
+    InvocationTuple, KeyringLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
+    PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
+    SigningMaterial,
 };
