@@ -26,11 +26,10 @@ workspace entrypoint; it must not drift into a second status ledger.
 | Java / JVM facade | unsupported |
 | Swift facade | unsupported |
 
-No language package should claim `cutover-ready` or complete Daemon SDK support
-until its declared profiles pass shared conformance and the corresponding
-consumer repository has removed lower-layer imports such as raw Axon/proto,
-direct daemon transports, direct C ABI usage, CLI subprocess calls, or
-product-local daemon ability shims.
+P0 consumer cutover readiness is tracked by
+`tools/scripts/check-sdk-cutover-readiness.sh` and summarized by
+`tools/scripts/check-sdk-completion-audit.sh`. Language profile rows remain
+provider-backed evidence; product cutover claims must cite the aggregate gates.
 
 ## Files
 

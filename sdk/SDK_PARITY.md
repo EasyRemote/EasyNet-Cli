@@ -514,6 +514,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | provider-backed | The public facade has a daemon, C ABI, Runtime Core, or explicit provider delegate path covered by shared conformance evidence. |
 | cutover-ready | The first-class consumer can remove lower-layer product code and the required import, route, or facade gates pass. |
 
-No current language is `cutover-ready` across every declared consumer-facing
-capability; consumer repository cutover evidence remains outside the SDK
-profile model.
+P0 consumer cutover readiness is an aggregate gate, not a per-profile row in
+this matrix. Go and Python remain `provider-backed` at the profile level, while
+`tools/scripts/check-sdk-cutover-readiness.sh` and
+`tools/scripts/check-sdk-completion-audit.sh` prove the current EasyNet backend
+and EasyRemote product boundary/cutover evidence. P1 language packages must not
+claim `provider-backed` or `cutover-ready` until their shipped profiles have
+daemon/provider evidence and consumer gates of their own.

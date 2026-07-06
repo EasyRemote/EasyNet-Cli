@@ -227,6 +227,7 @@ for path in \
   tools/scripts/check-backend-sdk-only-boundary.sh \
   tools/scripts/check-backend-route-family-coverage.sh \
   tools/scripts/check-daemon-latest-input-boundary.sh \
+  tools/scripts/check-sdk-completion-audit.sh \
   tools/scripts/check-sdk-conformance-reports.sh \
   tools/scripts/check-easyremote-sdk-boundary.sh \
   tools/scripts/check-sdk-cutover-readiness.sh \
@@ -611,6 +612,7 @@ validate_declared_file_list case_files sdk/conformance/cases .yaml
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-sdk-completion-audit.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-conformance-reports.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
@@ -990,9 +992,9 @@ require_literal sdk/README.md "sdk/conformance/sdk-parity-matrix.json"
 require_literal sdk/README.md "Go facade | provider-backed"
 require_literal sdk/README.md "Python facade | provider-backed"
 require_literal sdk/README.md "Node / TypeScript facade | Runtime Core seam"
-require_literal sdk/README.md "or complete Daemon SDK support"
+require_literal sdk/README.md "P0 consumer cutover readiness"
 require_literal sdk/README.md "Rust/C ABI/Go/Python action-adapter reports"
-require_literal sdk/SDK_PARITY.md "No current language is"
+require_literal sdk/SDK_PARITY.md "P0 consumer cutover readiness is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null
 
