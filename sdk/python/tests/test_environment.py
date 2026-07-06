@@ -797,6 +797,7 @@ class SdkEnvironmentTests(unittest.TestCase):
             for entry in raw.runtime_requests
             if entry[0] == "invoke"
         ]
+        self.assertIn("mission.run", runtime_abilities)
         self.assertIn("agent.list", runtime_abilities)
         self.assertIn("agent.start", runtime_abilities)
         self.assertIn("pages.list", runtime_abilities)
@@ -849,6 +850,69 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(
             raw.runtime_requests[-1][1]["metadata"]["system_ability"],
             "ability.deploy",
+        )
+        self.assertEqual(raw.shutdown_handles, [42, 42])
+
+    def test_mission_run_uses_cabi_carrier_and_runtime_core(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            mission = env.mission_client()
+            status = mission.run_eal(
+                MissionRunRequest(base=_mission_base(), source="mission weather")
+            )
+            env.close()
+
+        self.assertEqual(status.status.kind, "mission_status")
+        self.assertEqual(status.status.mission_id, "mission-1")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests[-2:]],
+            [
+                "easynet_mission_build_run_eal_invocation",
+                "easynet_mission_project_status",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[-1][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[-1][1]["metadata"]["system_ability"],
+            "mission.run",
+        )
+        self.assertEqual(raw.shutdown_handles, [42, 42])
+
+    def test_wrapper_transfer_uses_cabi_carrier_and_runtime_core(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            wrapper = env.wrapper_client()
+            record = wrapper.transfer_file(
+                WrapperFileTransferRequest(
+                    base=_wrapper_base(),
+                    file=WrapperFileRecordRequest(
+                        file_ref="easynet:///r/example/resource/alice.files/report.txt",
+                        owner_ura=_CALLER,
+                        content_type="text/plain",
+                        size_bytes=42,
+                    ),
+                )
+            )
+            env.close()
+
+        self.assertEqual(record.kind, "file_record")
+        self.assertEqual(
+            record.file_ref,
+            "easynet:///r/example/resource/alice.files/report.txt",
+        )
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests[-2:]],
+            [
+                "easynet_wrappers_build_file_transfer_invocation",
+                "easynet_wrappers_project_file_record",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[-1][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[-1][1]["metadata"]["system_ability"],
+            "wrapper.file.transfer",
         )
         self.assertEqual(raw.shutdown_handles, [42, 42])
 

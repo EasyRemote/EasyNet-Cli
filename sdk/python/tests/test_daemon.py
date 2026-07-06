@@ -428,6 +428,7 @@ class DaemonTests(unittest.TestCase):
                 "wrapper",
                 "runtime",
                 "runtime",
+                "runtime",
                 "identity",
             ],
         )

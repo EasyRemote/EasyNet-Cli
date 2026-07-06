@@ -22,13 +22,13 @@ from .events import EventClient
 from .health import HealthClient
 from .host_binding import HostBindingClient
 from .identity import AddressingClient, IdentityClient
-from .mission import MissionClient
+from .mission import MissionClient, RuntimeMissionTransport
 from .publication import PublicationClient, RuntimePublicationTransport
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
 from .surface import SurfaceClient
 from .transport import DaemonInvocationTransport
-from .wrappers import WrapperClient
+from .wrappers import RuntimeWrapperTransport, WrapperClient
 
 
 class _Closable(Protocol):
@@ -289,8 +289,19 @@ class SdkEnvironment:
 
         from . import _cabi
 
+        control_path = self.resolved_control_path()
+        carrier = self._profile_transport(_cabi.open_cabi_mission_transport)
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=control_path,
+            library_path=self.library_path,
+        )
         return self._track(
-            MissionClient(self._profile_transport(_cabi.open_cabi_mission_transport))
+            MissionClient(
+                RuntimeMissionTransport(
+                    carrier=carrier,
+                    runtime=RuntimeClient(runtime_transport),
+                )
+            )
         )
 
     def admin_client(self) -> AdminClient:
@@ -336,8 +347,19 @@ class SdkEnvironment:
 
         from . import _cabi
 
+        control_path = self.resolved_control_path()
+        carrier = self._profile_transport(_cabi.open_cabi_wrapper_transport)
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=control_path,
+            library_path=self.library_path,
+        )
         return self._track(
-            WrapperClient(self._profile_transport(_cabi.open_cabi_wrapper_transport))
+            WrapperClient(
+                RuntimeWrapperTransport(
+                    carrier=carrier,
+                    runtime=RuntimeClient(runtime_transport),
+                )
+            )
         )
 
     def close(self) -> None:

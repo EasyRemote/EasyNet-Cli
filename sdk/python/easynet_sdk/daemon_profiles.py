@@ -16,7 +16,7 @@ from .publication import PublicationClient, RuntimePublicationTransport
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
 from .surface import SurfaceClient
-from .wrappers import WrapperClient
+from .wrappers import RuntimeWrapperTransport, WrapperClient
 
 
 class DaemonHandleProfiles:
@@ -102,7 +102,14 @@ class DaemonHandleProfiles:
     def wrappers(self, options: ConnectOptions = ConnectOptions()) -> WrapperClient:
         """Open a Convenience Wrapper profile client scoped to this daemon handle."""
 
-        return WrapperClient(self._open_profile("wrapper", options))
+        carrier = self._open_profile("wrapper", options)
+        runtime_transport = self._open_profile("runtime", options)
+        return WrapperClient(
+            RuntimeWrapperTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
 
     def health(self, options: ConnectOptions = ConnectOptions()) -> HealthClient:
         """Open a runtime health client scoped to this daemon handle."""
