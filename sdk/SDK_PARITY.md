@@ -153,12 +153,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   half-close/cancel/terminal-close observation, InvocationHandle
   await/cancel/events/close observation, and RuntimeClient
   invoke/invoke-stream/open-bidi/prepare/prepare-builder/submit-signed/close methods behind narrow JSON
-  transport seams plus `RuntimeProfileBundle` factories for Runtime Core-backed
+  transport seams, SDK-internal direct daemon Axon gRPC-over-UDS
+  unary/server-stream/bidi transport, plus `RuntimeProfileBundle` factories for Runtime Core-backed
   profile clients with stable per-profile error source refs; direct Go daemon
-  UDS endpoint discovery exists, while concrete direct UDS unary/stream/bidi
-  transport, remaining profile conformance action
-  execution, and backend source cutover violations remain incomplete before
-  backend cutover.
+  UDS endpoint discovery exists, while remaining profile conformance action
+  execution and backend source cutover violations remain incomplete before backend cutover.
 - Go Directory + Identity facade exposes `DirectoryClient` resolve/list
   read-model pages with bounded pagination, Runtime Core-backed directory
   subscription streams, directory subscription state seams, and close state

@@ -33,6 +33,9 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 				if needle == `import "C"` && allowedPrivateCABIAdapter(path, text) {
 					continue
 				}
+				if needle == `google.golang.org/protobuf` && allowedPrivateAxonAdapter(path) {
+					continue
+				}
 				t.Fatalf("%s contains forbidden dependency marker %q", path, needle)
 			}
 		}
@@ -41,6 +44,10 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk SDK package: %v", err)
 	}
+}
+
+func allowedPrivateAxonAdapter(path string) bool {
+	return strings.HasPrefix(filepath.ToSlash(path), "internal/axonpb/")
 }
 
 func allowedPrivateCABIAdapter(path, text string) bool {

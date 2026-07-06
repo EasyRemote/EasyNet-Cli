@@ -29,7 +29,8 @@ terminal event projection, BidiSession frame ordering, half-close, cancel,
 terminal-frame projection, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient
 invoke/invoke-stream/open-bidi/prepare/submit-signed/close
-methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
+methods behind narrow JSON transport seams, SDK-internal direct daemon
+Axon gRPC-over-UDS unary/server-stream/bidi transport, plus DirectoryClient resolve/list
 read-model pages, Runtime Core-backed directory subscription streams, directory
 subscription state seams, and close state seams plus
 IdentityClient descriptor/resource projection, Axon-delegated
@@ -69,7 +70,7 @@ seams and close state seams. WrapperClient exposes
 file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, Runtime Core stream/bidi session entry points, transport-backed helper
 close state seams, and record projections. Direct daemon UDS RuntimeConnection
-endpoint discovery exists; concrete direct UDS unary/stream/bidi transport,
+endpoint discovery and concrete direct UDS unary/stream/bidi transport exist;
 Axon-backed receipt verification,
 concrete publication/host-binding
 carriers, concrete Admin trust/session carriers,
