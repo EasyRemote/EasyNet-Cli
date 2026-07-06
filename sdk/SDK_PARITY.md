@@ -56,6 +56,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   accessors, package-level profile source refs, and execute the shared
   `error/profile_source_refs` conformance case, while broader non-P0 language
   bindings remain incomplete.
+- Go and Python now expose typed `DelegationProof`/`SessionAuthority`
+  metadata projections plus InvocationBuilder authority attachment guardrails.
+  Canonical authority payload creation, signing, verification, and trust-anchor
+  admission remain daemon/Axon-owned; authority minting transports and backend
+  source cutover remain incomplete.
 - Backend SDK-only import-ban enforcement now has a shared `backend/import_ban`
   conformance case and executable scanner gate; the sibling EasyNet backend
   still reports raw Axon, generated Axon protobuf, and direct daemon transport
@@ -147,7 +152,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   RuntimeConnection endpoint resolution, runtime health readiness facts,
   schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, prepared/signed Invocation DTOs,
-  local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
+  typed authority metadata projections with mutually-exclusive InvocationBuilder
+  attachment guardrails, local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
   projection, StreamHandle state observation with schema-shaped terminal event
   projection, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
@@ -269,7 +275,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   close/cancel/timeout/wire-error lifecycle projection;
   `SdkEnvironment.addressing_client()` and package-level functions for the
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
-  generic descriptor-ref and target-dispatch cutover tests, stable
+  generic descriptor-ref and target-dispatch cutover tests, typed
+  authority metadata projections with mutually-exclusive InvocationBuilder
+  attachment guardrails, stable
   per-profile error source refs; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; direct daemon

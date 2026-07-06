@@ -24,7 +24,8 @@ Wrapper clients, schema-backed SDK error projection
 with stable error classes and profile source-ref accessors, complete Invocation
 draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, local Ed25519 signer provider over daemon/Axon
-canonical signing material, StreamHandle state observation with schema-shaped
+canonical signing material, typed authority metadata projections with
+mutually-exclusive InvocationBuilder attachment guardrails, StreamHandle state observation with schema-shaped
 terminal event projection, BidiSession frame ordering, half-close, cancel,
 terminal-frame projection, and terminal-close observation, InvocationHandle
 await/cancel/events/close observation, and RuntimeClient

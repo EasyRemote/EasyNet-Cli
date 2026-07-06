@@ -80,6 +80,14 @@ from .admin import (
     VerifyDeviceCredentialRequest,
     certificate_fingerprint,
 )
+from .authority import (
+    DELEGATION_METADATA_KEY,
+    SESSION_AUTHORITY_METADATA_KEY,
+    AuthorityMetadata,
+    DelegationProof,
+    SessionAuthority,
+    validate_authority_metadata,
+)
 from .bidi import (
     MAX_BIDI_BUFFERED_FRAMES,
     BidiFrame,

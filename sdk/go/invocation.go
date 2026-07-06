@@ -181,6 +181,7 @@ type InvocationBuilder struct {
 	contentType     string
 	metadata        map[string]any
 	callerSignature *InvocationSignature
+	authorityErr    error
 	hasArgs         bool
 	hasArguments    bool
 	consumed        bool
@@ -243,6 +244,16 @@ func (b *InvocationBuilder) WithMetadata(value map[string]any) *InvocationBuilde
 	return b
 }
 
+func (b *InvocationBuilder) WithAuthorityMetadata(value AuthorityMetadata) *InvocationBuilder {
+	metadata, err := value.MergeInto(b.metadata)
+	if err != nil {
+		b.authorityErr = err
+		return b
+	}
+	b.metadata = metadata
+	return b
+}
+
 func (b *InvocationBuilder) WithCallerSignature(value InvocationSignature) *InvocationBuilder {
 	b.callerSignature = &value
 	return b
@@ -281,6 +292,9 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 	if b.consumed {
 		return InvocationDraft{}, invalidInvocationHandle("invocation builder handle is consumed")
 	}
+	if b.authorityErr != nil {
+		return InvocationDraft{}, b.authorityErr
+	}
 	for _, field := range []struct {
 		name  string
 		value string
@@ -304,6 +318,9 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 	}
 	if b.hasArguments && strings.TrimSpace(b.argumentsBase64) == "" {
 		return InvocationDraft{}, invalidInvocation("arguments_base64 must be non-empty", nil)
+	}
+	if err := validateAuthorityMetadata(b.metadata); err != nil {
+		return InvocationDraft{}, err
 	}
 	if b.callerSignature != nil {
 		if strings.TrimSpace(b.callerSignature.Algorithm) == "" {

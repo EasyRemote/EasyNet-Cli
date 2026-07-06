@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional
 
+from .authority import AuthorityMetadata, validate_authority_metadata
 from .errors import ErrorCode, RetryHint, SDKError
 
 
@@ -204,6 +205,12 @@ class InvocationBuilder:
         self._metadata = dict(value)
         return self
 
+    def with_authority_metadata(
+        self, value: AuthorityMetadata
+    ) -> "InvocationBuilder":
+        self._metadata = value.merge_into(self._metadata)
+        return self
+
     def with_caller_signature(
         self, value: InvocationSignature
     ) -> "InvocationBuilder":
@@ -259,6 +266,7 @@ class InvocationBuilder:
             raise _invalid_invocation("exactly one of args or arguments_base64 is required")
         if self._has_arguments:
             _required_builder_string(self._arguments_base64, "arguments_base64")
+        validate_authority_metadata(self._metadata)
         if self._caller_signature is not None:
             _required_builder_string(
                 self._caller_signature.algorithm, "caller_signature.algorithm"

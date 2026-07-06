@@ -40,6 +40,8 @@ Runtime Core lifecycle delegation from InvocationBuilder through InvocationHandl
 objects over daemon-authorized handles, InvocationHandle await/cancel/events/close
 observation, SDK-owned signed unary prepare/sign/submit/await/free-handle
 transport path with explicit signer-boundary errors, product-neutral
+typed authority metadata projections with mutually-exclusive InvocationBuilder
+attachment guardrails,
 `InvocationResultAdapter`, `UnaryDispatchPool`, `StreamValueAdapter`, and
 `BidiSessionAdapter` runtime transport helpers for unary wait/timeout/retire/
 close, stream terminal/timeout/error/payload projection, and bidi session
