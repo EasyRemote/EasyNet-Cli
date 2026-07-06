@@ -54,6 +54,7 @@ func submittedHandleForRuntimeTest(t *testing.T) InvocationHandle {
 
 func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	var seenDraft map[string]any
+	var seenOptions map[string]any
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
 		InvokeFunc: func(ctx context.Context, draftJSON []byte) ([]byte, error) {
 			t.Fatalf("Invoke should not be called")
@@ -62,6 +63,9 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
 				t.Fatalf("draft JSON: %v", err)
+			}
+			if err := json.Unmarshal(optionsJSON, &seenOptions); err != nil {
+				t.Fatalf("options JSON: %v", err)
 			}
 			return []byte(preparedFixture), nil
 		},
@@ -74,7 +78,12 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
 
-	prepared, material, err := client.Prepare(context.Background(), completeDraftForRuntimeTest(t), PrepareOptions{ExpiresInMS: 60000})
+	prepared, material, err := client.Prepare(context.Background(), completeDraftForRuntimeTest(t), PrepareOptions{
+		ExpiresInMS:        60000,
+		SignerID:           "signer-alice-key-1",
+		PolicyRef:          "daemon-key-inventory:sha256:test-policy",
+		LocalDaemonSigning: true,
+	})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -86,6 +95,12 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	}
 	if seenDraft["caller_ura"] != "easynet:///r/example/agent/alice.sdk" {
 		t.Fatalf("draft not sent to transport: %#v", seenDraft)
+	}
+	if seenOptions["expires_in_ms"].(float64) != 60000 ||
+		seenOptions["signer_id"] != "signer-alice-key-1" ||
+		seenOptions["policy_ref"] != "daemon-key-inventory:sha256:test-policy" ||
+		seenOptions["local_daemon_signing"] != true {
+		t.Fatalf("latest prepare options not sent to transport: %#v", seenOptions)
 	}
 }
 

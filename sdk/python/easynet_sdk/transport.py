@@ -120,7 +120,7 @@ class DaemonInvocationTransport:
         invocation: Mapping[str, object] | InvocationDraft,
         *,
         signer: Signer | None,
-        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+        options: PrepareOptions = PrepareOptions(local_daemon_signing=True),
     ) -> dict[str, object]:
         """Prepare, sign, submit, await, and release one signed Invocation."""
 
@@ -221,7 +221,7 @@ class InvocationResultAdapter:
         invocation: Mapping[str, object] | InvocationDraft,
         *,
         signer: Signer | None,
-        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+        options: PrepareOptions = PrepareOptions(local_daemon_signing=True),
     ) -> dict[str, object]:
         """Submit a signed Invocation and return runtime result adapter shape."""
 
@@ -265,7 +265,7 @@ class UnaryInvocationTransport(Protocol):
         invocation: Mapping[str, object] | InvocationDraft,
         *,
         signer: Signer | None,
-        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+        options: PrepareOptions = PrepareOptions(local_daemon_signing=True),
     ) -> Mapping[str, object]:
         """Submit one runtime-shaped signed unary Invocation."""
 
@@ -318,7 +318,7 @@ class UnaryDispatchPool:
         invocation: Mapping[str, object] | InvocationDraft,
         *,
         signer: Signer | None,
-        options: PrepareOptions = PrepareOptions(require_user_sig=True),
+        options: PrepareOptions = PrepareOptions(local_daemon_signing=True),
         timeout: float | None = None,
     ) -> dict[str, object]:
         return self._invoke_with_transport(

@@ -54,21 +54,21 @@ class RuntimeTransport(Protocol):
 class PrepareOptions:
     """Daemon-owned prepare policy knobs."""
 
-    resolve_descriptor: bool = False
-    fill_nonce: bool = False
-    require_user_sig: bool = False
     expires_in_ms: int = 0
+    signer_id: str = ""
+    policy_ref: str = ""
+    local_daemon_signing: bool = False
 
     def to_json_dict(self) -> dict[str, object]:
         value: dict[str, object] = {}
-        if self.resolve_descriptor:
-            value["resolve_descriptor"] = self.resolve_descriptor
-        if self.fill_nonce:
-            value["fill_nonce"] = self.fill_nonce
-        if self.require_user_sig:
-            value["require_user_sig"] = self.require_user_sig
         if self.expires_in_ms:
             value["expires_in_ms"] = self.expires_in_ms
+        if self.signer_id:
+            value["signer_id"] = self.signer_id
+        if self.policy_ref:
+            value["policy_ref"] = self.policy_ref
+        if self.local_daemon_signing:
+            value["local_daemon_signing"] = self.local_daemon_signing
         return value
 
     def to_json_bytes(self) -> bytes:

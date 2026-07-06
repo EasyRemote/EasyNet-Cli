@@ -147,10 +147,10 @@ func (c *RuntimeClient) runtimeTransport(ctx context.Context) (RuntimeTransport,
 
 // PrepareOptions are daemon-owned prepare policy knobs.
 type PrepareOptions struct {
-	ResolveDescriptor bool  `json:"resolve_descriptor,omitempty"`
-	FillNonce         bool  `json:"fill_nonce,omitempty"`
-	RequireUserSig    bool  `json:"require_user_sig,omitempty"`
-	ExpiresInMS       int64 `json:"expires_in_ms,omitempty"`
+	ExpiresInMS        int64  `json:"expires_in_ms,omitempty"`
+	SignerID           string `json:"signer_id,omitempty"`
+	PolicyRef          string `json:"policy_ref,omitempty"`
+	LocalDaemonSigning bool   `json:"local_daemon_signing,omitempty"`
 }
 
 // Invoke submits a complete Invocation tuple and decodes the daemon result projection.

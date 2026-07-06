@@ -123,7 +123,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["terminal_state"], "Completed")
         self.assertEqual(result["state"], 5)
-        self.assertEqual(runtime.seen_options, {"require_user_sig": True})
+        self.assertEqual(runtime.seen_options, {"local_daemon_signing": True})
         self.assertEqual(runtime.seen_await_id, 7)
         self.assertEqual(runtime.seen_free_id, 7)
         assert runtime.seen_signed is not None

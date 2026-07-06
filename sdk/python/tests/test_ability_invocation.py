@@ -271,7 +271,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
         prepared, material = client.prepare(
             _request(ability_name="observe.health"),
-            PrepareOptions(fill_nonce=True, require_user_sig=True),
+            PrepareOptions(
+                expires_in_ms=60000,
+                signer_id="signer-alice-key-1",
+                policy_ref="daemon-key-inventory:sha256:test-policy",
+                local_daemon_signing=True,
+            ),
         )
 
         self.assertEqual(prepared.prepared_id, "prepared-example-1")
@@ -279,7 +284,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertIsNone(runtime.seen_signed)
         self.assertEqual(
             runtime.seen_options,
-            {"fill_nonce": True, "require_user_sig": True},
+            {
+                "expires_in_ms": 60000,
+                "signer_id": "signer-alice-key-1",
+                "policy_ref": "daemon-key-inventory:sha256:test-policy",
+                "local_daemon_signing": True,
+            },
         )
         assert runtime.seen_draft is not None
         self.assertEqual(

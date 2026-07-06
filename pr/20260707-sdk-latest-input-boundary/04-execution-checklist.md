@@ -7,3 +7,6 @@
 - [x] Rename exported Go/Python compatibility transports to latest profile method names.
 - [x] Run focused Go and Python tests.
 - [x] Record verification results and decisions.
+- [x] Remove legacy Runtime Core prepare-option fields from Go/Python.
+- [x] Update signed convenience helpers to use latest local signing policy.
+- [x] Run focused Go/Python Runtime Core and C ABI tests.

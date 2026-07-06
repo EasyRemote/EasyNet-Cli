@@ -14,3 +14,11 @@ Python:
 
 Errors:
 - Use existing typed SDK errors. No new string-parsing path is introduced.
+
+Runtime Core prepare options:
+- Keep `expires_in_ms`.
+- Add `signer_id`, `policy_ref`, and `local_daemon_signing` to Go/Python.
+- Remove public Go/Python inputs `resolve_descriptor`, `fill_nonce`, and
+  `require_user_sig`.
+- Signed convenience helpers default to `local_daemon_signing=true` instead of
+  emitting a legacy `require_user_sig` flag.
