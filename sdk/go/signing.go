@@ -245,6 +245,13 @@ func NewEd25519SignatureProvider(privateKeySeed []byte, publicKeyBase64 string) 
 	}, nil
 }
 
+func NewEd25519SignatureProviderFromPrivateKey(privateKey ed25519.PrivateKey, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return Ed25519SignatureProvider{}, invalidInvocation("private_key must be 64 bytes", nil)
+	}
+	return NewEd25519SignatureProvider(privateKey.Seed(), publicKeyBase64)
+}
+
 func NewEd25519SignatureProviderFromSeedBase64(seedBase64 string, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
 	seed, err := decodeBase64Field(seedBase64, "private_key_seed")
 	if err != nil {
@@ -377,6 +384,84 @@ func (s Signer) SignWithSignature(prepared PreparedInvocation, signature Invocat
 		return SignedInvocation{}, invalidInvocation("signed invocation signer does not match handle", nil)
 	}
 	return signed, nil
+}
+
+// SignInvocationDraft attaches a caller signature to a complete Invocation
+// draft without consuming or mutating the input. Existing caller signatures are
+// preserved; this keeps browser/user pre-signed Invocations from being
+// re-signed by a backend or host process.
+func (s Signer) SignInvocationDraft(draft InvocationDraft) (InvocationDraft, error) {
+	if draft.CallerSignature() != nil {
+		return draft, nil
+	}
+	if err := validateSignerHandle(s.handle); err != nil {
+		return InvocationDraft{}, err
+	}
+	if s.provider == nil {
+		return InvocationDraft{}, invalidInvocation("signature provider is required", nil)
+	}
+	material, err := SigningMaterialForInvocationDraft(draft)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	signature, err := s.provider.Sign(material, s.handle)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	normalized, err := normalizeSignature(s.handle, signature)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	signed := draft
+	signed.callerSignature = &normalized
+	return signed, nil
+}
+
+// SigningMaterialForInvocationDraft projects SDK Invocation DTO fields into the
+// canonical material callers sign. The byte layout is delegated to the Axon
+// canonical facade; this helper owns only DTO validation and projection.
+func SigningMaterialForInvocationDraft(draft InvocationDraft) (SigningMaterial, error) {
+	nonce, err := decodeBase64Field(draft.NonceBase64(), "nonce_base64")
+	if err != nil {
+		return SigningMaterial{}, err
+	}
+	envelope := Envelope{
+		Caller:        AgentRef{URA: draft.CallerURA()},
+		Callee:        AgentRef{URA: draft.CalleeURA()},
+		Subject:       SubjectRef{URA: draft.SubjectURA()},
+		Nonce:         nonce,
+		CausalContext: CausalNullWithReason(""),
+	}
+	causal, err := causalContextForInvocationDraft(draft.CausalContext())
+	if err != nil {
+		return SigningMaterial{}, err
+	}
+	envelope.CausalContext = causal
+	args, err := invocationDraftArgumentBytes(draft)
+	if err != nil {
+		return SigningMaterial{}, err
+	}
+	canonical, err := CanonicalInvocationBytes(envelope, draft.DescriptorRef(), args)
+	if err != nil {
+		return SigningMaterial{}, err
+	}
+	digest := sha256.Sum256(args)
+	return SigningMaterial{
+		algorithm:            "ed25519",
+		canonicalBytesBase64: base64.StdEncoding.EncodeToString(canonical),
+		argsDigestHex:        hex.EncodeToString(digest[:]),
+		descriptorRef:        draft.DescriptorRef(),
+		nonceBase64:          draft.NonceBase64(),
+		signedFields: []string{
+			"caller_ura",
+			"callee_ura",
+			"subject_ura",
+			"descriptor_ref",
+			"args_digest",
+			"nonce_base64",
+			"causal_context",
+		},
+	}, nil
 }
 
 // SignedInvocation is the immutable submit-ready pre-runtime envelope.
