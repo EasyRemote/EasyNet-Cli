@@ -519,10 +519,13 @@ case_files=(
   identity-ura-descriptor-projection.yaml
   receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml
+  receipt-axon-chain-verification.yaml
   stream-bidi-lifecycle-state.yaml
+  stream-backpressure-bound.yaml
   host-binding-codec-hash.yaml
   publication-resource-carriers.yaml
   mission-carrier-status.yaml
+  mission-plan-child-invocation.yaml
   events-directory-stream.yaml
   events-device-invocation-history.yaml
   events-session-stream.yaml
