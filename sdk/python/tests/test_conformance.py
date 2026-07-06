@@ -2217,6 +2217,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             identity_case, "rejects_hand_built_invalid_ura: true"
         )
+        self._require_case_expectation(
+            identity_case, "directory_list_runtime: provider_backed"
+        )
 
         identity = IdentityClient(SharedIdentityTransport())
         projection = identity.project_descriptor_ref(

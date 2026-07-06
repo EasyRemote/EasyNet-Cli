@@ -1064,6 +1064,7 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	requireCaseExpectation(t, identityCase, "fixture: identity.descriptor-ref.v4.json")
 	requireCaseExpectation(t, identityCase, "rejects_malformed_descriptor_ref: true")
 	requireCaseExpectation(t, identityCase, "rejects_hand_built_invalid_ura: true")
+	requireCaseExpectation(t, identityCase, "directory_list_runtime: provider_backed")
 
 	identity, err := NewIdentityClient(&sharedIdentityTransport{
 		t:                                 t,

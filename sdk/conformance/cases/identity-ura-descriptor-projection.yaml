@@ -30,4 +30,4 @@ expect:
   grammar_owner: axon
   rejects_malformed_descriptor_ref: true
   rejects_hand_built_invalid_ura: true
-  directory_list_runtime: scaffold_only
+  directory_list_runtime: provider_backed
