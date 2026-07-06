@@ -453,6 +453,12 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
 
                     def is_device_or_hub(value):
                         return "/device/" in value or value.find("/hub/") >= 0
+
+                    def owner_resource(value):
+                        return value.rpartition("/resource/")[0]
+
+                    def is_user(value):
+                        return value.startswith("/user/")
                     '''
                 ),
                 encoding="utf-8",
@@ -462,6 +468,16 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertIn("raw_ura_shape_literal", _rules(result))
+        details = " ".join(item.detail for item in result.violations)
+        for marker in (
+            "/ability/",
+            "/agent/",
+            "/device/",
+            "/hub/",
+            "/resource/",
+            "/user/",
+        ):
+            self.assertIn(marker, details)
 
     def test_flags_raw_publication_carrier_literals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -605,15 +621,15 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
             (root / "docs_only.py").write_text(
                 textwrap.dedent(
                     '''
-                    """Mentions easynet_daemon_start, dlopen, and /agent/ in prose only."""
+                    """Mentions easynet_daemon_start, dlopen, /agent/, and /user/ in prose only."""
 
                     # ctypes.CDLL("libeasynet_cli.dylib")
                     # symbol = "easynet_runtime_invoke"
-                    # if "/ability/" in value: pass
+                    # if "/ability/" in value or "/resource/" in value: pass
                     from easynet_sdk import RuntimeClient
 
                     def use(client: RuntimeClient) -> None:
-                        """References easynet_last_error and /device/ in documentation."""
+                        """References easynet_last_error, /device/, and /hub/ in documentation."""
                         client.close()
                     '''
                 ),

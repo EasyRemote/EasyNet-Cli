@@ -547,6 +547,8 @@ _RAW_URA_SHAPE_LITERALS = {
     "/ability/",
     "/device/",
     "/hub/",
+    "/resource/",
+    "/user/",
 }
 _RAW_URA_SHAPE_METHODS = {
     "endswith",
