@@ -16,6 +16,18 @@
       "message": null
     },
     {
+      "case_id": "authority/mutual_exclusion",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "backend/hub_route_family_coverage",
       "profile": "backend_cutover",
       "status": "passed",

@@ -1,0 +1,23 @@
+id: authority/mutual_exclusion
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Invocation builders expose typed authority metadata and reject ambiguous delegated/session authority.
+steps:
+  - action: load_authority_fixture
+    fixture: authority-metadata.v4.json
+  - action: project_delegation_metadata
+  - action: project_session_authority_metadata
+  - action: attach_single_authority_metadata
+  - action: attach_ambiguous_authority_metadata
+expect:
+  result: error
+  error_code: InvalidArgument
+  delegation_metadata_key: x-easynet-delegation
+  session_authority_metadata_key: x-easynet-session-authority
+  typed_delegation_projection: true
+  typed_session_authority_projection: true
+  unrelated_metadata_preserved: true
+  ambiguous_authority_rejected: true
+  canonical_payload_owned_by_sdk: false

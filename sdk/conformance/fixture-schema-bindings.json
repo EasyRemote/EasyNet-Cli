@@ -10,6 +10,10 @@
       "schema": "ability-package-manifest.schema.json"
     },
     {
+      "fixture": "authority-metadata.v4.json",
+      "schema": "authority.schema.json"
+    },
+    {
       "fixture": "admin-agent-lifecycle-result.v4.json",
       "schema": "admin.schema.json"
     },

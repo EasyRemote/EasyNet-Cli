@@ -84,7 +84,7 @@
     {
       "capability_id": "complete_invocation_draft",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-builder-handle-state.yaml"],
+      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-builder-handle-state.yaml", "sdk/conformance/cases/authority-mutual-exclusion.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/invocation_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]

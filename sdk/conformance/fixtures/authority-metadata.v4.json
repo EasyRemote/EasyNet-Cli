@@ -1,0 +1,26 @@
+{
+  "delegation_metadata_key": "x-easynet-delegation",
+  "session_authority_metadata_key": "x-easynet-session-authority",
+  "delegation_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwic3ViamVjdF91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwiY2FsbGVyX3VyYSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2FnZW50L2JhY2tlbmQiLCJhdWRpZW5jZSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInNjb3BlcyI6WyJkZXZpY2Uub2JzZXJ2ZS4qIl0sImlzc3VlZF9hdF9tcyI6MTAwMCwiZXhwaXJlc19hdF9tcyI6MjAwMH0sInNpZ25hdHVyZSI6IlpHVnNaV2RoZEdsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
+  "session_authority_metadata_value": "eyJwYXlsb2FkIjp7ImJhY2tlbmRfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvYWdlbnQvYmFja2VuZCIsInVzZXJfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvdXNlci9hbGljZSIsInNlc3Npb25faWQiOiJzYS1leGFtcGxlIiwic2NvcGVzIjpbImRldmljZS5vYnNlcnZlLioiXSwiYXVkaWVuY2VzIjpbImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSJdLCJpc3N1ZWRfYXRfbXMiOjEwMDAsImV4cGlyZXNfYXRfbXMiOjIwMDB9LCJzaWduYXR1cmUiOiJjMlZ6YzJsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
+  "expected_delegation": {
+    "issuer_ura": "easynet:///r/example/user/alice",
+    "subject_ura": "easynet:///r/example/user/alice",
+    "caller_ura": "easynet:///r/example/agent/backend",
+    "audience": "easynet:///r/example/device/dev-a",
+    "scopes": ["device.observe.*"],
+    "issued_at_ms": 1000,
+    "expires_at_ms": 2000,
+    "signature_base64": "ZGVsZWdhdGlvbi1zaWduYXR1cmU="
+  },
+  "expected_session_authority": {
+    "backend_ura": "easynet:///r/example/agent/backend",
+    "user_ura": "easynet:///r/example/user/alice",
+    "session_id": "sa-example",
+    "scopes": ["device.observe.*"],
+    "audiences": ["easynet:///r/example/device/dev-a"],
+    "issued_at_ms": 1000,
+    "expires_at_ms": 2000,
+    "signature_base64": "c2Vzc2lvbi1zaWduYXR1cmU="
+  }
+}

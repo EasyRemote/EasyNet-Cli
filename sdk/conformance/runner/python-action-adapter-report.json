@@ -16,6 +16,18 @@
       "message": null
     },
     {
+      "case_id": "authority/mutual_exclusion",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "compatibility/openai_carrier_projection",
       "profile": "compatibility",
       "status": "passed",

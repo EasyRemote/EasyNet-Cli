@@ -58,9 +58,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   bindings remain incomplete.
 - Go and Python now expose typed `DelegationProof`/`SessionAuthority`
   metadata projections plus InvocationBuilder authority attachment guardrails.
-  Canonical authority payload creation, signing, verification, and trust-anchor
-  admission remain daemon/Axon-owned; authority minting transports and backend
-  source cutover remain incomplete.
+  The shared `authority/mutual_exclusion` conformance case now pins projection
+  parity and ambiguous metadata rejection. Canonical authority payload creation,
+  signing, verification, and trust-anchor admission remain daemon/Axon-owned;
+  authority minting transports and backend source cutover remain incomplete.
 - Backend SDK-only import-ban enforcement now has a shared `backend/import_ban`
   conformance case and executable scanner gate; the sibling EasyNet backend
   still reports raw Axon, generated Axon protobuf, and direct daemon transport

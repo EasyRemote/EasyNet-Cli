@@ -1,3 +1,4 @@
+import base64
 import inspect
 import json
 import pathlib
@@ -37,6 +38,9 @@ from easynet_sdk import (
     DaemonHandle,
     DeleteDeviceSessionRequest,
     DescriptorRefRequest,
+    DELEGATION_METADATA_KEY,
+    SESSION_AUTHORITY_METADATA_KEY,
+    DelegationProof,
     DeviceQuery,
     DirectoryClient,
     DirectoryQueryBase,
@@ -108,6 +112,7 @@ from easynet_sdk import (
     PrepareOptions,
     RetryHint,
     SDKError,
+    SessionAuthority,
     Signer,
     SignerHandle,
     SignerRequest,
@@ -1332,6 +1337,89 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertTrue(diagnostics.ready)
         self.assertEqual(diagnostics.kind, "diagnostics_report")
+
+    def test_python_runtime_core_executes_shared_authority_conformance_case(self) -> None:
+        authority_case = shared_case("authority-mutual-exclusion.yaml")
+        self._require_case_id(authority_case, "authority/mutual_exclusion")
+        self._require_case_action(authority_case, "load_authority_fixture")
+        self._require_case_action(authority_case, "project_delegation_metadata")
+        self._require_case_action(authority_case, "project_session_authority_metadata")
+        self._require_case_action(authority_case, "attach_single_authority_metadata")
+        self._require_case_action(authority_case, "attach_ambiguous_authority_metadata")
+        self._require_case_fixture(authority_case, "authority-metadata.v4.json")
+        self._require_case_expectation(
+            authority_case, "ambiguous_authority_rejected: true"
+        )
+        self._require_case_expectation(
+            authority_case, "canonical_payload_owned_by_sdk: false"
+        )
+
+        fixture = json.loads(shared_fixture("authority-metadata.v4.json"))
+        self.assertEqual(fixture["delegation_metadata_key"], DELEGATION_METADATA_KEY)
+        self.assertEqual(
+            fixture["session_authority_metadata_key"], SESSION_AUTHORITY_METADATA_KEY
+        )
+
+        delegation = DelegationProof.from_metadata(
+            fixture["delegation_metadata_value"]
+        )
+        expected_delegation = fixture["expected_delegation"]
+        self.assertEqual(delegation.issuer_ura, expected_delegation["issuer_ura"])
+        self.assertEqual(delegation.subject_ura, expected_delegation["subject_ura"])
+        self.assertEqual(delegation.caller_ura, expected_delegation["caller_ura"])
+        self.assertEqual(delegation.audience, expected_delegation["audience"])
+        self.assertEqual(list(delegation.scopes), expected_delegation["scopes"])
+        self.assertEqual(delegation.issued_at_ms, expected_delegation["issued_at_ms"])
+        self.assertEqual(delegation.expires_at_ms, expected_delegation["expires_at_ms"])
+        self.assertEqual(
+            base64.b64encode(delegation.signature).decode("ascii"),
+            expected_delegation["signature_base64"],
+        )
+
+        session = SessionAuthority.from_metadata(
+            fixture["session_authority_metadata_value"]
+        )
+        expected_session = fixture["expected_session_authority"]
+        self.assertEqual(session.backend_ura, expected_session["backend_ura"])
+        self.assertEqual(session.user_ura, expected_session["user_ura"])
+        self.assertEqual(session.session_id, expected_session["session_id"])
+        self.assertEqual(list(session.scopes), expected_session["scopes"])
+        self.assertEqual(list(session.audiences), expected_session["audiences"])
+        self.assertEqual(session.issued_at_ms, expected_session["issued_at_ms"])
+        self.assertEqual(session.expires_at_ms, expected_session["expires_at_ms"])
+        self.assertEqual(
+            base64.b64encode(session.signature).decode("ascii"),
+            expected_session["signature_base64"],
+        )
+
+        draft = (
+            shared_invocation_builder()
+            .with_metadata({"trace": "authority-shared"})
+            .with_authority_metadata(delegation.metadata())
+            .build()
+        )
+        self.assertEqual(draft.metadata["trace"], "authority-shared")
+        self.assertEqual(
+            draft.metadata[fixture["delegation_metadata_key"]],
+            fixture["delegation_metadata_value"],
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            (
+                shared_invocation_builder()
+                .with_metadata(
+                    {
+                        fixture["delegation_metadata_key"]: fixture[
+                            "delegation_metadata_value"
+                        ],
+                        fixture["session_authority_metadata_key"]: fixture[
+                            "session_authority_metadata_value"
+                        ],
+                    }
+                )
+                .build()
+            )
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
     def test_python_runtime_core_executes_shared_lifecycle_version_error_conformance_cases(self) -> None:
         compatible_case = shared_case("version-abi-compatible.yaml")

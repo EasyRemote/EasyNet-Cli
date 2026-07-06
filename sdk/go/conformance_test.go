@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +90,78 @@ func TestGoFacadeExecutesSharedRuntimeCoreConformanceCases(t *testing.T) {
 	}
 	if !diagnostics.Ready || diagnostics.Kind != "diagnostics_report" {
 		t.Fatalf("unexpected diagnostics report from shared fixture: %#v", diagnostics)
+	}
+}
+
+func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	authorityCase := sharedCase(t, root, "authority-mutual-exclusion.yaml")
+	requireCaseID(t, authorityCase, "authority/mutual_exclusion")
+	requireCaseAction(t, authorityCase, "load_authority_fixture")
+	requireCaseAction(t, authorityCase, "project_delegation_metadata")
+	requireCaseAction(t, authorityCase, "project_session_authority_metadata")
+	requireCaseAction(t, authorityCase, "attach_single_authority_metadata")
+	requireCaseAction(t, authorityCase, "attach_ambiguous_authority_metadata")
+	requireCaseFixture(t, authorityCase, "authority-metadata.v4.json")
+	requireCaseExpectation(t, authorityCase, "ambiguous_authority_rejected: true")
+	requireCaseExpectation(t, authorityCase, "canonical_payload_owned_by_sdk: false")
+
+	fixture := sharedAuthorityFixture(t, root)
+	delegation, err := NewDelegationProofFromMetadata(fixture.DelegationMetadataValue)
+	if err != nil {
+		t.Fatalf("NewDelegationProofFromMetadata(shared fixture): %v", err)
+	}
+	if delegation.IssuerURA != fixture.ExpectedDelegation.IssuerURA ||
+		delegation.SubjectURA != fixture.ExpectedDelegation.SubjectURA ||
+		delegation.CallerURA != fixture.ExpectedDelegation.CallerURA ||
+		delegation.Audience != fixture.ExpectedDelegation.Audience ||
+		delegation.IssuedAtMS != fixture.ExpectedDelegation.IssuedAtMS ||
+		delegation.ExpiresAtMS != fixture.ExpectedDelegation.ExpiresAtMS {
+		t.Fatalf("unexpected delegation projection: %#v", delegation)
+	}
+	if base64.StdEncoding.EncodeToString(delegation.Signature) != fixture.ExpectedDelegation.SignatureBase64 {
+		t.Fatalf("unexpected delegation signature projection")
+	}
+
+	session, err := NewSessionAuthorityFromMetadata(fixture.SessionAuthorityMetadataValue)
+	if err != nil {
+		t.Fatalf("NewSessionAuthorityFromMetadata(shared fixture): %v", err)
+	}
+	if session.BackendURA != fixture.ExpectedSessionAuthority.BackendURA ||
+		session.UserURA != fixture.ExpectedSessionAuthority.UserURA ||
+		session.SessionID != fixture.ExpectedSessionAuthority.SessionID ||
+		session.IssuedAtMS != fixture.ExpectedSessionAuthority.IssuedAtMS ||
+		session.ExpiresAtMS != fixture.ExpectedSessionAuthority.ExpiresAtMS {
+		t.Fatalf("unexpected session authority projection: %#v", session)
+	}
+	if base64.StdEncoding.EncodeToString(session.Signature) != fixture.ExpectedSessionAuthority.SignatureBase64 {
+		t.Fatalf("unexpected session authority signature projection")
+	}
+
+	delegationMetadata, err := delegation.Metadata()
+	if err != nil {
+		t.Fatalf("delegation Metadata(shared fixture): %v", err)
+	}
+	draft, err := sharedInvocationBuilder(t, root).
+		WithMetadata(map[string]any{"trace": "authority-shared"}).
+		WithAuthorityMetadata(delegationMetadata).
+		Build()
+	if err != nil {
+		t.Fatalf("Build with shared delegation metadata: %v", err)
+	}
+	if draft.Metadata()["trace"] != "authority-shared" ||
+		draft.Metadata()[fixture.DelegationMetadataKey] != fixture.DelegationMetadataValue {
+		t.Fatalf("authority metadata merge failed: %#v", draft.Metadata())
+	}
+
+	_, err = sharedInvocationBuilder(t, root).
+		WithMetadata(map[string]any{
+			fixture.DelegationMetadataKey:       fixture.DelegationMetadataValue,
+			fixture.SessionAuthorityMetadataKey: fixture.SessionAuthorityMetadataValue,
+		}).
+		Build()
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ambiguous authority metadata error = %v, want InvalidArgument", err)
 	}
 }
 
@@ -4710,6 +4783,50 @@ func sharedInvocationBuilder(t *testing.T, root string) *InvocationBuilder {
 		builder.WithCallerSignature(*signature)
 	}
 	return builder
+}
+
+type sharedAuthorityMetadataFixture struct {
+	DelegationMetadataKey         string                              `json:"delegation_metadata_key"`
+	SessionAuthorityMetadataKey   string                              `json:"session_authority_metadata_key"`
+	DelegationMetadataValue       string                              `json:"delegation_metadata_value"`
+	SessionAuthorityMetadataValue string                              `json:"session_authority_metadata_value"`
+	ExpectedDelegation            sharedDelegationAuthorityProjection `json:"expected_delegation"`
+	ExpectedSessionAuthority      sharedSessionAuthorityProjection    `json:"expected_session_authority"`
+}
+
+type sharedDelegationAuthorityProjection struct {
+	IssuerURA       string   `json:"issuer_ura"`
+	SubjectURA      string   `json:"subject_ura"`
+	CallerURA       string   `json:"caller_ura"`
+	Audience        string   `json:"audience"`
+	Scopes          []string `json:"scopes"`
+	IssuedAtMS      int64    `json:"issued_at_ms"`
+	ExpiresAtMS     int64    `json:"expires_at_ms"`
+	SignatureBase64 string   `json:"signature_base64"`
+}
+
+type sharedSessionAuthorityProjection struct {
+	BackendURA      string   `json:"backend_ura"`
+	UserURA         string   `json:"user_ura"`
+	SessionID       string   `json:"session_id"`
+	Scopes          []string `json:"scopes"`
+	Audiences       []string `json:"audiences"`
+	IssuedAtMS      int64    `json:"issued_at_ms"`
+	ExpiresAtMS     int64    `json:"expires_at_ms"`
+	SignatureBase64 string   `json:"signature_base64"`
+}
+
+func sharedAuthorityFixture(t *testing.T, root string) sharedAuthorityMetadataFixture {
+	t.Helper()
+	var fixture sharedAuthorityMetadataFixture
+	if err := json.Unmarshal(sharedFixture(t, root, "authority-metadata.v4.json"), &fixture); err != nil {
+		t.Fatalf("decode shared authority fixture: %v", err)
+	}
+	if fixture.DelegationMetadataKey != DelegationMetadataKey ||
+		fixture.SessionAuthorityMetadataKey != SessionAuthorityMetadataKey {
+		t.Fatalf("shared authority fixture keys do not match SDK constants: %#v", fixture)
+	}
+	return fixture
 }
 
 func sharedInvocationSignature() InvocationSignature {

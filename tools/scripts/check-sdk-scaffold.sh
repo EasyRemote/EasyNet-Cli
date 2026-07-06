@@ -493,6 +493,7 @@ fixture_files=(
   wrapper-remote-desktop-session.v4.json
   wrapper-browser-session.v4.json
   wrapper-media-session.v4.json
+  authority-metadata.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -514,6 +515,7 @@ case_files=(
   invocation-prepared-not-submittable.yaml
   invocation-presigned-submit.yaml
   invocation-local-daemon-signing-boundary.yaml
+  authority-mutual-exclusion.yaml
   invocation-descriptor-ref-helper-delegation.yaml
   error-typed-json.yaml
   error-profile-source-refs.yaml
