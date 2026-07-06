@@ -58,6 +58,50 @@
       "schema": "admin-session-list-request.schema.json"
     },
     {
+      "fixture": "admin-pairing-preflight-request.v4.json",
+      "schema": "admin-pairing-preflight-request.schema.json"
+    },
+    {
+      "fixture": "admin-pairing-preflight.v4.json",
+      "schema": "admin.schema.json"
+    },
+    {
+      "fixture": "admin-pairing-create-request.v4.json",
+      "schema": "admin-pairing-create-request.schema.json"
+    },
+    {
+      "fixture": "admin-pairing-token.v4.json",
+      "schema": "admin.schema.json"
+    },
+    {
+      "fixture": "admin-pairing-validate-request.v4.json",
+      "schema": "admin-pairing-validate-request.schema.json"
+    },
+    {
+      "fixture": "admin-device-credential.v4.json",
+      "schema": "admin.schema.json"
+    },
+    {
+      "fixture": "admin-device-session-create-request.v4.json",
+      "schema": "admin-device-session-create-request.schema.json"
+    },
+    {
+      "fixture": "admin-device-session.v4.json",
+      "schema": "admin.schema.json"
+    },
+    {
+      "fixture": "admin-device-session-page.v4.json",
+      "schema": "admin.schema.json"
+    },
+    {
+      "fixture": "admin-device-session-delete-request.v4.json",
+      "schema": "admin-device-session-delete-request.schema.json"
+    },
+    {
+      "fixture": "admin-device-session-delete-result.v4.json",
+      "schema": "admin.schema.json"
+    },
+    {
       "fixture": "compatibility-chat-completion-invocation.v4.json",
       "schema": "invocation.schema.json"
     },

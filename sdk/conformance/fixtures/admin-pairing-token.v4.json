@@ -1,0 +1,18 @@
+{
+  "profile": "admin_gateway",
+  "kind": "pairing_token",
+  "token_id": "pair-token-1",
+  "token": "pair-token-value",
+  "hub_ura": "easynet:///r/example/hub/main",
+  "device_ura": "easynet:///r/example/device/dev-a",
+  "state": "issued",
+  "expires_unix_ms": 1893456000000,
+  "scopes": [
+    "invoke",
+    "events"
+  ],
+  "metadata": {
+    "profile": "admin_gateway",
+    "source": "pairing.create"
+  }
+}

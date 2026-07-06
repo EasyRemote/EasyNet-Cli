@@ -23,6 +23,18 @@ steps:
     fixture: admin-agent-records.v4.json
   - action: project_agent_lifecycle_result
     fixture: admin-agent-lifecycle-result.v4.json
+  - action: pairing_preflight
+    fixture: admin-pairing-preflight-request.v4.json
+  - action: create_pairing
+    fixture: admin-pairing-create-request.v4.json
+  - action: validate_pairing
+    fixture: admin-pairing-validate-request.v4.json
+  - action: create_device_session
+    fixture: admin-device-session-create-request.v4.json
+  - action: list_device_sessions
+    fixture: admin-session-list-request.v4.json
+  - action: delete_device_session
+    fixture: admin-device-session-delete-request.v4.json
 expect:
   result: admin_gateway_carrier_status_observed
   gateway_schema: gateway.schema.json
@@ -36,7 +48,13 @@ expect:
   gateway_status_fixture: gateway-status.v4.json
   agent_records_fixture: admin-agent-records.v4.json
   agent_lifecycle_fixture: admin-agent-lifecycle-result.v4.json
+  pairing_preflight_fixture: admin-pairing-preflight.v4.json
+  pairing_token_fixture: admin-pairing-token.v4.json
+  device_credential_fixture: admin-device-credential.v4.json
+  device_session_fixture: admin-device-session.v4.json
+  device_session_page_fixture: admin-device-session-page.v4.json
+  device_session_delete_fixture: admin-device-session-delete-result.v4.json
   rejects_incomplete_invocation_tuple: true
   rejects_system_agent_lifecycle: true
   preserves_control_only_degraded_state: true
-  pairing_and_device_session_crud: scaffold_only
+  pairing_and_device_session_crud: provider_backed

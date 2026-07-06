@@ -1362,9 +1362,20 @@ func TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase(t *testi
 		"admin-agent-stop-request.v4.json",
 		"admin-agent-refresh-request.v4.json",
 		"admin-session-list-request.v4.json",
+		"admin-pairing-preflight-request.v4.json",
+		"admin-pairing-create-request.v4.json",
+		"admin-pairing-validate-request.v4.json",
+		"admin-device-session-create-request.v4.json",
+		"admin-device-session-delete-request.v4.json",
 		"gateway-status.v4.json",
 		"admin-agent-records.v4.json",
 		"admin-agent-lifecycle-result.v4.json",
+		"admin-pairing-preflight.v4.json",
+		"admin-pairing-token.v4.json",
+		"admin-device-credential.v4.json",
+		"admin-device-session.v4.json",
+		"admin-device-session-page.v4.json",
+		"admin-device-session-delete-result.v4.json",
 	} {
 		requireCaseFixture(t, adminCase, fixture)
 	}
@@ -1375,24 +1386,41 @@ func TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase(t *testi
 	requireCaseExpectation(t, adminCase, "rejects_incomplete_invocation_tuple: true")
 	requireCaseExpectation(t, adminCase, "rejects_system_agent_lifecycle: true")
 	requireCaseExpectation(t, adminCase, "preserves_control_only_degraded_state: true")
-	requireCaseExpectation(t, adminCase, "pairing_and_device_session_crud: scaffold_only")
+	requireCaseExpectation(t, adminCase, "pairing_preflight_fixture: admin-pairing-preflight.v4.json")
+	requireCaseExpectation(t, adminCase, "pairing_token_fixture: admin-pairing-token.v4.json")
+	requireCaseExpectation(t, adminCase, "device_credential_fixture: admin-device-credential.v4.json")
+	requireCaseExpectation(t, adminCase, "device_session_fixture: admin-device-session.v4.json")
+	requireCaseExpectation(t, adminCase, "device_session_page_fixture: admin-device-session-page.v4.json")
+	requireCaseExpectation(t, adminCase, "device_session_delete_fixture: admin-device-session-delete-result.v4.json")
+	requireCaseExpectation(t, adminCase, "pairing_and_device_session_crud: provider_backed")
 
 	admin, err := NewAdminClient(&sharedAdminGatewayTransport{
-		t:                            t,
-		expectedAgentListRequest:     sharedFixture(t, root, "admin-agent-list-request.v4.json"),
-		expectedAgentStartRequest:    sharedFixture(t, root, "admin-agent-start-request.v4.json"),
-		expectedAgentStopRequest:     sharedFixture(t, root, "admin-agent-stop-request.v4.json"),
-		expectedAgentRefreshRequest:  sharedFixture(t, root, "admin-agent-refresh-request.v4.json"),
-		expectedSessionListRequest:   sharedFixture(t, root, "admin-session-list-request.v4.json"),
-		agentListInvocationJSON:      sharedFixture(t, root, "admin-agent-list-invocation.v4.json"),
-		agentStartInvocationJSON:     sharedFixture(t, root, "admin-agent-start-invocation.v4.json"),
-		agentStopInvocationJSON:      sharedFixture(t, root, "admin-agent-stop-invocation.v4.json"),
-		agentRefreshInvocationJSON:   sharedFixture(t, root, "admin-agent-refresh-invocation.v4.json"),
-		sessionListInvocationJSON:    sharedFixture(t, root, "admin-session-list-invocation.v4.json"),
-		gatewayStatusJSON:            sharedFixture(t, root, "gateway-status.v4.json"),
-		agentRecordsJSON:             sharedFixture(t, root, "admin-agent-records.v4.json"),
-		agentLifecycleResultJSON:     sharedFixture(t, root, "admin-agent-lifecycle-result.v4.json"),
-		expectedGatewayStatusRequest: []byte(`{}`),
+		t:                                  t,
+		expectedAgentListRequest:           sharedFixture(t, root, "admin-agent-list-request.v4.json"),
+		expectedAgentStartRequest:          sharedFixture(t, root, "admin-agent-start-request.v4.json"),
+		expectedAgentStopRequest:           sharedFixture(t, root, "admin-agent-stop-request.v4.json"),
+		expectedAgentRefreshRequest:        sharedFixture(t, root, "admin-agent-refresh-request.v4.json"),
+		expectedSessionListRequest:         sharedFixture(t, root, "admin-session-list-request.v4.json"),
+		expectedPairingPreflightRequest:    sharedFixture(t, root, "admin-pairing-preflight-request.v4.json"),
+		expectedPairingCreateRequest:       sharedFixture(t, root, "admin-pairing-create-request.v4.json"),
+		expectedPairingValidateRequest:     sharedFixture(t, root, "admin-pairing-validate-request.v4.json"),
+		expectedDeviceSessionCreateRequest: sharedFixture(t, root, "admin-device-session-create-request.v4.json"),
+		expectedDeviceSessionDeleteRequest: sharedFixture(t, root, "admin-device-session-delete-request.v4.json"),
+		agentListInvocationJSON:            sharedFixture(t, root, "admin-agent-list-invocation.v4.json"),
+		agentStartInvocationJSON:           sharedFixture(t, root, "admin-agent-start-invocation.v4.json"),
+		agentStopInvocationJSON:            sharedFixture(t, root, "admin-agent-stop-invocation.v4.json"),
+		agentRefreshInvocationJSON:         sharedFixture(t, root, "admin-agent-refresh-invocation.v4.json"),
+		sessionListInvocationJSON:          sharedFixture(t, root, "admin-session-list-invocation.v4.json"),
+		gatewayStatusJSON:                  sharedFixture(t, root, "gateway-status.v4.json"),
+		agentRecordsJSON:                   sharedFixture(t, root, "admin-agent-records.v4.json"),
+		agentLifecycleResultJSON:           sharedFixture(t, root, "admin-agent-lifecycle-result.v4.json"),
+		pairingPreflightJSON:               sharedFixture(t, root, "admin-pairing-preflight.v4.json"),
+		pairingTokenJSON:                   sharedFixture(t, root, "admin-pairing-token.v4.json"),
+		deviceCredentialJSON:               sharedFixture(t, root, "admin-device-credential.v4.json"),
+		deviceSessionJSON:                  sharedFixture(t, root, "admin-device-session.v4.json"),
+		deviceSessionPageJSON:              sharedFixture(t, root, "admin-device-session-page.v4.json"),
+		deviceSessionDeleteResultJSON:      sharedFixture(t, root, "admin-device-session-delete-result.v4.json"),
+		expectedGatewayStatusRequest:       []byte(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("NewAdminClient: %v", err)
@@ -1465,6 +1493,54 @@ func TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase(t *testi
 	}
 	if lifecycle.Kind != "agent_lifecycle_result" || lifecycle.State != "ok" || lifecycle.RuntimeNotReady {
 		t.Fatalf("unexpected shared admin lifecycle result: %#v", lifecycle)
+	}
+
+	preflight, err := admin.PairingPreflight(context.Background(), sharedAdminPairingPreflightRequest(t, root))
+	if err != nil {
+		t.Fatalf("PairingPreflight(shared fixture): %v", err)
+	}
+	if !preflight.PairingRequired || preflight.TrustReady || len(preflight.Scopes) != 2 {
+		t.Fatalf("unexpected shared pairing preflight: %#v", preflight)
+	}
+
+	token, err := admin.CreatePairing(context.Background(), sharedAdminPairingCreateRequest(t, root))
+	if err != nil {
+		t.Fatalf("CreatePairing(shared fixture): %v", err)
+	}
+	if token.TokenID != "pair-token-1" || token.Token != "pair-token-value" {
+		t.Fatalf("unexpected shared pairing token: %#v", token)
+	}
+
+	credential, err := admin.ValidatePairing(context.Background(), sharedAdminPairingValidateRequest(t, root))
+	if err != nil {
+		t.Fatalf("ValidatePairing(shared fixture): %v", err)
+	}
+	if credential.CredentialID != "cred-dev-a" || credential.State != "active" {
+		t.Fatalf("unexpected shared device credential: %#v", credential)
+	}
+
+	session, err := admin.CreateDeviceSession(context.Background(), sharedAdminDeviceSessionCreateRequest(t, root))
+	if err != nil {
+		t.Fatalf("CreateDeviceSession(shared fixture): %v", err)
+	}
+	if session.SessionID != "dev-session-1" || session.SessionKind != "remote_desktop" {
+		t.Fatalf("unexpected shared device session: %#v", session)
+	}
+
+	sessions, err := admin.ListDeviceSessions(context.Background(), sharedAdminSessionListRequest(t, root))
+	if err != nil {
+		t.Fatalf("ListDeviceSessions(shared fixture): %v", err)
+	}
+	if sessions.Kind != "device_sessions" || len(sessions.Items) != 1 || sessions.Items[0].SessionID != "dev-session-1" {
+		t.Fatalf("unexpected shared device session page: %#v", sessions)
+	}
+
+	deleted, err := admin.DeleteDeviceSession(context.Background(), sharedAdminDeviceSessionDeleteRequest(t, root))
+	if err != nil {
+		t.Fatalf("DeleteDeviceSession(shared fixture): %v", err)
+	}
+	if deleted.Kind != "device_admin_result" || deleted.Operation != "session.delete" || deleted.Ack == nil || !*deleted.Ack {
+		t.Fatalf("unexpected shared delete session result: %#v", deleted)
 	}
 
 	incomplete := sharedAdminAgentStartRequest(t, root)
@@ -2878,21 +2954,32 @@ func (t *sharedMissionTransport) Close(context.Context) error {
 }
 
 type sharedAdminGatewayTransport struct {
-	t                            *testing.T
-	expectedAgentListRequest     []byte
-	expectedAgentStartRequest    []byte
-	expectedAgentStopRequest     []byte
-	expectedAgentRefreshRequest  []byte
-	expectedSessionListRequest   []byte
-	expectedGatewayStatusRequest []byte
-	agentListInvocationJSON      []byte
-	agentStartInvocationJSON     []byte
-	agentStopInvocationJSON      []byte
-	agentRefreshInvocationJSON   []byte
-	sessionListInvocationJSON    []byte
-	gatewayStatusJSON            []byte
-	agentRecordsJSON             []byte
-	agentLifecycleResultJSON     []byte
+	t                                  *testing.T
+	expectedAgentListRequest           []byte
+	expectedAgentStartRequest          []byte
+	expectedAgentStopRequest           []byte
+	expectedAgentRefreshRequest        []byte
+	expectedSessionListRequest         []byte
+	expectedPairingPreflightRequest    []byte
+	expectedPairingCreateRequest       []byte
+	expectedPairingValidateRequest     []byte
+	expectedDeviceSessionCreateRequest []byte
+	expectedDeviceSessionDeleteRequest []byte
+	expectedGatewayStatusRequest       []byte
+	agentListInvocationJSON            []byte
+	agentStartInvocationJSON           []byte
+	agentStopInvocationJSON            []byte
+	agentRefreshInvocationJSON         []byte
+	sessionListInvocationJSON          []byte
+	gatewayStatusJSON                  []byte
+	agentRecordsJSON                   []byte
+	agentLifecycleResultJSON           []byte
+	pairingPreflightJSON               []byte
+	pairingTokenJSON                   []byte
+	deviceCredentialJSON               []byte
+	deviceSessionJSON                  []byte
+	deviceSessionPageJSON              []byte
+	deviceSessionDeleteResultJSON      []byte
 }
 
 func (t *sharedAdminGatewayTransport) BuildAgentListInvocation(_ context.Context, requestJSON []byte) ([]byte, error) {
@@ -2949,8 +3036,9 @@ func (t *sharedAdminGatewayTransport) AgentRefresh(_ context.Context, requestJSO
 	return t.agentLifecycleResultJSON, nil
 }
 
-func (t *sharedAdminGatewayTransport) ListDeviceSessions(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedAdminGatewayTransport) ListDeviceSessions(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedSessionListRequest)
+	return t.deviceSessionPageJSON, nil
 }
 
 func (t *sharedAdminGatewayTransport) JoinHub(context.Context, []byte) ([]byte, error) {
@@ -2961,32 +3049,37 @@ func (t *sharedAdminGatewayTransport) LeaveHub(context.Context, []byte) ([]byte,
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
-func (t *sharedAdminGatewayTransport) PairingPreflight(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedAdminGatewayTransport) PairingPreflight(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedPairingPreflightRequest)
+	return t.pairingPreflightJSON, nil
 }
 
-func (t *sharedAdminGatewayTransport) ValidatePairing(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedAdminGatewayTransport) ValidatePairing(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedPairingValidateRequest)
+	return t.deviceCredentialJSON, nil
 }
 
 func (t *sharedAdminGatewayTransport) VerifyDeviceCredential(context.Context, []byte) ([]byte, error) {
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
-func (t *sharedAdminGatewayTransport) CreatePairing(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedAdminGatewayTransport) CreatePairing(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedPairingCreateRequest)
+	return t.pairingTokenJSON, nil
 }
 
 func (t *sharedAdminGatewayTransport) RevokeDevice(context.Context, []byte) ([]byte, error) {
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
-func (t *sharedAdminGatewayTransport) CreateDeviceSession(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedAdminGatewayTransport) CreateDeviceSession(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDeviceSessionCreateRequest)
+	return t.deviceSessionJSON, nil
 }
 
-func (t *sharedAdminGatewayTransport) DeleteDeviceSession(context.Context, []byte) ([]byte, error) {
-	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
+func (t *sharedAdminGatewayTransport) DeleteDeviceSession(_ context.Context, requestJSON []byte) ([]byte, error) {
+	assertJSONEquivalent(t.t, requestJSON, t.expectedDeviceSessionDeleteRequest)
+	return t.deviceSessionDeleteResultJSON, nil
 }
 
 type sharedEventsTransport struct {
@@ -3676,6 +3769,51 @@ func sharedAdminSessionListRequest(t *testing.T, root string) AdminSessionListRe
 	var request AdminSessionListRequest
 	if err := json.Unmarshal(sharedFixture(t, root, "admin-session-list-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared admin session-list request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminPairingPreflightRequest(t *testing.T, root string) PairingPreflightRequest {
+	t.Helper()
+	var request PairingPreflightRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-pairing-preflight-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin pairing-preflight request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminPairingCreateRequest(t *testing.T, root string) CreatePairingRequest {
+	t.Helper()
+	var request CreatePairingRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-pairing-create-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin pairing-create request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminPairingValidateRequest(t *testing.T, root string) ValidatePairingRequest {
+	t.Helper()
+	var request ValidatePairingRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-pairing-validate-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin pairing-validate request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminDeviceSessionCreateRequest(t *testing.T, root string) CreateDeviceSessionRequest {
+	t.Helper()
+	var request CreateDeviceSessionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-device-session-create-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin device-session-create request: %v", err)
+	}
+	return request
+}
+
+func sharedAdminDeviceSessionDeleteRequest(t *testing.T, root string) DeleteDeviceSessionRequest {
+	t.Helper()
+	var request DeleteDeviceSessionRequest
+	if err := json.Unmarshal(sharedFixture(t, root, "admin-device-session-delete-request.v4.json"), &request); err != nil {
+		t.Fatalf("decode shared admin device-session-delete request: %v", err)
 	}
 	return request
 }

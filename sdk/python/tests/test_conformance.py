@@ -31,8 +31,11 @@ from easynet_sdk import (
     CompatibilityListModelsRequest,
     CompatibilityStreamChatCompletionRequest,
     Client,
+    CreateDeviceSessionRequest,
+    CreatePairingRequest,
     DaemonControl,
     DaemonHandle,
+    DeleteDeviceSessionRequest,
     DescriptorRefRequest,
     DeviceQuery,
     DirectoryClient,
@@ -84,6 +87,7 @@ from easynet_sdk import (
     MissionStatus,
     MissionTrackRequest,
     PreparedInvocation,
+    PairingPreflightRequest,
     SignedInvocation,
     PublicationClient,
     ReceiptClient,
@@ -127,6 +131,7 @@ from easynet_sdk import (
     CausalRef,
     UnpublishAbilityRequest,
     ValidatePackageOptions,
+    ValidatePairingRequest,
     audit_consumer_boundary,
     build_receipt_fetch_invocation,
 )
@@ -634,6 +639,21 @@ class SharedAdminGatewayTransport:
         self.expected_session_list_request = shared_fixture(
             "admin-session-list-request.v4.json"
         )
+        self.expected_pairing_preflight_request = shared_fixture(
+            "admin-pairing-preflight-request.v4.json"
+        )
+        self.expected_pairing_create_request = shared_fixture(
+            "admin-pairing-create-request.v4.json"
+        )
+        self.expected_pairing_validate_request = shared_fixture(
+            "admin-pairing-validate-request.v4.json"
+        )
+        self.expected_device_session_create_request = shared_fixture(
+            "admin-device-session-create-request.v4.json"
+        )
+        self.expected_device_session_delete_request = shared_fixture(
+            "admin-device-session-delete-request.v4.json"
+        )
         self.agent_list_invocation_json = shared_fixture(
             "admin-agent-list-invocation.v4.json"
         )
@@ -653,6 +673,14 @@ class SharedAdminGatewayTransport:
         self.agent_records_json = shared_fixture("admin-agent-records.v4.json")
         self.agent_lifecycle_result_json = shared_fixture(
             "admin-agent-lifecycle-result.v4.json"
+        )
+        self.pairing_preflight_json = shared_fixture("admin-pairing-preflight.v4.json")
+        self.pairing_token_json = shared_fixture("admin-pairing-token.v4.json")
+        self.device_credential_json = shared_fixture("admin-device-credential.v4.json")
+        self.device_session_json = shared_fixture("admin-device-session.v4.json")
+        self.device_session_page_json = shared_fixture("admin-device-session-page.v4.json")
+        self.device_session_delete_result_json = shared_fixture(
+            "admin-device-session-delete-result.v4.json"
         )
 
     def build_agent_list_invocation(self, request_json: bytes) -> bytes:
@@ -704,12 +732,8 @@ class SharedAdminGatewayTransport:
         return self.agent_lifecycle_result_json
 
     def list_device_sessions(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared admin gateway conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_session_list_request)
+        return self.device_session_page_json
 
     def join_hub(self, request_json: bytes) -> bytes:
         raise SDKError(
@@ -728,20 +752,12 @@ class SharedAdminGatewayTransport:
         )
 
     def pairing_preflight(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared admin gateway conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_pairing_preflight_request)
+        return self.pairing_preflight_json
 
     def validate_pairing(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared admin gateway conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_pairing_validate_request)
+        return self.device_credential_json
 
     def verify_device_credential(self, request_json: bytes) -> bytes:
         raise SDKError(
@@ -752,12 +768,8 @@ class SharedAdminGatewayTransport:
         )
 
     def create_pairing(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared admin gateway conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_pairing_create_request)
+        return self.pairing_token_json
 
     def revoke_device(self, request_json: bytes) -> bytes:
         raise SDKError(
@@ -768,20 +780,12 @@ class SharedAdminGatewayTransport:
         )
 
     def create_device_session(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared admin gateway conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_device_session_create_request)
+        return self.device_session_json
 
     def delete_device_session(self, request_json: bytes) -> bytes:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="test",
-            retry=RetryHint.NEVER,
-            message="not used by shared admin gateway conformance fixture test",
-        )
+        assert_json_equivalent(request_json, self.expected_device_session_delete_request)
+        return self.device_session_delete_result_json
 
     def close(self) -> None:
         return None
@@ -2554,6 +2558,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "project_gateway_status",
             "project_agent_records",
             "project_agent_lifecycle_result",
+            "pairing_preflight",
+            "create_pairing",
+            "validate_pairing",
+            "create_device_session",
+            "list_device_sessions",
+            "delete_device_session",
         ):
             self._require_case_action(admin_case, action)
         for fixture in (
@@ -2562,9 +2572,20 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "admin-agent-stop-request.v4.json",
             "admin-agent-refresh-request.v4.json",
             "admin-session-list-request.v4.json",
+            "admin-pairing-preflight-request.v4.json",
+            "admin-pairing-create-request.v4.json",
+            "admin-pairing-validate-request.v4.json",
+            "admin-device-session-create-request.v4.json",
+            "admin-device-session-delete-request.v4.json",
             "gateway-status.v4.json",
             "admin-agent-records.v4.json",
             "admin-agent-lifecycle-result.v4.json",
+            "admin-pairing-preflight.v4.json",
+            "admin-pairing-token.v4.json",
+            "admin-device-credential.v4.json",
+            "admin-device-session.v4.json",
+            "admin-device-session-page.v4.json",
+            "admin-device-session-delete-result.v4.json",
         ):
             self._require_case_fixture(admin_case, fixture)
         self._require_case_expectation(
@@ -2593,7 +2614,26 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             admin_case, "preserves_control_only_degraded_state: true"
         )
         self._require_case_expectation(
-            admin_case, "pairing_and_device_session_crud: scaffold_only"
+            admin_case, "pairing_preflight_fixture: admin-pairing-preflight.v4.json"
+        )
+        self._require_case_expectation(
+            admin_case, "pairing_token_fixture: admin-pairing-token.v4.json"
+        )
+        self._require_case_expectation(
+            admin_case, "device_credential_fixture: admin-device-credential.v4.json"
+        )
+        self._require_case_expectation(
+            admin_case, "device_session_fixture: admin-device-session.v4.json"
+        )
+        self._require_case_expectation(
+            admin_case, "device_session_page_fixture: admin-device-session-page.v4.json"
+        )
+        self._require_case_expectation(
+            admin_case,
+            "device_session_delete_fixture: admin-device-session-delete-result.v4.json",
+        )
+        self._require_case_expectation(
+            admin_case, "pairing_and_device_session_crud: provider_backed"
         )
 
         admin = AdminClient(SharedAdminGatewayTransport())
@@ -2654,6 +2694,33 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(lifecycle.kind, "agent_lifecycle_result")
         self.assertEqual(lifecycle.state, "ok")
         self.assertFalse(lifecycle.runtime_not_ready)
+
+        preflight = admin.pairing_preflight(shared_admin_pairing_preflight_request())
+        self.assertTrue(preflight.pairing_required)
+        self.assertFalse(preflight.trust_ready)
+        self.assertEqual(preflight.scopes, ("invoke", "events"))
+
+        token = admin.create_pairing(shared_admin_pairing_create_request())
+        self.assertEqual(token.token_id, "pair-token-1")
+        self.assertEqual(token.token, "pair-token-value")
+
+        credential = admin.validate_pairing(shared_admin_pairing_validate_request())
+        self.assertEqual(credential.credential_id, "cred-dev-a")
+        self.assertEqual(credential.state, "active")
+
+        session = admin.create_device_session(shared_admin_device_session_create_request())
+        self.assertEqual(session.session_id, "dev-session-1")
+        self.assertEqual(session.session_kind, "remote_desktop")
+
+        sessions = admin.list_device_sessions(shared_admin_session_list_request())
+        self.assertEqual(sessions.kind, "device_sessions")
+        self.assertEqual(len(sessions.items), 1)
+        self.assertEqual(sessions.items[0].session_id, "dev-session-1")
+
+        deleted = admin.delete_device_session(shared_admin_device_session_delete_request())
+        self.assertEqual(deleted.kind, "device_admin_result")
+        self.assertEqual(deleted.operation, "session.delete")
+        self.assertTrue(deleted.ack)
 
         start_request = shared_admin_agent_start_request()
         with self.assertRaises(SDKError) as caught:
@@ -4344,6 +4411,56 @@ def shared_admin_session_list_request() -> AdminSessionListRequest:
     return AdminSessionListRequest(
         base=shared_admin_carrier_base("admin-session-list-request.v4.json"),
         include_terminated=decoded.get("include_terminated"),
+    )
+
+
+def shared_admin_pairing_preflight_request() -> PairingPreflightRequest:
+    decoded = json.loads(shared_fixture("admin-pairing-preflight-request.v4.json"))
+    return PairingPreflightRequest(
+        base=shared_admin_carrier_base("admin-pairing-preflight-request.v4.json"),
+        hub_ura=decoded["hub_ura"],
+        device_ura=decoded["device_ura"],
+        requested_scopes=tuple(decoded.get("requested_scopes", ())),
+    )
+
+
+def shared_admin_pairing_create_request() -> CreatePairingRequest:
+    decoded = json.loads(shared_fixture("admin-pairing-create-request.v4.json"))
+    return CreatePairingRequest(
+        base=shared_admin_carrier_base("admin-pairing-create-request.v4.json"),
+        hub_ura=decoded["hub_ura"],
+        device_ura=decoded["device_ura"],
+        expires_unix_ms=decoded["expires_unix_ms"],
+        scopes=tuple(decoded.get("scopes", ())),
+    )
+
+
+def shared_admin_pairing_validate_request() -> ValidatePairingRequest:
+    decoded = json.loads(shared_fixture("admin-pairing-validate-request.v4.json"))
+    return ValidatePairingRequest(
+        base=shared_admin_carrier_base("admin-pairing-validate-request.v4.json"),
+        token=decoded["token"],
+        device_ura=decoded["device_ura"],
+    )
+
+
+def shared_admin_device_session_create_request() -> CreateDeviceSessionRequest:
+    decoded = json.loads(shared_fixture("admin-device-session-create-request.v4.json"))
+    return CreateDeviceSessionRequest(
+        base=shared_admin_carrier_base("admin-device-session-create-request.v4.json"),
+        device_ura=decoded["device_ura"],
+        hub_ura=decoded["hub_ura"],
+        session_kind=decoded["session_kind"],
+        expires_unix_ms=decoded.get("expires_unix_ms", 0),
+    )
+
+
+def shared_admin_device_session_delete_request() -> DeleteDeviceSessionRequest:
+    decoded = json.loads(shared_fixture("admin-device-session-delete-request.v4.json"))
+    return DeleteDeviceSessionRequest(
+        base=shared_admin_carrier_base("admin-device-session-delete-request.v4.json"),
+        session_id=decoded["session_id"],
+        reason=decoded.get("reason", ""),
     )
 
 
