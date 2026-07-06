@@ -347,6 +347,26 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
+    def test_allows_sdk_delegating_addressing_transport_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "invocation.py").write_text(
+                textwrap.dedent(
+                    """
+                    from . import _sdk_identity
+
+                    class ProductSdkAddressingTransport:
+                        def project_descriptor_ref(self, request_json):
+                            return _sdk_identity.project_descriptor_ref(request_json)
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_consumer_boundary(root)
+
+        self.assertTrue(result.ok)
+
     def test_flags_non_sdk_identity_facade_helper_methods(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

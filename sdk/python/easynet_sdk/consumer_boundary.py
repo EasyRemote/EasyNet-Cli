@@ -550,12 +550,20 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[BoundaryViolation
     except SyntaxError:
         return tuple(violations)
     sdk_identity_facade = _is_sdk_identity_facade_module(path, tree)
+    parents = _ast_parent_map(tree)
     docstrings = _docstring_node_ids(tree)
     for node in ast.walk(tree):
         if id(node) in docstrings:
             continue
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name in _RAW_ADDRESSING_HELPER_NAMES and not sdk_identity_facade:
+            if (
+                node.name in _RAW_ADDRESSING_HELPER_NAMES
+                and not sdk_identity_facade
+                and not _is_sdk_delegating_addressing_transport_method(
+                    node,
+                    parents,
+                )
+            ):
                 violations.append(
                     BoundaryViolation(
                         path=path,
@@ -585,6 +593,14 @@ def _audit_addressing_semantics(path: str, text: str) -> tuple[BoundaryViolation
     return tuple(violations)
 
 
+def _ast_parent_map(tree: ast.AST) -> dict[int, ast.AST]:
+    parents: dict[int, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[id(child)] = parent
+    return parents
+
+
 def _is_sdk_identity_facade_module(path: str, tree: ast.AST) -> bool:
     if Path(path).name != "_sdk_identity.py":
         return False
@@ -594,6 +610,28 @@ def _is_sdk_identity_facade_module(path: str, tree: ast.AST) -> bool:
                 if alias.name == _SDK_MODULE:
                     return True
         if isinstance(node, ast.ImportFrom) and node.module == _SDK_MODULE:
+            return True
+    return False
+
+
+def _is_sdk_delegating_addressing_transport_method(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    parents: dict[int, ast.AST],
+) -> bool:
+    parent = parents.get(id(node))
+    if not isinstance(parent, ast.ClassDef):
+        return False
+    if "AddressingTransport" not in parent.name:
+        return False
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == node.name
+            and _subtree_mentions_name(func.value, {_SDK_MODULE, "_sdk" + "_identity"})
+        ):
             return True
     return False
 
