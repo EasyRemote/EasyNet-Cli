@@ -331,6 +331,36 @@ class CLILibrary:
             ctypes.c_uint64(handle),
         )
 
+    def authority_prepare_delegation(self, request_json: bytes) -> bytes:
+        return self._call_output(
+            self._raw.easynet_authority_prepare_delegation,
+            ctypes.c_char_p(request_json),
+        )
+
+    def authority_materialize_delegation(
+        self, request_json: bytes, signature_json: bytes
+    ) -> bytes:
+        return self._call_output(
+            self._raw.easynet_authority_materialize_delegation,
+            ctypes.c_char_p(request_json),
+            ctypes.c_char_p(signature_json),
+        )
+
+    def authority_prepare_session(self, request_json: bytes) -> bytes:
+        return self._call_output(
+            self._raw.easynet_authority_prepare_session,
+            ctypes.c_char_p(request_json),
+        )
+
+    def authority_materialize_session(
+        self, request_json: bytes, signature_json: bytes
+    ) -> bytes:
+        return self._call_output(
+            self._raw.easynet_authority_materialize_session,
+            ctypes.c_char_p(request_json),
+            ctypes.c_char_p(signature_json),
+        )
+
     def invocation_invoke(self, handle: int, invocation_json: bytes) -> bytes:
         return self._call_output(
             self._raw.easynet_invocation_invoke,
@@ -555,6 +585,28 @@ class CLILibrary:
             ctypes.POINTER(ctypes.c_uint64),
         ]
         self._raw.easynet_daemon_open_client.restype = ctypes.c_int32
+        self._raw.easynet_authority_prepare_delegation.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_authority_prepare_delegation.restype = ctypes.c_int32
+        self._raw.easynet_authority_materialize_delegation.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_authority_materialize_delegation.restype = ctypes.c_int32
+        self._raw.easynet_authority_prepare_session.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_authority_prepare_session.restype = ctypes.c_int32
+        self._raw.easynet_authority_materialize_session.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_authority_materialize_session.restype = ctypes.c_int32
         self._raw.easynet_identity_project_ura.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
@@ -763,6 +815,91 @@ class CABIDiscoveryTransport:
 
     def close(self) -> None:
         self._closed = True
+
+
+@dataclass
+class CABIAuthorityTransport:
+    """Authority metadata transport backed by C ABI core plus external signer."""
+
+    lib: CLILibrary
+    signer: Any
+    _closed: bool = False
+
+    def mint_delegation_proof(self, request_json: bytes) -> bytes:
+        material_json = self._prepare(
+            request_json,
+            prepare=self.lib.authority_prepare_delegation,
+            kind="delegation",
+            metadata_key="x-easynet-delegation",
+        )
+        signature_json = self._sign(material_json)
+        return self._materialize(
+            request_json,
+            signature_json,
+            materialize=self.lib.authority_materialize_delegation,
+        )
+
+    def mint_session_authority(self, request_json: bytes) -> bytes:
+        material_json = self._prepare(
+            request_json,
+            prepare=self.lib.authority_prepare_session,
+            kind="session_authority",
+            metadata_key="x-easynet-session-authority",
+        )
+        signature_json = self._sign(material_json)
+        return self._materialize(
+            request_json,
+            signature_json,
+            materialize=self.lib.authority_materialize_session,
+        )
+
+    def close(self) -> None:
+        self._closed = True
+
+    def _prepare(
+        self,
+        request_json: bytes,
+        *,
+        prepare: Any,
+        kind: str,
+        metadata_key: str,
+    ) -> object:
+        self._require_open()
+        if not isinstance(request_json, bytes) or len(request_json) == 0:
+            raise _transport_error("authority request JSON is required")
+        material_json = prepare(request_json)
+        from .authority import AuthoritySigningMaterial
+
+        return AuthoritySigningMaterial.from_json(
+            material_json,
+            kind=kind,
+            metadata_key=metadata_key,
+        )
+
+    def _sign(self, material: object) -> bytes:
+        sign = getattr(self.signer, "sign_authority", None)
+        if not callable(sign):
+            raise _transport_error("authority signature provider is required")
+        signature = sign(material)
+        from .authority import AuthoritySignature
+
+        if not isinstance(signature, AuthoritySignature):
+            raise _transport_error("authority signature provider must return AuthoritySignature")
+        return signature.to_json()
+
+    def _materialize(
+        self,
+        request_json: bytes,
+        signature_json: bytes,
+        *,
+        materialize: Any,
+    ) -> bytes:
+        self._require_open()
+        return materialize(request_json, signature_json)
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _closed_error("authority transport is closed")
 
 
 @dataclass
@@ -3040,6 +3177,16 @@ def open_cabi_runtime_connector(
     """Open a C ABI-backed RuntimeConnection connector."""
 
     return CABIRuntimeConnector(lib=CLILibrary.load(library_path))
+
+
+def open_cabi_authority_transport(
+    *,
+    signer: Any,
+    library_path: str | None = None,
+) -> CABIAuthorityTransport:
+    """Open a C ABI authority transport using an explicit signer provider."""
+
+    return CABIAuthorityTransport(lib=CLILibrary.load(library_path), signer=signer)
 
 
 def _open_cabi_profile_transport(

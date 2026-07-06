@@ -150,6 +150,28 @@ int32_t easynet_runtime_diagnostics(
     char **out_diagnostics_json
 );
 
+int32_t easynet_authority_prepare_delegation(
+    const char *request_json,
+    char **out_material_json
+);
+
+int32_t easynet_authority_materialize_delegation(
+    const char *request_json,
+    const char *signature_json,
+    char **out_metadata_json
+);
+
+int32_t easynet_authority_prepare_session(
+    const char *request_json,
+    char **out_material_json
+);
+
+int32_t easynet_authority_materialize_session(
+    const char *request_json,
+    const char *signature_json,
+    char **out_metadata_json
+);
+
 int32_t easynet_invocation_builder_new(
     EasynetInvocationBuilderId *out_builder_id
 );

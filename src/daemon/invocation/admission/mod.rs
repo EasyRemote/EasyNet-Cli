@@ -1,6 +1,7 @@
 //! Admission, caller validation, quota, and trust gates for daemon Invocation.
 
 pub mod admission_facade;
+pub(crate) mod authority_metadata;
 pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;

@@ -1,3 +1,4 @@
+import base64
 import ctypes
 import json
 import unittest
@@ -144,6 +145,14 @@ class FakeSymbol:
         return self.func(*args)
 
 
+def _authority_metadata_value(payload: dict[str, object], signature_base64: str) -> str:
+    wire = json.dumps(
+        {"payload": payload, "signature": signature_base64},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.b64encode(wire).decode("ascii")
+
+
 class FakeRawCABI:
     def __init__(self) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
@@ -197,6 +206,18 @@ class FakeRawCABI:
             self._daemon_invocation_endpoint
         )
         self.easynet_daemon_open_client = FakeSymbol(self._daemon_open_client)
+        self.easynet_authority_prepare_delegation = FakeSymbol(
+            self._authority_prepare_delegation
+        )
+        self.easynet_authority_materialize_delegation = FakeSymbol(
+            self._authority_materialize_delegation
+        )
+        self.easynet_authority_prepare_session = FakeSymbol(
+            self._authority_prepare_session
+        )
+        self.easynet_authority_materialize_session = FakeSymbol(
+            self._authority_materialize_session
+        )
         self.easynet_identity_project_ura = FakeSymbol(self._identity_project_ura)
         self.easynet_identity_build_ura = FakeSymbol(self._identity_build_ura)
         self.easynet_identity_project_descriptor_ref = FakeSymbol(
@@ -274,11 +295,13 @@ class FakeRawCABI:
             out_ptr,
             b'{"abi_version":4,"sdk_version":"0.91.30",'
             b'"profiles":{"directory_identity":'
-            b'"read_model_subscription_projection_partial"},'
+            b'"read_model_subscription_projection_partial",'
+            b'"authority":"cabi_core"},'
             b'"symbols":{"directory_identity_projection":true,'
             b'"identity_signing_key_lifecycle":true,'
             b'"directory_subscription_projection":true,'
-            b'"events_session_stream":true},"axon_pb":true}',
+            b'"events_session_stream":true,'
+            b'"authority_metadata_core":true},"axon_pb":true}',
         )
 
     def _last_error_json(self, out_ptr) -> int:
@@ -355,6 +378,96 @@ class FakeRawCABI:
         self.daemon_open_clients.append(int(daemon_handle.value))
         out_handle._obj.value = 808
         return 0
+
+    def _authority_prepare_delegation(self, raw, out_ptr) -> int:
+        json.loads(raw.value.decode("utf-8"))
+        return self._write(
+            out_ptr,
+            json.dumps(
+                {
+                    "profile": "authority",
+                    "kind": "delegation",
+                    "algorithm": "ed25519",
+                    "metadata_key": "x-easynet-delegation",
+                    "canonical_bytes_base64": "Y2Fub24=",
+                    "canonical_hash_hex": "a" * 64,
+                    "signed_fields": ["issuer_ura"],
+                    "payload": {"issuer_ura": "easynet:///r/example/user/alice"},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+
+    def _authority_materialize_delegation(self, raw, signature_json, out_ptr) -> int:
+        request = json.loads(raw.value.decode("utf-8"))
+        signature = json.loads(signature_json.value.decode("utf-8"))
+        value = _authority_metadata_value(
+            {
+                "issuer_ura": request["issuer_ura"],
+                "subject_ura": request["subject_ura"],
+                "caller_ura": request["caller_ura"],
+                "audience": request["audience"],
+                "scopes": request["scopes"],
+                "issued_at_ms": request["issued_at_ms"],
+                "expires_at_ms": request["expires_at_ms"],
+            },
+            signature["signature_base64"],
+        )
+        return self._write(
+            out_ptr,
+            json.dumps(
+                {
+                    "metadata_value": value,
+                    "metadata": {"x-easynet-delegation": value},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+
+    def _authority_prepare_session(self, raw, out_ptr) -> int:
+        json.loads(raw.value.decode("utf-8"))
+        return self._write(
+            out_ptr,
+            json.dumps(
+                {
+                    "profile": "authority",
+                    "kind": "session_authority",
+                    "algorithm": "ed25519",
+                    "metadata_key": "x-easynet-session-authority",
+                    "canonical_bytes_base64": "Y2Fub24=",
+                    "canonical_hash_hex": "b" * 64,
+                    "signed_fields": ["backend_ura"],
+                    "payload": {"backend_ura": "easynet:///r/example/agent/backend"},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+
+    def _authority_materialize_session(self, raw, signature_json, out_ptr) -> int:
+        request = json.loads(raw.value.decode("utf-8"))
+        signature = json.loads(signature_json.value.decode("utf-8"))
+        value = _authority_metadata_value(
+            {
+                "backend_ura": request["backend_ura"],
+                "user_ura": request["user_ura"],
+                "session_id": request["session_id"],
+                "scopes": request["scopes"],
+                "audiences": request["audiences"],
+                "issued_at_ms": request["issued_at_ms"],
+                "expires_at_ms": request["expires_at_ms"],
+            },
+            signature["signature_base64"],
+        )
+        return self._write(
+            out_ptr,
+            json.dumps(
+                {
+                    "metadata_value": value,
+                    "metadata": {"x-easynet-session-authority": value},
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
 
     def _identity_project_ura(self, handle, raw, out_ptr) -> int:
         self.identity_requests.append(("project_ura", raw.value.decode("utf-8")))

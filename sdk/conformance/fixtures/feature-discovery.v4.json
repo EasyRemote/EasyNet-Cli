@@ -3,6 +3,7 @@
   "sdk_version": "0.91.30",
   "profiles": {
     "runtime_core": "partial",
+    "authority": "cabi_core",
     "receipt": "fetch_projection_partial",
     "directory_identity": "read_model_subscription_projection_partial",
     "publication": "carrier_partial",
@@ -43,6 +44,7 @@
     "compatibility_file_adapters": true,
     "wrapper_carriers": true,
     "wrapper_record_projection": true,
+    "authority_metadata_core": true,
     "invocation_builder_handles": false,
     "invocation_handle_observation": false,
     "stream_bidi_lifecycle": false,

@@ -85,29 +85,33 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tonic::Status;
 
 use easynet_axon::invocation::admission::{
-    now_ms as axon_now_ms, run_descriptor_bound_admission, REASON_CALLER_SIGNATURE_INVALID,
-    REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
+    REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
+    now_ms as axon_now_ms, run_descriptor_bound_admission,
 };
 use easynet_axon::invocation::axiom::{CallerSignature as AxiomCallerSignature, KeyResolver};
 use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
-use crate::daemon::ability::canonical_json_bytes;
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 use crate::daemon::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
+    WireCallerIdentity, descriptor_bound_from_wire_parts,
 };
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
+use crate::daemon::invocation::admission::authority_metadata::{
+    self, AuthorityMetadataError, AuthoritySubjectKind, DELEGATION_METADATA_KEY, DelegationPayload,
+    REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID, SESSION_AUTHORITY_METADATA_KEY,
+    SessionAuthorityPayload,
+};
 use crate::daemon::invocation::admission::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
@@ -128,16 +132,12 @@ use easynet_axon::pb::axon::v1::{
     Envelope, EnvelopeOpen, InvokeRequest, InvokeServerStreamRequest, RateLimitInfo,
 };
 
-const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
-const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 const REASON_AUTHORITY_REQUIRED: &str = "AUTHORITY_REQUIRED";
-const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
 const REASON_AUTHORITY_SIGNATURE_INVALID: &str = "AUTHORITY_SIGNATURE_INVALID";
 const REASON_AUTHORITY_CALLER_MISMATCH: &str = "AUTHORITY_CALLER_MISMATCH";
 const REASON_AUTHORITY_SUBJECT_MISMATCH: &str = "AUTHORITY_SUBJECT_MISMATCH";
 const REASON_AUTHORITY_AUDIENCE_VIOLATION: &str = "AUTHORITY_AUDIENCE_VIOLATION";
 const REASON_AUTHORITY_SCOPE_VIOLATION: &str = "AUTHORITY_SCOPE_VIOLATION";
-const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
 const REASON_AUTHORITY_ISSUER_UNKNOWN: &str = "AUTHORITY_ISSUER_UNKNOWN";
 const REASON_AUTHORITY_ISSUER_KEY_NOT_FOUND: &str = "AUTHORITY_ISSUER_KEY_NOT_FOUND";
 const REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY: &str = "HOSTED_AGENT_DELEGATION_LOCAL_ONLY";
@@ -909,43 +909,12 @@ struct DelegationProofRaw {
     signature: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct DelegationPayload {
-    issuer_ura: String,
-    subject_ura: String,
-    caller_ura: String,
-    audience: String,
-    scopes: Vec<String>,
-    issued_at_ms: i64,
-    expires_at_ms: i64,
-}
-
 #[derive(Debug, Deserialize)]
 struct SessionAuthorityRaw {
     #[serde(default)]
     payload: serde_json::Value,
     #[serde(default)]
     signature: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct SessionAuthorityPayload {
-    backend_ura: String,
-    user_ura: String,
-    session_id: String,
-    scopes: Vec<String>,
-    audiences: Vec<String>,
-    issued_at_ms: i64,
-    expires_at_ms: i64,
-}
-
-fn canonical_authority_payload_bytes<T: Serialize>(payload: &T) -> Result<Vec<u8>, Status> {
-    let value = serde_json::to_value(payload).map_err(|err| {
-        Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload canonical value marshal failed: {err}"
-        ))
-    })?;
-    Ok(canonical_json_bytes(&value))
 }
 
 fn verify_delegation_metadata(
@@ -1013,9 +982,11 @@ fn parse_and_verify_session_authority(
             "{REASON_AUTHORITY_FORMAT_INVALID}: session authority payload parse failed: {err}"
         ))
     })?;
-    validate_session_authority_payload_shape(&payload, now_ms)?;
+    authority_metadata::validate_session_authority_payload_shape(&payload, Some(now_ms))
+        .map_err(authority_metadata_error_status)?;
 
-    let payload_bytes = canonical_authority_payload_bytes(&payload)?;
+    let payload_bytes = authority_metadata::canonical_authority_payload_bytes(&payload)
+        .map_err(authority_metadata_error_status)?;
     let signature = BASE64_STANDARD.decode(&raw.signature).map_err(|err| {
         Status::invalid_argument(format!(
             "{REASON_AUTHORITY_FORMAT_INVALID}: session authority signature base64 decode failed: {err}"
@@ -1032,43 +1003,6 @@ fn parse_and_verify_session_authority(
     verify_delegation_signature(&backend.public_key_b64, &payload_bytes, &signature)?;
 
     Ok(payload)
-}
-
-fn validate_session_authority_payload_shape(
-    payload: &SessionAuthorityPayload,
-    now_ms: i64,
-) -> Result<(), Status> {
-    if payload.backend_ura.is_empty()
-        || payload.user_ura.is_empty()
-        || payload.session_id.is_empty()
-        || payload.scopes.is_empty()
-        || payload.audiences.is_empty()
-    {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority must carry backend, user, \
-             session_id, at least one audience, and at least one scope"
-        )));
-    }
-    if authority_subject_kind(&payload.user_ura) != AuthoritySubjectKind::User {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority user_ura `{}` must be a canonical \
-             user subject",
-            payload.user_ura
-        )));
-    }
-    if payload.expires_at_ms <= payload.issued_at_ms {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: session authority expires_at_ms must be greater than \
-             issued_at_ms"
-        )));
-    }
-    if now_ms >= payload.expires_at_ms {
-        return Err(Status::permission_denied(format!(
-            "{REASON_AUTHORITY_EXPIRED}: session authority expired at {}ms (now {}ms)",
-            payload.expires_at_ms, now_ms
-        )));
-    }
-    Ok(())
 }
 
 fn verify_session_authority_bindings(
@@ -1094,7 +1028,7 @@ fn verify_session_authority_bindings(
         .as_ref()
         .map(|s| s.ura.as_str())
         .unwrap_or("");
-    match authority_subject_kind(subject) {
+    match authority_metadata::authority_subject_kind(subject) {
         AuthoritySubjectKind::User if payload.user_ura != subject => {
             return Err(Status::permission_denied(format!(
                 "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session user `{}` does not match envelope \
@@ -1103,7 +1037,10 @@ fn verify_session_authority_bindings(
             )));
         }
         AuthoritySubjectKind::Session
-            if !session_subject_matches_session_id(subject, &payload.session_id) =>
+            if !authority_metadata::session_subject_matches_session_id(
+                subject,
+                &payload.session_id,
+            ) =>
         {
             return Err(Status::permission_denied(format!(
                 "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session authority id `{}` does not bind \
@@ -1174,9 +1111,11 @@ fn parse_and_verify_delegation_proof(
             "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload parse failed: {err}"
         ))
     })?;
-    validate_delegation_payload_shape(&payload, now_ms)?;
+    authority_metadata::validate_delegation_payload_shape(&payload, Some(now_ms))
+        .map_err(authority_metadata_error_status)?;
 
-    let payload_bytes = canonical_authority_payload_bytes(&payload)?;
+    let payload_bytes = authority_metadata::canonical_authority_payload_bytes(&payload)
+        .map_err(authority_metadata_error_status)?;
     let signature = BASE64_STANDARD.decode(&raw.signature).map_err(|err| {
         Status::invalid_argument(format!(
             "{REASON_AUTHORITY_FORMAT_INVALID}: authority signature base64 decode failed: {err}"
@@ -1206,91 +1145,9 @@ fn envelope_requires_authority(envelope: &Envelope) -> bool {
         return false;
     }
     matches!(
-        authority_subject_kind(subject),
+        authority_metadata::authority_subject_kind(subject),
         AuthoritySubjectKind::User | AuthoritySubjectKind::Session
     )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AuthoritySubjectKind {
-    User,
-    Session,
-    Other,
-}
-
-fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind {
-    match top_level_subject_role(subject_ura) {
-        Some("user" | "users") => AuthoritySubjectKind::User,
-        Some("session" | "sessions") => AuthoritySubjectKind::Session,
-        _ => AuthoritySubjectKind::Other,
-    }
-}
-
-fn top_level_subject_role(ura: &str) -> Option<&str> {
-    let rest = ura.trim().strip_prefix(crate::core::ura::URA_SCHEME)?;
-    let mut segments = rest.split('/');
-    let realm = segments.next()?;
-    let role = segments.next()?;
-    if realm.is_empty() || role.is_empty() {
-        return None;
-    }
-    Some(role)
-}
-
-fn session_subject_matches_session_id(subject_ura: &str, session_id: &str) -> bool {
-    if session_id.trim().is_empty() {
-        return false;
-    }
-    let Some(rest) = subject_ura
-        .trim()
-        .strip_prefix(crate::core::ura::URA_SCHEME)
-    else {
-        return false;
-    };
-    let mut segments = rest.split('/');
-    let Some(realm) = segments.next() else {
-        return false;
-    };
-    let Some(role) = segments.next() else {
-        return false;
-    };
-    let Some(id) = segments.next() else {
-        return false;
-    };
-    segments.next().is_none()
-        && !realm.is_empty()
-        && matches!(role, "session" | "sessions")
-        && id == session_id
-}
-
-fn validate_delegation_payload_shape(
-    payload: &DelegationPayload,
-    now_ms: i64,
-) -> Result<(), Status> {
-    if payload.issuer_ura.is_empty()
-        || payload.subject_ura.is_empty()
-        || payload.caller_ura.is_empty()
-        || payload.audience.is_empty()
-        || payload.scopes.is_empty()
-    {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: authority payload must carry issuer, subject, caller, \
-             audience, and at least one scope"
-        )));
-    }
-    if payload.expires_at_ms <= payload.issued_at_ms {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_AUTHORITY_FORMAT_INVALID}: authority expires_at_ms must be greater than \
-             issued_at_ms"
-        )));
-    }
-    if now_ms >= payload.expires_at_ms {
-        return Err(Status::permission_denied(format!(
-            "{REASON_AUTHORITY_EXPIRED}: authority proof expired at {}ms (now {}ms)",
-            payload.expires_at_ms, now_ms
-        )));
-    }
-    Ok(())
 }
 
 fn verify_delegation_signature(
@@ -1334,6 +1191,13 @@ fn verify_delegation_signature(
                 "{REASON_AUTHORITY_SIGNATURE_INVALID}: authority signature does not verify: {err}"
             ))
         })
+}
+
+fn authority_metadata_error_status(err: AuthorityMetadataError) -> Status {
+    match err.reason() {
+        REASON_AUTHORITY_EXPIRED => Status::permission_denied(err.status_message()),
+        _ => Status::invalid_argument(err.status_message()),
+    }
 }
 
 fn verify_delegation_bindings(
@@ -1999,7 +1863,7 @@ mod tests {
     #[test]
     fn quota_rejects_oversized_ability_key_as_invalid_argument() {
         use crate::daemon::invocation::admission::usage_quota::{
-            SharedUsageQuotaGate, MAX_QUOTA_ABILITY_NAME_BYTES,
+            MAX_QUOTA_ABILITY_NAME_BYTES, SharedUsageQuotaGate,
         };
         use crate::daemon::persistence::daemon_config::QuotaConfig;
 

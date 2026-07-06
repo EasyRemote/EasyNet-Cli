@@ -21,6 +21,10 @@ expect:
   typed_delegation_projection: true
   typed_session_authority_projection: true
   authority_minting_facade: provider_backed
+  authority_minting_cabi_core: true
+  authority_minting_concrete_transport: true
+  go_authority_minting_cabi_transport: true
+  python_authority_minting_cabi_transport: true
   authority_minting_canonical_payload_owned_by_sdk: false
   unrelated_metadata_preserved: true
   ambiguous_authority_rejected: true

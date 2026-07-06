@@ -21,6 +21,42 @@ const (
 	AuthorityKindSessionAuthority AuthorityKind = "session_authority"
 )
 
+// AuthoritySigningMaterial is canonical authority material prepared by the
+// runtime core for an external signer.
+type AuthoritySigningMaterial struct {
+	Profile              string         `json:"profile"`
+	Kind                 AuthorityKind  `json:"kind"`
+	Algorithm            string         `json:"algorithm"`
+	MetadataKey          string         `json:"metadata_key"`
+	CanonicalBytesBase64 string         `json:"canonical_bytes_base64"`
+	CanonicalHashHex     string         `json:"canonical_hash_hex"`
+	SignedFields         []string       `json:"signed_fields"`
+	Payload              map[string]any `json:"payload"`
+}
+
+// AuthoritySignature is the latest-only signature envelope accepted by the
+// authority materialization boundary.
+type AuthoritySignature struct {
+	SignatureBase64 string `json:"signature_base64"`
+}
+
+// AuthoritySignatureProvider signs canonical authority material. It owns key
+// access; the C ABI transport only prepares and materializes metadata.
+type AuthoritySignatureProvider interface {
+	SignAuthority(ctx context.Context, material AuthoritySigningMaterial) (AuthoritySignature, error)
+}
+
+// AuthoritySignatureProviderFunc adapts a function into an
+// AuthoritySignatureProvider.
+type AuthoritySignatureProviderFunc func(ctx context.Context, material AuthoritySigningMaterial) (AuthoritySignature, error)
+
+func (f AuthoritySignatureProviderFunc) SignAuthority(ctx context.Context, material AuthoritySigningMaterial) (AuthoritySignature, error) {
+	if f == nil {
+		return AuthoritySignature{}, invalidProfileClient(authorityProfile, "authority signature provider is required")
+	}
+	return f(ctx, material)
+}
+
 // DelegationProof is a typed projection of daemon/Axon delegated-authority
 // metadata. It does not own canonical signing or verification.
 type DelegationProof struct {
@@ -359,6 +395,41 @@ func validateSessionAuthorityRequest(req SessionAuthorityRequest) error {
 		return err
 	}
 	return rejectAuthorityPrivateKeyMetadata(req.Metadata)
+}
+
+func newAuthoritySigningMaterial(raw []byte, wantKey string, wantKind AuthorityKind) (AuthoritySigningMaterial, error) {
+	var material AuthoritySigningMaterial
+	if err := json.Unmarshal(raw, &material); err != nil {
+		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, fmt.Sprintf("decode authority signing material: %v", err), err)
+	}
+	if material.Profile != authorityProfile ||
+		material.Kind != wantKind ||
+		material.MetadataKey != wantKey ||
+		strings.TrimSpace(material.Algorithm) == "" ||
+		strings.TrimSpace(material.CanonicalBytesBase64) == "" ||
+		strings.TrimSpace(material.CanonicalHashHex) == "" ||
+		len(material.SignedFields) == 0 ||
+		material.Payload == nil {
+		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, "invalid authority signing material projection", nil)
+	}
+	if _, err := base64.StdEncoding.DecodeString(material.CanonicalBytesBase64); err != nil {
+		return AuthoritySigningMaterial{}, invalidProfilePayload(authorityProfile, fmt.Sprintf("authority canonical bytes base64 decode failed: %v", err), err)
+	}
+	return material, nil
+}
+
+func authoritySignatureJSON(signature AuthoritySignature) ([]byte, error) {
+	if strings.TrimSpace(signature.SignatureBase64) == "" {
+		return nil, invalidProfilePayload(authorityProfile, "authority signature_base64 is required", nil)
+	}
+	if _, err := base64.StdEncoding.DecodeString(signature.SignatureBase64); err != nil {
+		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("authority signature base64 decode failed: %v", err), err)
+	}
+	raw, err := json.Marshal(signature)
+	if err != nil {
+		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("encode authority signature: %v", err), err)
+	}
+	return raw, nil
 }
 
 func rejectAuthorityPrivateKeyMetadata(metadata map[string]any) error {

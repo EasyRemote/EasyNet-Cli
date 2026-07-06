@@ -1,0 +1,614 @@
+// EasyNet CLI — invocation authority metadata core
+// =================================================
+//
+// File: src/daemon/invocation/admission/authority_metadata.rs
+// Description: Daemon SDK core projection for delegated and session authority
+//              signing material plus wire metadata materialization.
+//
+// Protocol Responsibility
+// -----------------------
+// Own the EasyNet-Cli side of daemon admission authority metadata without
+// moving Axon semantics into Go/Python facades. The daemon still verifies
+// signatures and trust anchors at admission time; this module only prepares the
+// exact bytes that are signed and wraps a caller-provided signature into the
+// metadata shape admission already accepts.
+//
+// Implementation Approach
+// -----------------------
+// Authority payloads are typed Rust domain objects. Canonical bytes are derived
+// through the daemon's canonical JSON helper, matching admission verification.
+// Signing is intentionally outside this module so private keys never cross the
+// C ABI.
+//
+// Usage Contract
+// --------------
+// Callers pass request JSON, receive signing material, sign
+// `canonical_bytes_base64`, and pass only signature bytes/base64 back to
+// materialize metadata. Request metadata carrying private key material is
+// rejected at this boundary.
+//
+// Architectural Position
+// ----------------------
+// This module is the lower-layer SDK core used by both daemon admission and
+// `libeasynet_cli` authority ABI projection. Language SDKs are facades over
+// this contract, not owners of canonical authority payload construction.
+
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::daemon::ability::canonical_json_bytes;
+
+pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
+pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
+pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthorityMetadataError {
+    reason: &'static str,
+    message: String,
+}
+
+impl AuthorityMetadataError {
+    fn new(reason: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            reason,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn reason(&self) -> &'static str {
+        self.reason
+    }
+
+    pub(crate) fn status_message(&self) -> String {
+        format!("{}: {}", self.reason, self.message)
+    }
+}
+
+impl std::fmt::Display for AuthorityMetadataError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.reason, self.message)
+    }
+}
+
+impl std::error::Error for AuthorityMetadataError {}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct DelegationPayload {
+    pub(crate) issuer_ura: String,
+    pub(crate) subject_ura: String,
+    pub(crate) caller_ura: String,
+    pub(crate) audience: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) issued_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct SessionAuthorityPayload {
+    pub(crate) backend_ura: String,
+    pub(crate) user_ura: String,
+    pub(crate) session_id: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) audiences: Vec<String>,
+    pub(crate) issued_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DelegationRequest {
+    issuer_ura: String,
+    subject_ura: String,
+    caller_ura: String,
+    audience: String,
+    scopes: Vec<String>,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+    #[serde(default)]
+    metadata: Map<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionAuthorityRequest {
+    backend_ura: String,
+    user_ura: String,
+    session_id: String,
+    scopes: Vec<String>,
+    audiences: Vec<String>,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+    #[serde(default)]
+    metadata: Map<String, Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthoritySignature {
+    signature_base64: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SignedAuthorityWire<T> {
+    payload: T,
+    signature: String,
+}
+
+pub(crate) fn prepare_delegation_from_json(
+    request_json: &str,
+) -> Result<Value, AuthorityMetadataError> {
+    let request = parse_delegation_request(request_json)?;
+    let payload = request.into_payload()?;
+    signing_material("delegation", DELEGATION_METADATA_KEY, &payload)
+}
+
+pub(crate) fn materialize_delegation_from_json(
+    request_json: &str,
+    signature_json: &str,
+) -> Result<Value, AuthorityMetadataError> {
+    let request = parse_delegation_request(request_json)?;
+    let payload = request.into_payload()?;
+    let signature_base64 = parse_signature(signature_json)?;
+    materialize_metadata(
+        "delegation",
+        DELEGATION_METADATA_KEY,
+        payload,
+        signature_base64,
+    )
+}
+
+pub(crate) fn prepare_session_authority_from_json(
+    request_json: &str,
+) -> Result<Value, AuthorityMetadataError> {
+    let request = parse_session_authority_request(request_json)?;
+    let payload = request.into_payload()?;
+    signing_material(
+        "session_authority",
+        SESSION_AUTHORITY_METADATA_KEY,
+        &payload,
+    )
+}
+
+pub(crate) fn materialize_session_authority_from_json(
+    request_json: &str,
+    signature_json: &str,
+) -> Result<Value, AuthorityMetadataError> {
+    let request = parse_session_authority_request(request_json)?;
+    let payload = request.into_payload()?;
+    let signature_base64 = parse_signature(signature_json)?;
+    materialize_metadata(
+        "session_authority",
+        SESSION_AUTHORITY_METADATA_KEY,
+        payload,
+        signature_base64,
+    )
+}
+
+pub(crate) fn canonical_authority_payload_bytes<T: Serialize>(
+    payload: &T,
+) -> Result<Vec<u8>, AuthorityMetadataError> {
+    let value = serde_json::to_value(payload).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("authority payload canonical value marshal failed: {err}"),
+        )
+    })?;
+    Ok(canonical_json_bytes(&value))
+}
+
+pub(crate) fn validate_delegation_payload_shape(
+    payload: &DelegationPayload,
+    now_ms: Option<i64>,
+) -> Result<(), AuthorityMetadataError> {
+    if payload.issuer_ura.trim().is_empty()
+        || payload.subject_ura.trim().is_empty()
+        || payload.caller_ura.trim().is_empty()
+        || payload.audience.trim().is_empty()
+        || payload.scopes.is_empty()
+        || payload.scopes.iter().any(|scope| scope.trim().is_empty())
+    {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "authority payload must carry issuer, subject, caller, audience, and at least one non-empty scope",
+        ));
+    }
+    validate_expiry(
+        "authority",
+        payload.issued_at_ms,
+        payload.expires_at_ms,
+        now_ms,
+    )
+}
+
+pub(crate) fn validate_session_authority_payload_shape(
+    payload: &SessionAuthorityPayload,
+    now_ms: Option<i64>,
+) -> Result<(), AuthorityMetadataError> {
+    if payload.backend_ura.trim().is_empty()
+        || payload.user_ura.trim().is_empty()
+        || payload.session_id.trim().is_empty()
+        || payload.scopes.is_empty()
+        || payload.audiences.is_empty()
+        || payload.scopes.iter().any(|scope| scope.trim().is_empty())
+        || payload
+            .audiences
+            .iter()
+            .any(|audience| audience.trim().is_empty())
+    {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "session authority must carry backend, user, session_id, at least one audience, and at least one scope",
+        ));
+    }
+    if authority_subject_kind(&payload.user_ura) != AuthoritySubjectKind::User {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!(
+                "session authority user_ura `{}` must be a canonical user subject",
+                payload.user_ura
+            ),
+        ));
+    }
+    validate_expiry(
+        "session authority",
+        payload.issued_at_ms,
+        payload.expires_at_ms,
+        now_ms,
+    )
+}
+
+pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind {
+    match top_level_subject_role(subject_ura) {
+        Some("user" | "users") => AuthoritySubjectKind::User,
+        Some("session" | "sessions") => AuthoritySubjectKind::Session,
+        _ => AuthoritySubjectKind::Other,
+    }
+}
+
+pub(crate) fn session_subject_matches_session_id(subject_ura: &str, session_id: &str) -> bool {
+    if session_id.trim().is_empty() {
+        return false;
+    }
+    let Some(rest) = subject_ura
+        .trim()
+        .strip_prefix(crate::core::ura::URA_SCHEME)
+    else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    let Some(realm) = segments.next() else {
+        return false;
+    };
+    let Some(role) = segments.next() else {
+        return false;
+    };
+    let Some(id) = segments.next() else {
+        return false;
+    };
+    segments.next().is_none()
+        && !realm.is_empty()
+        && matches!(role, "session" | "sessions")
+        && id == session_id
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthoritySubjectKind {
+    User,
+    Session,
+    Other,
+}
+
+impl DelegationRequest {
+    fn into_payload(self) -> Result<DelegationPayload, AuthorityMetadataError> {
+        reject_private_key_metadata(&self.metadata)?;
+        let payload = DelegationPayload {
+            issuer_ura: self.issuer_ura,
+            subject_ura: self.subject_ura,
+            caller_ura: self.caller_ura,
+            audience: self.audience,
+            scopes: self.scopes,
+            issued_at_ms: self.issued_at_ms,
+            expires_at_ms: self.expires_at_ms,
+        };
+        validate_delegation_payload_shape(&payload, None)?;
+        Ok(payload)
+    }
+}
+
+impl SessionAuthorityRequest {
+    fn into_payload(self) -> Result<SessionAuthorityPayload, AuthorityMetadataError> {
+        reject_private_key_metadata(&self.metadata)?;
+        let payload = SessionAuthorityPayload {
+            backend_ura: self.backend_ura,
+            user_ura: self.user_ura,
+            session_id: self.session_id,
+            scopes: self.scopes,
+            audiences: self.audiences,
+            issued_at_ms: self.issued_at_ms,
+            expires_at_ms: self.expires_at_ms,
+        };
+        validate_session_authority_payload_shape(&payload, None)?;
+        Ok(payload)
+    }
+}
+
+fn parse_delegation_request(raw: &str) -> Result<DelegationRequest, AuthorityMetadataError> {
+    serde_json::from_str(raw).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("delegation request JSON parse failed: {err}"),
+        )
+    })
+}
+
+fn parse_session_authority_request(
+    raw: &str,
+) -> Result<SessionAuthorityRequest, AuthorityMetadataError> {
+    serde_json::from_str(raw).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("session authority request JSON parse failed: {err}"),
+        )
+    })
+}
+
+fn parse_signature(raw: &str) -> Result<String, AuthorityMetadataError> {
+    let signature: AuthoritySignature = serde_json::from_str(raw).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("authority signature JSON parse failed: {err}"),
+        )
+    })?;
+    let signature_base64 = signature.signature_base64.trim();
+    if signature_base64.is_empty() {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "authority signature_base64 is required",
+        ));
+    }
+    BASE64_STANDARD.decode(signature_base64).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("authority signature base64 decode failed: {err}"),
+        )
+    })?;
+    Ok(signature_base64.to_string())
+}
+
+fn signing_material<T: Serialize>(
+    kind: &'static str,
+    metadata_key: &'static str,
+    payload: &T,
+) -> Result<Value, AuthorityMetadataError> {
+    let canonical = canonical_authority_payload_bytes(payload)?;
+    let canonical_hash_hex = Sha256::digest(&canonical)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(json!({
+        "profile": "authority",
+        "kind": kind,
+        "algorithm": "ed25519",
+        "metadata_key": metadata_key,
+        "canonical_bytes_base64": BASE64_STANDARD.encode(&canonical),
+        "canonical_hash_hex": canonical_hash_hex,
+        "signed_fields": authority_signed_fields(kind),
+        "payload": payload,
+    }))
+}
+
+fn materialize_metadata<T: Serialize>(
+    kind: &'static str,
+    metadata_key: &'static str,
+    payload: T,
+    signature_base64: String,
+) -> Result<Value, AuthorityMetadataError> {
+    let wire = SignedAuthorityWire {
+        payload,
+        signature: signature_base64,
+    };
+    let wire_json = serde_json::to_vec(&wire).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("authority metadata wire marshal failed: {err}"),
+        )
+    })?;
+    let metadata_value = BASE64_STANDARD.encode(wire_json);
+    Ok(json!({
+        "profile": "authority",
+        "kind": kind,
+        "metadata_key": metadata_key,
+        "metadata_value": metadata_value,
+        "metadata": {
+            metadata_key: metadata_value,
+        },
+    }))
+}
+
+fn authority_signed_fields(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "delegation" => &[
+            "issuer_ura",
+            "subject_ura",
+            "caller_ura",
+            "audience",
+            "scopes",
+            "issued_at_ms",
+            "expires_at_ms",
+        ],
+        "session_authority" => &[
+            "backend_ura",
+            "user_ura",
+            "session_id",
+            "scopes",
+            "audiences",
+            "issued_at_ms",
+            "expires_at_ms",
+        ],
+        _ => &[],
+    }
+}
+
+fn validate_expiry(
+    label: &str,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+    now_ms: Option<i64>,
+) -> Result<(), AuthorityMetadataError> {
+    if expires_at_ms <= issued_at_ms {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("{label} expires_at_ms must be greater than issued_at_ms"),
+        ));
+    }
+    if let Some(now_ms) = now_ms {
+        if now_ms >= expires_at_ms {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_EXPIRED,
+                format!("{label} expired at {expires_at_ms}ms (now {now_ms}ms)"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_private_key_metadata(
+    metadata: &Map<String, Value>,
+) -> Result<(), AuthorityMetadataError> {
+    reject_private_key_metadata_value(&Value::Object(metadata.clone()))
+}
+
+fn reject_private_key_metadata_value(value: &Value) -> Result<(), AuthorityMetadataError> {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                reject_private_key_metadata_key(key)?;
+                reject_private_key_metadata_value(child)?;
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for child in items {
+                reject_private_key_metadata_value(child)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn reject_private_key_metadata_key(key: &str) -> Result<(), AuthorityMetadataError> {
+    let normalized = key.to_ascii_lowercase().replace(['-', '_'], "");
+    if normalized.contains("privatekey")
+        || normalized.contains("secretkey")
+        || normalized == "seed"
+        || normalized.contains("signingseed")
+    {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("authority request metadata must not carry private key material: `{key}`"),
+        ));
+    }
+    Ok(())
+}
+
+fn top_level_subject_role(ura: &str) -> Option<&str> {
+    let rest = ura.trim().strip_prefix(crate::core::ura::URA_SCHEME)?;
+    let mut segments = rest.split('/');
+    let realm = segments.next()?;
+    let role = segments.next()?;
+    if realm.is_empty() || role.is_empty() {
+        return None;
+    }
+    Some(role)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DELEGATION_REQUEST: &str = r#"{
+      "issuer_ura":"easynet:///r/example/user/alice",
+      "subject_ura":"easynet:///r/example/user/alice",
+      "caller_ura":"easynet:///r/example/agent/backend",
+      "audience":"easynet:///r/example/device/dev-a",
+      "scopes":["device.observe.*"],
+      "issued_at_ms":1000,
+      "expires_at_ms":2000
+    }"#;
+
+    const SESSION_REQUEST: &str = r#"{
+      "backend_ura":"easynet:///r/example/agent/backend",
+      "user_ura":"easynet:///r/example/user/alice",
+      "session_id":"sa-example",
+      "scopes":["device.observe.*"],
+      "audiences":["easynet:///r/example/device/dev-a"],
+      "issued_at_ms":1000,
+      "expires_at_ms":2000
+    }"#;
+
+    #[test]
+    fn prepare_delegation_returns_canonical_material() {
+        let material = prepare_delegation_from_json(DELEGATION_REQUEST).unwrap();
+        assert_eq!(material["profile"], "authority");
+        assert_eq!(material["kind"], "delegation");
+        assert_eq!(material["algorithm"], "ed25519");
+        assert_eq!(material["metadata_key"], DELEGATION_METADATA_KEY);
+        assert!(material["canonical_hash_hex"].as_str().unwrap().len() == 64);
+        let canonical = BASE64_STANDARD
+            .decode(material["canonical_bytes_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(canonical).unwrap(),
+            r#"{"audience":"easynet:///r/example/device/dev-a","caller_ura":"easynet:///r/example/agent/backend","expires_at_ms":2000,"issued_at_ms":1000,"issuer_ura":"easynet:///r/example/user/alice","scopes":["device.observe.*"],"subject_ura":"easynet:///r/example/user/alice"}"#
+        );
+    }
+
+    #[test]
+    fn materialize_session_authority_returns_admission_metadata_shape() {
+        let projection = materialize_session_authority_from_json(
+            SESSION_REQUEST,
+            r#"{"signature_base64":"c2Vzc2lvbi1zaWduYXR1cmU="}"#,
+        )
+        .unwrap();
+        let value = projection["metadata"][SESSION_AUTHORITY_METADATA_KEY]
+            .as_str()
+            .unwrap();
+        let wire = BASE64_STANDARD.decode(value).unwrap();
+        let wire_json: Value = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(
+            wire_json["payload"]["backend_ura"],
+            "easynet:///r/example/agent/backend"
+        );
+        assert_eq!(wire_json["signature"], "c2Vzc2lvbi1zaWduYXR1cmU=");
+    }
+
+    #[test]
+    fn request_metadata_rejects_private_key_material() {
+        let err = prepare_delegation_from_json(
+            r#"{
+              "issuer_ura":"easynet:///r/example/user/alice",
+              "subject_ura":"easynet:///r/example/user/alice",
+              "caller_ura":"easynet:///r/example/agent/backend",
+              "audience":"easynet:///r/example/device/dev-a",
+              "scopes":["device.observe.*"],
+              "issued_at_ms":1000,
+              "expires_at_ms":2000,
+              "metadata":{"nested":{"secret_key":"never"}}
+            }"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+    }
+
+    #[test]
+    fn materialize_rejects_legacy_signature_alias() {
+        let err = materialize_delegation_from_json(
+            DELEGATION_REQUEST,
+            r#"{"signature":"ZGVsZWdhdGlvbi1zaWduYXR1cmU="}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+    }
+}

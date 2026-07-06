@@ -237,6 +237,48 @@ func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 	}
 }
 
+func TestAuthoritySigningMaterialProjectionValidatesRuntimeCoreOutput(t *testing.T) {
+	raw := []byte(`{
+		"profile":"authority",
+		"kind":"delegation",
+		"algorithm":"ed25519",
+		"metadata_key":"x-easynet-delegation",
+		"canonical_bytes_base64":"eyJjYWxsZXJfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvYWdlbnQvYmFja2VuZCJ9",
+		"canonical_hash_hex":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"signed_fields":["caller_ura"],
+		"payload":{"caller_ura":"easynet:///r/example/agent/backend"}
+	}`)
+	material, err := newAuthoritySigningMaterial(raw, DelegationMetadataKey, AuthorityKindDelegation)
+	if err != nil {
+		t.Fatalf("newAuthoritySigningMaterial: %v", err)
+	}
+	if material.Profile != authorityProfile || material.Kind != AuthorityKindDelegation {
+		t.Fatalf("unexpected material: %#v", material)
+	}
+}
+
+func TestAuthoritySignatureJSONRejectsLegacySignatureField(t *testing.T) {
+	if _, err := authoritySignatureJSON(AuthoritySignature{}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("empty authoritySignatureJSON error = %v, want invalid argument", err)
+	}
+	raw, err := authoritySignatureJSON(AuthoritySignature{
+		SignatureBase64: base64.StdEncoding.EncodeToString([]byte("signature")),
+	})
+	if err != nil {
+		t.Fatalf("authoritySignatureJSON: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode signature JSON: %v", err)
+	}
+	if _, ok := decoded["signature"]; ok {
+		t.Fatalf("legacy signature field must not be emitted: %#v", decoded)
+	}
+	if decoded["signature_base64"] == "" {
+		t.Fatalf("signature_base64 missing: %#v", decoded)
+	}
+}
+
 func authorityMetadataFixture(t *testing.T, payload map[string]any, signature []byte) string {
 	t.Helper()
 	wire, err := json.Marshal(map[string]any{

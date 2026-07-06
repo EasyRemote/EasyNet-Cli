@@ -8,7 +8,7 @@ method spelling.
 | Language | Tier | Primary consumer | Current capability-state summary |
 | --- | --- | --- | --- |
 | Rust | P0 | native SDK core and FFI implementation | provider-backed Runtime Core substrate; language parity tracked through FFI and future Rust SDK public matrix |
-| C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers |
+| C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers, including authority signing-material and metadata-materialization core helpers |
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | unsupported |
@@ -60,10 +60,14 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   metadata projections, InvocationBuilder authority attachment guardrails, and
   provider-backed `AuthorityClient` minting facades for delegation/session
   authority metadata. The shared `authority/mutual_exclusion` conformance case
-  now pins projection parity and ambiguous metadata rejection. Canonical
-  authority payload creation, signing, verification, and trust-anchor admission
-  remain daemon/Axon-owned; concrete daemon-backed authority minting transports
-  and backend source cutover remain incomplete.
+  now pins projection parity and ambiguous metadata rejection. C ABI now exposes
+  daemon-core-backed `easynet_authority_prepare_*` and
+  `easynet_authority_materialize_*` helpers so canonical authority payload
+  creation and metadata wire materialization are no longer language-facade
+  responsibilities. Go and Python now have optional C ABI authority transports
+  that sign prepared bytes through explicit external signers and materialize
+  metadata through C ABI. Signing, verification, and trust-anchor admission
+  remain daemon/Axon-owned; backend source cutover remains incomplete.
 - Backend SDK-only import-ban enforcement now has a shared `backend/import_ban`
   conformance case and executable scanner gate; the sibling EasyNet backend
   still reports raw Axon, generated Axon protobuf, and direct daemon transport
@@ -158,7 +162,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, prepared/signed Invocation DTOs,
   typed authority metadata projections with mutually-exclusive InvocationBuilder
-  attachment guardrails, provider-backed `AuthorityClient` minting facades,
+  attachment guardrails, provider-backed `AuthorityClient` minting facades and optional
+  `easynet_cabi,cgo` `CABIAuthorityTransport` over C ABI authority signing-material/
+  materialization core,
   local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
   projection, StreamHandle state observation with schema-shaped terminal event
   projection, BidiSession frame ordering/
@@ -285,7 +291,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   generic descriptor-ref and target-dispatch cutover tests, typed
   authority metadata projections with mutually-exclusive InvocationBuilder
-  attachment guardrails, provider-backed `AuthorityClient` minting facades, stable
+  attachment guardrails, provider-backed `AuthorityClient` minting facades and C ABI
+  authority transport over runtime-core signing-material/materialization helpers, stable
   per-profile error source refs; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; direct daemon

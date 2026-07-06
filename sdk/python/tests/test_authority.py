@@ -13,8 +13,10 @@ from easynet_sdk import (
     SDKError,
     SessionAuthorityRequest,
     SessionAuthority,
+    AuthoritySignature,
     is_code,
 )
+from easynet_sdk._cabi import CABIAuthorityTransport
 
 
 class AuthorityTests(unittest.TestCase):
@@ -232,6 +234,93 @@ class AuthorityTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(transport.session_calls, 0)
 
+    def test_cabi_authority_transport_mints_via_core_and_signer(self) -> None:
+        delegation_value = _authority_metadata(
+            {
+                "issuer_ura": "easynet:///r/example/user/alice",
+                "subject_ura": "easynet:///r/example/user/alice",
+                "caller_ura": "easynet:///r/example/agent/backend",
+                "audience": "easynet:///r/example/device/dev-a",
+                "scopes": ["device.observe.*"],
+                "issued_at_ms": 1000,
+                "expires_at_ms": 2000,
+            },
+            b"cabi-signature",
+        )
+        session_value = _authority_metadata(
+            {
+                "backend_ura": "easynet:///r/example/agent/backend",
+                "user_ura": "easynet:///r/example/user/alice",
+                "session_id": "sa-example",
+                "scopes": ["device.observe.*"],
+                "audiences": ["easynet:///r/example/device/dev-a"],
+                "issued_at_ms": 1000,
+                "expires_at_ms": 2000,
+            },
+            b"cabi-signature",
+        )
+        signer = _RecordingAuthoritySigner(
+            AuthoritySignature(
+                signature_base64=base64.b64encode(b"cabi-signature").decode("ascii")
+            )
+        )
+        transport = CABIAuthorityTransport(
+            lib=_FakeCABIAuthorityLibrary(delegation_value, session_value),
+            signer=signer,
+        )
+        client = AuthorityClient(transport)
+
+        proof = client.mint_delegation_proof(
+            DelegationRequest(
+                issuer_ura="easynet:///r/example/user/alice",
+                subject_ura="easynet:///r/example/user/alice",
+                caller_ura="easynet:///r/example/agent/backend",
+                audience="easynet:///r/example/device/dev-a",
+                scopes=("device.observe.*",),
+                issued_at_ms=1000,
+                expires_at_ms=2000,
+            )
+        )
+        session = client.mint_session_authority(
+            SessionAuthorityRequest(
+                backend_ura="easynet:///r/example/agent/backend",
+                user_ura="easynet:///r/example/user/alice",
+                session_id="sa-example",
+                scopes=("device.observe.*",),
+                audiences=("easynet:///r/example/device/dev-a",),
+                issued_at_ms=1000,
+                expires_at_ms=2000,
+            )
+        )
+
+        self.assertEqual(proof.metadata().value, delegation_value)
+        self.assertEqual(session.metadata().value, session_value)
+        self.assertEqual(signer.seen[0].kind, "delegation")
+        self.assertEqual(signer.seen[1].kind, "session_authority")
+
+    def test_cabi_authority_transport_rejects_non_latest_signature(self) -> None:
+        class BadSigner:
+            def sign_authority(self, material):
+                return object()
+
+        transport = CABIAuthorityTransport(
+            lib=_FakeCABIAuthorityLibrary("delegation", "session"),
+            signer=BadSigner(),
+        )
+        with self.assertRaises(SDKError) as caught:
+            transport.mint_delegation_proof(
+                b"""{
+                "issuer_ura":"easynet:///r/example/user/alice",
+                "subject_ura":"easynet:///r/example/user/alice",
+                "caller_ura":"easynet:///r/example/agent/backend",
+                "audience":"easynet:///r/example/device/dev-a",
+                "scopes":["device.observe.*"],
+                "issued_at_ms":1000,
+                "expires_at_ms":2000
+                }"""
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.ROUTE_UNAVAILABLE))
+
 
 def _authority_metadata(payload: dict[str, object], signature: bytes) -> str:
     wire = json.dumps(
@@ -267,6 +356,78 @@ class _MemoryAuthorityTransport:
         self.session_calls += 1
         self.seen_session = json.loads(request_json.decode("utf-8"))
         return self.session_json
+
+
+class _RecordingAuthoritySigner:
+    def __init__(self, signature: AuthoritySignature) -> None:
+        self.signature = signature
+        self.seen = []
+
+    def sign_authority(self, material):
+        self.seen.append(material)
+        return self.signature
+
+
+class _FakeCABIAuthorityLibrary:
+    def __init__(self, delegation_value: str, session_value: str) -> None:
+        self.delegation_value = delegation_value
+        self.session_value = session_value
+        self.seen_delegation_signature: dict[str, object] = {}
+        self.seen_session_signature: dict[str, object] = {}
+
+    def authority_prepare_delegation(self, request_json: bytes) -> bytes:
+        json.loads(request_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "profile": "authority",
+                "kind": "delegation",
+                "algorithm": "ed25519",
+                "metadata_key": DELEGATION_METADATA_KEY,
+                "canonical_bytes_base64": base64.b64encode(b"canonical").decode("ascii"),
+                "canonical_hash_hex": "a" * 64,
+                "signed_fields": ["issuer_ura"],
+                "payload": {"issuer_ura": "easynet:///r/example/user/alice"},
+            }
+        ).encode("utf-8")
+
+    def authority_materialize_delegation(
+        self, request_json: bytes, signature_json: bytes
+    ) -> bytes:
+        json.loads(request_json.decode("utf-8"))
+        self.seen_delegation_signature = json.loads(signature_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "metadata_value": self.delegation_value,
+                "metadata": {DELEGATION_METADATA_KEY: self.delegation_value},
+            }
+        ).encode("utf-8")
+
+    def authority_prepare_session(self, request_json: bytes) -> bytes:
+        json.loads(request_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "profile": "authority",
+                "kind": "session_authority",
+                "algorithm": "ed25519",
+                "metadata_key": SESSION_AUTHORITY_METADATA_KEY,
+                "canonical_bytes_base64": base64.b64encode(b"canonical").decode("ascii"),
+                "canonical_hash_hex": "b" * 64,
+                "signed_fields": ["backend_ura"],
+                "payload": {"backend_ura": "easynet:///r/example/agent/backend"},
+            }
+        ).encode("utf-8")
+
+    def authority_materialize_session(
+        self, request_json: bytes, signature_json: bytes
+    ) -> bytes:
+        json.loads(request_json.decode("utf-8"))
+        self.seen_session_signature = json.loads(signature_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "metadata_value": self.session_value,
+                "metadata": {SESSION_AUTHORITY_METADATA_KEY: self.session_value},
+            }
+        ).encode("utf-8")
 
 
 if __name__ == "__main__":

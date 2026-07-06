@@ -15,6 +15,71 @@ SESSION_AUTHORITY_METADATA_KEY = "x-easynet-session-authority"
 
 
 @dataclass(frozen=True)
+class AuthoritySigningMaterial:
+    """Canonical authority material prepared by the runtime core."""
+
+    profile: str
+    kind: str
+    algorithm: str
+    metadata_key: str
+    canonical_bytes_base64: str
+    canonical_hash_hex: str
+    signed_fields: tuple[str, ...]
+    payload: Mapping[str, object]
+
+    @classmethod
+    def from_json(cls, raw: bytes | str, *, kind: str, metadata_key: str) -> "AuthoritySigningMaterial":
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        try:
+            decoded = json.loads(text)
+        except Exception as exc:
+            raise _invalid_authority(f"decode authority signing material: {exc}", exc) from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_authority("authority signing material must be an object")
+        material = cls(
+            profile=_required_string(decoded.get("profile"), "profile"),
+            kind=_required_string(decoded.get("kind"), "kind"),
+            algorithm=_required_string(decoded.get("algorithm"), "algorithm"),
+            metadata_key=_required_string(decoded.get("metadata_key"), "metadata_key"),
+            canonical_bytes_base64=_required_string(
+                decoded.get("canonical_bytes_base64"), "canonical_bytes_base64"
+            ),
+            canonical_hash_hex=_required_string(decoded.get("canonical_hash_hex"), "canonical_hash_hex"),
+            signed_fields=_required_string_tuple(
+                decoded.get("signed_fields"), "signed_fields", "authority"
+            ),
+            payload=_required_mapping(decoded.get("payload"), "payload"),
+        )
+        if material.profile != "authority" or material.kind != kind or material.metadata_key != metadata_key:
+            raise _invalid_authority("authority signing material identity mismatch")
+        _decode_base64(material.canonical_bytes_base64, "canonical_bytes_base64")
+        return material
+
+
+@dataclass(frozen=True)
+class AuthoritySignature:
+    """Latest-only authority signature envelope."""
+
+    signature_base64: str
+
+    def to_json(self) -> bytes:
+        if not isinstance(self.signature_base64, str) or not self.signature_base64.strip():
+            raise _invalid_authority("authority signature_base64 is required")
+        _decode_base64(self.signature_base64, "signature_base64")
+        return json.dumps(
+            {"signature_base64": self.signature_base64},
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+
+class AuthoritySignatureProvider(Protocol):
+    """Signs canonical authority material outside the C ABI."""
+
+    def sign_authority(self, material: AuthoritySigningMaterial) -> AuthoritySignature:
+        ...
+
+
+@dataclass(frozen=True)
 class AuthorityMetadata:
     """Mutually-exclusive authority metadata envelope for one Invocation."""
 
@@ -254,7 +319,7 @@ def _decode_authority_metadata(value: str, label: str) -> tuple[Mapping[str, obj
     if not isinstance(value, str) or not value.strip():
         raise _invalid_authority(f"{label} metadata value is required")
     try:
-        wire_bytes = base64.b64decode(value.strip(), validate=True)
+        wire_bytes = _decode_base64(value.strip(), f"{label} metadata")
     except binascii.Error as exc:
         raise _invalid_authority(f"{label} metadata base64 decode failed: {exc}", exc) from exc
     try:
@@ -270,7 +335,7 @@ def _decode_authority_metadata(value: str, label: str) -> tuple[Mapping[str, obj
     if not isinstance(signature_value, str) or not signature_value.strip():
         raise _invalid_authority(f"{label} metadata signature is required")
     try:
-        signature = base64.b64decode(signature_value, validate=True)
+        signature = _decode_base64(signature_value, f"{label} metadata signature")
     except binascii.Error as exc:
         raise _invalid_authority(
             f"{label} metadata signature base64 decode failed: {exc}", exc
@@ -317,8 +382,12 @@ def _authority_metadata_projection(raw: bytes | str, metadata_key: str, label: s
 
 def _required_payload_string(payload: Mapping[str, object], field_name: str, label: str) -> str:
     value = payload.get(field_name)
+    return _required_string(value, f"{label} authority {field_name}")
+
+
+def _required_string(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise _invalid_authority(f"{label} authority {field_name} is required")
+        raise _invalid_authority(f"{label} is required")
     return value
 
 
@@ -338,6 +407,22 @@ def _required_string_tuple(value: object, field_name: str, label: str) -> tuple[
             raise _invalid_authority(f"{label} authority {field_name} must be strings")
         result.append(item)
     return tuple(result)
+
+
+def _required_mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, dict):
+        raise _invalid_authority(f"authority signing material {label} is required")
+    return value
+
+
+def _decode_base64(value: str, label: str) -> bytes:
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except binascii.Error as exc:
+        raise _invalid_authority(f"{label} base64 decode failed: {exc}", exc) from exc
+    if not decoded:
+        raise _invalid_authority(f"{label} is required")
+    return decoded
 
 
 def _validate_delegation(proof: DelegationProof) -> None:

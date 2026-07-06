@@ -47,6 +47,9 @@
 //   server-stream Axon Invocation over daemon.sock.
 // - `easynet_invocation_bidi_open/send/close_send/close/cancel`:
 //   complete InvokeBidi session ABI over daemon.sock.
+// - `easynet_authority_prepare_*` and
+//   `easynet_authority_materialize_*`: authority signing material and metadata
+//   materialization helpers backed by daemon admission metadata core.
 // - `easynet_host_binding_build/decode_request/encode_*` and
 //   `easynet_host_binding_fold_output_hash`: schema-backed host-stream
 //   binding/frame/hash DTO projections.
@@ -96,6 +99,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod admin_gateway;
+pub mod authority;
 pub mod client;
 pub mod compatibility;
 pub mod daemon;
@@ -118,10 +122,10 @@ use std::os::raw::c_char;
 
 use crate::daemon::control::discovery;
 use crate::ffi::client as ipc_client;
-use crate::ffi::client::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
+use crate::ffi::client::handle::{ClientSession, EasynetHandle, alloc, get, lib_runtime, release};
 use crate::ffi::errors::{
-    clear_last_error, set_last_error_code, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC,
-    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
+    EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE, ERR_INVALID_UTF8,
+    ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE, clear_last_error, set_last_error_code,
 };
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 

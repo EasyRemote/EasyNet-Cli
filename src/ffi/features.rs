@@ -4,12 +4,13 @@
 //! `easynet_feature_discovery`. Language facades decode this DTO; they do not
 //! maintain an independent capability list.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::EASYNET_ABI_VERSION;
 
 pub const PROFILES: &[(&str, &str)] = &[
     ("runtime_core", "partial"),
+    ("authority", "cabi_core"),
     ("receipt", "fetch_projection_partial"),
     (
         "directory_identity",
@@ -54,6 +55,7 @@ pub const ALWAYS_ON_SYMBOLS: &[&str] = &[
     "compatibility_file_adapters",
     "wrapper_carriers",
     "wrapper_record_projection",
+    "authority_metadata_core",
 ];
 
 pub const AXON_PB_SYMBOLS: &[&str] = &[
