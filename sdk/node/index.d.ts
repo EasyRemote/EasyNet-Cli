@@ -659,12 +659,118 @@ export interface AsyncIterationOptions extends ReceiveOptions {
   closeOnReturn?: boolean;
 }
 
+export interface SignerPolicyFields {
+  mode?: string | null;
+  signer_id?: string | null;
+  policy_ref?: string | null;
+  expires_at_unix_ms?: number | null;
+}
+
+export class SignerPolicy {
+  mode: string;
+  signerId: string;
+  policyRef: string;
+  expiresAtUnixMS: number;
+  constructor(fields?: SignerPolicyFields);
+  toJSON(): Required<SignerPolicyFields>;
+}
+
+export interface SigningMaterialFields {
+  algorithm?: string | null;
+  canonical_bytes_base64: string;
+  args_digest_hex: string;
+  descriptor_ref: string;
+  nonce_base64?: string | null;
+  signed_fields?: string[];
+  expires_at_unix_ms: number;
+  signer_policy?: SignerPolicyFields | null;
+}
+
+export class SigningMaterial {
+  algorithm: string;
+  canonicalBytesBase64: string;
+  argsDigestHex: string;
+  descriptorRef: string;
+  nonceBase64: string;
+  signedFields: readonly string[];
+  expiresAtUnixMS: number;
+  signerPolicy: SignerPolicy | null;
+  constructor(fields: SigningMaterialFields);
+  toJSON(): SigningMaterialFields;
+}
+
+export interface InvocationSignatureFields {
+  algorithm: string;
+  signature_base64: string;
+  key_id_hint?: string | null;
+  signer_public_key_base64?: string | null;
+}
+
+export class InvocationSignature {
+  algorithm: string;
+  signatureBase64: string;
+  keyIdHint: string;
+  signerPublicKeyBase64: string;
+  constructor(fields: InvocationSignatureFields);
+  toJSON(): Required<InvocationSignatureFields>;
+}
+
+export interface PreparedInvocationFields {
+  prepared_id?: string | null;
+  request_id?: string | null;
+  tuple: Record<string, unknown>;
+  signing_material: SigningMaterialFields;
+  descriptor_ref?: string | null;
+  descriptor_hash_hex?: string | null;
+  schema_hash_hex?: string | null;
+  canonical_hash_hex?: string | null;
+  expires_at_unix_ms?: number | null;
+  submit_ready?: false | null;
+}
+
+export class PreparedInvocation {
+  preparedId: string;
+  requestId: string;
+  tuple: InvocationDraft;
+  signingMaterial: SigningMaterial;
+  descriptorRef: string;
+  descriptorHashHex: string;
+  schemaHashHex: string;
+  canonicalHashHex: string;
+  expiresAtUnixMS: number;
+  constructor(fields: PreparedInvocationFields);
+  static fromJSON(raw: Uint8Array | string): PreparedInvocation;
+  bindRuntime(runtime: RuntimeClient): this;
+  submitReady(): false;
+  signWithCallerSignature(signature: InvocationSignature | InvocationSignatureFields): SignedInvocation;
+  toJSON(): Required<PreparedInvocationFields>;
+}
+
+export interface SignedInvocationFields {
+  prepared: PreparedInvocation | PreparedInvocationFields;
+  signature: InvocationSignature | InvocationSignatureFields;
+  signer_id: string;
+  policy?: SignerPolicy | SignerPolicyFields | null;
+}
+
+export class SignedInvocation {
+  prepared: PreparedInvocation;
+  signature: InvocationSignature;
+  signerId: string;
+  policy: SignerPolicy | null;
+  constructor(fields: SignedInvocationFields);
+  bindRuntime(runtime: RuntimeClient): this;
+  submitReady(): boolean;
+  submit(): Promise<InvocationHandle>;
+  toJSON(): Record<string, unknown>;
+}
+
 export class RuntimeClient {
   constructor(transport: RuntimeTransport);
   newInvocation(): InvocationBuilder;
   invoke(draft: InvocationDraft): Promise<Record<string, unknown>>;
-  prepare(draft: InvocationDraft, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
-  submitSigned(signed: Record<string, unknown>): Promise<InvocationHandle>;
+  prepare(draft: InvocationDraft, options?: Record<string, unknown>): Promise<PreparedInvocation>;
+  submitSigned(signed: SignedInvocation): Promise<InvocationHandle>;
   awaitResult(handle: InvocationHandle): Promise<Record<string, unknown>>;
   cancel(handle: InvocationHandle, reason?: string): Promise<InvocationCancel>;
   events(handle: InvocationHandle): Promise<InvocationHandle>;

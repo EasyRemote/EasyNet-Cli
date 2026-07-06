@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: submit_signed preserves caller signature material without facade re-signing.
 steps:
   - action: prepare

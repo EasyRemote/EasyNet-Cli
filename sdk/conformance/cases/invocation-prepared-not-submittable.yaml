@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Submit rejects PreparedInvocation; only SignedInvocation is submit-ready.
 steps:
   - action: prepare

@@ -112,6 +112,54 @@
       "message": null
     },
     {
+      "case_id": "invocation/canonical_material",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/handle_terminal_monotonicity",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "host_binding/codec_hash",
       "profile": "host_binding",
       "status": "passed",

@@ -1323,7 +1323,7 @@ export class RuntimeClient {
       Buffer.from(assertDraft(draft).toJSONString()),
       Buffer.from(JSON.stringify(options ?? {})),
     );
-    return parseJSON(raw, "prepared invocation");
+    return PreparedInvocation.fromJSON(raw).bindRuntime(this);
   }
 
   async submitSigned(signed) {
@@ -1331,10 +1331,10 @@ export class RuntimeClient {
     if (typeof transport.submitSigned !== "function") {
       throw invalidSDK("runtime submit-signed transport function is required");
     }
-    if (!signed || typeof signed !== "object" || Array.isArray(signed)) {
-      throw invalidInvocation("signed invocation is required");
+    if (!(signed instanceof SignedInvocation)) {
+      throw invalidRuntime("signed invocation is required");
     }
-    const raw = await transport.submitSigned(Buffer.from(JSON.stringify(signed)));
+    const raw = await transport.submitSigned(Buffer.from(JSON.stringify(signed.toJSON())));
     return InvocationHandle.fromJSON(raw).bindRuntime(this);
   }
 
@@ -1412,6 +1412,270 @@ export class RuntimeClient {
       throw invalidSDK("runtime client is closed");
     }
     return this.transport;
+  }
+}
+
+export class SignerPolicy {
+  constructor(fields = {}) {
+    const value = objectValue(fields, "signer policy");
+    rejectRuntimeFields(value, ["mode", "signer_id", "policy_ref", "expires_at_unix_ms"]);
+    this.mode = optionalRuntimeString(value.mode, "mode") ?? "";
+    this.signerId = optionalRuntimeString(value.signer_id, "signer_id") ?? "";
+    this.policyRef = optionalRuntimeString(value.policy_ref, "policy_ref") ?? "";
+    this.expiresAtUnixMS = optionalRuntimeNonNegativeInteger(
+      value.expires_at_unix_ms,
+      "expires_at_unix_ms",
+    ) ?? 0;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      mode: this.mode,
+      signer_id: this.signerId,
+      policy_ref: this.policyRef,
+      expires_at_unix_ms: this.expiresAtUnixMS,
+    };
+  }
+}
+
+export class SigningMaterial {
+  constructor(fields) {
+    const value = objectValue(fields, "signing material");
+    rejectRuntimeFields(value, [
+      "algorithm",
+      "canonical_bytes_base64",
+      "args_digest_hex",
+      "descriptor_ref",
+      "nonce_base64",
+      "signed_fields",
+      "expires_at_unix_ms",
+      "signer_policy",
+    ]);
+    this.algorithm = optionalRuntimeString(value.algorithm, "algorithm") ?? "";
+    this.canonicalBytesBase64 = requiredRuntimeString(
+      value.canonical_bytes_base64,
+      "canonical_bytes_base64",
+    );
+    validateRuntimeBase64(this.canonicalBytesBase64, "canonical_bytes_base64");
+    this.argsDigestHex = requiredRuntimeString(value.args_digest_hex, "args_digest_hex");
+    validateRuntimeHex(this.argsDigestHex, "args_digest_hex", 64);
+    this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");
+    this.nonceBase64 = optionalRuntimeString(value.nonce_base64, "nonce_base64") ?? "";
+    if (this.nonceBase64) {
+      validateRuntimeBase64(this.nonceBase64, "nonce_base64");
+    }
+    const signedFields = value.signed_fields ?? [];
+    if (!Array.isArray(signedFields) || signedFields.some((field) => typeof field !== "string")) {
+      throw invalidRuntime("signed_fields must be an array of strings");
+    }
+    this.signedFields = Object.freeze([...signedFields]);
+    this.expiresAtUnixMS = positiveRuntimeInteger(value.expires_at_unix_ms, "expires_at_unix_ms");
+    this.signerPolicy = value.signer_policy === undefined || value.signer_policy === null
+      ? null
+      : new SignerPolicy(value.signer_policy);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const value = {
+      algorithm: this.algorithm,
+      canonical_bytes_base64: this.canonicalBytesBase64,
+      args_digest_hex: this.argsDigestHex,
+      descriptor_ref: this.descriptorRef,
+      nonce_base64: this.nonceBase64,
+      signed_fields: [...this.signedFields],
+      expires_at_unix_ms: this.expiresAtUnixMS,
+    };
+    if (this.signerPolicy) {
+      value.signer_policy = this.signerPolicy.toJSON();
+    }
+    return value;
+  }
+}
+
+export class InvocationSignature {
+  constructor(fields) {
+    const value = objectValue(fields, "invocation signature");
+    rejectRuntimeFields(value, [
+      "algorithm",
+      "signature_base64",
+      "key_id_hint",
+      "signer_public_key_base64",
+    ]);
+    this.algorithm = requiredRuntimeString(value.algorithm, "signature.algorithm");
+    this.signatureBase64 = requiredRuntimeString(value.signature_base64, "signature.signature_base64");
+    validateRuntimeBase64(this.signatureBase64, "signature.signature_base64");
+    this.keyIdHint = optionalRuntimeString(value.key_id_hint, "key_id_hint") ?? "";
+    this.signerPublicKeyBase64 =
+      optionalRuntimeString(value.signer_public_key_base64, "signer_public_key_base64") ?? "";
+    if (this.signerPublicKeyBase64) {
+      validateRuntimeBase64(this.signerPublicKeyBase64, "signer_public_key_base64");
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      algorithm: this.algorithm,
+      signature_base64: this.signatureBase64,
+      key_id_hint: this.keyIdHint,
+      signer_public_key_base64: this.signerPublicKeyBase64,
+    };
+  }
+}
+
+export class PreparedInvocation {
+  constructor(fields) {
+    const value = objectValue(fields, "prepared invocation");
+    rejectRuntimeFields(value, [
+      "prepared_id",
+      "request_id",
+      "tuple",
+      "signing_material",
+      "descriptor_ref",
+      "descriptor_hash_hex",
+      "schema_hash_hex",
+      "canonical_hash_hex",
+      "expires_at_unix_ms",
+      "submit_ready",
+    ]);
+    if (
+      value.submit_ready !== undefined &&
+      value.submit_ready !== null &&
+      value.submit_ready !== false
+    ) {
+      throw invalidRuntime("PreparedInvocation must not be submit-ready");
+    }
+    this.tuple = InvocationDraft.fromJSON(JSON.stringify(objectValue(value.tuple, "tuple")));
+    this.signingMaterial = new SigningMaterial(objectValue(value.signing_material, "signing_material"));
+    if (this.signingMaterial.descriptorRef !== this.tuple.descriptorRef) {
+      throw invalidRuntime("signing_material.descriptor_ref must match tuple descriptor_ref");
+    }
+    this.preparedId = optionalRuntimeString(value.prepared_id, "prepared_id") ?? "";
+    this.requestId = optionalRuntimeString(value.request_id, "request_id") ?? "";
+    if (!this.preparedId && !this.requestId) {
+      throw invalidRuntime("prepared_id or request_id is required");
+    }
+    this.descriptorRef =
+      optionalRuntimeString(value.descriptor_ref, "descriptor_ref") ?? this.signingMaterial.descriptorRef;
+    this.descriptorHashHex = optionalRuntimeString(value.descriptor_hash_hex, "descriptor_hash_hex") ?? "";
+    this.schemaHashHex = optionalRuntimeString(value.schema_hash_hex, "schema_hash_hex") ?? "";
+    this.canonicalHashHex = optionalRuntimeString(value.canonical_hash_hex, "canonical_hash_hex") ?? "";
+    validatePreparedHash(this.signingMaterial.canonicalBytesBase64, this.canonicalHashHex);
+    this.expiresAtUnixMS =
+      optionalRuntimeNonNegativeInteger(value.expires_at_unix_ms, "expires_at_unix_ms") ??
+      this.signingMaterial.expiresAtUnixMS;
+    this.runtime = null;
+  }
+
+  static fromJSON(raw) {
+    return new PreparedInvocation(parseJSON(raw, "prepared invocation"));
+  }
+
+  bindRuntime(runtime) {
+    this.runtime = runtime;
+    return this;
+  }
+
+  submitReady() {
+    return false;
+  }
+
+  signWithCallerSignature(signature) {
+    const normalized = signature instanceof InvocationSignature
+      ? signature
+      : new InvocationSignature(signature);
+    let signerId = normalized.keyIdHint || normalized.signerPublicKeyBase64;
+    if (this.signingMaterial.signerPolicy && this.signingMaterial.signerPolicy.signerId) {
+      signerId = this.signingMaterial.signerPolicy.signerId;
+    }
+    if (!signerId) {
+      throw invalidRuntime("signer id is required");
+    }
+    return new SignedInvocation({
+      prepared: this,
+      signature: normalized,
+      signer_id: signerId,
+      policy: this.signingMaterial.signerPolicy,
+    }).bindRuntime(this.runtime);
+  }
+
+  toJSON() {
+    const value = {
+      prepared_id: this.preparedId,
+      request_id: this.requestId,
+      tuple: this.tuple.toJSON(),
+      signing_material: this.signingMaterial.toJSON(),
+      descriptor_ref: this.descriptorRef,
+      descriptor_hash_hex: this.descriptorHashHex,
+      schema_hash_hex: this.schemaHashHex,
+      canonical_hash_hex: this.canonicalHashHex,
+      expires_at_unix_ms: this.expiresAtUnixMS,
+      submit_ready: false,
+    };
+    return value;
+  }
+}
+
+export class SignedInvocation {
+  constructor(fields) {
+    const value = objectValue(fields, "signed invocation");
+    rejectRuntimeFields(value, ["prepared", "signature", "signer_id", "policy"]);
+    this.prepared = value.prepared instanceof PreparedInvocation
+      ? value.prepared
+      : new PreparedInvocation(objectValue(value.prepared, "prepared"));
+    this.signature = value.signature instanceof InvocationSignature
+      ? value.signature
+      : new InvocationSignature(objectValue(value.signature, "signature"));
+    this.signerId = requiredRuntimeString(value.signer_id, "signer_id");
+    this.policy = value.policy === undefined || value.policy === null
+      ? null
+      : (value.policy instanceof SignerPolicy ? value.policy : new SignerPolicy(value.policy));
+    this.runtime = null;
+    if (!this.submitReady()) {
+      throw invalidRuntime("signed invocation is not submit-ready");
+    }
+  }
+
+  bindRuntime(runtime) {
+    this.runtime = runtime;
+    this.prepared.bindRuntime(runtime);
+    return this;
+  }
+
+  submitReady() {
+    return Boolean(
+      this.signerId &&
+      this.signature.algorithm &&
+      this.signature.signatureBase64 &&
+      this.prepared.descriptorRef &&
+      this.prepared.signingMaterial.canonicalBytesBase64,
+    );
+  }
+
+  async submit() {
+    return requireBoundRuntime(this.runtime).submitSigned(this);
+  }
+
+  toJSON() {
+    const value = {
+      signer_id: this.signerId,
+      prepared: {
+        prepared_id: this.prepared.preparedId,
+        request_id: this.prepared.requestId,
+        descriptor_ref: this.prepared.descriptorRef,
+        canonical_hash_hex: this.prepared.canonicalHashHex,
+        expires_at_unix_ms: this.prepared.expiresAtUnixMS,
+        canonical_bytes_base64: this.prepared.signingMaterial.canonicalBytesBase64,
+        tuple: this.prepared.tuple.toJSON(),
+      },
+      signature: this.signature.toJSON(),
+    };
+    if (this.policy) {
+      value.policy = this.policy.toJSON();
+    }
+    return value;
   }
 }
 
@@ -2413,6 +2677,16 @@ function positiveRuntimeInteger(value, field) {
   return value;
 }
 
+function optionalRuntimeNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidRuntime(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
 function requiredRuntimeString(value, field) {
   if (typeof value !== "string" || value === "") {
     throw invalidRuntime(`${field} must be a non-empty string`);
@@ -2467,6 +2741,43 @@ function validateInvocationHandleMonotonicity(handle) {
   }
   if (handle.result !== null && !handle.terminal) {
     throw invalidRuntime("result requires terminal handle state");
+  }
+}
+
+function validateRuntimeBase64(value, field) {
+  let raw;
+  try {
+    raw = Buffer.from(value, "base64");
+  } catch {
+    throw invalidRuntime(`${field} must be base64`);
+  }
+  if (raw.length === 0 || raw.toString("base64") !== value) {
+    throw invalidRuntime(`${field} must be base64`);
+  }
+}
+
+function validateRuntimeHex(value, field, expectedLength = null) {
+  if (!/^[0-9a-f]+$/i.test(value)) {
+    throw invalidRuntime(`${field} must be hex`);
+  }
+  if (expectedLength !== null && value.length !== expectedLength) {
+    throw invalidRuntime(`${field} must be ${expectedLength} hex characters`);
+  }
+}
+
+function validatePreparedHash(canonicalBytesBase64, canonicalHashHex) {
+  if (!canonicalHashHex) {
+    return;
+  }
+  const normalized = canonicalHashHex.startsWith("sha256:")
+    ? canonicalHashHex.slice("sha256:".length)
+    : canonicalHashHex;
+  validateRuntimeHex(normalized, "canonical_hash_hex", 64);
+  const computed = createHash("sha256")
+    .update(Buffer.from(canonicalBytesBase64, "base64"))
+    .digest("hex");
+  if (computed !== normalized.toLowerCase()) {
+    throw invalidRuntime("canonical_hash_hex must match canonical_bytes_base64");
   }
 }
 

@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: All languages obtain signing material from the Axon delegated helper path.
 steps:
   - action: prepare

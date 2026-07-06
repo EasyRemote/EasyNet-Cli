@@ -12,10 +12,12 @@ import {
   HostBindingClient,
   HostStreamHashState,
   HealthClient,
+  InvocationSignature,
   InvocationHandle,
   IdentityClient,
   InvocationBuilder,
   LocalHostBindingTransport,
+  PreparedInvocation,
   PublicationClient,
   ReceiptChain,
   ReceiptClient,
@@ -29,6 +31,17 @@ const completeDraft = () =>
     .withCallerURA("easynet:///r/example/agent/alice.sdk")
     .withCalleeURA("easynet:///r/example/device/dev-a")
     .withDescriptorRef("opaque-descriptor-ref-from-identity-profile")
+    .withSubjectURA("easynet:///r/example/device/dev-a")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs({})
+    .withContentType("application/json");
+
+const runtimeCoreDraft = () =>
+  new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/alice.sdk")
+    .withCalleeURA("easynet:///r/example/device/dev-a")
+    .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
     .withSubjectURA("easynet:///r/example/device/dev-a")
     .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
     .withCausalContext({ form: "none" })
@@ -92,15 +105,26 @@ const hostBindingRequest = () => ({
   timeout_ms: 30000,
 });
 
-const signedInvocation = () => ({
-  prepared: {
-    tuple: completeDraft().build().toJSON(),
-    canonical_hash_hex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+const preparedInvocationJSON = (overrides = {}) => ({
+  prepared_id: "prepared-example-1",
+  tuple: runtimeCoreDraft().build().toJSON(),
+  signing_material: {
+    algorithm: "ed25519",
+    canonical_bytes_base64: "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
+    args_digest_hex: "0000000000000000000000000000000000000000000000000000000000000000",
+    descriptor_ref: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+    expires_at_unix_ms: 1783000000000,
   },
-  signer_id: "signer-alice-key-1",
-  signature: { signature_base64: "c2lnbmF0dXJl" },
-  policy: { mode: "caller_signing" },
+  submit_ready: false,
+  ...overrides,
 });
+
+const callerSignature = () =>
+  new InvocationSignature({
+    algorithm: "ed25519",
+    signature_base64: "c2lnbmF0dXJl",
+    key_id_hint: "signer-alice-key-1",
+  });
 
 test("feature discovery decodes canonical Runtime Core facts", async () => {
   const client = new Client({
@@ -315,10 +339,103 @@ test("RuntimeClient delegates through injected transport and rejects closed use"
   );
 });
 
+test("RuntimeClient.prepare returns daemon-provided canonical signing material", async () => {
+  const seen = [];
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    prepare: (draftJSON, optionsJSON) => {
+      seen.push({
+        draft: JSON.parse(Buffer.from(draftJSON).toString("utf8")),
+        options: JSON.parse(Buffer.from(optionsJSON).toString("utf8")),
+      });
+      return JSON.stringify(preparedInvocationJSON());
+    },
+  });
+
+  const prepared = await runtime.prepare(runtimeCoreDraft().build(), { deadline_unix_ms: 1783000000000 });
+
+  assert.equal(prepared instanceof PreparedInvocation, true);
+  assert.equal(prepared.submitReady(), false);
+  assert.equal(prepared.preparedId, "prepared-example-1");
+  assert.equal(prepared.signingMaterial.algorithm, "ed25519");
+  assert.equal(prepared.signingMaterial.canonicalBytesBase64, "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=");
+  assert.equal(
+    prepared.signingMaterial.descriptorRef,
+    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+  );
+  assert.equal(seen[0].draft.descriptor_ref, prepared.signingMaterial.descriptorRef);
+  assert.deepEqual(seen[0].options, { deadline_unix_ms: 1783000000000 });
+});
+
+test("PreparedInvocation enforces non-submit-ready canonical material boundaries", () => {
+  assert.throws(
+    () => new PreparedInvocation(preparedInvocationJSON({ submit_ready: true })),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  assert.throws(
+    () => new PreparedInvocation(preparedInvocationJSON({ submit_ready: "false" })),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+
+  assert.throws(
+    () =>
+      new PreparedInvocation(
+        preparedInvocationJSON({
+          signing_material: {
+            ...preparedInvocationJSON().signing_material,
+            descriptor_ref: "easynet:///r/example/ability/other@1.0.0",
+          },
+        }),
+      ),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+
+  assert.throws(
+    () =>
+      new PreparedInvocation(
+        preparedInvocationJSON({
+          canonical_hash_hex: "0000000000000000000000000000000000000000000000000000000000000000",
+        }),
+      ),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("PreparedInvocation signs with caller signature without rewriting daemon material", () => {
+  const prepared = new PreparedInvocation(preparedInvocationJSON());
+  const signed = prepared.signWithCallerSignature(callerSignature());
+  const encoded = signed.toJSON();
+
+  assert.equal(signed.submitReady(), true);
+  assert.equal(encoded.signer_id, "signer-alice-key-1");
+  assert.equal(encoded.signature.algorithm, "ed25519");
+  assert.equal(encoded.signature.signature_base64, "c2lnbmF0dXJl");
+  assert.equal(encoded.prepared.canonical_bytes_base64, prepared.signingMaterial.canonicalBytesBase64);
+  assert.equal(encoded.prepared.descriptor_ref, prepared.descriptorRef);
+});
+
+test("RuntimeClient.submitSigned rejects prepared invocations before transport", async () => {
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    submitSigned: () => {
+      throw new Error("transport must not receive prepared invocation");
+    },
+  });
+
+  await assert.rejects(
+    () => runtime.submitSigned(new PreparedInvocation(preparedInvocationJSON())),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
 test("RuntimeClient submits signed envelopes and observes invocation handles", async () => {
   const seen = [];
   const runtime = new RuntimeClient({
     invoke: () => JSON.stringify({ ok: true }),
+    prepare: (draftJSON) => {
+      seen.push(["prepare", JSON.parse(Buffer.from(draftJSON).toString("utf8"))]);
+      return JSON.stringify(preparedInvocationJSON());
+    },
     submitSigned: (signedJSON) => {
       seen.push(["submit", JSON.parse(Buffer.from(signedJSON).toString("utf8"))]);
       return JSON.stringify({
@@ -371,7 +488,8 @@ test("RuntimeClient submits signed envelopes and observes invocation handles", a
     },
   });
 
-  const signed = signedInvocation();
+  const prepared = await runtime.prepare(runtimeCoreDraft().build());
+  const signed = prepared.signWithCallerSignature(callerSignature());
   const handle = await runtime.submitSigned(signed);
   const result = await handle.awaitResult();
   const cancel = await handle.cancel("after terminal");
@@ -387,9 +505,11 @@ test("RuntimeClient submits signed envelopes and observes invocation handles", a
   assert.equal(refreshed.terminal, true);
   assert.equal(refreshed.events.length, 1);
   assert.equal(refreshed.events[0].terminal, true);
-  assert.equal(seen[0][0], "submit");
-  assert.equal(seen[0][1].signature.signature_base64, "c2lnbmF0dXJl");
-  assert.deepEqual(seen.slice(1), [
+  assert.equal(seen[0][0], "prepare");
+  assert.equal(seen[1][0], "submit");
+  assert.equal(seen[1][1].signature.signature_base64, "c2lnbmF0dXJl");
+  assert.equal(seen[1][1].prepared.canonical_bytes_base64, "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=");
+  assert.deepEqual(seen.slice(2), [
     ["await", 7],
     ["cancel", 7, "after terminal"],
     ["events", 7],
