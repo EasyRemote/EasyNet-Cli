@@ -114,6 +114,57 @@ class ControlIpcTests(unittest.TestCase):
             },
         )
 
+    def test_rejects_product_ability_subscribe_before_socket_write(self) -> None:
+        first, second = socket.socketpair()
+        try:
+            discovery = ControlDiscovery(
+                socket_path="/tmp/control.sock",
+                supported_ipc_versions=IpcVersionRange(1, 1),
+            )
+            client = ControlIpcClient(first, discovery=discovery, ipc_version=1)
+
+            with self.assertRaises(SDKError) as caught:
+                client.subscribe("product-sub", "directory.subscribe")
+
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+            self.assertIn("system.watch_boot", caught.exception.message)
+            second.settimeout(0.05)
+            with self.assertRaises(socket.timeout):
+                second.recv(1)
+        finally:
+            first.close()
+            second.close()
+
+    def test_generic_send_rejects_product_dispatch_frame(self) -> None:
+        first, second = socket.socketpair()
+        try:
+            discovery = ControlDiscovery(
+                socket_path="/tmp/control.sock",
+                supported_ipc_versions=IpcVersionRange(1, 1),
+            )
+            client = ControlIpcClient(first, discovery=discovery, ipc_version=1)
+
+            for frame in (
+                {"type": "invoke", "ability": "observe.health", "args": {}},
+                {"type": "OpenBidi", "ability": "terminal.attach", "args": {}},
+                {
+                    "type": "subscribe",
+                    "subscription_id": "x",
+                    "ability": "events.device.subscribe",
+                },
+            ):
+                with self.subTest(frame=frame):
+                    with self.assertRaises(SDKError) as caught:
+                        client.send(frame)
+                    self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+            second.settimeout(0.05)
+            with self.assertRaises(socket.timeout):
+                second.recv(1)
+        finally:
+            first.close()
+            second.close()
+
     def test_recv_rejects_oversized_frame_before_allocation(self) -> None:
         first, second = socket.socketpair()
         try:

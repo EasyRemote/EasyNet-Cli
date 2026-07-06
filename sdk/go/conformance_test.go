@@ -192,8 +192,11 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	controlOnlyCase := sharedCase(t, root, "daemon-control-only.yaml")
 	requireCaseID(t, controlOnlyCase, "daemon/control_only")
 	requireCaseAction(t, controlOnlyCase, "attach_daemon")
+	requireCaseAction(t, controlOnlyCase, "reject_control_socket_product_call")
 	requireCaseFixture(t, controlOnlyCase, "health.ready.v4.json")
 	requireCaseExpectation(t, controlOnlyCase, "error_code: ControlOnly")
+	requireCaseExpectation(t, controlOnlyCase, "boot_status_subscription: system.watch_boot")
+	requireCaseExpectation(t, controlOnlyCase, "control_socket_product_dispatch: false")
 
 	health, err := NewRuntimeHealthFromJSON(sharedControlOnlyHealthJSON(t, root))
 	if err != nil {

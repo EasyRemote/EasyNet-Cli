@@ -1312,8 +1312,15 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         control_only_case = shared_case("daemon-control-only.yaml")
         self._require_case_id(control_only_case, "daemon/control_only")
         self._require_case_action(control_only_case, "attach_daemon")
+        self._require_case_action(control_only_case, "reject_control_socket_product_call")
         self._require_case_fixture(control_only_case, "health.ready.v4.json")
         self._require_case_expectation(control_only_case, "error_code: ControlOnly")
+        self._require_case_expectation(
+            control_only_case, "boot_status_subscription: system.watch_boot"
+        )
+        self._require_case_expectation(
+            control_only_case, "control_socket_product_dispatch: false"
+        )
 
         health_client = HealthClient(
             SharedHealthTransport(shared_control_only_health_json())

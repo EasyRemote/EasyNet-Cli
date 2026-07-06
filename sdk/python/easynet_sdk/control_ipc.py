@@ -18,6 +18,8 @@ from .errors import ErrorCode, RetryHint, SDKError
 
 CONTROL_IPC_VERSION = 1
 MAX_CONTROL_FRAME_BYTES = 8 * 1024 * 1024
+CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
+_CONTROL_FRAME_TYPES = {"subscribe", "cancel"}
 
 
 @dataclass(frozen=True)
@@ -216,7 +218,7 @@ class ControlIpcClient:
 
     def send(self, frame: Mapping[str, object]) -> None:
         self._require_open()
-        raw = _json_bytes(frame)
+        raw = _json_bytes(_validate_outgoing_control_frame(frame))
         if len(raw) > self.max_frame_bytes:
             raise _invalid_control("control frame exceeds max_frame_bytes")
         packet = struct.pack("<I", len(raw)) + raw
@@ -344,6 +346,40 @@ def _negotiate_ipc_version(daemon_range: IpcVersionRange) -> int:
     return overlap.max
 
 
+def _validate_outgoing_control_frame(frame: Mapping[str, object]) -> dict[str, object]:
+    frame_type = _required_string(frame, "type")
+    if frame_type not in _CONTROL_FRAME_TYPES:
+        raise _invalid_control(
+            "control IPC only accepts boot/status subscribe or cancel frames"
+        )
+    if frame_type == "cancel":
+        return {
+            "type": "cancel",
+            "subscription_id": _clean_string(
+                frame.get("subscription_id"), "subscription_id"
+            ),
+        }
+
+    ability = _clean_string(frame.get("ability"), "ability")
+    if ability != CONTROL_BOOT_STATUS_ABILITY:
+        raise _invalid_control(
+            "control IPC subscriptions are limited to system.watch_boot"
+        )
+    args = frame.get("args", {})
+    if args is None:
+        args = {}
+    if not isinstance(args, Mapping):
+        raise _invalid_control("control subscription args must be an object")
+    return {
+        "type": "subscribe",
+        "subscription_id": _clean_string(
+            frame.get("subscription_id"), "subscription_id"
+        ),
+        "ability": ability,
+        "args": dict(args),
+    }
+
+
 def _json_object(raw: bytes | str, label: str) -> dict[str, object]:
     try:
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
@@ -394,9 +430,11 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     return value
 
 
-def _clean_string(value: str, field_name: str) -> str:
+def _clean_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or value.strip() == "":
         raise _invalid_control(f"{field_name} is required")
+    if value != value.strip():
+        raise _invalid_control(f"{field_name} must not contain surrounding whitespace")
     return value
 
 
