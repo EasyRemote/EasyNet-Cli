@@ -28,8 +28,8 @@ methods behind narrow JSON transport seams, plus DirectoryClient resolve/list
 read-model pages, Runtime Core-backed directory subscription streams, directory
 subscription state seams, and close state seams plus
 IdentityClient descriptor/resource projection, Axon-delegated
-URA/DescriptorRef helper seams, signing-key lifecycle, and signer-handle
-provenance/policy guardrails.
+URA/DescriptorRef helper seams, signing-key lifecycle, signer workflow
+acquisition, and signer-handle provenance/policy guardrails.
 It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref projection,
 invocation-history list/get/trace read-model methods, explicit daemon/Axon
 projection provider seams for Runtime-backed project/verify/verify-chain/causal-ref,
@@ -43,7 +43,8 @@ exposes binding DTO, envelope decode, item/error/terminal frame encoding,
 output-hash folding seams, and hash cursor invariant guardrails plus close state
 seams. MissionClient exposes run/run-file/track/cancel
 Invocation carrier builders plus MissionStatus and MissionEventPage projection
-seams, bounded Mission event tailing, and close state seams. AdminClient
+seams, bounded Mission event tailing, MissionPlan EAL rendering, complete child
+Invocation fact conformance, and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, explicit daemon-owned GatewayStatus provider seams, GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential

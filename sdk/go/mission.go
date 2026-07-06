@@ -259,13 +259,15 @@ type MissionChildInvocationConformance struct {
 	MissingSteps           []string
 	UnexpectedSteps        []string
 	AbilityMismatchedSteps []string
+	IncompleteFactSteps    []string
 	ReceiptBackedSteps     []string
 }
 
 func (c MissionChildInvocationConformance) Passed() bool {
 	return len(c.MissingSteps) == 0 &&
 		len(c.UnexpectedSteps) == 0 &&
-		len(c.AbilityMismatchedSteps) == 0
+		len(c.AbilityMismatchedSteps) == 0 &&
+		len(c.IncompleteFactSteps) == 0
 }
 
 func (c MissionChildInvocationConformance) RequirePassed() error {
@@ -284,6 +286,7 @@ func (c MissionChildInvocationConformance) RequirePassed() error {
 			"missing_steps":            append([]string(nil), c.MissingSteps...),
 			"unexpected_steps":         append([]string(nil), c.UnexpectedSteps...),
 			"ability_mismatched_steps": append([]string(nil), c.AbilityMismatchedSteps...),
+			"incomplete_fact_steps":    append([]string(nil), c.IncompleteFactSteps...),
 		}),
 	}
 }
@@ -439,9 +442,16 @@ func (p *MissionPlan) ValidateChildInvocations(status MissionStatus) (MissionChi
 	}
 
 	abilityMismatched := map[string]struct{}{}
+	incompleteFacts := map[string]struct{}{}
 	for stepID, intent := range expectedByStep {
 		child, ok := observedByStep[stepID]
-		if !ok || child.Ability == nil || *child.Ability == "" {
+		if !ok {
+			continue
+		}
+		if !missionChildInvocationFactComplete(child) {
+			incompleteFacts[stepID] = struct{}{}
+		}
+		if child.Ability == nil || *child.Ability == "" {
 			continue
 		}
 		if *child.Ability != intent.Ability {
@@ -456,6 +466,7 @@ func (p *MissionPlan) ValidateChildInvocations(status MissionStatus) (MissionChi
 		MissingSteps:           sortedSet(setDifference(expected, observed)),
 		UnexpectedSteps:        sortedSet(setDifference(observed, expected)),
 		AbilityMismatchedSteps: sortedSet(abilityMismatched),
+		IncompleteFactSteps:    sortedSet(incompleteFacts),
 		ReceiptBackedSteps:     sortedSet(setIntersection(receiptBacked, expected)),
 	}
 	return conformance, conformance.RequirePassed()
@@ -812,6 +823,14 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 		dto.ChildReceipts == nil || dto.OutputRefs == nil || dto.Metadata == nil {
 		return MissionStatus{}, invalidProfilePayload(missionProfile, "invalid mission status projection", nil)
 	}
+	for _, invocation := range dto.ChildInvocations {
+		if !missionChildInvocationFactComplete(invocation) {
+			return MissionStatus{}, invalidProfilePayload(missionProfile, "incomplete mission child invocation fact", nil)
+		}
+		if invocation.Receipt != nil && !missionChildInvocationReceiptFactComplete(invocation.Receipt) {
+			return MissionStatus{}, invalidProfilePayload(missionProfile, "incomplete mission child invocation receipt fact", nil)
+		}
+	}
 	for _, receipt := range dto.ChildReceipts {
 		if receipt.ReceiptURA == "" || receipt.ReceiptHash == "" {
 			return MissionStatus{}, invalidProfilePayload(missionProfile, "invalid mission child receipt projection", nil)
@@ -850,6 +869,35 @@ func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
 		Error:              sdkErr,
 		Metadata:           dto.Metadata,
 	}, nil
+}
+
+func missionChildInvocationFactComplete(invocation MissionChildInvocation) bool {
+	return stringPtrHasValue(invocation.StepID) &&
+		stringPtrHasValue(invocation.RequestID) &&
+		stringPtrHasValue(invocation.TraceID) &&
+		stringPtrHasValue(invocation.Ability) &&
+		stringPtrHasValue(invocation.InvocationURA) &&
+		stringPtrHasValue(invocation.CallerURA) &&
+		stringPtrHasValue(invocation.CalleeURA) &&
+		stringPtrHasValue(invocation.SubjectURA) &&
+		stringPtrHasValue(invocation.MetadataState) &&
+		invocation.LedgerState != nil
+}
+
+func missionChildInvocationReceiptFactComplete(receipt map[string]any) bool {
+	receiptURA, ok := receipt["receipt_ura"].(string)
+	if !ok || strings.TrimSpace(receiptURA) == "" {
+		return false
+	}
+	receiptHash, ok := receipt["receipt_hash"].(string)
+	if !ok || strings.TrimSpace(receiptHash) == "" {
+		return false
+	}
+	return true
+}
+
+func stringPtrHasValue(value *string) bool {
+	return value != nil && strings.TrimSpace(*value) != ""
 }
 
 func validateMissionChildReceiptAnchors(parentReceiptURA *string, invocations []MissionChildInvocation, receipts []MissionChildReceipt) error {

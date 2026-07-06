@@ -485,10 +485,37 @@ func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing
 	requireCaseExpectation(t, localSigningCase, "signer_handle_policy_usage: invocation.sign")
 	requireCaseExpectation(t, localSigningCase, "signer_handle_source: daemon_key_inventory")
 	requireCaseExpectation(t, localSigningCase, "forged_signer_handle_rejected: true")
+	requireCaseExpectation(t, localSigningCase, "signer_workflow_acquisition_provider_bound: true")
 	forgedHandle := signerHandle("")
 	forgedHandle.Metadata = map[string]any{"source": "product_local_fixture"}
 	if _, err := NewSigner(forgedHandle, NewStaticSignatureProvider(sharedInvocationSignature())); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("forged signer handle error = %v, want %s", err, ErrInvalidArgument)
+	}
+	identityClient, err := NewIdentityClient(IdentityTransportFunc{
+		SignerFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			var request SignerRequest
+			if err := json.Unmarshal(requestJSON, &request); err != nil {
+				t.Fatalf("decode signer acquisition request: %v", err)
+			}
+			if request.Usage != "invocation.sign" {
+				t.Fatalf("signer acquisition usage = %q", request.Usage)
+			}
+			return []byte(signerHandleJSON), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewIdentityClient(acquisition): %v", err)
+	}
+	acquiredSigner, err := identityClient.AcquireSigner(context.Background(), SignerRequest{
+		OwnerURA: "easynet:///r/example/agent/alice.sdk",
+		KeyID:    "alice-key-1",
+		Usage:    "invocation.sign",
+	}, NewStaticSignatureProvider(sharedInvocationSignature()))
+	if err != nil {
+		t.Fatalf("AcquireSigner: %v", err)
+	}
+	if acquiredSigner.Handle().SignerID != "signer-alice-key-1" {
+		t.Fatalf("unexpected acquired signer: %#v", acquiredSigner.Handle())
 	}
 	if !signed.SubmitReady() || signed.Prepared().SubmitReady() {
 		t.Fatalf("local signing did not produce SignedInvocation boundary")
@@ -1495,6 +1522,8 @@ func TestGoMissionFacadeExecutesSharedPlanChildInvocationConformanceCase(t *test
 		"rejects_foreign_step_output: true",
 		"rejects_structured_plan_field: true",
 		"receipt_backed_steps: true",
+		"complete_child_invocation_facts: true",
+		"rejects_incomplete_child_invocation_fact: true",
 		"sdk_executes_mission: false",
 	} {
 		requireCaseExpectation(t, planCase, expected)
@@ -1545,8 +1574,18 @@ func TestGoMissionFacadeExecutesSharedPlanChildInvocationConformanceCase(t *test
 	if !conformance.Passed() || len(conformance.ReceiptBackedSteps) != 1 || conformance.ReceiptBackedSteps[0] != "health" {
 		t.Fatalf("shared plan conformance mismatch: %#v", conformance)
 	}
+	if len(conformance.IncompleteFactSteps) != 0 {
+		t.Fatalf("shared plan reported incomplete child facts: %#v", conformance)
+	}
 	if _, err := plan.ValidateChildInvocations(status); !IsCode(err, ErrProtocol) {
 		t.Fatalf("missing child Invocation facts error = %v, want %s", err, ErrProtocol)
+	}
+	if _, err := NewMissionStatusFromJSON([]byte(strings.ReplaceAll(
+		string(sharedFixture(t, root, "mission-status.v4.json")),
+		`"request_id": "req-1"`,
+		`"request_id": null`,
+	))); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete child Invocation fact error = %v, want %s", err, ErrInvalidArgument)
 	}
 
 	foreign, err := NewMissionPlan("foreign")
@@ -2482,6 +2521,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Type:  reflect.TypeOf((*IdentityClient)(nil)),
 			Operations: map[string]string{
 				"AbilityURAFromDescriptorRef":   "directory_identity.identity.ability_ura_from_descriptor_ref",
+				"AcquireSigner":                 "directory_identity.identity.acquire_signer",
 				"BuildDescriptorRef":            "directory_identity.identity.build_descriptor_ref",
 				"BuildResourceRef":              "directory_identity.identity.build_resource_ref",
 				"BuildURA":                      "directory_identity.identity.build_ura",
@@ -2865,7 +2905,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Profile:  "directory_identity",
 			Surfaces: []sharedConsumerCoverageSurface{
 				{Type: reflect.TypeOf((*DirectoryClient)(nil)), Methods: []string{"Resolve", "ListAbilities"}},
-				{Type: reflect.TypeOf((*IdentityClient)(nil)), Methods: []string{"BuildResourceRef", "Signer", "RegisterSigningKey", "ListSigningKeys"}},
+				{Type: reflect.TypeOf((*IdentityClient)(nil)), Methods: []string{"BuildResourceRef", "Signer", "AcquireSigner", "RegisterSigningKey", "ListSigningKeys"}},
 			},
 		},
 		{

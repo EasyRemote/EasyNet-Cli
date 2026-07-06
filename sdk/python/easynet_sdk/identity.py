@@ -956,6 +956,16 @@ class IdentityClient:
             raise _transport_error("identity signer failed", exc) from exc
         return SignerHandle.from_json(raw)
 
+    def acquire_signer(self, request: SignerRequest, provider: object):
+        """Obtain a daemon-authorized handle and return a Runtime Core signer."""
+
+        self._require_open()
+        if provider is None or not callable(getattr(provider, "sign", None)):
+            raise _invalid_identity("signature provider is required")
+        from .signing import Signer
+
+        return Signer(handle=self.signer(request), provider=provider)
+
     def close(self) -> None:
         self._lifecycle.close(self.transport)
 

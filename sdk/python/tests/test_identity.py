@@ -16,6 +16,8 @@ from easynet_sdk import (
     SigningKeyListRequest,
     SigningKeyRegistrationRequest,
     SigningKeyRevokeRequest,
+    StaticSignatureProvider,
+    InvocationSignature,
     is_code,
 )
 
@@ -559,6 +561,41 @@ class IdentityTests(unittest.TestCase):
         )
         self.assertEqual(signer.signer_id, "signer-alice-key-1")
         self.assertEqual(signer.algorithm, "ed25519")
+
+    def test_acquire_signer_binds_provider_to_daemon_handle(self) -> None:
+        transport = MemoryIdentityTransport()
+        client = IdentityClient(transport)
+
+        with self.assertRaises(SDKError) as caught:
+            client.acquire_signer(
+                SignerRequest(
+                    owner_ura="easynet:///r/example/agent/alice.sdk",
+                    key_id="alice-key-1",
+                    usage="invocation.sign",
+                ),
+                None,
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_request)
+
+        signer = client.acquire_signer(
+            SignerRequest(
+                owner_ura="easynet:///r/example/agent/alice.sdk",
+                key_id="alice-key-1",
+                usage="invocation.sign",
+            ),
+            StaticSignatureProvider(
+                InvocationSignature(
+                    algorithm="ed25519",
+                    signature_base64="c2lnbmF0dXJl",
+                    key_id_hint="signer-alice-key-1",
+                )
+            ),
+        )
+
+        self.assertEqual(signer.handle.signer_id, "signer-alice-key-1")
+        assert transport.seen_request is not None
+        self.assertEqual(transport.seen_request["usage"], "invocation.sign")
 
     def test_signer_handle_rejects_forged_source(self) -> None:
         with self.assertRaises(SDKError) as caught:

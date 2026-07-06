@@ -108,6 +108,8 @@ from easynet_sdk import (
     SDKError,
     Signer,
     SignerHandle,
+    SignerRequest,
+    StaticSignatureProvider,
     MAX_SURFACE_PAGE_SIZE,
     BidiFrame,
     BidiSession,
@@ -320,6 +322,33 @@ class SharedDirectoryTransport:
     def subscribe_directory(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_subscription_request)
         return self.subscription_json
+
+    def close(self) -> None:
+        return None
+
+
+class SharedSignerAcquisitionTransport:
+    def __init__(self) -> None:
+        self.seen_request: dict[str, object] = {}
+
+    def signer(self, request_json: bytes) -> bytes:
+        self.seen_request = json.loads(request_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "profile": "directory_identity",
+                "signer_id": "signer-alice-key-1",
+                "owner_ura": "easynet:///r/example/agent/alice.sdk",
+                "key_id": "alice-key-1",
+                "algorithm": "ed25519",
+                "policy": {
+                    "mode": "local_daemon_signing",
+                    "usage": "invocation.sign",
+                },
+                "metadata": {"source": "daemon_key_inventory"},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
 
     def close(self) -> None:
         return None
@@ -1529,6 +1558,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_expectation(
             local_signing_case, "forged_signer_handle_rejected: true"
         )
+        self._require_case_expectation(
+            local_signing_case, "signer_workflow_acquisition_provider_bound: true"
+        )
         signer_handle = shared_signer_handle()
         forged_handle = SignerHandle(
             profile=signer_handle.profile,
@@ -1547,6 +1579,17 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     signature_base64="c2lnbmF0dXJl",
                 ),
             ).sign(prepared)
+        signer_transport = SharedSignerAcquisitionTransport()
+        acquired_signer = IdentityClient(signer_transport).acquire_signer(
+            SignerRequest(
+                owner_ura="easynet:///r/example/agent/alice.sdk",
+                key_id="alice-key-1",
+                usage="invocation.sign",
+            ),
+            StaticSignatureProvider(shared_invocation_signature()),
+        )
+        self.assertEqual(acquired_signer.handle.signer_id, "signer-alice-key-1")
+        self.assertEqual(signer_transport.seen_request["usage"], "invocation.sign")
         local_signed = Signer.from_signature(
             shared_signer_handle(),
             InvocationSignature(
@@ -2695,6 +2738,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "rejects_foreign_step_output: true",
             "rejects_structured_plan_field: true",
             "receipt_backed_steps: true",
+            "complete_child_invocation_facts: true",
+            "rejects_incomplete_child_invocation_fact: true",
             "sdk_executes_mission: false",
         ):
             self._require_case_expectation(plan_case, expectation)
@@ -2723,6 +2768,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         conformance = observed_only.validate_child_invocations(status)
         self.assertTrue(conformance.passed)
         self.assertEqual(conformance.receipt_backed_steps, ("health",))
+        self.assertEqual(conformance.incomplete_fact_steps, ())
 
         with self.assertRaises(SDKError) as missing:
             plan.validate_child_invocations(status)
@@ -2731,6 +2777,13 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             missing.exception.details["reason"],
             "mission_child_invocation_mismatch",
         )
+        with self.assertRaises(SDKError) as incomplete:
+            MissionStatus.from_json(
+                shared_fixture("mission-status.v4.json").replace(
+                    b'"request_id": "req-1"', b'"request_id": null'
+                )
+            )
+        self.assertEqual(incomplete.exception.code, ErrorCode.INVALID_ARGUMENT)
 
         foreign = MissionPlan("foreign").step("er.src")
         with self.assertRaises(SDKError) as foreign_error:
@@ -3722,6 +3775,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 IdentityClient,
                 {
                     "ability_address": "directory_identity.identity.ability_address",
+                    "acquire_signer": "directory_identity.identity.acquire_signer",
                     "agent_ura": "directory_identity.identity.agent_ura",
                     "build_list_signing_keys_invocation": "directory_identity.identity.build_list_signing_keys_invocation",
                     "build_register_signing_key_invocation": "directory_identity.identity.build_register_signing_key_invocation",
@@ -4039,7 +4093,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 "directory_identity",
                 (
                     (DirectoryClient, ("resolve", "list_abilities")),
-                    (IdentityClient, ("build_resource_ref", "signer", "register_signing_key", "list_signing_keys")),
+                    (IdentityClient, ("build_resource_ref", "signer", "acquire_signer", "register_signing_key", "list_signing_keys")),
                 ),
             ),
             (

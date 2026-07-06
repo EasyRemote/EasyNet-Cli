@@ -30,7 +30,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
 | typed errors | Runtime Core | provider-backed | provider-backed | P1 language error classes and package-level source refs remain incomplete. |
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
-| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | Daemon-owned signer-handle provenance guardrails exist; live signer acquisition/keyring policy cutover remains incomplete. |
+| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition and signer-handle provenance guardrails exist; live daemon keyring policy cutover remains incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; concrete product wrapper stream adapters remain incomplete outside the daemon SDK. |
@@ -38,7 +38,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus cross-invocation chain signature and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
-| mission | Mission | provider-backed | provider-backed | SDK plan rendering and child Invocation fact conformance exist; daemon-backed child Invocation execution behavior, live stream adapters, and scheduler policy remain incomplete outside the SDK plan/fact facade. |
+| mission | Mission | provider-backed | provider-backed | SDK plan rendering and complete child Invocation fact conformance exist; daemon-side child Invocation execution, live stream adapters, and scheduler policy remain incomplete outside the SDK facade. |
 | admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
 | events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
@@ -78,8 +78,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   guardrails for Go/Python, C ABI `directory.subscribe` carrier/projection
   symbols, Identity URA/DescriptorRef projection guardrails, and identity
   signing-key register/list/revoke builder/projection guardrails plus
-  signer-handle provenance/policy guardrails exist; live signer acquisition and
-  broader external language-facade cutovers remain incomplete.
+  signer workflow acquisition and signer-handle provenance/policy guardrails
+  exist; live daemon keyring policy and broader external language-facade
+  cutovers remain incomplete.
 - Publication ResourceRef/package validation/plugin install/deploy-unpublish
   carrier and lifecycle guardrails exist for Rust/C ABI; Go now executes
   list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
@@ -93,9 +94,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 - Mission carrier/status/events guardrails exist for Rust/C ABI over
   `mission.run/track/cancel/events`; Go/Python C ABI transports now execute
   run/run-file/track/cancel/events through Runtime Core invoke, and Go/Python
-  expose bounded page-based Mission event tail state machines. Stream-backed
-  live adapters, daemon-backed child Invocation execution behavior conformance,
-  scheduler/retry policy, and backend automation cutover remain incomplete.
+  expose bounded page-based Mission event tail state machines plus complete
+  child Invocation fact conformance. Stream-backed live adapters, daemon-side
+  child Invocation execution, scheduler/retry policy, and backend automation
+  cutover remain incomplete.
 - Events Directory/device/invocation stream carrier guardrails, session stream
   carrier guardrails, DirectoryEvent/drop/terminal projection guardrails, and
   bounded device event history carrier/page guardrails exist for Rust/C ABI over
@@ -156,7 +158,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   subscription streams, directory subscription state seams, and close state
   seams plus `IdentityClient` descriptor, identity, Axon-delegated
   URA/DescriptorRef helper seams, ResourceRef, signing-key lifecycle,
-  signer-handle projection, and close state seams; signing-key live execution
+  signer-handle projection, signer workflow acquisition, and close state seams; signing-key live execution
   adapters, concrete daemon carriers, and backend route cutover remain
   incomplete.
 - Go Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref
@@ -187,9 +189,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel/events
   execution through Runtime Core invoke, daemon `MissionStatus` and
   `MissionEventPage` projection seams, bounded page-based Mission event tailing,
-  and close state seams; daemon stream-backed live adapters, child Invocation
-  behavior conformance, scheduler/retry policy, and backend automation cutover
-  remain incomplete.
+  SDK-owned `MissionPlan` EAL rendering, complete child Invocation fact
+  conformance, and close state seams; daemon stream-backed live adapters,
+  daemon-side child Invocation execution, scheduler/retry policy, and backend
+  automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
   session-list, hub join/leave, pairing preflight/create/validate, credential
   verification, device-session create/delete, device-revoke Runtime
@@ -279,7 +282,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   `canonical_ability_descriptor_ref`, and `project_descriptor_ref` helper
   facades plus an `AbilityAddress` projection for owner/subject facts consumed
   by generic host addressing, `IdentityClient` descriptor, identity, ResourceRef,
-  signing-key lifecycle, signer-handle projection/provenance guardrails, and
+  signing-key lifecycle, signer-handle projection/provenance guardrails, signer workflow acquisition, and
   close state seams; Python now has private C ABI v4 identity projection, profile carrier
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, plus C ABI-backed signing-key register/list/revoke
@@ -351,7 +354,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
   gates, and product Invocation direct daemon UDS unary/server-stream/bidi transport plus
   explicit direct-runtime prepare/submit/handle delegation is available through
-  the SDK facade, while live daemon-owned signer acquisition/keyring policy, daemon-backed
+  the SDK facade, while live daemon keyring policy, daemon-backed
   MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover and RFC-007 receipt URA construction remain
   incomplete.
@@ -363,10 +366,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   event-page projection, SDK-owned Daemon profile bridge dispatch/projection
   glue, page-based Mission event access, SDK-owned bounded Mission event
   projection tailing, SDK-owned `MissionPlan` EAL rendering and
-  child Invocation fact conformance projection, raw mission carrier audit gate for
+  complete child Invocation fact conformance projection, raw mission carrier audit gate for
   `mission.run/track/cancel/events`, and close state seams;
-  daemon stream-backed live adapters, daemon-backed child Invocation execution
-  behavior conformance, and scheduler/retry policy remain incomplete.
+  daemon stream-backed live adapters, daemon-side child Invocation execution,
+  and scheduler/retry policy remain incomplete.
 - Python Admin + Gateway facade exposes `AdminClient` agent
   list/start/stop/refresh, session-list, hub join/leave, pairing
   preflight/create/validate, credential verification, device-session

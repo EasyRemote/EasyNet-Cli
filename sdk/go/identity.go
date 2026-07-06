@@ -487,6 +487,20 @@ func (c *IdentityClient) Signer(ctx context.Context, req SignerRequest) (SignerH
 	return NewSignerHandleFromJSON(raw)
 }
 
+// AcquireSigner obtains a daemon-authorized signer handle and binds it to a
+// Runtime Core signature provider without exposing handle composition to
+// product callers.
+func (c *IdentityClient) AcquireSigner(ctx context.Context, req SignerRequest, provider SignatureProvider) (Signer, error) {
+	if provider == nil {
+		return Signer{}, invalidProfilePayload(directoryIdentityProfile, "signature provider is required", nil)
+	}
+	handle, err := c.Signer(ctx, req)
+	if err != nil {
+		return Signer{}, err
+	}
+	return NewSigner(handle, provider)
+}
+
 func (c *IdentityClient) requireReady(ctx context.Context) error {
 	if c == nil || c.transport == nil {
 		return invalidProfileClient(directoryIdentityProfile, "identity client is not initialized")

@@ -1,5 +1,6 @@
 import json
 import unittest
+from dataclasses import replace
 
 from easynet_sdk import MissionExecutionAdapter, ErrorCode, SDKError, is_code
 from easynet_sdk.mission import (
@@ -420,6 +421,27 @@ class MissionTests(unittest.TestCase):
                 )
             )
         self.assertEqual(mismatch.exception.details["ability_mismatched_steps"], ["health"])
+
+        incomplete_child = replace(status.child_invocations[0], invocation_ura=None)
+        incomplete_status = replace(status, child_invocations=(incomplete_child,))
+        with self.assertRaises(SDKError) as incomplete:
+            plan.validate_child_invocations(incomplete_status)
+        self.assertEqual(
+            incomplete.exception.details["incomplete_fact_steps"], ["health"]
+        )
+
+    def test_mission_status_rejects_incomplete_child_invocation_fact(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            MissionStatus.from_json(
+                MISSION_STATUS_JSON.replace(b'"request_id": "req-1"', b'"request_id": null')
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as receipt:
+            MissionStatus.from_json(
+                MISSION_STATUS_JSON.replace(b'"receipt_hash": "bbbb"', b'"receipt_hash": ""')
+            )
+        self.assertTrue(is_code(receipt.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_mission_execution_adapter_runs_tracks_and_cancels_missions(self) -> None:
         transport = MemoryMissionTransport()

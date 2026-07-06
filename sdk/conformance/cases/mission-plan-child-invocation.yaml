@@ -23,4 +23,6 @@ expect:
   rejects_foreign_step_output: true
   rejects_structured_plan_field: true
   receipt_backed_steps: true
+  complete_child_invocation_facts: true
+  rejects_incomplete_child_invocation_fact: true
   sdk_executes_mission: false

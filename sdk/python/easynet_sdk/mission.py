@@ -377,6 +377,15 @@ class MissionStatus:
         parsed_child_invocations = tuple(
             _child_invocation(item) for item in child_invocations
         )
+        for invocation in parsed_child_invocations:
+            if not _child_invocation_fact_complete(invocation):
+                raise _invalid_mission("incomplete mission child invocation fact")
+            if invocation.receipt is not None and not _child_invocation_receipt_fact_complete(
+                invocation.receipt
+            ):
+                raise _invalid_mission(
+                    "incomplete mission child invocation receipt fact"
+                )
         parsed_child_receipts = tuple(_child_receipt(item) for item in child_receipts)
         parent_receipt_ura = _optional_string(
             decoded.get("parent_receipt_ura"), "parent_receipt_ura"
@@ -530,6 +539,7 @@ class MissionChildInvocationConformance:
     missing_steps: tuple[str, ...]
     unexpected_steps: tuple[str, ...]
     ability_mismatched_steps: tuple[str, ...]
+    incomplete_fact_steps: tuple[str, ...]
     receipt_backed_steps: tuple[str, ...]
 
     @property
@@ -538,6 +548,7 @@ class MissionChildInvocationConformance:
             not self.missing_steps
             and not self.unexpected_steps
             and not self.ability_mismatched_steps
+            and not self.incomplete_fact_steps
         )
 
     def require_passed(self) -> None:
@@ -555,6 +566,7 @@ class MissionChildInvocationConformance:
                 "missing_steps": list(self.missing_steps),
                 "unexpected_steps": list(self.unexpected_steps),
                 "ability_mismatched_steps": list(self.ability_mismatched_steps),
+                "incomplete_fact_steps": list(self.incomplete_fact_steps),
             },
         )
 
@@ -669,6 +681,12 @@ class MissionPlan:
             and observed_by_step[step_id].ability is not None
             and observed_by_step[step_id].ability != intent.ability
         }
+        incomplete_facts = {
+            step_id
+            for step_id in expected_by_step
+            if step_id in observed_by_step
+            and not _child_invocation_fact_complete(observed_by_step[step_id])
+        }
         receipt_backed = {
             child.step_id
             for child in status.child_invocations
@@ -681,6 +699,7 @@ class MissionPlan:
             missing_steps=tuple(sorted(expected - observed)),
             unexpected_steps=tuple(sorted(observed - expected)),
             ability_mismatched_steps=tuple(sorted(ability_mismatched)),
+            incomplete_fact_steps=tuple(sorted(incomplete_facts)),
             receipt_backed_steps=tuple(sorted(receipt_backed & expected)),
         )
         conformance.require_passed()
@@ -1028,6 +1047,33 @@ def _child_invocation(value: object) -> MissionChildInvocation:
         ledger_state=value.get("ledger_state"),
         receipt=_optional_mapping(value.get("receipt"), "receipt"),
     )
+
+
+def _child_invocation_fact_complete(invocation: MissionChildInvocation) -> bool:
+    return (
+        _has_text(invocation.step_id)
+        and _has_text(invocation.request_id)
+        and _has_text(invocation.trace_id)
+        and _has_text(invocation.ability)
+        and _has_text(invocation.invocation_ura)
+        and _has_text(invocation.caller_ura)
+        and _has_text(invocation.callee_ura)
+        and _has_text(invocation.subject_ura)
+        and _has_text(invocation.metadata_state)
+        and invocation.ledger_state is not None
+    )
+
+
+def _child_invocation_receipt_fact_complete(
+    receipt: Mapping[str, object],
+) -> bool:
+    return _has_text(receipt.get("receipt_ura")) and _has_text(
+        receipt.get("receipt_hash")
+    )
+
+
+def _has_text(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _child_receipt(value: object) -> MissionChildReceipt:

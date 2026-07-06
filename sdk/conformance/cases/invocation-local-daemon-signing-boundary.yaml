@@ -18,3 +18,4 @@ expect:
   signer_handle_policy_usage: invocation.sign
   signer_handle_source: daemon_key_inventory
   forged_signer_handle_rejected: true
+  signer_workflow_acquisition_provider_bound: true

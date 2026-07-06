@@ -404,6 +404,39 @@ func TestMissionPlanValidatesChildInvocationFacts(t *testing.T) {
 	if !ok || len(mismatchedSteps) != 1 || mismatchedSteps[0] != "health" {
 		t.Fatalf("ability mismatch details = %#v", sdkErr.Details)
 	}
+
+	incompleteStatus := status
+	incompleteChild := incompleteStatus.ChildInvocations[0]
+	incompleteChild.InvocationURA = nil
+	incompleteStatus.ChildInvocations = []MissionChildInvocation{incompleteChild}
+	_, err = plan.ValidateChildInvocations(incompleteStatus)
+	if err == nil || !errors.As(err, &sdkErr) {
+		t.Fatalf("incomplete child fact error = %#v", err)
+	}
+	incompleteSteps, ok := sdkErr.Details["incomplete_fact_steps"].([]string)
+	if !ok || len(incompleteSteps) != 1 || incompleteSteps[0] != "health" {
+		t.Fatalf("incomplete fact details = %#v", sdkErr.Details)
+	}
+}
+
+func TestMissionStatusRejectsIncompleteChildInvocationFact(t *testing.T) {
+	_, err := NewMissionStatusFromJSON([]byte(strings.ReplaceAll(
+		missionStatusFixtureJSON,
+		`"request_id": "req-1"`,
+		`"request_id": null`,
+	)))
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete child invocation fact error = %v, want %s", err, ErrInvalidArgument)
+	}
+
+	_, err = NewMissionStatusFromJSON([]byte(strings.ReplaceAll(
+		missionStatusFixtureJSON,
+		`"receipt_hash": "bbbb"`,
+		`"receipt_hash": ""`,
+	)))
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete child invocation receipt fact error = %v, want %s", err, ErrInvalidArgument)
+	}
 }
 
 func TestMissionEventTailerReportsDroppedEvents(t *testing.T) {

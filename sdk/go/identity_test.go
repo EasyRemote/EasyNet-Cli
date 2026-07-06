@@ -350,6 +350,44 @@ func TestIdentitySigningKeyLifecycleAndSignerHandle(t *testing.T) {
 	}
 }
 
+func TestIdentityAcquireSignerBindsProviderToDaemonHandle(t *testing.T) {
+	transport := &memoryIdentityTransport{signerJSON: signerHandleJSON}
+	client, err := NewIdentityClient(transport)
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+
+	if _, err := client.AcquireSigner(context.Background(), SignerRequest{
+		OwnerURA: "easynet:///r/example/agent/alice.sdk",
+		KeyID:    "alice-key-1",
+		Usage:    "invocation.sign",
+	}, nil); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("nil provider error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if transport.seenRequest != nil {
+		t.Fatalf("nil provider should fail before transport call: %#v", transport.seenRequest)
+	}
+
+	signer, err := client.AcquireSigner(context.Background(), SignerRequest{
+		OwnerURA: "easynet:///r/example/agent/alice.sdk",
+		KeyID:    "alice-key-1",
+		Usage:    "invocation.sign",
+	}, NewStaticSignatureProvider(InvocationSignature{
+		Algorithm:       "ed25519",
+		SignatureBase64: "c2lnbmF0dXJl",
+		KeyIDHint:       "signer-alice-key-1",
+	}))
+	if err != nil {
+		t.Fatalf("AcquireSigner: %v", err)
+	}
+	if signer.Handle().SignerID != "signer-alice-key-1" {
+		t.Fatalf("unexpected acquired signer: %#v", signer.Handle())
+	}
+	if transport.seenRequest["usage"] != "invocation.sign" {
+		t.Fatalf("signer request not delegated: %#v", transport.seenRequest)
+	}
+}
+
 func TestIdentitySignerHandleRejectsForgedSource(t *testing.T) {
 	_, err := NewSignerHandleFromJSON([]byte(`{
 		"profile":"directory_identity",
