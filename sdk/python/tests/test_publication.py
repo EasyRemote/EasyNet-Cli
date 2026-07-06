@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Mapping
 
 from easynet_sdk import (
     AbilityDeployRequest,
@@ -409,12 +410,35 @@ class _PublicationHostClient:
 
 
 class _PublicationUraProjection:
-    def __init__(self, kind: str) -> None:
+    def __init__(
+        self, kind: str, components: Mapping[str, object] | None = None
+    ) -> None:
         self.kind = kind
+        self.components = dict(components or {})
 
 
 class _PublicationAddressing:
     def parse_ura(self, value: str) -> _PublicationUraProjection:
+        if value == "easynet:///r/example/agent/alice.caesura":
+            return _PublicationUraProjection(
+                "agent",
+                {
+                    "owner_kind": "user",
+                    "user_id": "alice",
+                    "agent_id": "caesura",
+                },
+            )
+        if value == "easynet:///r/example/agent/bob.caesura":
+            return _PublicationUraProjection(
+                "agent",
+                {
+                    "owner_kind": "user",
+                    "user_id": "bob",
+                    "agent_id": "caesura",
+                },
+            )
+        if value == "easynet:///r/example/agent/alice.opaque":
+            return _PublicationUraProjection("agent", {"owner_kind": "user"})
         if "/ability/" in value:
             return _PublicationUraProjection("ability")
         if "/device/" in value:
@@ -609,6 +633,10 @@ class PublicationTests(unittest.TestCase):
                 "ability_ura": "easynet:///r/example/ability/device.dev-a.er.fn",
                 "owner_ura": "easynet:///r/example/device/dev-a",
                 "metadata": {"owner_user": "alice"},
+            },
+            {
+                "ability_ura": "easynet:///r/example/ability/alice.opaque.chat",
+                "owner_ura": "easynet:///r/example/agent/alice.opaque",
             },
         ]
         client = _PublicationHostClient({"abilities": rows})

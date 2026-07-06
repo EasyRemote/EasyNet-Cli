@@ -3836,6 +3836,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "ability_ura_from_descriptor_ref": "directory_identity.identity.ability_ura_from_descriptor_ref",
                     "canonical_ability_descriptor_ref": "directory_identity.identity.canonical_ability_descriptor_ref",
                     "close": "directory_identity.identity.close",
+                    "descriptor_bound_resource_subject_ura": "directory_identity.identity.descriptor_bound_resource_subject_ura",
                     "device_ability_ura": "directory_identity.identity.device_ability_ura",
                     "device_agent_ura": "directory_identity.identity.device_agent_ura",
                     "device_ura": "directory_identity.identity.device_ura",

@@ -1506,13 +1506,31 @@ def _record_belongs_to_user(
         parsed = _parse_ura_with_addressing(addressing, record.owner_ura)
     except SDKError:
         return False
-    if str(parsed.kind) == "user":
-        return record.owner_ura.rstrip("/").endswith(f"/user/{user_id}")
-    if str(parsed.kind) != "agent":
+    kind = str(parsed.kind)
+    if kind == "user":
+        return _projection_component_equals(parsed, user_id, "user_id")
+    if kind != "agent":
         return False
-    marker = "/agent/"
-    _, _, tail = record.owner_ura.partition(marker)
-    return tail.split(".", 1)[0] == user_id
+    owner_kind = _projection_component_string(parsed, "owner_kind")
+    if owner_kind and owner_kind != "user":
+        return False
+    return _projection_component_equals(parsed, user_id, "user_id")
+
+
+def _projection_component_equals(
+    projection: _UraProjectionLike, expected: str, *keys: str
+) -> bool:
+    return any(_projection_component_string(projection, key) == expected for key in keys)
+
+
+def _projection_component_string(
+    projection: _UraProjectionLike, key: str
+) -> str:
+    components = getattr(projection, "components", {})
+    if not isinstance(components, Mapping):
+        return ""
+    value = components.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def _required_clean_string(
