@@ -57,11 +57,13 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   `error/profile_source_refs` conformance case, while broader non-P0 language
   bindings remain incomplete.
 - Go and Python now expose typed `DelegationProof`/`SessionAuthority`
-  metadata projections plus InvocationBuilder authority attachment guardrails.
-  The shared `authority/mutual_exclusion` conformance case now pins projection
-  parity and ambiguous metadata rejection. Canonical authority payload creation,
-  signing, verification, and trust-anchor admission remain daemon/Axon-owned;
-  authority minting transports and backend source cutover remain incomplete.
+  metadata projections, InvocationBuilder authority attachment guardrails, and
+  provider-backed `AuthorityClient` minting facades for delegation/session
+  authority metadata. The shared `authority/mutual_exclusion` conformance case
+  now pins projection parity and ambiguous metadata rejection. Canonical
+  authority payload creation, signing, verification, and trust-anchor admission
+  remain daemon/Axon-owned; concrete daemon-backed authority minting transports
+  and backend source cutover remain incomplete.
 - Backend SDK-only import-ban enforcement now has a shared `backend/import_ban`
   conformance case and executable scanner gate; the sibling EasyNet backend
   still reports raw Axon, generated Axon protobuf, and direct daemon transport
@@ -156,7 +158,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   schema-backed typed SDK error projection, complete Invocation draft
   construction with inspect/build handle consumption, prepared/signed Invocation DTOs,
   typed authority metadata projections with mutually-exclusive InvocationBuilder
-  attachment guardrails, local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
+  attachment guardrails, provider-backed `AuthorityClient` minting facades,
+  local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
   projection, StreamHandle state observation with schema-shaped terminal event
   projection, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
@@ -282,7 +285,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Axon-delegated URA/DescriptorRef helper subset, including SDK-owned
   generic descriptor-ref and target-dispatch cutover tests, typed
   authority metadata projections with mutually-exclusive InvocationBuilder
-  attachment guardrails, stable
+  attachment guardrails, provider-backed `AuthorityClient` minting facades, stable
   per-profile error source refs; private C ABI v4 profile carrier/projection bridges for
   Receipt, Directory, Publication, Host Binding, Mission, Admin + Gateway, Events,
   Surface, Compatibility, and Wrapper carriers/records; direct daemon

@@ -24,6 +24,7 @@ from easynet_sdk import (
     AgentQuery,
     AddressingClient,
     AttachOptions,
+    AuthorityClient,
     CompatibilityCarrierBase,
     CompatibilityChatCompletionRequest,
     CompatibilityClient,
@@ -41,6 +42,7 @@ from easynet_sdk import (
     DescriptorRefRequest,
     DELEGATION_METADATA_KEY,
     SESSION_AUTHORITY_METADATA_KEY,
+    DelegationRequest,
     DelegationProof,
     DeviceQuery,
     DirectoryClient,
@@ -114,6 +116,7 @@ from easynet_sdk import (
     PrepareOptions,
     RetryHint,
     SDKError,
+    SessionAuthorityRequest,
     SessionAuthority,
     Signer,
     SignerHandle,
@@ -486,6 +489,26 @@ class SharedIdentityTransport:
 
     def close(self) -> None:
         return None
+
+
+class ConformanceAuthorityTransport:
+    def __init__(self, *, delegation_value: str, session_value: str) -> None:
+        self.delegation_value = delegation_value
+        self.session_value = session_value
+
+    def mint_delegation_proof(self, request_json: bytes) -> bytes:
+        json.loads(request_json.decode("utf-8"))
+        return json.dumps(
+            {"metadata_value": self.delegation_value},
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    def mint_session_authority(self, request_json: bytes) -> bytes:
+        json.loads(request_json.decode("utf-8"))
+        return json.dumps(
+            {"metadata": {SESSION_AUTHORITY_METADATA_KEY: self.session_value}},
+            separators=(",", ":"),
+        ).encode("utf-8")
 
 
 class SharedPublicationTransport:
@@ -1370,6 +1393,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_action(authority_case, "load_authority_fixture")
         self._require_case_action(authority_case, "project_delegation_metadata")
         self._require_case_action(authority_case, "project_session_authority_metadata")
+        self._require_case_action(authority_case, "mint_delegation_via_transport")
+        self._require_case_action(authority_case, "mint_session_authority_via_transport")
         self._require_case_action(authority_case, "attach_single_authority_metadata")
         self._require_case_action(authority_case, "attach_ambiguous_authority_metadata")
         self._require_case_fixture(authority_case, "authority-metadata.v4.json")
@@ -1378,6 +1403,13 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_expectation(
             authority_case, "canonical_payload_owned_by_sdk: false"
+        )
+        self._require_case_expectation(
+            authority_case, "authority_minting_facade: provider_backed"
+        )
+        self._require_case_expectation(
+            authority_case,
+            "authority_minting_canonical_payload_owned_by_sdk: false",
         )
 
         fixture = json.loads(shared_fixture("authority-metadata.v4.json"))
@@ -1416,6 +1448,43 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(
             base64.b64encode(session.signature).decode("ascii"),
             expected_session["signature_base64"],
+        )
+
+        authority_client = AuthorityClient(
+            ConformanceAuthorityTransport(
+                delegation_value=fixture["delegation_metadata_value"],
+                session_value=fixture["session_authority_metadata_value"],
+            )
+        )
+        minted_delegation = authority_client.mint_delegation_proof(
+            DelegationRequest(
+                issuer_ura=expected_delegation["issuer_ura"],
+                subject_ura=expected_delegation["subject_ura"],
+                caller_ura=expected_delegation["caller_ura"],
+                audience=expected_delegation["audience"],
+                scopes=tuple(expected_delegation["scopes"]),
+                issued_at_ms=expected_delegation["issued_at_ms"],
+                expires_at_ms=expected_delegation["expires_at_ms"],
+            )
+        )
+        self.assertEqual(
+            minted_delegation.metadata().value,
+            fixture["delegation_metadata_value"],
+        )
+        minted_session = authority_client.mint_session_authority(
+            SessionAuthorityRequest(
+                backend_ura=expected_session["backend_ura"],
+                user_ura=expected_session["user_ura"],
+                session_id=expected_session["session_id"],
+                scopes=tuple(expected_session["scopes"]),
+                audiences=tuple(expected_session["audiences"]),
+                issued_at_ms=expected_session["issued_at_ms"],
+                expires_at_ms=expected_session["expires_at_ms"],
+            )
+        )
+        self.assertEqual(
+            minted_session.metadata().value,
+            fixture["session_authority_metadata_value"],
         )
 
         draft = (

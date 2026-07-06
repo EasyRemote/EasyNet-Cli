@@ -1,6 +1,7 @@
 package easynet
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 const (
 	DelegationMetadataKey       = "x-easynet-delegation"
 	SessionAuthorityMetadataKey = "x-easynet-session-authority"
+	authorityProfile            = "authority"
 )
 
 type AuthorityKind string
@@ -49,12 +51,128 @@ type SessionAuthority struct {
 	metadataValue string
 }
 
+// DelegationRequest asks the authority transport to mint delegated-authority
+// metadata. The SDK validates shape only; canonical payload creation stays
+// below this facade.
+type DelegationRequest struct {
+	IssuerURA   string         `json:"issuer_ura"`
+	SubjectURA  string         `json:"subject_ura"`
+	CallerURA   string         `json:"caller_ura"`
+	Audience    string         `json:"audience"`
+	Scopes      []string       `json:"scopes"`
+	IssuedAtMS  int64          `json:"issued_at_ms"`
+	ExpiresAtMS int64          `json:"expires_at_ms"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+// SessionAuthorityRequest asks the authority transport to mint session
+// authority metadata. It is backend/session policy input, not backend
+// JWT/OAuth state.
+type SessionAuthorityRequest struct {
+	BackendURA  string         `json:"backend_ura"`
+	UserURA     string         `json:"user_ura"`
+	SessionID   string         `json:"session_id"`
+	Scopes      []string       `json:"scopes"`
+	Audiences   []string       `json:"audiences"`
+	IssuedAtMS  int64          `json:"issued_at_ms"`
+	ExpiresAtMS int64          `json:"expires_at_ms"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
 // AuthorityMetadata is the mutually-exclusive Invocation metadata envelope
 // accepted by daemon admission.
 type AuthorityMetadata struct {
 	kind  AuthorityKind
 	key   string
 	value string
+}
+
+// AuthorityTransport mints authority metadata behind the SDK facade.
+//
+// Implementations may call the daemon, C ABI, or an Axon-owned helper. The Go
+// SDK contract is that callers never import raw Axon packages to mint authority
+// metadata.
+type AuthorityTransport interface {
+	MintDelegationProof(ctx context.Context, requestJSON []byte) ([]byte, error)
+	MintSessionAuthority(ctx context.Context, requestJSON []byte) ([]byte, error)
+}
+
+// AuthorityTransportFunc adapts function fields into an AuthorityTransport.
+type AuthorityTransportFunc struct {
+	MintDelegationProofFunc  func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	MintSessionAuthorityFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+}
+
+func (f AuthorityTransportFunc) MintDelegationProof(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.MintDelegationProofFunc == nil {
+		return nil, invalidProfileClient(authorityProfile, "authority delegation mint transport function is required")
+	}
+	return f.MintDelegationProofFunc(ctx, requestJSON)
+}
+
+func (f AuthorityTransportFunc) MintSessionAuthority(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.MintSessionAuthorityFunc == nil {
+		return nil, invalidProfileClient(authorityProfile, "authority session mint transport function is required")
+	}
+	return f.MintSessionAuthorityFunc(ctx, requestJSON)
+}
+
+// AuthorityClient is the typed authority metadata minting facade.
+type AuthorityClient struct {
+	lifecycle profileClientLifecycle
+	transport AuthorityTransport
+}
+
+func NewAuthorityClient(transport AuthorityTransport) (*AuthorityClient, error) {
+	if transport == nil {
+		return nil, invalidProfileClient(authorityProfile, "authority transport is required")
+	}
+	return &AuthorityClient{transport: transport}, nil
+}
+
+func (c *AuthorityClient) MintDelegationProof(ctx context.Context, req DelegationRequest) (DelegationProof, error) {
+	if err := c.requireOpen(ctx); err != nil {
+		return DelegationProof{}, err
+	}
+	requestJSON, err := marshalDelegationRequest(req)
+	if err != nil {
+		return DelegationProof{}, err
+	}
+	raw, err := c.transport.MintDelegationProof(ctx, requestJSON)
+	if err != nil {
+		return DelegationProof{}, transportProfileError(authorityProfile, "authority delegation mint failed", err)
+	}
+	value, err := decodeAuthorityMetadataProjection(raw, DelegationMetadataKey, "delegation")
+	if err != nil {
+		return DelegationProof{}, err
+	}
+	return NewDelegationProofFromMetadata(value)
+}
+
+func (c *AuthorityClient) MintSessionAuthority(ctx context.Context, req SessionAuthorityRequest) (SessionAuthority, error) {
+	if err := c.requireOpen(ctx); err != nil {
+		return SessionAuthority{}, err
+	}
+	requestJSON, err := marshalSessionAuthorityRequest(req)
+	if err != nil {
+		return SessionAuthority{}, err
+	}
+	raw, err := c.transport.MintSessionAuthority(ctx, requestJSON)
+	if err != nil {
+		return SessionAuthority{}, transportProfileError(authorityProfile, "authority session mint failed", err)
+	}
+	value, err := decodeAuthorityMetadataProjection(raw, SessionAuthorityMetadataKey, "session authority")
+	if err != nil {
+		return SessionAuthority{}, err
+	}
+	return NewSessionAuthorityFromMetadata(value)
+}
+
+func (c *AuthorityClient) Close(ctx context.Context) error {
+	if c == nil {
+		return invalidProfileClient(authorityProfile, "authority client is not initialized")
+	}
+	return c.lifecycle.Close(ctx, c.transport, authorityProfile)
 }
 
 func NewDelegationProofFromMetadata(value string) (DelegationProof, error) {
@@ -178,6 +296,109 @@ func validateAuthorityMetadata(metadata map[string]any) error {
 		return invalidInvocation("invocation authority metadata is ambiguous", nil)
 	}
 	return nil
+}
+
+func (c *AuthorityClient) requireOpen(ctx context.Context) error {
+	if c == nil || c.transport == nil {
+		return invalidProfileClient(authorityProfile, "authority client is not initialized")
+	}
+	return c.lifecycle.RequireOpen(ctx, authorityProfile)
+}
+
+func marshalDelegationRequest(req DelegationRequest) ([]byte, error) {
+	if err := validateDelegationRequest(req); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("encode delegation request: %v", err), err)
+	}
+	return raw, nil
+}
+
+func marshalSessionAuthorityRequest(req SessionAuthorityRequest) ([]byte, error) {
+	if err := validateSessionAuthorityRequest(req); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("encode session authority request: %v", err), err)
+	}
+	return raw, nil
+}
+
+func validateDelegationRequest(req DelegationRequest) error {
+	proof := DelegationProof{
+		IssuerURA:   req.IssuerURA,
+		SubjectURA:  req.SubjectURA,
+		CallerURA:   req.CallerURA,
+		Audience:    req.Audience,
+		Scopes:      req.Scopes,
+		IssuedAtMS:  req.IssuedAtMS,
+		ExpiresAtMS: req.ExpiresAtMS,
+		Signature:   []byte("shape-only"),
+	}
+	if err := validateDelegationProof(proof); err != nil {
+		return err
+	}
+	return rejectAuthorityPrivateKeyMetadata(req.Metadata)
+}
+
+func validateSessionAuthorityRequest(req SessionAuthorityRequest) error {
+	authority := SessionAuthority{
+		BackendURA:  req.BackendURA,
+		UserURA:     req.UserURA,
+		SessionID:   req.SessionID,
+		Scopes:      req.Scopes,
+		Audiences:   req.Audiences,
+		IssuedAtMS:  req.IssuedAtMS,
+		ExpiresAtMS: req.ExpiresAtMS,
+		Signature:   []byte("shape-only"),
+	}
+	if err := validateSessionAuthority(authority); err != nil {
+		return err
+	}
+	return rejectAuthorityPrivateKeyMetadata(req.Metadata)
+}
+
+func rejectAuthorityPrivateKeyMetadata(metadata map[string]any) error {
+	for key := range metadata {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "private_key", "private_key_seed", "private_key_seed_base64", "private_key_hex", "signing_key", "ed25519_seed":
+			return invalidProfilePayload(authorityProfile, "private key material must not be supplied to authority facade", nil)
+		}
+	}
+	return nil
+}
+
+func decodeAuthorityMetadataProjection(raw []byte, metadataKey string, label string) (string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "", invalidProfilePayload(authorityProfile, label+" metadata projection is required", nil)
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var projection map[string]any
+		if err := json.Unmarshal(raw, &projection); err != nil {
+			return "", invalidProfilePayload(authorityProfile, fmt.Sprintf("decode %s metadata projection: %v", label, err), err)
+		}
+		for _, key := range []string{"metadata_value", "value"} {
+			if value, ok := projection[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value), nil
+			}
+		}
+		if metadata, ok := projection["metadata"].(map[string]any); ok {
+			return authorityMetadataValue(metadata, metadataKey)
+		}
+		return "", invalidProfilePayload(authorityProfile, label+" metadata projection missing metadata_value", nil)
+	}
+	if strings.HasPrefix(trimmed, `"`) {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return "", invalidProfilePayload(authorityProfile, fmt.Sprintf("decode %s metadata value: %v", label, err), err)
+		}
+		return strings.TrimSpace(value), nil
+	}
+	return trimmed, nil
 }
 
 func authorityMetadataValue(metadata map[string]any, key string) (string, error) {

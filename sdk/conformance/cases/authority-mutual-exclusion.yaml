@@ -9,6 +9,8 @@ steps:
     fixture: authority-metadata.v4.json
   - action: project_delegation_metadata
   - action: project_session_authority_metadata
+  - action: mint_delegation_via_transport
+  - action: mint_session_authority_via_transport
   - action: attach_single_authority_metadata
   - action: attach_ambiguous_authority_metadata
 expect:
@@ -18,6 +20,8 @@ expect:
   session_authority_metadata_key: x-easynet-session-authority
   typed_delegation_projection: true
   typed_session_authority_projection: true
+  authority_minting_facade: provider_backed
+  authority_minting_canonical_payload_owned_by_sdk: false
   unrelated_metadata_preserved: true
   ambiguous_authority_rejected: true
   canonical_payload_owned_by_sdk: false

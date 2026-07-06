@@ -6,7 +6,7 @@ import base64
 import binascii
 import json
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from .errors import ErrorCode, RetryHint, SDKError
 
@@ -122,6 +122,118 @@ class SessionAuthority:
         )
 
 
+@dataclass(frozen=True)
+class DelegationRequest:
+    """Typed request for delegated-authority metadata minting."""
+
+    issuer_ura: str
+    subject_ura: str
+    caller_ura: str
+    audience: str
+    scopes: tuple[str, ...]
+    issued_at_ms: int
+    expires_at_ms: int
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json(self) -> bytes:
+        _validate_delegation_request(self)
+        return json.dumps(
+            {
+                "issuer_ura": self.issuer_ura,
+                "subject_ura": self.subject_ura,
+                "caller_ura": self.caller_ura,
+                "audience": self.audience,
+                "scopes": list(self.scopes),
+                "issued_at_ms": self.issued_at_ms,
+                "expires_at_ms": self.expires_at_ms,
+                "metadata": dict(self.metadata),
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class SessionAuthorityRequest:
+    """Typed request for session-authority metadata minting."""
+
+    backend_ura: str
+    user_ura: str
+    session_id: str
+    scopes: tuple[str, ...]
+    audiences: tuple[str, ...]
+    issued_at_ms: int
+    expires_at_ms: int
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def to_json(self) -> bytes:
+        _validate_session_authority_request(self)
+        return json.dumps(
+            {
+                "backend_ura": self.backend_ura,
+                "user_ura": self.user_ura,
+                "session_id": self.session_id,
+                "scopes": list(self.scopes),
+                "audiences": list(self.audiences),
+                "issued_at_ms": self.issued_at_ms,
+                "expires_at_ms": self.expires_at_ms,
+                "metadata": dict(self.metadata),
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+
+class AuthorityTransport(Protocol):
+    """Provider boundary for authority metadata minting."""
+
+    def mint_delegation_proof(self, request_json: bytes) -> bytes:
+        ...
+
+    def mint_session_authority(self, request_json: bytes) -> bytes:
+        ...
+
+
+class AuthorityClient:
+    """Typed authority metadata minting facade."""
+
+    def __init__(self, transport: AuthorityTransport):
+        if transport is None:
+            raise _invalid_authority("authority transport is required")
+        self._transport = transport
+        self._closed = False
+
+    def mint_delegation_proof(self, request: DelegationRequest) -> DelegationProof:
+        self._require_open()
+        if not isinstance(request, DelegationRequest):
+            raise _invalid_authority("delegation request is required")
+        raw = self._transport.mint_delegation_proof(request.to_json())
+        value = _authority_metadata_projection(raw, DELEGATION_METADATA_KEY, "delegation")
+        return DelegationProof.from_metadata(value)
+
+    def mint_session_authority(
+        self, request: SessionAuthorityRequest
+    ) -> SessionAuthority:
+        self._require_open()
+        if not isinstance(request, SessionAuthorityRequest):
+            raise _invalid_authority("session authority request is required")
+        raw = self._transport.mint_session_authority(request.to_json())
+        value = _authority_metadata_projection(
+            raw, SESSION_AUTHORITY_METADATA_KEY, "session authority"
+        )
+        return SessionAuthority.from_metadata(value)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        close = getattr(self._transport, "close", None)
+        self._closed = True
+        if callable(close):
+            close()
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_authority("authority client is closed")
+
+
 def validate_authority_metadata(metadata: Mapping[str, object]) -> None:
     delegation = _authority_metadata_value(metadata, DELEGATION_METADATA_KEY)
     session = _authority_metadata_value(metadata, SESSION_AUTHORITY_METADATA_KEY)
@@ -166,6 +278,41 @@ def _decode_authority_metadata(value: str, label: str) -> tuple[Mapping[str, obj
     if not signature:
         raise _invalid_authority(f"{label} metadata signature is required")
     return payload, signature
+
+
+def _authority_metadata_projection(raw: bytes | str, metadata_key: str, label: str) -> str:
+    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    if not isinstance(text, str) or not text.strip():
+        raise _invalid_authority(f"{label} metadata projection is required")
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            decoded = json.loads(stripped)
+        except Exception as exc:
+            raise _invalid_authority(
+                f"decode {label} metadata projection: {exc}", exc
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_authority(f"{label} metadata projection must be an object")
+        for key in ("metadata_value", "value"):
+            value = decoded.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        metadata = decoded.get("metadata")
+        if isinstance(metadata, dict):
+            return _authority_metadata_value(metadata, metadata_key)
+        raise _invalid_authority(f"{label} metadata projection missing metadata_value")
+    if stripped.startswith('"'):
+        try:
+            value = json.loads(stripped)
+        except Exception as exc:
+            raise _invalid_authority(
+                f"decode {label} metadata value: {exc}", exc
+            ) from exc
+        if not isinstance(value, str):
+            raise _invalid_authority(f"{label} metadata value must be a string")
+        return value.strip()
+    return stripped
 
 
 def _required_payload_string(payload: Mapping[str, object], field_name: str, label: str) -> str:
@@ -224,6 +371,53 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
         )
     if not authority.signature:
         raise _invalid_authority("session authority signature is required")
+
+
+def _validate_delegation_request(request: DelegationRequest) -> None:
+    _validate_delegation(
+        DelegationProof(
+            issuer_ura=request.issuer_ura,
+            subject_ura=request.subject_ura,
+            caller_ura=request.caller_ura,
+            audience=request.audience,
+            scopes=tuple(request.scopes),
+            issued_at_ms=request.issued_at_ms,
+            expires_at_ms=request.expires_at_ms,
+            signature=b"shape-only",
+        )
+    )
+    _reject_private_key_metadata(request.metadata)
+
+
+def _validate_session_authority_request(request: SessionAuthorityRequest) -> None:
+    _validate_session_authority(
+        SessionAuthority(
+            backend_ura=request.backend_ura,
+            user_ura=request.user_ura,
+            session_id=request.session_id,
+            scopes=tuple(request.scopes),
+            audiences=tuple(request.audiences),
+            issued_at_ms=request.issued_at_ms,
+            expires_at_ms=request.expires_at_ms,
+            signature=b"shape-only",
+        )
+    )
+    _reject_private_key_metadata(request.metadata)
+
+
+def _reject_private_key_metadata(metadata: Mapping[str, object]) -> None:
+    for key in metadata.keys():
+        if key.strip().lower() in {
+            "private_key",
+            "private_key_seed",
+            "private_key_seed_base64",
+            "private_key_hex",
+            "signing_key",
+            "ed25519_seed",
+        }:
+            raise _invalid_authority(
+                "private key material must not be supplied to authority facade"
+            )
 
 
 def _invalid_authority(message: str, cause: BaseException | None = None) -> SDKError:

@@ -100,11 +100,15 @@ func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
 	requireCaseAction(t, authorityCase, "load_authority_fixture")
 	requireCaseAction(t, authorityCase, "project_delegation_metadata")
 	requireCaseAction(t, authorityCase, "project_session_authority_metadata")
+	requireCaseAction(t, authorityCase, "mint_delegation_via_transport")
+	requireCaseAction(t, authorityCase, "mint_session_authority_via_transport")
 	requireCaseAction(t, authorityCase, "attach_single_authority_metadata")
 	requireCaseAction(t, authorityCase, "attach_ambiguous_authority_metadata")
 	requireCaseFixture(t, authorityCase, "authority-metadata.v4.json")
 	requireCaseExpectation(t, authorityCase, "ambiguous_authority_rejected: true")
 	requireCaseExpectation(t, authorityCase, "canonical_payload_owned_by_sdk: false")
+	requireCaseExpectation(t, authorityCase, "authority_minting_facade: provider_backed")
+	requireCaseExpectation(t, authorityCase, "authority_minting_canonical_payload_owned_by_sdk: false")
 
 	fixture := sharedAuthorityFixture(t, root)
 	delegation, err := NewDelegationProofFromMetadata(fixture.DelegationMetadataValue)
@@ -136,6 +140,44 @@ func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
 	}
 	if base64.StdEncoding.EncodeToString(session.Signature) != fixture.ExpectedSessionAuthority.SignatureBase64 {
 		t.Fatalf("unexpected session authority signature projection")
+	}
+
+	client, err := NewAuthorityClient(&memoryAuthorityTransport{
+		delegationJSON: []byte(`{"metadata_value":"` + fixture.DelegationMetadataValue + `"}`),
+		sessionJSON:    []byte(`"` + fixture.SessionAuthorityMetadataValue + `"`),
+	})
+	if err != nil {
+		t.Fatalf("NewAuthorityClient(shared fixture): %v", err)
+	}
+	mintedDelegation, err := client.MintDelegationProof(context.Background(), DelegationRequest{
+		IssuerURA:   fixture.ExpectedDelegation.IssuerURA,
+		SubjectURA:  fixture.ExpectedDelegation.SubjectURA,
+		CallerURA:   fixture.ExpectedDelegation.CallerURA,
+		Audience:    fixture.ExpectedDelegation.Audience,
+		Scopes:      fixture.ExpectedDelegation.Scopes,
+		IssuedAtMS:  fixture.ExpectedDelegation.IssuedAtMS,
+		ExpiresAtMS: fixture.ExpectedDelegation.ExpiresAtMS,
+	})
+	if err != nil {
+		t.Fatalf("MintDelegationProof(shared fixture): %v", err)
+	}
+	if mintedDelegation.metadataValue != fixture.DelegationMetadataValue {
+		t.Fatalf("minted delegation metadata mismatch")
+	}
+	mintedSession, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
+		BackendURA:  fixture.ExpectedSessionAuthority.BackendURA,
+		UserURA:     fixture.ExpectedSessionAuthority.UserURA,
+		SessionID:   fixture.ExpectedSessionAuthority.SessionID,
+		Scopes:      fixture.ExpectedSessionAuthority.Scopes,
+		Audiences:   fixture.ExpectedSessionAuthority.Audiences,
+		IssuedAtMS:  fixture.ExpectedSessionAuthority.IssuedAtMS,
+		ExpiresAtMS: fixture.ExpectedSessionAuthority.ExpiresAtMS,
+	})
+	if err != nil {
+		t.Fatalf("MintSessionAuthority(shared fixture): %v", err)
+	}
+	if mintedSession.metadataValue != fixture.SessionAuthorityMetadataValue {
+		t.Fatalf("minted session metadata mismatch")
 	}
 
 	delegationMetadata, err := delegation.Metadata()
