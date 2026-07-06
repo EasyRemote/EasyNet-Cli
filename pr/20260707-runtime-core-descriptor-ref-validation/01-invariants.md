@@ -8,7 +8,8 @@
 
 ## Boundary Invariants
 
-- Go delegates parsing to the existing Axon SDK helper.
+- Go Runtime Core does not own descriptor-ref lexical parsing during draft construction.
+- Go descriptor-ref projection and canonical construction stay behind Identity/Axon helper seams.
 - Python Runtime Core does not own a lexical descriptor-ref seam.
 - Python descriptor projection delegates to Identity/Addressing facade methods.
 - Identity/profile clients still use daemon/Axon helper methods for canonical descriptor-ref construction and projection.

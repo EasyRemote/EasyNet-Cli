@@ -323,9 +323,8 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 			return InvocationDraft{}, invalidInvocation(fmt.Sprintf("%s is required", field.name), nil)
 		}
 	}
-	if err := validateInvocationDescriptorRef(b.descriptorRef); err != nil {
-		return InvocationDraft{}, err
-	}
+	// DescriptorRef canonical validation belongs to the Identity profile and
+	// daemon/Axon boundary. Runtime Core validates tuple completeness here.
 	if b.causalContext == nil {
 		return InvocationDraft{}, invalidInvocation("causal_context is required", nil)
 	}
@@ -368,17 +367,6 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 		callerSignature: copySignature(b.callerSignature),
 		hasArgs:         b.hasArgs,
 	}, nil
-}
-
-func validateInvocationDescriptorRef(value string) error {
-	ref, err := ParseAbilityDescriptorRef(value)
-	if err != nil {
-		return invalidInvocation(fmt.Sprintf("descriptor_ref is invalid: %v", err), err)
-	}
-	if strings.TrimSpace(ref.AbilityURA) == "" || strings.TrimSpace(ref.Version) == "" {
-		return invalidInvocation("descriptor_ref must bind ability_ura and descriptor_version", nil)
-	}
-	return nil
 }
 
 func validateInvocationNonceBase64(value string) error {

@@ -15,7 +15,7 @@ not become a second Axon parser.
 
 ## Acceptance Criteria
 
-- Go `InvocationBuilder.Build` validates descriptor refs through the existing Axon-delegated helper.
+- Go `InvocationBuilder.Build` validates descriptor-ref presence only; descriptor-ref grammar remains owned by Identity/Axon projection helpers.
 - Python `parse_ability_descriptor_ref` delegates to `AddressingClient.project_descriptor_ref` or the default Identity projection facade.
 - Python `InvocationBuilder.build` validates tuple completeness without parsing descriptor-ref grammar.
 - Import-boundary tests reject descriptor-ref split/count/partition logic in Python Runtime Core.

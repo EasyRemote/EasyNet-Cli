@@ -10,7 +10,8 @@ Python Runtime Core creates a second source of truth.
 
 - Validate required Invocation tuple fields during draft inspection.
 - Keep descriptor-ref projection and canonical construction in Directory + Identity helpers.
-- Use the existing Go Axon-delegated parser where available.
+- Keep Go Runtime Core draft construction independent of descriptor-ref grammar parsing.
+- Use the Go Identity/Axon-delegated projection helper when callers need descriptor facts or canonical construction.
 - Use the Python Identity/Addressing projection facade for descriptor-ref decomposition.
 
 ## Module Boundaries
