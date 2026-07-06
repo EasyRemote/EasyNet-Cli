@@ -271,7 +271,20 @@ pub(crate) fn project_signer_handle(input: &Value) -> Result<Value, IdentitySdkE
             continue;
         }
         let key_id = daemon_key_id.unwrap_or(derived_key_id);
+        let key_state = match optional_string_field(key_obj, "state")? {
+            Some(state) => state,
+            None => {
+                optional_string_field(key_obj, "status")?.unwrap_or_else(|| "active".to_string())
+            }
+        };
+        if key_state != "active" {
+            return Err(IdentitySdkError::InvalidField(
+                "key_state",
+                "signer key must be active in daemon identity inventory".to_string(),
+            ));
+        }
         let signer_id = format!("signer-{key_id}");
+        let policy_ref = signer_policy_ref(owner_ura, &key_id, public_key_base64);
         return Ok(json!({
             "profile": IDENTITY_PROFILE,
             "signer_id": signer_id,
@@ -282,11 +295,16 @@ pub(crate) fn project_signer_handle(input: &Value) -> Result<Value, IdentitySdkE
                 "mode": "local_daemon_signing",
                 "usage": usage,
                 "signer_id": signer_id,
+                "policy_ref": policy_ref,
+                "inventory_owner_ura": owner_ura,
+                "key_state": key_state,
             },
             "metadata": {
                 "source": "identity.list_user_pubkeys",
+                "source_ability": "identity.list_user_pubkeys",
                 "public_key_base64": public_key_base64,
                 "rotation_epoch": optional_u64(result, "rotation_epoch")?.unwrap_or(0),
+                "policy_ref": policy_ref,
             },
         }));
     }
@@ -378,6 +396,17 @@ fn public_key_key_id(public_key_base64: &str) -> Result<String, IdentitySdkError
     let decoded = decode_ed25519_public_key(public_key_base64)?;
     let digest = sha2::Sha256::digest(&decoded);
     Ok(format!("ed25519:{}", hex::encode(&digest[..16])))
+}
+
+fn signer_policy_ref(owner_ura: &str, key_id: &str, public_key_base64: &str) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(owner_ura.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(key_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(public_key_base64.as_bytes());
+    let digest = hasher.finalize();
+    format!("daemon-key-inventory:sha256:{}", hex::encode(&digest[..16]))
 }
 
 fn optional_bool(
@@ -696,7 +725,20 @@ mod tests {
         assert_eq!(handle["algorithm"], "ed25519");
         assert_eq!(handle["policy"]["mode"], "local_daemon_signing");
         assert_eq!(handle["policy"]["usage"], "invocation.sign");
+        assert_eq!(
+            handle["policy"]["inventory_owner_ura"],
+            "easynet:///r/example/user/alice"
+        );
+        assert_eq!(handle["policy"]["key_state"], "active");
+        assert!(handle["policy"]["policy_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("daemon-key-inventory:sha256:"));
         assert_eq!(handle["metadata"]["source"], "identity.list_user_pubkeys");
+        assert_eq!(
+            handle["metadata"]["policy_ref"],
+            handle["policy"]["policy_ref"]
+        );
     }
 
     #[test]
@@ -720,6 +762,31 @@ mod tests {
         let err = project_signer_handle(&input).unwrap_err();
 
         assert!(err.to_string().contains("key_id"));
+    }
+
+    #[test]
+    fn project_signer_handle_rejects_inactive_daemon_key() {
+        let key_id = public_key_key_id(public_key()).unwrap();
+        let input = json!({
+            "request": {
+                "owner_ura": "easynet:///r/example/user/alice",
+                "key_id": key_id,
+                "usage": "invocation.sign"
+            },
+            "result": {
+                "agent_ura": "easynet:///r/example/user/alice",
+                "keys": [
+                    {
+                        "public_key_b64": public_key(),
+                        "state": "revoked"
+                    }
+                ]
+            }
+        });
+
+        let err = project_signer_handle(&input).unwrap_err();
+
+        assert!(err.to_string().contains("key_state"));
     }
 
     #[test]

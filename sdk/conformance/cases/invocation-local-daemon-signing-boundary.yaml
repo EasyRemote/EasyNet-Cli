@@ -16,6 +16,9 @@ expect:
   signer_handle_profile: directory_identity
   signer_handle_policy_mode: local_daemon_signing
   signer_handle_policy_usage: invocation.sign
+  signer_handle_policy_ref_required: true
+  signer_handle_inventory_owner_bound: true
+  signer_handle_key_state: active
   signer_handle_source: daemon_key_inventory
   forged_signer_handle_rejected: true
   signer_workflow_acquisition_provider_bound: true

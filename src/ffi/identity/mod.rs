@@ -1183,6 +1183,15 @@ mod tests {
         assert_eq!(value["signer_id"], "signer-alice-key-1");
         assert_eq!(value["key_id"], "alice-key-1");
         assert_eq!(value["policy"]["mode"], "local_daemon_signing");
+        assert_eq!(
+            value["policy"]["inventory_owner_ura"],
+            "easynet:///r/example/user/alice"
+        );
+        assert_eq!(value["policy"]["key_state"], "active");
+        assert!(value["policy"]["policy_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("daemon-key-inventory:sha256:"));
         assert_eq!(value["metadata"]["source"], "identity.list_user_pubkeys");
         release(handle);
     }

@@ -391,13 +391,17 @@ func projectIdentitySigningKeyPage(raw []byte, request SigningKeyListRequest) ([
 		if err != nil {
 			return nil, err
 		}
+		keyState := firstIdentityString(key, "state", "status")
+		if keyState == "" {
+			keyState = "active"
+		}
 		items = append(items, map[string]any{
 			"profile":           directoryIdentityProfile,
 			"key_id":            keyID,
 			"owner_ura":         ownerURA,
 			"algorithm":         "ed25519",
 			"public_key_base64": publicKey,
-			"state":             "active",
+			"state":             keyState,
 			"usage":             []string{"invocation.sign"},
 			"created_unix_ms":   identityOptionalInt64(key["added_at_unix_ms"]),
 			"revoked_unix_ms":   int64(0),
@@ -472,7 +476,11 @@ func projectIdentitySignerHandle(raw []byte, request SignerRequest) ([]byte, err
 		if record.KeyID != request.KeyID {
 			continue
 		}
+		if record.State != "active" {
+			return nil, invalidProfilePayload(directoryIdentityProfile, "signer key must be active in daemon identity inventory", nil)
+		}
 		signerID := "signer-" + record.KeyID
+		policyRef := identitySignerPolicyRef(request.OwnerURA, record.KeyID, record.PublicKeyBase64)
 		return json.Marshal(map[string]any{
 			"profile":   directoryIdentityProfile,
 			"signer_id": signerID,
@@ -480,14 +488,19 @@ func projectIdentitySignerHandle(raw []byte, request SignerRequest) ([]byte, err
 			"key_id":    record.KeyID,
 			"algorithm": "ed25519",
 			"policy": map[string]any{
-				"mode":      "local_daemon_signing",
-				"usage":     usage,
-				"signer_id": signerID,
+				"mode":                "local_daemon_signing",
+				"usage":               usage,
+				"signer_id":           signerID,
+				"policy_ref":          policyRef,
+				"inventory_owner_ura": request.OwnerURA,
+				"key_state":           record.State,
 			},
 			"metadata": map[string]any{
 				"source":            identityAbilityListUserPubkeys,
+				"source_ability":    identityAbilityListUserPubkeys,
 				"public_key_base64": record.PublicKeyBase64,
 				"rotation_epoch":    record.Metadata["rotation_epoch"],
+				"policy_ref":        policyRef,
 			},
 		})
 	}
@@ -517,6 +530,16 @@ func identityPublicKeyID(publicKeyBase64 string) (string, error) {
 	}
 	digest := sha256.Sum256(decoded)
 	return "ed25519:" + hex.EncodeToString(digest[:16]), nil
+}
+
+func identitySignerPolicyRef(ownerURA string, keyID string, publicKeyBase64 string) string {
+	hasher := sha256.New()
+	hasher.Write([]byte(ownerURA))
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(keyID))
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(publicKeyBase64))
+	return "daemon-key-inventory:sha256:" + hex.EncodeToString(hasher.Sum(nil)[:16])
 }
 
 func validateEd25519PublicKey(publicKeyBase64 string) error {

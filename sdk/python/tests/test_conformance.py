@@ -336,6 +336,7 @@ class SharedSignerAcquisitionTransport:
 
     def signer(self, request_json: bytes) -> bytes:
         self.seen_request = json.loads(request_json.decode("utf-8"))
+        policy_ref = "daemon-key-inventory:sha256:test-policy"
         return json.dumps(
             {
                 "profile": "directory_identity",
@@ -346,8 +347,15 @@ class SharedSignerAcquisitionTransport:
                 "policy": {
                     "mode": "local_daemon_signing",
                     "usage": "invocation.sign",
+                    "signer_id": "signer-alice-key-1",
+                    "policy_ref": policy_ref,
+                    "inventory_owner_ura": "easynet:///r/example/agent/alice.sdk",
+                    "key_state": "active",
                 },
-                "metadata": {"source": "daemon_key_inventory"},
+                "metadata": {
+                    "source": "daemon_key_inventory",
+                    "policy_ref": policy_ref,
+                },
             },
             separators=(",", ":"),
             sort_keys=True,
@@ -1581,6 +1589,15 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_expectation(
             local_signing_case, "signer_handle_policy_usage: invocation.sign"
+        )
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_policy_ref_required: true"
+        )
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_inventory_owner_bound: true"
+        )
+        self._require_case_expectation(
+            local_signing_case, "signer_handle_key_state: active"
         )
         self._require_case_expectation(
             local_signing_case, "signer_handle_source: daemon_key_inventory"
@@ -5261,14 +5278,22 @@ def shared_invocation_signature() -> InvocationSignature:
 
 
 def shared_signer_handle() -> SignerHandle:
+    policy_ref = "daemon-key-inventory:sha256:test-policy"
     return SignerHandle(
         profile="directory_identity",
         signer_id="signer-alice-key-1",
         owner_ura="easynet:///r/example/agent/alice.sdk",
         key_id="alice-key-1",
         algorithm="ed25519",
-        policy={"mode": "local_daemon_signing", "usage": "invocation.sign"},
-        metadata={"source": "daemon_keyring"},
+        policy={
+            "mode": "local_daemon_signing",
+            "usage": "invocation.sign",
+            "signer_id": "signer-alice-key-1",
+            "policy_ref": policy_ref,
+            "inventory_owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "key_state": "active",
+        },
+        metadata={"source": "daemon_keyring", "policy_ref": policy_ref},
     )
 
 

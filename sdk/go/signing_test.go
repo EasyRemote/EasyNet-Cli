@@ -355,6 +355,12 @@ func TestSignerRejectsForgedHandleProvenance(t *testing.T) {
 	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("NewSigner signer_id mismatch error = %v, want InvalidArgument", err)
 	}
+
+	handle = signerHandle("")
+	handle.Metadata["policy_ref"] = "daemon-key-inventory:sha256:other-policy"
+	if _, err := NewSigner(handle, provider); err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSigner policy_ref mismatch error = %v, want InvalidArgument", err)
+	}
 }
 
 func TestEd25519ProviderSignsDaemonCanonicalBytes(t *testing.T) {
@@ -505,7 +511,8 @@ func TestPreparedInvocationRejectsEmptySignature(t *testing.T) {
 }
 
 func signerHandle(publicKeyBase64 string) SignerHandle {
-	metadata := map[string]any{"source": "daemon_keyring"}
+	policyRef := "daemon-key-inventory:sha256:test-policy"
+	metadata := map[string]any{"source": "daemon_keyring", "policy_ref": policyRef}
 	if publicKeyBase64 != "" {
 		metadata["public_key_base64"] = publicKeyBase64
 	}
@@ -516,8 +523,12 @@ func signerHandle(publicKeyBase64 string) SignerHandle {
 		KeyID:     "alice-key-1",
 		Algorithm: "ed25519",
 		Policy: map[string]any{
-			"mode":  "local_daemon_signing",
-			"usage": "invocation.sign",
+			"mode":                "local_daemon_signing",
+			"usage":               "invocation.sign",
+			"signer_id":           "signer-alice-key-1",
+			"policy_ref":          policyRef,
+			"inventory_owner_ura": "easynet:///r/example/agent/alice.sdk",
+			"key_state":           "active",
 		},
 		Metadata: metadata,
 	}

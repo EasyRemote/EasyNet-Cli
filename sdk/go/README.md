@@ -30,7 +30,7 @@ read-model pages, Runtime Core-backed directory subscription streams, directory
 subscription state seams, and close state seams plus
 IdentityClient descriptor/resource projection, Axon-delegated
 URA/DescriptorRef helper seams, signing-key lifecycle, signer workflow
-acquisition, and signer-handle provenance/policy guardrails.
+acquisition, and signer-handle provenance/policy-proof guardrails.
 It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref projection,
 invocation-history list/get/trace read-model methods, explicit daemon/Axon
 projection provider seams for Runtime-backed project/verify/verify-chain/causal-ref,

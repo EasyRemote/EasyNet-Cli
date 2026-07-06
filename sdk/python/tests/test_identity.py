@@ -623,6 +623,12 @@ class IdentityTests(unittest.TestCase):
         )
 
         self.assertEqual(signer.handle.signer_id, "signer-alice-key-1")
+        self.assertEqual(
+            signer.handle.policy["inventory_owner_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(signer.handle.policy["key_state"], "active")
+        self.assertTrue(str(signer.handle.policy["policy_ref"]))
         assert transport.seen_request is not None
         self.assertEqual(transport.seen_request["usage"], "invocation.sign")
 
@@ -663,7 +669,21 @@ class IdentityTests(unittest.TestCase):
                     "owner_ura":"easynet:///r/example/agent/alice.sdk",
                     "key_id":"alice-key-1",
                     "algorithm":"ed25519",
-                    "policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
+                    "policy":{"mode":"local_daemon_signing","usage":"invocation.sign","signer_id":"signer-alice-key-1","inventory_owner_ura":"easynet:///r/example/agent/alice.sdk","key_state":"active"},
+                    "metadata":{"source":"daemon_keyring"}
+                }"""
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as caught:
+            SignerHandle.from_json(
+                b"""{
+                    "profile":"directory_identity",
+                    "signer_id":"signer-alice-key-1",
+                    "owner_ura":"easynet:///r/example/agent/alice.sdk",
+                    "key_id":"alice-key-1",
+                    "algorithm":"ed25519",
+                    "policy":{"mode":"local_daemon_signing","usage":"invocation.sign","signer_id":"signer-alice-key-1","policy_ref":"daemon-key-inventory:sha256:test-policy","inventory_owner_ura":"easynet:///r/example/agent/alice.sdk","key_state":"active"},
                     "metadata":{"source":"daemon_keyring","public_key_base64":"c2hvcnQ="}
                 }"""
             )
@@ -743,8 +763,13 @@ SIGNER_HANDLE = (
     b'{"profile":"directory_identity","signer_id":"signer-alice-key-1",'
     b'"owner_ura":"easynet:///r/example/agent/alice.sdk","key_id":"alice-key-1",'
     b'"algorithm":"ed25519",'
-    b'"policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},'
-    b'"metadata":{"source":"daemon_keyring"}}'
+    b'"policy":{"mode":"local_daemon_signing","usage":"invocation.sign",'
+    b'"signer_id":"signer-alice-key-1",'
+    b'"policy_ref":"daemon-key-inventory:sha256:test-policy",'
+    b'"inventory_owner_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"key_state":"active"},'
+    b'"metadata":{"source":"daemon_keyring",'
+    b'"policy_ref":"daemon-key-inventory:sha256:test-policy"}}'
 )
 
 

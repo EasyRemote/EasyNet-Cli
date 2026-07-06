@@ -475,6 +475,24 @@ def _signer_handle_provenance_error(handle: SignerHandle) -> str:
         and policy_signer_id != handle.signer_id
     ):
         return "signer handle policy.signer_id must match signer_id"
+    policy_ref = handle.policy.get("policy_ref")
+    if not isinstance(policy_ref, str) or policy_ref.strip() == "":
+        return "signer handle policy_ref is required"
+    inventory_owner_ura = handle.policy.get("inventory_owner_ura")
+    if not isinstance(inventory_owner_ura, str) or inventory_owner_ura.strip() == "":
+        return "signer handle inventory_owner_ura is required"
+    if inventory_owner_ura != handle.owner_ura:
+        return "signer handle inventory_owner_ura must match owner_ura"
+    key_state = handle.policy.get("key_state")
+    if not isinstance(key_state, str) or key_state.strip() != "active":
+        return "signer handle key_state must be active"
+    metadata_policy_ref = handle.metadata.get("policy_ref")
+    if (
+        isinstance(metadata_policy_ref, str)
+        and metadata_policy_ref.strip()
+        and metadata_policy_ref != policy_ref
+    ):
+        return "signer handle metadata policy_ref must match policy.policy_ref"
     if handle.algorithm.strip().lower() != "ed25519":
         return "signer handle algorithm must be ed25519"
     public_key = handle.metadata.get("public_key_base64")

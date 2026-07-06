@@ -366,6 +366,25 @@ class SigningTests(unittest.TestCase):
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+        mismatched_policy_ref = SignerHandle(
+            profile=handle.profile,
+            signer_id=handle.signer_id,
+            owner_ura=handle.owner_ura,
+            key_id=handle.key_id,
+            algorithm=handle.algorithm,
+            policy=handle.policy,
+            metadata={
+                **dict(handle.metadata),
+                "policy_ref": "daemon-key-inventory:sha256:other-policy",
+            },
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            Signer(handle=mismatched_policy_ref, provider=MemorySignatureProvider()).sign(
+                prepared
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     @unittest.skipUnless(CRYPTOGRAPHY_AVAILABLE, "cryptography is not installed")
     def test_ed25519_provider_signs_daemon_canonical_bytes(self) -> None:
         seed = bytes([0x11]) * 32
@@ -498,7 +517,8 @@ class SigningTests(unittest.TestCase):
 
 
 def signer_handle(public_key_base64: str = "") -> SignerHandle:
-    metadata = {"source": "daemon_keyring"}
+    policy_ref = "daemon-key-inventory:sha256:test-policy"
+    metadata = {"source": "daemon_keyring", "policy_ref": policy_ref}
     if public_key_base64:
         metadata["public_key_base64"] = public_key_base64
     return SignerHandle(
@@ -507,7 +527,14 @@ def signer_handle(public_key_base64: str = "") -> SignerHandle:
         owner_ura="easynet:///r/example/agent/alice.sdk",
         key_id="alice-key-1",
         algorithm="ed25519",
-        policy={"mode": "local_daemon_signing", "usage": "invocation.sign"},
+        policy={
+            "mode": "local_daemon_signing",
+            "usage": "invocation.sign",
+            "signer_id": "signer-alice-key-1",
+            "policy_ref": policy_ref,
+            "inventory_owner_ura": "easynet:///r/example/agent/alice.sdk",
+            "key_state": "active",
+        },
         metadata=metadata,
     )
 

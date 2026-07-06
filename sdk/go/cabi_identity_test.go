@@ -130,6 +130,9 @@ func TestCABIIdentityTransportSigningKeyLifecycleAndSigner(t *testing.T) {
 	if signer.SignerID != "signer-alice-key-1" || signer.KeyID != "alice-key-1" || signer.Algorithm != "ed25519" {
 		t.Fatalf("signer = %#v", signer)
 	}
+	if signer.Policy["policy_ref"] == "" || signer.Policy["inventory_owner_ura"] != signer.OwnerURA || signer.Policy["key_state"] != "active" {
+		t.Fatalf("signer policy proof = %#v", signer.Policy)
+	}
 }
 
 func cabiIdentityCarrierBase() IdentityCarrierBase {
@@ -282,7 +285,7 @@ int32_t easynet_identity_project_signing_key_revoke_result(uint64_t handle, cons
 int32_t easynet_identity_project_signer_handle(uint64_t handle, const char *result_json, char **out_signer_json) {
 	(void)handle;
 	if (strstr(result_json, "invocation.sign") == 0 || strstr(result_json, "keys") == 0) return 10;
-	*out_signer_json = dup_json("{\"profile\":\"directory_identity\",\"signer_id\":\"signer-alice-key-1\",\"owner_ura\":\"easynet:///r/example/agent/alice.sdk\",\"key_id\":\"alice-key-1\",\"algorithm\":\"ed25519\",\"policy\":{\"mode\":\"local_daemon_signing\",\"usage\":\"invocation.sign\",\"signer_id\":\"signer-alice-key-1\"},\"metadata\":{\"source\":\"fake\",\"public_key_base64\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\"}}");
+	*out_signer_json = dup_json("{\"profile\":\"directory_identity\",\"signer_id\":\"signer-alice-key-1\",\"owner_ura\":\"easynet:///r/example/agent/alice.sdk\",\"key_id\":\"alice-key-1\",\"algorithm\":\"ed25519\",\"policy\":{\"mode\":\"local_daemon_signing\",\"usage\":\"invocation.sign\",\"signer_id\":\"signer-alice-key-1\",\"policy_ref\":\"daemon-key-inventory:sha256:test-policy\",\"inventory_owner_ura\":\"easynet:///r/example/agent/alice.sdk\",\"key_state\":\"active\"},\"metadata\":{\"source\":\"identity.list_user_pubkeys\",\"public_key_base64\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\",\"policy_ref\":\"daemon-key-inventory:sha256:test-policy\"}}");
 	return 0;
 }
 `

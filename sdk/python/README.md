@@ -65,7 +65,7 @@ AddressingClient and package-level Axon-delegated `parse_ura`, `device_ura`,
 IdentityClient descriptor/resource projection, C ABI-backed signing-key
 register/list/revoke execution through daemon identity abilities, and
 C ABI-backed signer-handle projection from daemon key inventory with
-SDK-owned signer workflow acquisition, signer-handle provenance/policy guardrails, plus
+SDK-owned signer workflow acquisition, signer-handle provenance/policy-proof guardrails, plus
 `Ed25519SignatureProvider` for local signatures over daemon/Axon-provided
 canonical signing material.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
@@ -150,7 +150,8 @@ signed unary dispatch now flows through Runtime Core
 prepare/sign/submit/await/free when a daemon-authorized SDK signer is supplied.
 Product Invocation direct daemon UDS unary, server-stream, bidi transport, and
 explicit direct-runtime prepare/submit/handle delegation are available through
-the SDK facade. Live daemon keyring policy, Axon-backed receipt verification, receipt URA
+the SDK facade with signer policy-proof validation. Live daemon keyring signing
+execution policy, Axon-backed receipt verification, receipt URA
 construction, ability implementation lifecycle adapters that require daemon/ABI
 lifecycle result contracts, warm host process execution
 and cleanup execution adapters, mission event live streams,

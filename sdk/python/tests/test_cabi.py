@@ -1849,8 +1849,12 @@ IDENTITY_SIGNER_HANDLE = (
     b'"owner_ura":"easynet:///r/example/agent/alice.sdk",'
     b'"key_id":"ed25519:derived","algorithm":"ed25519",'
     b'"policy":{"mode":"local_daemon_signing","usage":"invocation.sign",'
-    b'"signer_id":"signer-ed25519:derived"},'
-    b'"metadata":{"source":"identity.list_user_pubkeys"}}'
+    b'"signer_id":"signer-ed25519:derived",'
+    b'"policy_ref":"daemon-key-inventory:sha256:test-policy",'
+    b'"inventory_owner_ura":"easynet:///r/example/agent/alice.sdk",'
+    b'"key_state":"active"},'
+    b'"metadata":{"source":"identity.list_user_pubkeys",'
+    b'"policy_ref":"daemon-key-inventory:sha256:test-policy"}}'
 )
 
 HOST_BINDING_PROJECTION = (
@@ -2945,6 +2949,12 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(signer.signer_id, "signer-ed25519:derived")
         self.assertEqual(signer.key_id, "ed25519:derived")
         self.assertEqual(signer.algorithm, "ed25519")
+        self.assertEqual(
+            signer.policy["inventory_owner_ura"],
+            "easynet:///r/example/agent/alice.sdk",
+        )
+        self.assertEqual(signer.policy["key_state"], "active")
+        self.assertTrue(str(signer.policy["policy_ref"]))
         self.assertEqual(
             [item[0] for item in raw.profile_requests[-2:]],
             [

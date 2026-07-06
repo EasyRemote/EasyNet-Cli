@@ -30,7 +30,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
 | typed errors | Runtime Core | provider-backed | provider-backed | Go/Python expose stable error classes and package-level source refs; non-P0 language bindings and package stability gates remain incomplete. |
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
-| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition and signer-handle provenance guardrails exist; live daemon keyring policy cutover remains incomplete. |
+| prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; live daemon keyring signing execution policy cutover remains incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
@@ -79,8 +79,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   guardrails for Go/Python, C ABI `directory.subscribe` carrier/projection
   symbols, Identity URA/DescriptorRef projection guardrails, and identity
   signing-key register/list/revoke builder/projection guardrails plus
-  signer workflow acquisition and signer-handle provenance/policy guardrails
-  exist; live daemon keyring policy and broader external language-facade
+  signer workflow acquisition and signer-handle provenance/policy-proof guardrails
+  exist; live daemon keyring signing execution policy and broader external language-facade
   cutovers remain incomplete.
 - Publication ResourceRef/package validation/plugin install/deploy-unpublish
   carrier and lifecycle guardrails exist for Rust/C ABI; Go now executes
@@ -357,7 +357,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   prepare/sign/submit/await/free with an explicit SDK signer now pass static
   gates, and SDK-internal direct daemon UDS unary/server-stream/bidi transport plus
   explicit direct-runtime prepare/submit/handle delegation is available only
-  through Runtime Core SDK facades, while live daemon keyring policy, daemon-backed
+  through Runtime Core SDK facades with signer policy-proof validation, while live daemon keyring policy, daemon-backed
   MissionPlan child Invocation execution behavior, daemon/ABI-backed Server
   pairing/hub lifecycle cutover and RFC-007 receipt URA construction remain
   incomplete.

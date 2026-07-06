@@ -348,6 +348,9 @@ func TestIdentitySigningKeyLifecycleAndSignerHandle(t *testing.T) {
 	if signer.SignerID != "signer-alice-key-1" || signer.Algorithm != "ed25519" {
 		t.Fatalf("unexpected signer handle: %#v", signer)
 	}
+	if signer.Policy["policy_ref"] == "" || signer.Policy["inventory_owner_ura"] != signer.OwnerURA || signer.Policy["key_state"] != "active" {
+		t.Fatalf("signer handle missing policy proof: %#v", signer.Policy)
+	}
 }
 
 func TestIdentityAcquireSignerBindsProviderToDaemonHandle(t *testing.T) {
@@ -424,7 +427,20 @@ func TestIdentitySignerHandleRejectsForgedSource(t *testing.T) {
 		"owner_ura":"easynet:///r/example/agent/alice.sdk",
 		"key_id":"alice-key-1",
 		"algorithm":"ed25519",
-		"policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
+		"policy":{"mode":"local_daemon_signing","usage":"invocation.sign","signer_id":"signer-alice-key-1","inventory_owner_ura":"easynet:///r/example/agent/alice.sdk","key_state":"active"},
+		"metadata":{"source":"daemon_keyring"}
+	}`))
+	if err == nil || !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("NewSignerHandleFromJSON accepted missing policy_ref: %v", err)
+	}
+
+	_, err = NewSignerHandleFromJSON([]byte(`{
+		"profile":"directory_identity",
+		"signer_id":"signer-alice-key-1",
+		"owner_ura":"easynet:///r/example/agent/alice.sdk",
+		"key_id":"alice-key-1",
+		"algorithm":"ed25519",
+		"policy":{"mode":"local_daemon_signing","usage":"invocation.sign","signer_id":"signer-alice-key-1","policy_ref":"daemon-key-inventory:sha256:test-policy","inventory_owner_ura":"easynet:///r/example/agent/alice.sdk","key_state":"active"},
 		"metadata":{"source":"daemon_keyring","public_key_base64":"c2hvcnQ="}
 	}`))
 	if err == nil || !IsCode(err, ErrInvalidArgument) {
@@ -563,6 +579,13 @@ const signerHandleJSON = `{
   "owner_ura":"easynet:///r/example/agent/alice.sdk",
   "key_id":"alice-key-1",
   "algorithm":"ed25519",
-  "policy":{"mode":"local_daemon_signing","usage":"invocation.sign"},
-  "metadata":{"source":"daemon_keyring"}
+  "policy":{
+    "mode":"local_daemon_signing",
+    "usage":"invocation.sign",
+    "signer_id":"signer-alice-key-1",
+    "policy_ref":"daemon-key-inventory:sha256:test-policy",
+    "inventory_owner_ura":"easynet:///r/example/agent/alice.sdk",
+    "key_state":"active"
+  },
+  "metadata":{"source":"daemon_keyring","policy_ref":"daemon-key-inventory:sha256:test-policy"}
 }`

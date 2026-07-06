@@ -615,6 +615,24 @@ func validateSignerHandle(handle SignerHandle) error {
 	if policySignerID, ok := handle.Policy["signer_id"].(string); ok && strings.TrimSpace(policySignerID) != "" && policySignerID != handle.SignerID {
 		return invalidInvocation("signer handle policy.signer_id must match signer_id", nil)
 	}
+	policyRef, ok := handle.Policy["policy_ref"].(string)
+	if !ok || strings.TrimSpace(policyRef) == "" {
+		return invalidInvocation("signer handle policy_ref is required", nil)
+	}
+	inventoryOwnerURA, ok := handle.Policy["inventory_owner_ura"].(string)
+	if !ok || strings.TrimSpace(inventoryOwnerURA) == "" {
+		return invalidInvocation("signer handle inventory_owner_ura is required", nil)
+	}
+	if inventoryOwnerURA != handle.OwnerURA {
+		return invalidInvocation("signer handle inventory_owner_ura must match owner_ura", nil)
+	}
+	keyState, ok := handle.Policy["key_state"].(string)
+	if !ok || strings.TrimSpace(keyState) != "active" {
+		return invalidInvocation("signer handle key_state must be active", nil)
+	}
+	if metadataPolicyRef, ok := handle.Metadata["policy_ref"].(string); ok && strings.TrimSpace(metadataPolicyRef) != "" && metadataPolicyRef != policyRef {
+		return invalidInvocation("signer handle metadata policy_ref must match policy.policy_ref", nil)
+	}
 	return nil
 }
 
