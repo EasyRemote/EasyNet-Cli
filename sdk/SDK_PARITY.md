@@ -33,7 +33,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | Daemon-owned signer acquisition and keyring policy cutover remain incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
-| bidi | Runtime Core | provider-backed | provider-backed | Concrete product wrapper stream adapters remain incomplete. |
+| bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; concrete product wrapper stream adapters remain incomplete outside the daemon SDK. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
 | receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus single-invocation chain signature and parent-receipt closure verification exist for full Axon audit bundles; cross-invocation causal DAG verification and RFC-007 receipt URA construction remain incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |

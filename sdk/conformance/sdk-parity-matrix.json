@@ -140,7 +140,7 @@
     {
       "capability_id": "bidi",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/stream-bidi-lifecycle-state.yaml"],
+      "shared_cases": ["sdk/conformance/cases/stream-bidi-lifecycle-state.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/bidi_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -149,7 +149,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_bidi.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Concrete product wrapper stream adapters remain incomplete."
+      "remaining": "Concrete product wrapper stream adapters remain incomplete outside the daemon SDK."
     },
     {
       "capability_id": "directory_identity",
