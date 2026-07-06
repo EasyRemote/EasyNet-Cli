@@ -116,3 +116,109 @@ test("typed daemon error JSON rejects legacy code aliases", () => {
     );
   }
 });
+
+test("StreamHandle exposes async iteration with terminal close", async () => {
+  const closed = [];
+  const events = [
+    { frame_type: "data", value: 1 },
+    { frame_type: "terminal", terminal: true, state: "Completed" },
+  ];
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    openStream: () => ({
+      open: JSON.stringify({ stream_id: "stream-1", state: "Open" }),
+      transport: {
+        receive: () => JSON.stringify(events.shift()),
+        close: () => {
+          closed.push("stream-1");
+        },
+      },
+    }),
+  });
+
+  const stream = await runtime.invokeStream(completeDraft().build());
+  const seen = [];
+  for await (const event of stream) {
+    seen.push(event);
+  }
+
+  assert.deepEqual(seen.map((event) => event.frame_type), ["data", "terminal"]);
+  assert.equal(stream.terminal, true);
+  assert.deepEqual(closed, ["stream-1"]);
+  await assert.rejects(
+    () => stream.receive(),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("StreamHandle AbortSignal cancellation calls transport cancel", async () => {
+  const cancelled = [];
+  const controller = new AbortController();
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    openStream: () => ({
+      open: JSON.stringify({ stream_id: "stream-2", state: "Open" }),
+      transport: {
+        receive: () => new Promise(() => {}),
+        cancel: (reason) => {
+          cancelled.push(reason);
+        },
+      },
+    }),
+  });
+
+  const stream = await runtime.invokeStream(completeDraft().build());
+  const pending = stream.receive({ signal: controller.signal, cancelReason: "operator cancelled" });
+  controller.abort("ignored by explicit reason");
+
+  await assert.rejects(
+    pending,
+    (error) => error instanceof SDKError && error.code === ErrorCode.CANCELLED,
+  );
+  assert.deepEqual(cancelled, ["operator cancelled"]);
+  assert.equal(stream.closed, true);
+});
+
+test("BidiSession exposes async iteration and AbortSignal cancellation", async () => {
+  const closed = [];
+  const cancelled = [];
+  const frames = [
+    { frame_type: "data", payload: { ok: true } },
+    { frame_type: "done", terminal: true, state: "Closed" },
+  ];
+  const runtime = new RuntimeClient({
+    invoke: () => JSON.stringify({ ok: true }),
+    openBidi: () => ({
+      open: JSON.stringify({ session_id: "bidi-1", state: "Open" }),
+      transport: {
+        send: () => {},
+        receive: () => (frames.length > 0 ? JSON.stringify(frames.shift()) : new Promise(() => {})),
+        close: () => {
+          closed.push("bidi-1");
+        },
+        cancel: (reason) => {
+          cancelled.push(reason);
+        },
+      },
+    }),
+  });
+
+  const bidi = await runtime.openBidi(completeDraft().build());
+  await bidi.send({ frame_type: "data", payload: { hello: true } });
+  const seen = [];
+  for await (const frame of bidi.frames()) {
+    seen.push(frame);
+  }
+  assert.deepEqual(seen.map((frame) => frame.frame_type), ["data", "done"]);
+  assert.deepEqual(closed, ["bidi-1"]);
+
+  const aborted = await runtime.openBidi(completeDraft().build());
+  const controller = new AbortController();
+  const pending = aborted.receive({ signal: controller.signal });
+  controller.abort("stop bidi");
+  await assert.rejects(
+    pending,
+    (error) => error instanceof SDKError && error.code === ErrorCode.CANCELLED,
+  );
+  assert.deepEqual(cancelled, ["stop bidi"]);
+});

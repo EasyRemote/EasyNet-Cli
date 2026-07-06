@@ -402,19 +402,50 @@ export class StreamHandle {
     this.transport = transport;
     this.open = objectValue(open, "stream open");
     this.closed = false;
+    this.terminal = false;
   }
 
-  async receive() {
+  async receive(options = {}) {
     if (this.closed) {
       throw invalidSDK("stream handle is closed");
     }
-    return parseJSON(await this.transport.receive(), "stream event");
+    if (this.terminal) {
+      throw invalidSDK("stream handle is terminal");
+    }
+    const event = parseJSON(
+      await withAbortSignal(this.transport.receive(), options.signal, () =>
+        this.cancel(options.cancelReason ?? abortReason(options.signal)),
+      ),
+      "stream event",
+    );
+    if (isTerminalFrame(event)) {
+      this.terminal = true;
+    }
+    return event;
+  }
+
+  async *events(options = {}) {
+    try {
+      while (!this.closed && !this.terminal) {
+        const event = await this.receive(options);
+        yield event;
+      }
+    } finally {
+      if (options.closeOnReturn !== false) {
+        await this.close();
+      }
+    }
+  }
+
+  [Symbol.asyncIterator]() {
+    return this.events();
   }
 
   async cancel(reason = "") {
     if (!this.closed && typeof this.transport.cancel === "function") {
       await this.transport.cancel(reason);
     }
+    this.terminal = true;
     this.closed = true;
   }
 
@@ -422,6 +453,7 @@ export class StreamHandle {
     if (!this.closed && typeof this.transport.close === "function") {
       await this.transport.close();
     }
+    this.terminal = true;
     this.closed = true;
   }
 }
@@ -434,20 +466,57 @@ export class BidiSession {
     this.transport = transport;
     this.open = objectValue(open, "bidi open");
     this.closed = false;
+    this.terminal = false;
   }
 
-  async send(frame) {
+  async send(frame, options = {}) {
     if (this.closed) {
       throw invalidSDK("bidi session is closed");
     }
-    await this.transport.send(Buffer.from(JSON.stringify(frame)));
+    if (this.terminal) {
+      throw invalidSDK("bidi session is terminal");
+    }
+    await withAbortSignal(
+      this.transport.send(Buffer.from(JSON.stringify(frame))),
+      options.signal,
+      () => this.cancel(options.cancelReason ?? abortReason(options.signal)),
+    );
   }
 
-  async receive() {
+  async receive(options = {}) {
     if (this.closed) {
       throw invalidSDK("bidi session is closed");
     }
-    return parseJSON(await this.transport.receive(), "bidi frame");
+    if (this.terminal) {
+      throw invalidSDK("bidi session is terminal");
+    }
+    const frame = parseJSON(
+      await withAbortSignal(this.transport.receive(), options.signal, () =>
+        this.cancel(options.cancelReason ?? abortReason(options.signal)),
+      ),
+      "bidi frame",
+    );
+    if (isTerminalFrame(frame)) {
+      this.terminal = true;
+    }
+    return frame;
+  }
+
+  async *frames(options = {}) {
+    try {
+      while (!this.closed && !this.terminal) {
+        const frame = await this.receive(options);
+        yield frame;
+      }
+    } finally {
+      if (options.closeOnReturn !== false) {
+        await this.close();
+      }
+    }
+  }
+
+  [Symbol.asyncIterator]() {
+    return this.frames();
   }
 
   async closeSend() {
@@ -460,6 +529,7 @@ export class BidiSession {
     if (!this.closed && typeof this.transport.cancel === "function") {
       await this.transport.cancel(reason);
     }
+    this.terminal = true;
     this.closed = true;
   }
 
@@ -467,6 +537,7 @@ export class BidiSession {
     if (!this.closed && typeof this.transport.close === "function") {
       await this.transport.close();
     }
+    this.terminal = true;
     this.closed = true;
   }
 }
@@ -613,9 +684,75 @@ function boolMap(value, field) {
   return map;
 }
 
+function withAbortSignal(operation, signal, onAbort) {
+  if (!signal) {
+    return Promise.resolve(operation);
+  }
+  if (signal.aborted) {
+    return Promise.resolve(onAbort()).then(() => {
+      throw cancelledSDK(abortReason(signal));
+    });
+  }
+  let abortHandler;
+  const abort = new Promise((_, reject) => {
+    abortHandler = () => {
+      Promise.resolve(onAbort())
+        .catch(() => {})
+        .finally(() => reject(cancelledSDK(abortReason(signal))));
+    };
+    signal.addEventListener("abort", abortHandler, { once: true });
+  });
+  return Promise.race([Promise.resolve(operation), abort]).finally(() => {
+    signal.removeEventListener("abort", abortHandler);
+  });
+}
+
+function abortReason(signal) {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim() !== "") {
+    return reason;
+  }
+  if (reason && typeof reason.message === "string" && reason.message.trim() !== "") {
+    return reason.message;
+  }
+  return "aborted";
+}
+
+function isTerminalFrame(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (value.terminal === true) {
+    return true;
+  }
+  for (const key of ["state", "frame_type", "event_type", "type", "kind"]) {
+    if (terminalToken(value[key])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function terminalToken(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const token = value.toLowerCase().replace(/[^a-z]/g, "");
+  return ["terminal", "closed", "completed", "failed", "cancelled", "canceled", "timedout", "done"].includes(token);
+}
+
 function invalidSDK(message) {
   return new SDKError({
     code: ErrorCode.INVALID_ARGUMENT,
+    stage: "sdk",
+    retry: RetryHint.NEVER,
+    message,
+  });
+}
+
+function cancelledSDK(message) {
+  return new SDKError({
+    code: ErrorCode.CANCELLED,
     stage: "sdk",
     retry: RetryHint.NEVER,
     message,

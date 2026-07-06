@@ -7,8 +7,8 @@ operations.
 
 Current status: Runtime Core seam. `index.js` and `index.d.ts` expose feature
 discovery, typed errors, Invocation draft construction, RuntimeClient dispatch
-seams, stream/bidi lifecycle handles, and explicit close/cancel over injected
-transports.
+seams, stream/bidi lifecycle handles, async iteration, `AbortSignal`
+cancellation, and explicit close/cancel over injected transports.
 
 This package has no daemon transport provider and no profile clients yet. It
 must not claim provider-backed, cutover-ready, or package-stable status.

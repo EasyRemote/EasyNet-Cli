@@ -127,6 +127,15 @@ export interface BidiTransport {
   close?(): Promise<void> | void;
 }
 
+export interface ReceiveOptions {
+  signal?: AbortSignal;
+  cancelReason?: string;
+}
+
+export interface AsyncIterationOptions extends ReceiveOptions {
+  closeOnReturn?: boolean;
+}
+
 export class RuntimeClient {
   constructor(transport: RuntimeTransport);
   newInvocation(): InvocationBuilder;
@@ -139,16 +148,22 @@ export class RuntimeClient {
 }
 
 export class StreamHandle {
+  terminal: boolean;
   constructor(transport: StreamTransport, open: Record<string, unknown>);
-  receive(): Promise<Record<string, unknown>>;
+  receive(options?: ReceiveOptions): Promise<Record<string, unknown>>;
+  events(options?: AsyncIterationOptions): AsyncIterableIterator<Record<string, unknown>>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<Record<string, unknown>>;
   cancel(reason?: string): Promise<void>;
   close(): Promise<void>;
 }
 
 export class BidiSession {
+  terminal: boolean;
   constructor(transport: BidiTransport, open: Record<string, unknown>);
-  send(frame: Record<string, unknown>): Promise<void>;
-  receive(): Promise<Record<string, unknown>>;
+  send(frame: Record<string, unknown>, options?: ReceiveOptions): Promise<void>;
+  receive(options?: ReceiveOptions): Promise<Record<string, unknown>>;
+  frames(options?: AsyncIterationOptions): AsyncIterableIterator<Record<string, unknown>>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<Record<string, unknown>>;
   closeSend(): Promise<void>;
   cancel(reason?: string): Promise<void>;
   close(): Promise<void>;

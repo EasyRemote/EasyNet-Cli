@@ -491,9 +491,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   live product smoke evidence remain incomplete.
 - Node/TypeScript now exposes a Runtime Core seam with feature discovery, typed
   errors, Invocation draft construction, RuntimeClient transport delegation,
-  stream/bidi lifecycle handles, TypeScript declarations, and a scaffold-backed
-  test gate. It is not provider-backed: daemon transports, profile clients,
-  conformance action-adapter reports, and package stability remain incomplete.
+  stream/bidi lifecycle handles, async iteration, `AbortSignal` cancellation,
+  TypeScript declarations, and a scaffold-backed test gate. It is not
+  provider-backed: daemon transports, profile clients, conformance
+  action-adapter reports, and package stability remain incomplete.
 
 ## Capability States
 
