@@ -31,6 +31,23 @@ export const ErrorCode = Object.freeze(
   Object.fromEntries([...ERROR_CODES].map((code) => [code, code])),
 );
 
+export const ErrorClass = Object.freeze({
+  VALIDATION: "validation",
+  HANDLE: "handle",
+  LIFECYCLE: "lifecycle",
+  AVAILABILITY: "availability",
+  PERMISSION: "permission",
+  ADMISSION: "admission",
+  ROUTING: "routing",
+  TIMEOUT: "timeout",
+  CANCELLATION: "cancellation",
+  PROTOCOL: "protocol",
+  VERSION: "version",
+  CONTROL: "control",
+  UNSUPPORTED: "unsupported",
+  GENERIC: "generic",
+});
+
 export const RetryHint = Object.freeze({
   NEVER: "never",
   SAFE: "safe",
@@ -95,6 +112,18 @@ export class SDKError extends Error {
       receiptURA: stringValue(decoded.receipt_ura, "receipt_ura", true),
       details: decoded.details ?? {},
     });
+  }
+
+  errorClass() {
+    return errorClassForCode(this.code);
+  }
+
+  profile() {
+    return detailString(this.details, "profile");
+  }
+
+  sourceRef() {
+    return detailString(this.details, "source_ref");
   }
 }
 
@@ -2164,10 +2193,16 @@ function localResourceRefRequest(value) {
   const payload = requestObject(value, ["path", "capability"], "local resource ref request");
   const resourcePath = publicationRequiredString(payload.path, "path");
   if (!isAbsolutePath(resourcePath)) {
-    throw invalidPublication("absolute resource path is required");
+    throw invalidPublication("absolute resource path is required", {
+      reason: "resource_ref_path_must_be_absolute",
+      operation: "build_local_resource_ref",
+    });
   }
   if (!["list", "stat", "read", "write"].includes(payload.capability)) {
-    throw invalidPublication("capability must be one of list, stat, read, or write");
+    throw invalidPublication("capability must be one of list, stat, read, or write", {
+      reason: "resource_ref_capability_invalid",
+      operation: "build_local_resource_ref",
+    });
   }
   return payload;
 }
@@ -2309,7 +2344,9 @@ function validateResourceRef(value) {
   publicationRequiredString(ref.capability, "capability");
   publicationRequiredString(ref.revision, "revision");
   if (["axon", "daemon", "easynet", "internal", "system"].includes(namespace.toLowerCase())) {
-    throw invalidPublication("resource_ref namespace is reserved");
+    throw invalidPublication("resource_ref namespace is reserved", {
+      reason: "resource_ref_namespace_reserved",
+    });
   }
   if (ref.display_path !== undefined) {
     cleanOptionalString(ref.display_path, "display_path");
@@ -2919,6 +2956,73 @@ function normalizeErrorCode(code) {
   return text;
 }
 
+export function profileSourceRef(profile) {
+  if (typeof profile !== "string") {
+    throw invalidSDK("profile must be a string");
+  }
+  const clean = profile.trim();
+  return clean ? `node_sdk.profile.${clean}` : "";
+}
+
+export function profileErrorDetails(profile, details = {}) {
+  const value = objectValue(details, "details");
+  if (value.profile === undefined) {
+    value.profile = profile;
+  }
+  if (value.source_ref === undefined) {
+    value.source_ref = profileSourceRef(profile);
+  }
+  return value;
+}
+
+function detailString(details, key) {
+  const value = details?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function errorClassForCode(code) {
+  switch (code) {
+    case ErrorCode.INVALID_ARGUMENT:
+    case ErrorCode.NULL_POINTER:
+    case ErrorCode.INVALID_UTF8:
+    case ErrorCode.INVALID_INVOCATION:
+      return ErrorClass.VALIDATION;
+    case ErrorCode.INVALID_HANDLE:
+      return ErrorClass.HANDLE;
+    case ErrorCode.NOT_INITIALIZED:
+    case ErrorCode.ALREADY_INIT:
+      return ErrorClass.LIFECYCLE;
+    case ErrorCode.DAEMON_OFFLINE:
+    case ErrorCode.TRANSPORT:
+      return ErrorClass.AVAILABILITY;
+    case ErrorCode.PERMISSION_DENIED:
+      return ErrorClass.PERMISSION;
+    case ErrorCode.ADMISSION_DENIED:
+    case ErrorCode.ABILITY_FAILED:
+      return ErrorClass.ADMISSION;
+    case ErrorCode.ABILITY_NOT_FOUND:
+    case ErrorCode.ROUTE_UNAVAILABLE:
+    case ErrorCode.NOT_FOUND:
+      return ErrorClass.ROUTING;
+    case ErrorCode.TIMEOUT:
+      return ErrorClass.TIMEOUT;
+    case ErrorCode.CANCELLED:
+      return ErrorClass.CANCELLATION;
+    case ErrorCode.PROTOCOL_MISMATCH:
+    case ErrorCode.PROTOCOL:
+      return ErrorClass.PROTOCOL;
+    case ErrorCode.VERSION_MISMATCH:
+    case ErrorCode.VERSION_INCOMPATIBLE:
+      return ErrorClass.VERSION;
+    case ErrorCode.CONTROL_ONLY:
+      return ErrorClass.CONTROL;
+    case ErrorCode.NOT_IMPLEMENTED:
+      return ErrorClass.UNSUPPORTED;
+    default:
+      return ErrorClass.GENERIC;
+  }
+}
+
 function parseRetryHint(value) {
   for (const hint of Object.values(RetryHint)) {
     if (value === hint) {
@@ -3121,53 +3225,34 @@ function invalidSDK(message) {
   });
 }
 
-function invalidDirectory(message) {
-  return new SDKError({
-    code: ErrorCode.INVALID_ARGUMENT,
-    stage: "directory",
-    retry: RetryHint.NEVER,
-    source: DIRECTORY_IDENTITY_PROFILE,
-    message,
-  });
+function invalidDirectory(message, details = {}) {
+  return invalidProfile(DIRECTORY_IDENTITY_PROFILE, "directory", message, details);
 }
 
-function invalidReceipt(message) {
-  return new SDKError({
-    code: ErrorCode.INVALID_ARGUMENT,
-    stage: "receipt",
-    retry: RetryHint.NEVER,
-    source: RECEIPT_PROFILE,
-    message,
-  });
+function invalidReceipt(message, details = {}) {
+  return invalidProfile(RECEIPT_PROFILE, "receipt", message, details);
 }
 
-function invalidPublication(message) {
-  return new SDKError({
-    code: ErrorCode.INVALID_ARGUMENT,
-    stage: "publication",
-    retry: RetryHint.NEVER,
-    source: PUBLICATION_PROFILE,
-    message,
-  });
+function invalidPublication(message, details = {}) {
+  return invalidProfile(PUBLICATION_PROFILE, "publication", message, details);
 }
 
-function invalidHostBinding(message) {
-  return new SDKError({
-    code: ErrorCode.INVALID_ARGUMENT,
-    stage: "host_binding",
-    retry: RetryHint.NEVER,
-    source: HOST_BINDING_PROFILE,
-    message,
-  });
+function invalidHostBinding(message, details = {}) {
+  return invalidProfile(HOST_BINDING_PROFILE, "host_binding", message, details);
 }
 
-function invalidHealth(message) {
+function invalidHealth(message, details = {}) {
+  return invalidProfile(HEALTH_PROFILE, "decode", message, details);
+}
+
+function invalidProfile(profile, stage, message, details = {}) {
   return new SDKError({
     code: ErrorCode.INVALID_ARGUMENT,
-    stage: "decode",
+    stage,
     retry: RetryHint.NEVER,
-    source: HEALTH_PROFILE,
+    source: profile,
     message,
+    details: profileErrorDetails(profile, details),
   });
 }
 

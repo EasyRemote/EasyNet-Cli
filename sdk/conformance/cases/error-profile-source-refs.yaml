@@ -3,6 +3,7 @@ profile: errors
 required_for:
   - go
   - python
+  - node
 description: Profile-originated SDK errors expose stable profile and source_ref details without changing typed error schema fields.
 steps:
   - action: trigger_profile_validation_error
@@ -21,7 +22,9 @@ expect:
   profile: publication
   python_source_ref: python_sdk.profile.publication
   go_source_ref: go_sdk.profile.publication
+  node_source_ref: node_sdk.profile.publication
   python_package_source_ref: python_sdk.profile.publication
   go_package_source_ref: go_sdk.profile.publication
+  node_package_source_ref: node_sdk.profile.publication
   top_level_schema_change: false
   existing_details_preserved: true

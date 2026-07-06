@@ -5,6 +5,7 @@ import {
   Client,
   DEFAULT_DIRECTORY_PAGE_SIZE,
   DirectoryClient,
+  ErrorClass,
   ErrorCode,
   HOST_STREAM_EMPTY_OUTPUT_HASH,
   HOST_STREAM_FRAME_SCHEMA,
@@ -26,6 +27,8 @@ import {
   ReceiptRef,
   RuntimeClient,
   SDKError,
+  profileErrorDetails,
+  profileSourceRef,
 } from "../index.js";
 
 const completeDraft = () =>
@@ -568,6 +571,9 @@ test("typed daemon error JSON decodes canonical schema values", () => {
   assert.equal(error.code, ErrorCode.DAEMON_OFFLINE);
   assert.equal(error.retryable, true);
   assert.equal(error.details.profile, "runtime_core");
+  assert.equal(error.errorClass(), ErrorClass.AVAILABILITY);
+  assert.equal(error.profile(), "runtime_core");
+  assert.equal(error.sourceRef(), "");
 });
 
 test("typed daemon error JSON rejects legacy code aliases", () => {
@@ -586,6 +592,41 @@ test("typed daemon error JSON rejects legacy code aliases", () => {
       (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
     );
   }
+});
+
+test("profile errors expose stable source refs without schema changes", async () => {
+  assert.equal(profileSourceRef(" publication "), "node_sdk.profile.publication");
+  assert.deepEqual(
+    profileErrorDetails("publication", {
+      source_ref: "custom.source",
+      reason: "resource_ref_namespace_reserved",
+    }),
+    {
+      profile: "publication",
+      source_ref: "custom.source",
+      reason: "resource_ref_namespace_reserved",
+    },
+  );
+
+  const publication = new PublicationClient({
+    buildResourceRef: () => JSON.stringify(publicationResourceRef()),
+  });
+
+  await assert.rejects(
+    () => publication.buildLocalResourceRef({ path: "relative/pkg", capability: "read" }),
+    (error) => {
+      assert.equal(error instanceof SDKError, true);
+      assert.equal(error.code, ErrorCode.INVALID_ARGUMENT);
+      assert.equal(error.errorClass(), ErrorClass.VALIDATION);
+      assert.equal(error.profile(), "publication");
+      assert.equal(error.sourceRef(), "node_sdk.profile.publication");
+      assert.equal(error.details.profile, "publication");
+      assert.equal(error.details.source_ref, "node_sdk.profile.publication");
+      assert.equal(error.details.reason, "resource_ref_path_must_be_absolute");
+      assert.equal(error.details.operation, "build_local_resource_ref");
+      return true;
+    },
+  );
 });
 
 test("StreamHandle exposes async iteration with terminal close", async () => {

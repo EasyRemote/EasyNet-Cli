@@ -7,8 +7,8 @@ operations.
 
 Current status: Runtime Core, Health, Directory + Identity, Receipt,
 Publication, and Host Binding seams.
-`index.js` and `index.d.ts` expose feature discovery, typed errors, Invocation
-draft construction, RuntimeClient dispatch seams, PreparedInvocation,
+`index.js` and `index.d.ts` expose feature discovery, typed errors, profile
+source-ref accessors, Invocation draft construction, RuntimeClient dispatch seams, PreparedInvocation,
 SigningMaterial, InvocationSignature, SignedInvocation, stream/bidi lifecycle
 handles, bounded retained stream/bidi history, async iteration, `AbortSignal`
 cancellation, HealthClient runtime health/diagnostics seams,
@@ -28,7 +28,7 @@ bytes, acquire signer handles, or perform local daemon signing.
 This package has no daemon transport provider, C ABI bridge, local daemon
 signing provider, or package-stability claim yet. Its shared conformance
 adapter report covers only declared Runtime Core, Health, Directory + Identity,
-MEMC, Receipt, Publication, and Host Binding seam cases; it must not claim
+Errors, MEMC, Receipt, Publication, and Host Binding seam cases; it must not claim
 provider-backed or cutover-ready status. Node also does not claim the shared
 C ABI callback-queue overflow case because daemon wire backpressure mapping is
 not implemented in this package.

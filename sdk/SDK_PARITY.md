@@ -491,7 +491,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   live product smoke evidence remain incomplete.
 - Node/TypeScript now exposes Runtime Core, Health, Directory + Identity,
   Receipt, Publication, and Host Binding seams with feature discovery, typed errors, Invocation draft construction,
-  RuntimeClient transport delegation, stream/bidi lifecycle handles, async
+  profile source-ref accessors, RuntimeClient transport delegation, stream/bidi lifecycle handles, async
   iteration, `AbortSignal` cancellation, HealthClient runtime health and
   diagnostics DTOs, InvocationHandle await/cancel/events/free observation
   seams, DirectoryClient read-model
@@ -501,7 +501,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   package, deploy/unpublish, read-model, lifecycle carrier seams,
   HostBindingClient host-stream codec/hash/lifecycle seams, TypeScript declarations, and
   a scaffold-backed test gate plus a shared Node action-adapter report for
-  Runtime Core, Health, Directory + Identity, MEMC, Receipt, Publication, and Host Binding seam
+  Runtime Core, Errors, Health, Directory + Identity, MEMC, Receipt, Publication, and Host Binding seam
   cases. It is not provider-backed: daemon transports, remaining profile
   clients, C ABI-style callback overflow, plugin policy, host binding bridge,
   Axon-backed receipt verification, and package stability remain incomplete.

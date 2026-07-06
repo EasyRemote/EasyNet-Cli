@@ -1,6 +1,37 @@
 export type RetryHintValue = "never" | "safe" | "after_backoff" | "unknown";
+export type ErrorClassValue =
+  | "validation"
+  | "handle"
+  | "lifecycle"
+  | "availability"
+  | "permission"
+  | "admission"
+  | "routing"
+  | "timeout"
+  | "cancellation"
+  | "protocol"
+  | "version"
+  | "control"
+  | "unsupported"
+  | "generic";
 
 export declare const ErrorCode: Readonly<Record<string, string>>;
+export declare const ErrorClass: Readonly<{
+  VALIDATION: "validation";
+  HANDLE: "handle";
+  LIFECYCLE: "lifecycle";
+  AVAILABILITY: "availability";
+  PERMISSION: "permission";
+  ADMISSION: "admission";
+  ROUTING: "routing";
+  TIMEOUT: "timeout";
+  CANCELLATION: "cancellation";
+  PROTOCOL: "protocol";
+  VERSION: "version";
+  CONTROL: "control";
+  UNSUPPORTED: "unsupported";
+  GENERIC: "generic";
+}>;
 export declare const RetryHint: Readonly<{
   NEVER: "never";
   SAFE: "safe";
@@ -21,6 +52,9 @@ export declare const MAX_BIDI_BUFFERED_FRAMES: 1024;
 export declare const HOST_STREAM_FRAME_SCHEMA: "host-stream-frame.schema.json";
 export declare const HOST_STREAM_HASH_ALGORITHM: "sha256(prev_hash || seq_be || canonical_json(value))";
 export declare const HOST_STREAM_EMPTY_OUTPUT_HASH: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+export declare function profileSourceRef(profile: string): string;
+export declare function profileErrorDetails(profile: string, details?: Record<string, unknown>): Record<string, unknown>;
 
 export interface SDKErrorOptions {
   code: string;
@@ -46,6 +80,9 @@ export class SDKError extends Error {
   details: Record<string, unknown>;
   constructor(options: SDKErrorOptions);
   static fromJSON(raw: Uint8Array | string): SDKError | null;
+  errorClass(): ErrorClassValue;
+  profile(): string;
+  sourceRef(): string;
 }
 
 export interface DiscoveryTransport {

@@ -64,6 +64,18 @@
       "message": null
     },
     {
+      "case_id": "error/profile_source_refs",
+      "profile": "errors",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "health/api_vs_runtime",
       "profile": "health",
       "status": "passed",
