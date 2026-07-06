@@ -838,7 +838,7 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let pending_stream = Arc::new(PendingStreamDispatchMap::new());
     let _svc = DaemonInvocationService::new(Arc::clone(&presence), admission)

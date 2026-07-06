@@ -103,7 +103,7 @@ pub(super) fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Opti
     // Phase 3D: prefer the keyring vault's seed when the operator
     // has opted in via EASYNET_KEYRING_PASSPHRASE. The vault's
     // primary_self for this device is `caller_ura`; the role
-    // overlay also matches HubURI(realm) on the same host, so
+    // overlay also matches HubURA(realm) on the same host, so
     // backend (Go side, Phase 3D's Go reader) and daemon (Rust
     // side here) end up signing with the **same** Ed25519 seed.
     //

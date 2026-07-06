@@ -87,16 +87,16 @@ fn hub_daemon_invocation_surface_satisfies_baseline_contract() {
 async fn forward_invoke_quota_throttles_by_inner_user_ability() {
     let caller_ura = "easynet:///r/test-realm/device/quota-caller";
     let rt = runtime_with_json_echo(
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         "observe.health",
         "handled_by",
         "quota-test",
     )
     .await;
     let svc = make_quota_service_for_device_caller(caller_ura, 1).with_local_runtime(rt);
-    publish_test_route(&svc, TEST_DAEMON_URI, "observe.health");
+    publish_test_route(&svc, TEST_DAEMON_URA, "observe.health");
     let args = forward_invoke_args_for_ability(
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         "observe.health",
         serde_json::json!({"probe": true}),
     );
@@ -228,7 +228,7 @@ async fn invoke_dispatches_federation_status() {
 #[test]
 fn session_control_heartbeat_renews_caller_owner_projection_lease() {
     let svc = make_service();
-    let owner_ura = TEST_DAEMON_URI;
+    let owner_ura = TEST_DAEMON_URA;
     let public_name = "agent.list";
     let ability_ura =
         crate::core::ura::owner_ability_ura(owner_ura, public_name).expect("ability ura");
@@ -295,7 +295,7 @@ async fn invoke_dispatches_federation_resolve_with_no_filter() {
 #[tokio::test]
 async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
     let svc = make_service();
-    let owner_ura = TEST_DAEMON_URI;
+    let owner_ura = TEST_DAEMON_URA;
     let ability_ura =
         crate::core::ura::owner_ability_ura(owner_ura, "agent.list").expect("device ability ura");
     svc.directory.presence.insert(owner_ura.to_string(), {
@@ -348,7 +348,7 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
     assert_eq!(body["abilityUra"], ability_ura);
     assert_eq!(
         body["nextHop"]["localDeviceAbility"]["deviceUra"],
-        TEST_DAEMON_URI
+        TEST_DAEMON_URA
     );
 }
 
@@ -419,7 +419,7 @@ async fn invoke_writes_success_record_to_invocation_ledger() {
     let records = ledger.list_all().expect("ledger list");
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record.caller_ura, TEST_DAEMON_URI);
+    assert_eq!(record.caller_ura, TEST_DAEMON_URA);
     let expected_prefix =
         crate::core::ura::resource_dot_ura("test-realm", "device.test-daemon", "invocations/");
     assert!(record.invocation_ura.starts_with(&expected_prefix));
@@ -1042,15 +1042,15 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
             tls_ca_pem_path: None,
         })
         .expect("append device");
-    let admission = AdmissionFacade::new(Arc::new(anchor_inner), Some(TEST_DAEMON_URI.to_string()));
+    let admission = AdmissionFacade::new(Arc::new(anchor_inner), Some(TEST_DAEMON_URA.to_string()));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
 
     let function_name = ABILITY_FEDERATION_LIST_USER_DEVICES;
     let arguments = br#"{"realm":"realm-x"}"#.to_vec();
     let envelope = signed_test_envelope(
         device_caller_ura,
-        TEST_DAEMON_URI,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
         function_name,
         &arguments,
         &signing_key,
@@ -1062,7 +1062,7 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            test_descriptor_ref(TEST_DAEMON_URA, function_name),
         )]),
         ..InvokeRequest::default()
     });
@@ -1099,7 +1099,7 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
         .expect("device caller trust anchor"),
     ));
     let admission =
-        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let trust_dir = tempfile::tempdir().expect("trust tempdir");
     let trust_path = trust_dir.path().join("realm-trust.toml");
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
@@ -1117,8 +1117,8 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
     let function_name = ABILITY_IDENTITY_REGISTER_PUBKEY;
     let envelope = signed_test_envelope(
         device_caller_ura,
-        TEST_DAEMON_URI,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
         function_name,
         &arguments,
         &device_signing_key,
@@ -1130,7 +1130,7 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            test_descriptor_ref(TEST_DAEMON_URA, function_name),
         )]),
         ..InvokeRequest::default()
     });
@@ -1189,7 +1189,7 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
         .expect("device caller plus user trust anchor"),
     ));
     let admission =
-        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let trust_dir = tempfile::tempdir().expect("trust tempdir");
     let trust_path = trust_dir.path().join("realm-trust.toml");
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
@@ -1204,8 +1204,8 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
     let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
     let envelope = signed_test_envelope(
         device_caller_ura,
-        TEST_DAEMON_URI,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
         function_name,
         &arguments,
         &device_signing_key,
@@ -1217,7 +1217,7 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            test_descriptor_ref(TEST_DAEMON_URA, function_name),
         )]),
         ..InvokeRequest::default()
     });
@@ -1278,7 +1278,7 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
         .expect("backend plus user trust anchor"),
     ));
     let admission =
-        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let presence = Arc::new(PresenceRegistry::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     presence.insert_negotiated_with_trust(
@@ -1304,8 +1304,8 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
     let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
     let envelope = signed_test_envelope(
         &backend_ura,
-        TEST_DAEMON_URI,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
         function_name,
         &arguments,
         &backend_signing_key,
@@ -1318,7 +1318,7 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
             metadata: std::collections::HashMap::from([(
                 crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                     .to_string(),
-                test_descriptor_ref(TEST_DAEMON_URI, function_name),
+                test_descriptor_ref(TEST_DAEMON_URA, function_name),
             )]),
             ..InvokeRequest::default()
         }))
@@ -1393,7 +1393,7 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
         .expect("backend plus user trust anchor"),
     ));
     let admission =
-        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let presence = Arc::new(PresenceRegistry::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     presence.insert(host_ura.to_string(), tx);
@@ -1440,8 +1440,8 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
     let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
     let envelope = signed_test_envelope(
         &backend_ura,
-        TEST_DAEMON_URI,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
         function_name,
         &arguments,
         &backend_signing_key,
@@ -1454,7 +1454,7 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
             metadata: std::collections::HashMap::from([(
                 crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                     .to_string(),
-                test_descriptor_ref(TEST_DAEMON_URI, function_name),
+                test_descriptor_ref(TEST_DAEMON_URA, function_name),
             )]),
             ..InvokeRequest::default()
         }))
@@ -1531,7 +1531,7 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
         .expect("backend trust anchor"),
     ));
     let admission =
-        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URI.to_string()));
+        AdmissionFacade::with_trust_anchor_cell(cell.clone(), Some(TEST_DAEMON_URA.to_string()));
     let presence = Arc::new(PresenceRegistry::new());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     presence.insert(user_ura.to_string(), tx);
@@ -1550,8 +1550,8 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
     let function_name = ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
     let envelope = signed_test_envelope(
         &backend_ura,
-        TEST_DAEMON_URI,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
         function_name,
         &arguments,
         &backend_signing_key,
@@ -1564,7 +1564,7 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
             metadata: std::collections::HashMap::from([(
                 crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                     .to_string(),
-                test_descriptor_ref(TEST_DAEMON_URI, function_name),
+                test_descriptor_ref(TEST_DAEMON_URA, function_name),
             )]),
             ..InvokeRequest::default()
         }))
@@ -1603,7 +1603,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamp
         }])
         .expect("peer hub trust anchor"),
     );
-    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
     let canned = InvokeResponse {
         result: br#"{
             "devices":[{
@@ -1669,7 +1669,7 @@ async fn federation_proxy_caller_gate_accepts_local_hub_identity_with_hub_role()
         }])
         .expect("local hub trust anchor"),
     );
-    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_session_realm("local-realm");
     let envelope = Envelope {
@@ -1707,7 +1707,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         }])
         .expect("hub caller trust anchor"),
     );
-    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_session_realm("local-realm");
 
@@ -1804,7 +1804,7 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
         }])
         .expect("peer hub trust anchor"),
     );
-    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
     let owner_ura = "easynet:///r/peer-realm/device/dev-peer";
     let ability_ura =
         crate::core::ura::owner_ability_ura(owner_ura, "agent.list").expect("ability ura");
@@ -1905,7 +1905,7 @@ async fn invoke_dispatches_federation_resolve_key_returns_pubkey_when_present() 
         tls_ca_pem_path: None,
     };
     let anchor = Arc::new(RealmTrustAnchor::from_entries(vec![entry]).expect("anchor"));
-    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URI.to_string()));
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
 
     let resp = svc
@@ -2029,7 +2029,7 @@ async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
 
     let rt = LocalRuntime::new();
     let ability = "test.fallback.echo";
-    let ability_ura = crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, ability).unwrap();
+    let ability_ura = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).unwrap();
     rt.register_ability_with_options(
         ability_ura,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -2045,7 +2045,7 @@ async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
     .unwrap();
 
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, ability);
+    publish_test_route(&svc, TEST_DAEMON_URA, ability);
     let resp = svc
         .invoke(invoke_request(ability, r#"{"hello":"world"}"#))
         .await
@@ -2060,7 +2060,7 @@ async fn invoke_selected_route_unknown_runtime_handler_surfaces_not_found() {
 
     let rt = LocalRuntime::new();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "nope.nope");
+    publish_test_route(&svc, TEST_DAEMON_URA, "nope.nope");
 
     match svc.invoke(invoke_request("nope.nope", "{}")).await {
         Err(err) => {
@@ -2168,10 +2168,10 @@ async fn dispatch_remote_rpc_refuses_self_execution_host() {
     let svc = make_service().with_pending(Arc::new(PendingDispatchMap::new()));
     svc.directory
         .presence
-        .insert(TEST_DAEMON_URI.to_string(), self_tx);
-    publish_test_route(&svc, TEST_DAEMON_URI, "observe.health");
+        .insert(TEST_DAEMON_URA.to_string(), self_tx);
+    publish_test_route(&svc, TEST_DAEMON_URA, "observe.health");
 
-    let ability_ura = crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, "observe.health")
+    let ability_ura = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "observe.health")
         .expect("device ability URA");
     let selected_route = svc
         .target_gate()
@@ -2179,7 +2179,7 @@ async fn dispatch_remote_rpc_refuses_self_execution_host() {
         .await
         .resolve_route(&ability_ura, "")
         .expect("resolver selects the self-hosted route");
-    assert_eq!(selected_route.execution_host_ura, TEST_DAEMON_URI);
+    assert_eq!(selected_route.execution_host_ura, TEST_DAEMON_URA);
 
     let request = invoke_request("observe.health", "{}").into_inner();
     let err = svc

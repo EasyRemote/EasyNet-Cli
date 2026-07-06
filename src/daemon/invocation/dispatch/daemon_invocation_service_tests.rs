@@ -68,20 +68,20 @@ use easynet_axon::pb::axon::v1::{
 // URA v4.1.4: daemons are devices, not agents. Fixtures use the
 // canonical shape because forward_invoke no longer repairs legacy
 // `agent/<bare-id>` device aliases at the request boundary.
-const TEST_DAEMON_URI: &str = "easynet:///r/test-realm/device/test-daemon";
+const TEST_DAEMON_URA: &str = "easynet:///r/test-realm/device/test-daemon";
 const TEST_DEVICE_SIGNING_SEED: [u8; 32] = [0x33; 32];
 
 fn make_service() -> DaemonInvocationService {
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_hub_signing_seed([0x11; 32])
 }
 
 fn publish_test_route(svc: &DaemonInvocationService, owner_ura: &str, public_name: &str) {
-    publish_test_route_hosted_by(svc, owner_ura, public_name, TEST_DAEMON_URI);
+    publish_test_route_hosted_by(svc, owner_ura, public_name, TEST_DAEMON_URA);
 }
 
 fn publish_test_route_hosted_by(
@@ -210,7 +210,7 @@ fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInv
         60_000,
         std::collections::BTreeMap::new(),
     );
-    let admission = AdmissionFacade::new(Arc::new(anchor), Some(TEST_DAEMON_URI.to_string()))
+    let admission = AdmissionFacade::new(Arc::new(anchor), Some(TEST_DAEMON_URA.to_string()))
         .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(quota)));
     DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_hub_signing_seed([0x11; 32])
@@ -260,7 +260,7 @@ async fn runtime_with_json_echo(
 }
 
 fn test_envelope() -> Envelope {
-    ProtoEnvelope::targeted(TEST_DAEMON_URI, TEST_DAEMON_URI, TEST_DAEMON_URI)
+    ProtoEnvelope::targeted(TEST_DAEMON_URA, TEST_DAEMON_URA, TEST_DAEMON_URA)
         .expect("valid test envelope")
         .into_inner()
 }
@@ -269,7 +269,7 @@ fn test_envelope() -> Envelope {
 fn route_table_match_projects_descriptor_ref_to_public_name() {
     let ability =
         crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE;
-    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ability);
     let envelope = test_envelope();
 
     assert_eq!(
@@ -340,9 +340,9 @@ fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest
     let signing_key = test_device_signing_key();
     Request::new(InvokeRequest {
         envelope: Some(signed_test_envelope(
-            TEST_DAEMON_URI,
-            TEST_DAEMON_URI,
-            TEST_DAEMON_URI,
+            TEST_DAEMON_URA,
+            TEST_DAEMON_URA,
+            TEST_DAEMON_URA,
             function_name,
             &arguments,
             &signing_key,
@@ -352,7 +352,7 @@ fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            test_descriptor_ref(TEST_DAEMON_URA, function_name),
         )]),
         ..InvokeRequest::default()
     })
@@ -367,8 +367,8 @@ fn invoke_request_from_device(
     Request::new(InvokeRequest {
         envelope: Some(signed_test_envelope(
             caller_ura,
-            TEST_DAEMON_URI,
-            TEST_DAEMON_URI,
+            TEST_DAEMON_URA,
+            TEST_DAEMON_URA,
             function_name,
             &arguments,
             &signing_key,
@@ -378,7 +378,7 @@ fn invoke_request_from_device(
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URI, function_name),
+            test_descriptor_ref(TEST_DAEMON_URA, function_name),
         )]),
         ..InvokeRequest::default()
     })
@@ -413,9 +413,9 @@ fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
     let signing_key = test_device_signing_key();
     EnvelopeOpen {
         envelope: Some(signed_test_envelope(
-            TEST_DAEMON_URI,
-            TEST_DAEMON_URI,
-            TEST_DAEMON_URI,
+            TEST_DAEMON_URA,
+            TEST_DAEMON_URA,
+            TEST_DAEMON_URA,
             ability,
             &initial_args,
             &signing_key,
@@ -435,7 +435,7 @@ fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
     let signing_key = test_device_signing_key();
     EnvelopeOpen {
         envelope: Some(signed_test_envelope(
-            TEST_DAEMON_URI,
+            TEST_DAEMON_URA,
             callee_ura,
             callee_ura,
             ability,

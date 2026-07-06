@@ -89,7 +89,7 @@ async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
     // dispatch key is also bare. This mirrors the production
     // convention and the sibling `observe.health` quota test.
     let rt = runtime_with_json_echo(
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         "demo.echo",
         "MARKER-C9-1",
         "self-target-fallthrough-fired",
@@ -99,14 +99,14 @@ async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "demo.echo");
+    publish_test_route(&svc, TEST_DAEMON_URA, "demo.echo");
 
     let response = svc
         .unary_dispatcher()
         .dispatch_federation_forward_invoke(
             None,
             &forward_invoke_args_for_ability(
-                TEST_DAEMON_URI,
+                TEST_DAEMON_URA,
                 "demo.echo",
                 serde_json::json!({"k": "v"}),
             ),
@@ -205,7 +205,7 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
 /// InvalidArgument.
 #[tokio::test]
 async fn forward_invoke_agent_ability_unhosted_by_target_fails_at_resolution() {
-    let target_ura = TEST_DAEMON_URI;
+    let target_ura = TEST_DAEMON_URA;
     let rt = runtime_with_json_echo(
         target_ura,
         "observe.health",
@@ -253,7 +253,7 @@ async fn forward_invoke_rejects_bare_device_agent_alias() {
 
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let svc = DaemonInvocationService::new(presence, admission)
         .with_session_realm("test-realm")
@@ -337,11 +337,11 @@ async fn forward_invoke_self_target_without_local_runtime_rejects_explicitly() {
     // dispatch must fail explicitly instead of falling through to
     // PresenceRegistry and reporting a misleading target_offline.
     let svc = make_service().with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URI, "observe.health");
+    publish_test_route(&svc, TEST_DAEMON_URA, "observe.health");
 
     let err = svc
         .unary_dispatcher()
-        .dispatch_federation_forward_invoke(None, &forward_invoke_args(TEST_DAEMON_URI))
+        .dispatch_federation_forward_invoke(None, &forward_invoke_args(TEST_DAEMON_URA))
         .await
         .expect_err("no LocalRuntime => explicit wiring error");
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -357,14 +357,14 @@ async fn forward_invoke_self_target_unknown_ability_returns_route_negative() {
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "demo.missing");
+    publish_test_route(&svc, TEST_DAEMON_URA, "demo.missing");
 
     let err = svc
         .unary_dispatcher()
         .dispatch_federation_forward_invoke(
             None,
             &forward_invoke_args_for_ability(
-                TEST_DAEMON_URI,
+                TEST_DAEMON_URA,
                 "demo.missing",
                 serde_json::json!({}),
             ),
@@ -392,7 +392,7 @@ async fn forward_invoke_self_target_does_not_intercept_other_target_uras() {
     // target_offline when the device is not subscribed —
     // unchanged by the fall-through.
     let rt = runtime_with_json_echo(
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         "demo.echo",
         "MARKER-OTHER",
         "must-not-fire",
@@ -1015,10 +1015,10 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     //
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
-    const DAEMON_A_URI: &str = "easynet:///r/realm-a/device/daemon-a";
-    const DAEMON_B_URI: &str = "easynet:///r/realm-b/device/daemon-b";
-    const TARGET_DEVICE_URI: &str = "easynet:///r/realm-b/device/target-device";
-    const PEER_HUB_URI: &str = "https://daemon-b.example:50443";
+    const DAEMON_A_URA: &str = "easynet:///r/realm-a/device/daemon-a";
+    const DAEMON_B_URA: &str = "easynet:///r/realm-b/device/daemon-b";
+    const TARGET_DEVICE_URA: &str = "easynet:///r/realm-b/device/target-device";
+    const PEER_HUB_ENDPOINT: &str = "https://daemon-b.example:50443";
     const DAEMON_A_SIGNING_SEED: [u8; 32] = [0xA1; 32];
 
     let daemon_a_signing_key = ed25519_dalek::SigningKey::from_bytes(&DAEMON_A_SIGNING_SEED);
@@ -1032,7 +1032,7 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // request with the matching private key, so daemon B exercises
     // the same strict Device-caller admission path as production callers.
     let daemon_a_in_b_trust = vec![crate::daemon::trust::anchor::TrustedAgent {
-        agent_ura: DAEMON_A_URI.to_string(),
+        agent_ura: DAEMON_A_URA.to_string(),
         public_key_b64: daemon_a_pubkey_b64,
         role: crate::daemon::trust::anchor::TrustedAgentRole::Device,
         added_at_unix_ms: 1_714_492_800_000,
@@ -1055,16 +1055,16 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // SessionDispatch::Result up).
     let daemon_b_presence = Arc::new(PresenceRegistry::new());
     let (target_tx, mut target_rx) = tokio::sync::mpsc::channel(8);
-    daemon_b_presence.insert(TARGET_DEVICE_URI.to_string(), target_tx);
+    daemon_b_presence.insert(TARGET_DEVICE_URA.to_string(), target_tx);
 
     let daemon_b_pending = Arc::new(PendingDispatchMap::new());
-    let daemon_b_admission = AdmissionFacade::new(daemon_b_anchor, Some(DAEMON_B_URI.to_string()));
+    let daemon_b_admission = AdmissionFacade::new(daemon_b_anchor, Some(DAEMON_B_URA.to_string()));
     let daemon_b = Arc::new(
         DaemonInvocationService::new(daemon_b_presence, daemon_b_admission)
             .with_session_realm(REALM_B)
             .with_pending(Arc::clone(&daemon_b_pending)),
     );
-    publish_test_route(&daemon_b, TARGET_DEVICE_URI, "federation.heartbeat");
+    publish_test_route(&daemon_b, TARGET_DEVICE_URA, "federation.heartbeat");
 
     // Fake device-B task: drain the dispatch frame, decode it,
     // and feed back a canned ability response via
@@ -1113,17 +1113,17 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // bytes daemon B verifies.
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(DAEMON_A_URI.to_string()),
+        Some(DAEMON_A_URA.to_string()),
     );
     let federation_client: Arc<dyn FederationClient> = Arc::new(ForwardingPeerClient {
         peer: daemon_b,
-        caller_ura: DAEMON_A_URI.to_string(),
+        caller_ura: DAEMON_A_URA.to_string(),
         callee_ura: crate::core::ura::hub_ura(REALM_B),
-        subject_ura: DAEMON_B_URI.to_string(),
+        subject_ura: DAEMON_B_URA.to_string(),
         signing_seed: DAEMON_A_SIGNING_SEED,
     });
     let mut peers = BTreeMap::new();
-    peers.insert(REALM_B.to_string(), PEER_HUB_URI.to_string());
+    peers.insert(REALM_B.to_string(), PEER_HUB_ENDPOINT.to_string());
 
     let daemon_a =
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
@@ -1143,12 +1143,12 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     //   "ts_ms":0
     // }})
     let public_ability = "federation.heartbeat";
-    let ability_ura = crate::core::ura::owner_ability_ura(TARGET_DEVICE_URI, public_ability)
+    let ability_ura = crate::core::ura::owner_ability_ura(TARGET_DEVICE_URA, public_ability)
         .expect("target device ability URA");
     let inner_payload = serde_json::json!({
         "ability_ura": ability_ura,
         "args": {
-            "agent_ura": TARGET_DEVICE_URI,
+            "agent_ura": TARGET_DEVICE_URA,
         },
         "call_id": "e2e-call-id-1",
     });
@@ -1158,10 +1158,10 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     };
     let forward_args = format!(
         r#"{{"target_ura":"{}","inner_envelope_b64":"{}"}}"#,
-        TARGET_DEVICE_URI, inner_b64
+        TARGET_DEVICE_URA, inner_b64
     );
     let req = Request::new(InvokeRequest {
-        envelope: Some(test_envelope_with_ura(DAEMON_A_URI)),
+        envelope: Some(test_envelope_with_ura(DAEMON_A_URA)),
         function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
         arguments: forward_args.into_bytes(),
         ..InvokeRequest::default()

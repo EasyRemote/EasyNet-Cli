@@ -177,7 +177,7 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
         .expect("resolver selects agent route");
     assert_eq!(selected_route.owner_ura, owner_ura);
     assert_eq!(selected_route.callee_ura, owner_ura);
-    assert_eq!(selected_route.execution_host_ura, TEST_DAEMON_URI);
+    assert_eq!(selected_route.execution_host_ura, TEST_DAEMON_URA);
     assert_eq!(selected_route.ability_ura, ability_ura);
 
     let response = svc
@@ -375,7 +375,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     // 1. THIS daemon's URA → self target.
     assert!(
         svc.target_gate()
-            .matches_self_target_ura(TEST_DAEMON_URI)
+            .matches_self_target_ura(TEST_DAEMON_URA)
             .await,
         "own daemon URA must be self-target"
     );
@@ -420,7 +420,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     let rt = LocalRuntime::new();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, "demo.unary_via_axon").unwrap();
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.unary_via_axon").unwrap();
     rt.register_ability_with_options(
         runtime_ability.clone(),
         make_ability(|ctx| async move {
@@ -444,14 +444,14 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "demo.unary_via_axon");
+    publish_test_route(&svc, TEST_DAEMON_URA, "demo.unary_via_axon");
 
     let mut request = invoke_request("demo.unary_via_axon", r#"{"k":"v"}"#).into_inner();
     let external_caller = "easynet:///r/test-realm/device/client-1";
     let signing_key = test_device_signing_key();
     request.envelope = Some(signed_test_envelope(
         external_caller,
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         "easynet:///r/test-realm/resource/camera-1",
         &request.function_name,
         &request.arguments,
@@ -508,7 +508,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         "Axon-routed unary ledger row must preserve the external-signed wire caller"
     );
     assert_eq!(
-        records[0].callee_ura, TEST_DAEMON_URI,
+        records[0].callee_ura, TEST_DAEMON_URA,
         "Axon-routed unary ledger row must preserve the external-signed wire callee"
     );
     assert_eq!(
@@ -525,7 +525,7 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let rt = LocalRuntime::new();
     let ability = "demo.descriptor_bound_unary";
-    let runtime_ability = crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, ability).unwrap();
+    let runtime_ability = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).unwrap();
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -537,9 +537,9 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, ability);
+    publish_test_route(&svc, TEST_DAEMON_URA, ability);
 
-    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ability);
     let request = invoke_request(&descriptor_ref, r#"{"descriptor":"function-name"}"#).into_inner();
     let (result, axon_took_it) = svc
         .unary_dispatcher()
@@ -561,7 +561,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     let rt = LocalRuntime::new();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, "demo.loopback_unsigned").unwrap();
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.loopback_unsigned").unwrap();
     rt.register_ability_with_options(
         runtime_ability.clone(),
         make_ability(|ctx| async move {
@@ -588,14 +588,14 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "demo.loopback_unsigned");
+    publish_test_route(&svc, TEST_DAEMON_URA, "demo.loopback_unsigned");
 
     let arguments = br#"{"k":"v"}"#.to_vec();
     let request = InvokeRequest {
         envelope: Some(
             ProtoEnvelope::targeted(
                 crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                TEST_DAEMON_URI,
+                TEST_DAEMON_URA,
                 "easynet:///r/test-realm/resource/camera-1",
             )
             .expect("valid loopback envelope")
@@ -623,7 +623,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
         decoded["caller"],
         crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
     );
-    assert_eq!(decoded["callee"], TEST_DAEMON_URI);
+    assert_eq!(decoded["callee"], TEST_DAEMON_URA);
     assert_eq!(
         decoded["subject"],
         "easynet:///r/test-realm/resource/camera-1"
@@ -650,7 +650,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
         crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         "loopback dispatch must be signed by daemon-local system identity"
     );
-    assert_eq!(records[0].callee_ura, TEST_DAEMON_URI);
+    assert_eq!(records[0].callee_ura, TEST_DAEMON_URA);
     assert_eq!(
         records[0].subject_ura,
         "easynet:///r/test-realm/resource/camera-1"
@@ -685,13 +685,13 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
 
     let ability = "probe.concurrent_echo";
     let rt =
-        runtime_with_json_echo(TEST_DAEMON_URI, ability, "handled_by", "concurrency-probe").await;
+        runtime_with_json_echo(TEST_DAEMON_URA, ability, "handled_by", "concurrency-probe").await;
     let svc = std::sync::Arc::new(
         make_service()
             .with_session_realm("test-realm")
             .with_local_runtime(rt),
     );
-    publish_test_route(svc.as_ref(), TEST_DAEMON_URI, ability);
+    publish_test_route(svc.as_ref(), TEST_DAEMON_URA, ability);
 
     let mut tasks = JoinSet::new();
     let started = std::time::Instant::now();
@@ -705,8 +705,8 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
                     envelope: Some(
                         ProtoEnvelope::targeted(
                             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                            TEST_DAEMON_URI,
-                            TEST_DAEMON_URI,
+                            TEST_DAEMON_URA,
+                            TEST_DAEMON_URA,
                         )
                         .expect("valid concurrency probe envelope")
                         .into_inner(),
@@ -820,7 +820,7 @@ async fn simple_uds_invocation_concurrency_probe() {
 
     let ability = "probe.uds_concurrent_echo";
     let rt = runtime_with_json_echo(
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         ability,
         "handled_by",
         "uds-concurrency-probe",
@@ -829,7 +829,7 @@ async fn simple_uds_invocation_concurrency_probe() {
     let service = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(rt);
-    publish_test_route(&service, TEST_DAEMON_URI, ability);
+    publish_test_route(&service, TEST_DAEMON_URA, ability);
 
     let temp = tempfile::tempdir().expect("temp UDS dir");
     let socket_path = temp.path().join("invocation-probe.sock");
@@ -875,8 +875,8 @@ async fn simple_uds_invocation_concurrency_probe() {
                     envelope: Some(
                         ProtoEnvelope::targeted(
                             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                            TEST_DAEMON_URI,
-                            TEST_DAEMON_URI,
+                            TEST_DAEMON_URA,
+                            TEST_DAEMON_URA,
                         )
                         .expect("valid UDS concurrency probe envelope")
                         .into_inner(),
@@ -976,7 +976,7 @@ async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "missing.ability");
+    publish_test_route(&svc, TEST_DAEMON_URA, "missing.ability");
 
     let request = invoke_request("missing.ability", "{}").into_inner();
     let (result, axon_took_it) = svc
@@ -1010,7 +1010,7 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let rt = LocalRuntime::new();
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, "demo.stream_only").unwrap();
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.stream_only").unwrap();
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|_ctx| async { Ok(Vec::new()) }),
@@ -1022,7 +1022,7 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "demo.stream_only");
+    publish_test_route(&svc, TEST_DAEMON_URA, "demo.stream_only");
 
     let request = invoke_request("demo.stream_only", "{}").into_inner();
     let (result, axon_took_it) = svc

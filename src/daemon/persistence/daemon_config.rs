@@ -544,7 +544,7 @@ impl DaemonConfig {
     }
 
     /// The realm this daemon and every device it serves belong to.
-    /// Used as the `realm` component when minting URIs and when
+    /// Used as the `realm` component when minting URAs and when
     /// deriving `join_receipt_hash` (spec §5.1).
     pub fn realm(&self) -> &str {
         &self.realm

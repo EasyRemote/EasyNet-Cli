@@ -12,7 +12,7 @@ async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() 
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let svc = DaemonInvocationService::new(Arc::clone(&presence), admission);
 
@@ -84,7 +84,7 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let svc = DaemonInvocationService::new(Arc::clone(&presence), admission);
 
@@ -184,7 +184,7 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_subscribe_v2_heartbeat_interval_ms(std::num::NonZeroU64::new(50).unwrap());
@@ -237,7 +237,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 
     let rt = LocalRuntime::new();
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "browser.capture_viewport")
             .expect("device stream ability URA");
     // Stream-mode descriptor proof so Axon's receipt-proof normalizer
     // admits the dispatch (production stamps the equivalent off the
@@ -272,7 +272,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     .await
     .unwrap();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
+    publish_test_route(&svc, TEST_DAEMON_URA, "browser.capture_viewport");
 
     let function_name = "browser.capture_viewport".to_string();
     let arguments = br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#.to_vec();
@@ -282,7 +282,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
             envelope: Some(
                 ProtoEnvelope::targeted(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URA,
                     subject_ura,
                 )
                 .expect("valid unsigned loopback stream envelope")
@@ -368,7 +368,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     let ability = "browser.descriptor_stream";
     let rt = LocalRuntime::new();
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, ability).expect("stream ability URA");
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).expect("stream ability URA");
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -383,17 +383,17 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     .unwrap();
 
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, ability);
+    publish_test_route(&svc, TEST_DAEMON_URA, ability);
 
     let arguments = br#"{"descriptor":"stream-function-name"}"#.to_vec();
-    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URI, ability);
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ability);
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::targeted(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URI,
-                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URA,
+                    TEST_DAEMON_URA,
                 )
                 .expect("valid unsigned loopback stream envelope")
                 .into_inner(),
@@ -421,7 +421,7 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
 
     let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
         LocalRuntime::new(),
-        AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URI)
+        AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URA)
             .expect("test daemon URA is a valid device authority root"),
     );
     let handler: LocalStreamHandler = Arc::new(|_args| {
@@ -432,15 +432,15 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
     catalog.register_stream_with_owner("browser.snapshot_once", OwnerKind::Device, handler);
     let rt = catalog.runtime().expect("catalog attaches a LocalRuntime");
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "browser.snapshot_once");
+    publish_test_route(&svc, TEST_DAEMON_URA, "browser.snapshot_once");
 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::targeted(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URI,
-                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URA,
+                    TEST_DAEMON_URA,
                 )
                 .expect("valid unsigned loopback stream envelope")
                 .into_inner(),
@@ -506,7 +506,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     const NON_DEFAULT_VERSION: &str = "2.0.0";
     let rt = LocalRuntime::new();
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URI, "browser.capture_viewport")
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "browser.capture_viewport")
             .expect("device stream ability URA");
     rt.register_ability_with_options(
         runtime_ability,
@@ -523,7 +523,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     .await
     .unwrap();
     let svc = make_service().with_local_runtime(Arc::clone(&rt));
-    publish_test_route(&svc, TEST_DAEMON_URI, "browser.capture_viewport");
+    publish_test_route(&svc, TEST_DAEMON_URA, "browser.capture_viewport");
 
     let function_name = "browser.capture_viewport".to_string();
     let arguments = br#"{}"#.to_vec();
@@ -532,8 +532,8 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
             envelope: Some(
                 ProtoEnvelope::targeted(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URI,
-                    TEST_DAEMON_URI,
+                    TEST_DAEMON_URA,
+                    TEST_DAEMON_URA,
                 )
                 .expect("valid loopback stream envelope")
                 .into_inner(),
@@ -575,7 +575,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(signed_test_envelope(
-                TEST_DAEMON_URI,
+                TEST_DAEMON_URA,
                 TARGET_DEVICE_URA,
                 TARGET_DEVICE_URA,
                 ABILITY,
@@ -694,7 +694,7 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&rt),
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                TEST_DAEMON_URI,
+                TEST_DAEMON_URA,
             )
             .expect("test daemon URA is a valid device authority root"),
         );
@@ -721,7 +721,7 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     }))
     .unwrap();
     let file_transfer_descriptor_ref = test_descriptor_ref(
-        TEST_DAEMON_URI,
+        TEST_DAEMON_URA,
         crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
     );
     let open = make_envelope_open(&file_transfer_descriptor_ref, args);

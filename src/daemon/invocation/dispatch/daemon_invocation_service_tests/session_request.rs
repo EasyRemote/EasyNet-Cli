@@ -51,7 +51,7 @@ async fn dispatch_session_request_advertise_agent_updates_store() {
         "agent_ura": agent_ura,
         "signing_authority": {
             "kind": "hosted_by",
-            "host_ura": TEST_DAEMON_URI,
+            "host_ura": TEST_DAEMON_URA,
         },
         "host_node_id": "test-daemon",
     }))
@@ -80,7 +80,7 @@ async fn dispatch_session_request_advertise_agent_updates_store() {
         .advertised_agents
         .get(agent_ura)
         .expect("advertise_agent request must populate AdvertisedAgentStore");
-    assert_eq!(record.host_ura(), Some(TEST_DAEMON_URI));
+    assert_eq!(record.host_ura(), Some(TEST_DAEMON_URA));
     assert_eq!(record.host_node_id.as_deref(), Some("test-daemon"));
 }
 
@@ -994,7 +994,7 @@ async fn end_to_end_device_escalation_resolves_via_hub_session_request() {
     presence.insert(target_ura.to_string(), target_tx);
     let admission = AdmissionFacade::new(
         std::sync::Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let hub_service = DaemonInvocationService::new(presence, admission)
         .with_session_realm("test-realm")

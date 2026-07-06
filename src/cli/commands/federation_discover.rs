@@ -36,7 +36,7 @@
 // ----------
 // Default plain output:
 //
-//   AGENT_URI                                  NODE_ID    STATUS  ORIGIN_REALM  HUB_ENDPOINT
+//   AGENT_URA                                  NODE_ID    STATUS  ORIGIN_REALM  HUB_ENDPOINT
 //   easynet:///r/realm-a/agent/device-X        device-X   active  realm-a       https://hub-a.example:50443
 //   ...
 //
@@ -103,7 +103,7 @@ pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
     }
     println!(
         "{:<58} {:<14} {:<10} {:<14} HUB_ENDPOINT",
-        "AGENT_URI", "NODE_ID", "STATUS", "ORIGIN_REALM"
+        "AGENT_URA", "NODE_ID", "STATUS", "ORIGIN_REALM"
     );
     for entry in &entries {
         let agent_ura = entry

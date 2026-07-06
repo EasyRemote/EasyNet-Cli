@@ -7,7 +7,7 @@
 // vault for the Ed25519 private key(s) this device signs as. Every
 // EasyNet process on a given host (backend hub-role, daemon
 // device-role, CLI agent-role) shares one device-level secret —
-// the role overlays (`HubURI(realm)` vs `DeviceURI(realm, uuid)`)
+// the role overlays (`HubURA(realm)` vs `DeviceURA(realm, uuid)`)
 // fan out from the *same* keypair, anchoring "this physical
 // machine" as the load-bearing identity unit.
 //
