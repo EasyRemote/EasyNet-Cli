@@ -1,5 +1,3 @@
-//go:build easynet_direct_runtime
-
 package easynet
 
 import (
