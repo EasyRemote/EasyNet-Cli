@@ -7,7 +7,10 @@ steps:
   - action: scan_backend_go_imports
   - action: reject_raw_axon_imports
   - action: reject_generated_axon_pb_imports
+  - action: reject_generated_axon_pb_packages
   - action: reject_direct_daemon_transport
+  - action: reject_direct_daemon_transport_packages
+  - action: reject_raw_daemon_socket_markers
   - action: reject_cabi_ffi_markers
   - action: reject_runtime_subprocess
 expect:
@@ -15,7 +18,10 @@ expect:
   allowed_runtime_import: easynet.run/cli/sdk/go
   raw_axon_import: false
   generated_axon_pb_import: false
+  generated_axon_pb_package: false
   direct_daemon_transport: false
+  direct_daemon_transport_package: false
+  raw_daemon_socket_marker: false
   c_abi_ffi: false
   runtime_subprocess: false
   easyremote_runtime_dependency: false

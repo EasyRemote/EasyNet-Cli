@@ -277,7 +277,10 @@ func TestGoBackendCutoverExecutesSharedImportBanConformanceCase(t *testing.T) {
 		"scan_backend_go_imports",
 		"reject_raw_axon_imports",
 		"reject_generated_axon_pb_imports",
+		"reject_generated_axon_pb_packages",
 		"reject_direct_daemon_transport",
+		"reject_direct_daemon_transport_packages",
+		"reject_raw_daemon_socket_markers",
 		"reject_cabi_ffi_markers",
 		"reject_runtime_subprocess",
 	} {
@@ -286,7 +289,10 @@ func TestGoBackendCutoverExecutesSharedImportBanConformanceCase(t *testing.T) {
 	requireCaseExpectation(t, backendCase, "allowed_runtime_import: easynet.run/cli/sdk/go")
 	requireCaseExpectation(t, backendCase, "raw_axon_import: false")
 	requireCaseExpectation(t, backendCase, "generated_axon_pb_import: false")
+	requireCaseExpectation(t, backendCase, "generated_axon_pb_package: false")
 	requireCaseExpectation(t, backendCase, "direct_daemon_transport: false")
+	requireCaseExpectation(t, backendCase, "direct_daemon_transport_package: false")
+	requireCaseExpectation(t, backendCase, "raw_daemon_socket_marker: false")
 	requireCaseExpectation(t, backendCase, "runtime_subprocess: false")
 
 	cmd := exec.Command(filepath.Join(root, "tools/scripts/check-backend-sdk-only-boundary.sh"), "--self-test")
