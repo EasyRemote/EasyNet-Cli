@@ -319,6 +319,11 @@ schema_files=(
   admin-agent-stop-request.schema.json
   admin-agent-refresh-request.schema.json
   admin-session-list-request.schema.json
+  admin-pairing-preflight-request.schema.json
+  admin-pairing-create-request.schema.json
+  admin-pairing-validate-request.schema.json
+  admin-device-session-create-request.schema.json
+  admin-device-session-delete-request.schema.json
   surface-page.schema.json
   surface-list-pages-request.schema.json
   surface-create-page-request.schema.json
@@ -429,6 +434,17 @@ fixture_files=(
   admin-agent-stop-invocation.v4.json
   admin-agent-refresh-invocation.v4.json
   admin-session-list-invocation.v4.json
+  admin-pairing-preflight-request.v4.json
+  admin-pairing-preflight.v4.json
+  admin-pairing-create-request.v4.json
+  admin-pairing-token.v4.json
+  admin-pairing-validate-request.v4.json
+  admin-device-credential.v4.json
+  admin-device-session-create-request.v4.json
+  admin-device-session.v4.json
+  admin-device-session-page.v4.json
+  admin-device-session-delete-request.v4.json
+  admin-device-session-delete-result.v4.json
   gateway-status.v4.json
   admin-agent-records.v4.json
   admin-agent-lifecycle-result.v4.json
