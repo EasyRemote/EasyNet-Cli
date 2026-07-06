@@ -193,6 +193,7 @@ for path in \
   sdk/go/import_boundary_test.go \
   tools/scripts/check-backend-sdk-only-boundary.sh \
   tools/scripts/check-backend-route-family-coverage.sh \
+  tools/scripts/check-easyremote-sdk-boundary.sh \
   tools/scripts/check-sdk-parity-matrix.sh \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
@@ -560,6 +561,7 @@ validate_declared_file_list case_files sdk/conformance/cases .yaml
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 
 require_file sdk/conformance/runner/README.md

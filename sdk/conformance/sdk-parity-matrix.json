@@ -318,7 +318,7 @@
       "product_id": "easyremote_product",
       "primary_sdk_language": "python",
       "not_sdk_profile": true,
-      "evidence": [{"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/python-easyremote-no-raw-ffi.yaml"}, {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/python-easyremote-no-invocation-codec.yaml"}],
+      "evidence": [{"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/python-easyremote-no-raw-ffi.yaml"}, {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/python-easyremote-no-invocation-codec.yaml"}, {"kind": "static_gate", "ref": "tools/scripts/check-easyremote-sdk-boundary.sh"}],
       "rule": "Product decorators, warm host process behavior, and product server lifecycle stay outside the daemon SDK capability matrix."
     }
   ]
