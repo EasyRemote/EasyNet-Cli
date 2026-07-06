@@ -12,6 +12,7 @@ from .admin import (
     AdminCarrierBase,
     AdminClient,
     AgentLifecycleAdapter,
+    GatewayStatus,
 )
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
 from .identity import owner_ability_descriptor_ref as _sdk_owner_ability_descriptor_ref
@@ -677,58 +678,18 @@ def _admin_result_json(
 def _gateway_status_json(
     response: Mapping[str, object], *, require_public_listener: object = None
 ) -> bytes:
-    raw = _admin_output_object(response)
-    if raw.get("profile") == _ADMIN_PROFILE and raw.get("kind") == "gateway_status":
-        return _json_bytes(raw)
-    listeners = raw.get("listeners") if isinstance(raw.get("listeners"), list) else []
-    process_live = _admin_bool(raw.get("process_live"), fallback=raw.get("running"))
-    control_ready = _admin_bool(raw.get("control_ready"), fallback=raw.get("ready"))
-    runtime_ready = _admin_bool(raw.get("runtime_ready"), fallback=raw.get("ready"))
-    directory_ready = _admin_bool(raw.get("directory_ready"), fallback=raw.get("ready"))
-    trust_ready = _admin_bool(raw.get("trust_ready"), fallback=raw.get("ready"))
-    public_ready = _admin_bool(raw.get("public_listener_ready"), fallback=False)
-    require_public = (
-        require_public_listener if isinstance(require_public_listener, bool) else False
-    )
-    ready = _admin_bool(
-        raw.get("ready"),
-        fallback=(
-            process_live
-            and control_ready
-            and runtime_ready
-            and directory_ready
-            and trust_ready
-            and (public_ready or not require_public)
-        ),
-    )
-    return _json_bytes(
-        {
-            "profile": _ADMIN_PROFILE,
-            "gateway_id": _first_admin_string(raw, "gateway_id", "id", "device_ura"),
-            "ready": ready,
-            "state": str(
-                raw.get("state")
-                or raw.get("status")
-                or ("ready" if ready else "not_ready")
-            ),
-            "process_live": process_live,
-            "control_ready": control_ready,
-            "runtime_ready": runtime_ready,
-            "directory_ready": directory_ready,
-            "trust_ready": trust_ready,
-            "public_listener_ready": public_ready,
-            "listeners": [_gateway_listener(row) for row in listeners],
-            "identity": _optional_mapping(
-                raw.get("identity"), "identity", _invalid_admin
-            ),
-            "metadata": {
-                **_mapping_or_empty(raw.get("metadata")),
-                "profile": _ADMIN_PROFILE,
-                "source": _GATEWAY_STATUS.value,
-                "raw_result": raw,
-            },
-        }
-    )
+    raw = dict(response)
+    if require_public_listener is not None and not isinstance(
+        require_public_listener, bool
+    ):
+        raise _invalid_admin("require_public_listener must be a bool")
+    if raw.get("profile") != _ADMIN_PROFILE:
+        raise _invalid_admin(
+            "gateway.status dispatcher must return canonical admin_gateway GatewayStatus"
+        )
+    encoded = _json_bytes(raw)
+    GatewayStatus.from_json(encoded)
+    return encoded
 
 
 def _device_session_page_json(response: Mapping[str, object]) -> bytes:
@@ -1565,18 +1526,6 @@ def _first_admin_string_with_default(
     if default:
         return default
     raise _invalid_admin(f"{field_names[0]} is required")
-
-
-def _gateway_listener(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        raise _invalid_admin("gateway listener must be an object")
-    raw = dict(value)
-    return {
-        "kind": _first_admin_string(raw, "kind"),
-        "endpoint": _first_admin_string(raw, "endpoint", "address"),
-        "ready": _admin_bool(raw.get("ready"), fallback=False),
-        "public": _admin_bool(raw.get("public"), fallback=False),
-    }
 
 
 def _invalid_admin(message: str) -> SDKError:

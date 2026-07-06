@@ -2906,6 +2906,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             admin_case, "preserves_control_only_degraded_state: true"
         )
         self._require_case_expectation(
+            admin_case, "gateway_status_projection_owner: native_sdk_core"
+        )
+        self._require_case_expectation(
+            admin_case, "facade_gateway_status_readiness_derivation: false"
+        )
+        self._require_case_expectation(
             admin_case, "pairing_preflight_fixture: admin-pairing-preflight.v4.json"
         )
         self._require_case_expectation(

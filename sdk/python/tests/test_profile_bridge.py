@@ -207,6 +207,21 @@ class DaemonProfileBridgeTests(unittest.TestCase):
             ],
         )
 
+    def test_admin_profile_rejects_raw_gateway_status_projection(self) -> None:
+        dispatcher = RawGatewayStatusDispatcher()
+        bridge = DaemonProfileBridge(
+            dispatcher, nonce_factory=lambda: bytes(range(1, 17))
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            bridge.admin_facade()._client.gateway_status(  # noqa: SLF001
+                AdminGatewayStatusRequest()
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("canonical admin_gateway", caught.exception.message)
+        self.assertEqual(dispatcher.calls, [("gateway.status", {})])
+
     def test_carrier_base_uses_dispatcher_device_and_sdk_nonce(self) -> None:
         bridge = DaemonProfileBridge(
             MemoryProfileDispatcher(), nonce_factory=lambda: bytes(range(1, 17))
@@ -336,6 +351,7 @@ class MemoryProfileDispatcher:
             }
         if ability == "gateway.status":
             return {
+                "profile": "admin_gateway",
                 "gateway_id": "gateway-dev-a",
                 "ready": True,
                 "state": "ready",
@@ -354,6 +370,13 @@ class MemoryProfileDispatcher:
                     }
                 ],
                 "identity": {"device_ura": "easynet:///r/example/device/dev-a"},
+                "metadata": {
+                    "profile": "admin_gateway",
+                    "source": "daemon_lifecycle_status",
+                    "requires_public_listener": kwargs.get(
+                        "require_public_listener", False
+                    ),
+                },
             }
         if ability == "hub.join":
             return {"state": "ok", "ack": True, "device_ura": kwargs["device_ura"]}
@@ -466,6 +489,21 @@ class MemoryProfileDispatcher:
                         "metadata": {"source": "test"},
                     }
                 ],
+            }
+        raise AssertionError(f"unexpected ability {ability}")
+
+
+class RawGatewayStatusDispatcher(MemoryProfileDispatcher):
+    def invoke_system_ability(
+        self, ability: str, **kwargs: object
+    ) -> Mapping[str, object]:
+        self.calls.append((ability, dict(kwargs)))
+        if ability == "gateway.status":
+            return {
+                "gateway_id": "legacy-gateway",
+                "ready": True,
+                "running": True,
+                "state": "ready",
             }
         raise AssertionError(f"unexpected ability {ability}")
 

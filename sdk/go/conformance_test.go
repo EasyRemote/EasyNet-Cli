@@ -1687,6 +1687,8 @@ func TestGoAdminGatewayFacadeExecutesSharedCarrierStatusConformanceCase(t *testi
 	requireCaseExpectation(t, adminCase, "rejects_incomplete_invocation_tuple: true")
 	requireCaseExpectation(t, adminCase, "rejects_system_agent_lifecycle: true")
 	requireCaseExpectation(t, adminCase, "preserves_control_only_degraded_state: true")
+	requireCaseExpectation(t, adminCase, "gateway_status_projection_owner: native_sdk_core")
+	requireCaseExpectation(t, adminCase, "facade_gateway_status_readiness_derivation: false")
 	requireCaseExpectation(t, adminCase, "pairing_preflight_fixture: admin-pairing-preflight.v4.json")
 	requireCaseExpectation(t, adminCase, "pairing_token_fixture: admin-pairing-token.v4.json")
 	requireCaseExpectation(t, adminCase, "device_credential_fixture: admin-device-credential.v4.json")

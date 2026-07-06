@@ -57,4 +57,6 @@ expect:
   rejects_incomplete_invocation_tuple: true
   rejects_system_agent_lifecycle: true
   preserves_control_only_degraded_state: true
+  gateway_status_projection_owner: native_sdk_core
+  facade_gateway_status_readiness_derivation: false
   pairing_and_device_session_crud: provider_backed
