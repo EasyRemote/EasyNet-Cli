@@ -15,7 +15,7 @@ from .mission import MissionClient, RuntimeMissionTransport
 from .publication import PublicationClient, RuntimePublicationTransport
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
-from .surface import SurfaceClient
+from .surface import RuntimeSurfaceTransport, SurfaceClient
 from .wrappers import RuntimeWrapperTransport, WrapperClient
 
 
@@ -90,7 +90,14 @@ class DaemonHandleProfiles:
     def surfaces(self, options: ConnectOptions = ConnectOptions()) -> SurfaceClient:
         """Open a Surface profile client scoped to this daemon handle."""
 
-        return SurfaceClient(self._open_profile("surface", options))
+        carrier = self._open_profile("surface", options)
+        runtime_transport = self._open_profile("runtime", options)
+        return SurfaceClient(
+            RuntimeSurfaceTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
 
     def compatibility(
         self, options: ConnectOptions = ConnectOptions()

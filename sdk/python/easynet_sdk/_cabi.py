@@ -1865,6 +1865,9 @@ class CABISurfaceTransport(_CABIProfileTransport):
     def project_mutation_result(self, result_json: bytes) -> bytes:
         return self._call("easynet_surface_project_mutation_result", result_json)
 
+    def project_health(self, health_json: bytes) -> bytes:
+        return self._call("easynet_surface_project_health", health_json)
+
 
 @dataclass
 class CABICompatibilityTransport(_CABIProfileTransport):

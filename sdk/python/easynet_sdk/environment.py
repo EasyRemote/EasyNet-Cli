@@ -26,7 +26,7 @@ from .mission import MissionClient, RuntimeMissionTransport
 from .publication import PublicationClient, RuntimePublicationTransport
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
-from .surface import SurfaceClient
+from .surface import RuntimeSurfaceTransport, SurfaceClient
 from .transport import DaemonInvocationTransport
 from .wrappers import RuntimeWrapperTransport, WrapperClient
 
@@ -327,8 +327,19 @@ class SdkEnvironment:
 
         from . import _cabi
 
+        control_path = self.resolved_control_path()
+        carrier = self._profile_transport(_cabi.open_cabi_surface_transport)
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=control_path,
+            library_path=self.library_path,
+        )
         return self._track(
-            SurfaceClient(self._profile_transport(_cabi.open_cabi_surface_transport))
+            SurfaceClient(
+                RuntimeSurfaceTransport(
+                    carrier=carrier,
+                    runtime=RuntimeClient(runtime_transport),
+                )
+            )
         )
 
     def compatibility_client(self) -> CompatibilityClient:

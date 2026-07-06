@@ -1,9 +1,10 @@
 import json
 import unittest
 
-from easynet_sdk import ErrorCode, SDKError, is_code
+from easynet_sdk import ErrorCode, SDKError, RuntimeClient, is_code
 from easynet_sdk.surface import (
     MAX_SURFACE_PAGE_SIZE,
+    RuntimeSurfaceTransport,
     SurfaceCarrierBase,
     SurfaceClient,
     SurfaceCreatePageRequest,
@@ -208,6 +209,59 @@ class MemorySurfaceTransport:
         self._remember("surface_health", request_json)
         return SURFACE_HEALTH
 
+    def project_page_record(self, page_json: bytes) -> bytes:
+        self._remember("project_page_record", page_json)
+        return SURFACE_PAGE_RECORD
+
+    def project_page_page(self, pages_json: bytes) -> bytes:
+        self._remember("project_page_page", pages_json)
+        return SURFACE_PAGE_PAGE
+
+    def project_manifest(self, page_json: bytes) -> bytes:
+        self._remember("project_manifest", page_json)
+        return SURFACE_MANIFEST
+
+    def project_public_page_ref(self, page_json: bytes) -> bytes:
+        self._remember("project_public_page_ref", page_json)
+        return SURFACE_PUBLIC_PAGE_REF
+
+    def project_mutation_result(self, result_json: bytes) -> bytes:
+        self._remember("project_mutation_result", result_json)
+        return SURFACE_MUTATION_RESULT
+
+    def project_health(self, health_json: bytes) -> bytes:
+        self._remember("project_health", health_json)
+        return SURFACE_HEALTH
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class MemorySurfaceRuntimeTransport:
+    def __init__(self, output_json: object) -> None:
+        self.output_json = output_json
+        self.seen_draft: dict[str, object] | None = None
+        self.invoke_calls = 0
+        self.close_calls = 0
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.invoke_calls += 1
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_draft,
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": self.output_json,
+                "elapsed_ms": 1,
+                "receipt": {},
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
     def close(self) -> None:
         self.close_calls += 1
 
@@ -328,6 +382,80 @@ class SurfaceClientTests(unittest.TestCase):
             SurfaceStatusRequest(surface_base(), project_id="docs")
         )
         self.assertEqual(status.surface_ref, health.surface_ref)
+
+    def test_runtime_surface_transport_invokes_and_projects(self) -> None:
+        carrier = MemorySurfaceTransport()
+        runtime_transport = MemorySurfaceRuntimeTransport(
+            {"items": [{"page_id": "docs"}], "next_cursor": None}
+        )
+        client = SurfaceClient(
+            RuntimeSurfaceTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        page = client.list_pages(SurfaceListPagesRequest(surface_base(), limit=50))
+
+        self.assertEqual(page.kind, "surface_page_page")
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "pages.list",
+        )
+        self.assertEqual(carrier.seen["project_page_page"]["limit"], 50)
+
+    def test_runtime_surface_transport_keeps_public_ref_projection_only(self) -> None:
+        carrier = MemorySurfaceTransport()
+        runtime_transport = MemorySurfaceRuntimeTransport({"unexpected": True})
+        client = SurfaceClient(
+            RuntimeSurfaceTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+        record = client.create_page(
+            SurfaceCreatePageRequest(
+                surface_base(),
+                project_id="docs",
+                folder="/tmp/easynet-pages-docs",
+                visibility="public",
+            )
+        )
+
+        ref = client.public_page_ref(record)
+
+        self.assertEqual(ref.kind, "public_page_ref")
+        self.assertEqual(runtime_transport.invoke_calls, 1)
+        self.assertEqual(carrier.seen["project_public_page_ref"]["page_id"], "docs")
+
+    def test_runtime_surface_transport_projects_health_with_request_context(self) -> None:
+        carrier = MemorySurfaceTransport()
+        runtime_transport = MemorySurfaceRuntimeTransport(
+            {
+                "state": "ready",
+                "ready": True,
+                "page_count": 1,
+                "checks": [],
+            }
+        )
+        client = SurfaceClient(
+            RuntimeSurfaceTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        health = client.surface_health(
+            SurfaceHealthRequest(surface_base(), project_id="docs")
+        )
+
+        self.assertTrue(health.ready)
+        self.assertEqual(
+            carrier.seen["project_health"]["callee_ura"],
+            "easynet:///r/example/agent/alice.pages",
+        )
+        self.assertEqual(carrier.seen["project_health"]["project_id"], "docs")
 
     def test_rejects_invalid_requests(self) -> None:
         client = SurfaceClient(MemorySurfaceTransport())

@@ -424,6 +424,7 @@ class DaemonTests(unittest.TestCase):
                 "admin",
                 "events",
                 "surface",
+                "runtime",
                 "compatibility",
                 "wrapper",
                 "runtime",

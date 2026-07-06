@@ -7,8 +7,15 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
+from .errors import (
+    ErrorCode,
+    RetryHint,
+    SDKError,
+    canonical_failure_code,
+    profile_error_details,
+)
 from .invocation import InvocationDraft
+from .runtime import RuntimeClient
 
 
 _PROFILE = "surface"
@@ -389,6 +396,183 @@ class SurfaceTransport(Protocol):
         ...
 
 
+class SurfaceRuntimeCarrier(SurfaceTransport, Protocol):
+    """Surface carrier/projection provider used by RuntimeSurfaceTransport."""
+
+    def project_page_record(self, page_json: bytes) -> bytes:
+        ...
+
+    def project_page_page(self, pages_json: bytes) -> bytes:
+        ...
+
+    def project_manifest(self, page_json: bytes) -> bytes:
+        ...
+
+    def project_public_page_ref(self, page_json: bytes) -> bytes:
+        ...
+
+    def project_mutation_result(self, result_json: bytes) -> bytes:
+        ...
+
+    def project_health(self, health_json: bytes) -> bytes:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@dataclass
+class RuntimeSurfaceTransport:
+    """Surface transport that executes live operations through Runtime Core."""
+
+    carrier: SurfaceRuntimeCarrier
+    runtime: RuntimeClient
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def build_list_pages_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_list_pages_invocation", request_json)
+
+    def build_create_page_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_create_page_invocation", request_json)
+
+    def build_delete_page_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_delete_page_invocation", request_json)
+
+    def build_manifest_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_manifest_invocation", request_json)
+
+    def build_health_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_health_invocation", request_json)
+
+    def list_pages(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_list_pages_invocation",
+            project_method="project_page_page",
+            projection_keys=("limit", "cursor"),
+            failure_message="surface list-pages invocation failed",
+            output_message="surface page output_json must be an object",
+        )
+
+    def create_page(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_create_page_invocation",
+            project_method="project_page_record",
+            failure_message="surface create-page invocation failed",
+            output_message="surface page record output_json must be an object",
+        )
+
+    def delete_page(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_delete_page_invocation",
+            project_method="project_mutation_result",
+            failure_message="surface delete-page invocation failed",
+            output_message="surface mutation output_json must be an object",
+        )
+
+    def surface_manifest(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_manifest_invocation",
+            project_method="project_manifest",
+            failure_message="surface manifest invocation failed",
+            output_message="surface manifest output_json must be an object",
+        )
+
+    def public_page_ref(self, request_json: bytes) -> bytes:
+        return self._delegate("project_public_page_ref", request_json)
+
+    def surface_health(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_health_invocation",
+            project_method="project_health",
+            projection_keys=(
+                "callee_ura",
+                "descriptor_version",
+                "project_id",
+                "surface_ref",
+            ),
+            failure_message="surface health invocation failed",
+            output_message="surface health output_json must be an object",
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        for owned in (self.runtime, self.carrier):
+            close = getattr(owned, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            except Exception as exc:
+                if first_error is None:
+                    first_error = SDKError(
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
+                        stage="surface",
+                        retry=RetryHint.SAFE,
+                        retryable=True,
+                        message="surface runtime transport close failed",
+                        cause=exc,
+                    )
+        if first_error is not None:
+            raise first_error
+
+    def _delegate(self, method_name: str, request_json: bytes) -> bytes:
+        self._require_open()
+        return getattr(self.carrier, method_name)(request_json)
+
+    def _invoke_projected(
+        self,
+        request_json: bytes,
+        *,
+        build_method: str,
+        project_method: str,
+        projection_keys: tuple[str, ...] = (),
+        failure_message: str,
+        output_message: str,
+    ) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        result = self.runtime.invoke(draft)
+        if not result.ok:
+            raise SDKError(
+                code=canonical_failure_code(result.error.code if result.error else None),
+                stage="surface",
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                message=failure_message,
+                cause=result.error,
+            )
+        output = result.output_json
+        if not isinstance(output, dict):
+            raise _invalid_surface(output_message)
+        projection = _surface_runtime_projection_request(
+            request_json,
+            output,
+            projection_keys,
+        )
+        raw = getattr(self.carrier, project_method)(_json_bytes(projection))
+        _validate_surface_runtime_projection(project_method, raw)
+        return raw
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_surface("surface runtime transport is closed")
+        if self.carrier is None:
+            raise _invalid_surface("surface carrier transport is required")
+        if self.runtime is None:
+            raise _invalid_surface("runtime client is required")
+
+
 @dataclass(frozen=True)
 class SurfaceClient:
     """Surface profile facade."""
@@ -615,6 +799,34 @@ def _json_object(raw: bytes | str, label: str) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise _invalid_surface(f"{label} JSON must be an object")
     return decoded
+
+
+def _surface_runtime_projection_request(
+    request_json: bytes,
+    output: Mapping[str, object],
+    keys: tuple[str, ...],
+) -> dict[str, object]:
+    if not keys:
+        return dict(output)
+    request = _json_object(request_json, "surface runtime request")
+    projected = dict(output)
+    for key in keys:
+        if key in request and key not in projected:
+            projected[key] = request[key]
+    return projected
+
+
+def _validate_surface_runtime_projection(project_method: str, raw: bytes) -> None:
+    if project_method == "project_page_record":
+        SurfacePageRecord.from_json(raw)
+    elif project_method == "project_page_page":
+        SurfacePagePage.from_json(raw)
+    elif project_method == "project_manifest":
+        SurfaceManifest.from_json(raw)
+    elif project_method == "project_mutation_result":
+        SurfaceMutationResult.from_json(raw)
+    elif project_method == "project_health":
+        SurfaceHealth.from_json(raw)
 
 
 def _required_string(decoded: Mapping[str, object], field_name: str) -> str:

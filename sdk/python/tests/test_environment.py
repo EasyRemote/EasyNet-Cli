@@ -879,6 +879,29 @@ class SdkEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(raw.shutdown_handles, [42, 42])
 
+    def test_surface_list_uses_cabi_carrier_and_runtime_core(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            surface = env.surface_client()
+            page = surface.list_pages(SurfaceListPagesRequest(base=_surface_base()))
+            env.close()
+
+        self.assertEqual(page.kind, "surface_page_page")
+        self.assertEqual(
+            [item[0] for item in raw.profile_requests[-2:]],
+            [
+                "easynet_surface_build_list_pages_invocation",
+                "easynet_surface_project_page_page",
+            ],
+        )
+        self.assertEqual(raw.runtime_requests[-1][0], "invoke")
+        self.assertEqual(
+            raw.runtime_requests[-1][1]["metadata"]["system_ability"],
+            "pages.list",
+        )
+        self.assertEqual(raw.shutdown_handles, [42, 42])
+
     def test_wrapper_transfer_uses_cabi_carrier_and_runtime_core(self) -> None:
         raw = FakeRawCABI()
         with _load_patch(raw):
