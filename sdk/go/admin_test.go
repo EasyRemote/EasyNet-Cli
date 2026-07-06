@@ -226,8 +226,8 @@ func TestGatewayLifecycleFacadeMaterializesHubConfigOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := string(configBytes)
-	if runtime != second {
-		t.Fatal("start while running must return the same runtime")
+	if runtime.Endpoint != second.Endpoint || runtime.ConfigPath != second.ConfigPath || runtime.Fingerprint != second.Fingerprint || runtime.Daemon != second.Daemon {
+		t.Fatalf("start while running returned a different runtime: first=%#v second=%#v", runtime, second)
 	}
 	if len(started) != 1 || started[0] != `ac"me` {
 		t.Fatalf("started realms = %#v", started)
