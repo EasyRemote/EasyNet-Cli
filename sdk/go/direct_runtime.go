@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -32,21 +33,63 @@ type DirectDaemonRuntimeConnector struct {
 	ControlPath string
 	Reader      ControlDiscoveryReader
 
-	mu         sync.Mutex
-	transports map[*DirectDaemonRuntimeTransport]struct{}
-	closed     bool
+	mu                   sync.Mutex
+	handle               RuntimeTransport
+	closeHandleTransport bool
+	transports           map[*DirectDaemonRuntimeTransport]struct{}
+	closed               bool
+}
+
+// DirectDaemonRuntimeConnectorOptions configures a concrete direct runtime
+// connector. HandleTransport is the SDK-owned Runtime Core surface for
+// prepare/submit/handle operations; direct gRPC remains the invoke/stream/bidi
+// transport.
+type DirectDaemonRuntimeConnectorOptions struct {
+	ControlPath          string
+	Reader               ControlDiscoveryReader
+	HandleTransport      RuntimeTransport
+	CloseHandleTransport bool
 }
 
 // NewDirectDaemonRuntimeConnector creates a direct daemon Runtime connector.
 func NewDirectDaemonRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *DirectDaemonRuntimeConnector {
+	return NewDirectDaemonRuntimeConnectorWithOptions(DirectDaemonRuntimeConnectorOptions{
+		ControlPath: controlPath,
+		Reader:      reader,
+	})
+}
+
+// NewDirectDaemonRuntimeConnectorWithOptions creates a direct daemon Runtime
+// connector with explicit handle-transport ownership.
+func NewDirectDaemonRuntimeConnectorWithOptions(options DirectDaemonRuntimeConnectorOptions) *DirectDaemonRuntimeConnector {
+	reader := options.Reader
 	if reader == nil {
 		reader = FileControlDiscoveryReader{}
 	}
 	return &DirectDaemonRuntimeConnector{
-		ControlPath: controlPath,
-		Reader:      reader,
-		transports:  map[*DirectDaemonRuntimeTransport]struct{}{},
+		ControlPath:          options.ControlPath,
+		Reader:               reader,
+		handle:               options.HandleTransport,
+		closeHandleTransport: options.CloseHandleTransport,
+		transports:           map[*DirectDaemonRuntimeTransport]struct{}{},
 	}
+}
+
+// WithHandleTransport sets the Runtime Core handle transport used for
+// prepare/submit/handle operations. The caller must set closeOnConnectorClose
+// only when this connector owns the handle transport lifecycle.
+func (c *DirectDaemonRuntimeConnector) WithHandleTransport(handle RuntimeTransport, closeOnConnectorClose bool) *DirectDaemonRuntimeConnector {
+	if c == nil {
+		return c
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return c
+	}
+	c.handle = handle
+	c.closeHandleTransport = closeOnConnectorClose
+	return c
 }
 
 func (c *DirectDaemonRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
@@ -94,10 +137,12 @@ func (c *DirectDaemonRuntimeConnector) Handshake(ctx context.Context, endpointJS
 	if err != nil {
 		return nil, nil, err
 	}
+	handleTransport, _ := c.handleTransport(ctx)
 	transport, err := OpenDirectDaemonRuntimeTransport(ctx, endpoint.Endpoint, DirectRuntimeOptions{
 		DialTimeoutMS:   options.DialTimeoutMS,
 		InvokeTimeoutMS: options.InvokeTimeoutMS,
 		MaxMessageBytes: options.MaxMessageBytes,
+		HandleTransport: handleTransport,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -117,8 +162,8 @@ func (c *DirectDaemonRuntimeConnector) Handshake(ctx context.Context, endpointJS
 		"unary":         true,
 		"stream":        true,
 		"bidi":          true,
-		"prepare":       false,
-		"submit_signed": false,
+		"prepare":       handleTransport != nil,
+		"submit_signed": handleTransport != nil,
 	})
 	if err != nil {
 		_ = transport.Close(ctx)
@@ -139,6 +184,10 @@ func (c *DirectDaemonRuntimeConnector) Close(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
+	handle := c.handle
+	closeHandle := c.closeHandleTransport
+	c.handle = nil
+	c.closeHandleTransport = false
 	transports := make([]*DirectDaemonRuntimeTransport, 0, len(c.transports))
 	for transport := range c.transports {
 		transports = append(transports, transport)
@@ -152,6 +201,9 @@ func (c *DirectDaemonRuntimeConnector) Close(ctx context.Context) error {
 		if err := transport.Close(ctx); err != nil && closeErr == nil {
 			closeErr = err
 		}
+	}
+	if closeHandle && handle != nil {
+		closeErr = errors.Join(closeErr, handle.Close(ctx))
 	}
 	return closeErr
 }
@@ -171,23 +223,34 @@ func (c *DirectDaemonRuntimeConnector) requireOpen(ctx context.Context) error {
 	return nil
 }
 
+func (c *DirectDaemonRuntimeConnector) handleTransport(ctx context.Context) (RuntimeTransport, bool) {
+	if c == nil || ctx == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.handle, c.closeHandleTransport
+}
+
 // DirectRuntimeOptions are SDK-internal direct daemon transport knobs.
 type DirectRuntimeOptions struct {
-	DialTimeoutMS   int64
-	InvokeTimeoutMS int64
-	MaxMessageBytes int
-	HandleTransport RuntimeTransport
+	DialTimeoutMS        int64
+	InvokeTimeoutMS      int64
+	MaxMessageBytes      int
+	HandleTransport      RuntimeTransport
+	CloseHandleTransport bool
 }
 
 // DirectDaemonRuntimeTransport is a concrete RuntimeTransport over Axon gRPC UDS.
 type DirectDaemonRuntimeTransport struct {
-	mu            sync.Mutex
-	conn          *grpc.ClientConn
-	client        axonpb.InvocationClient
-	endpoint      string
-	invokeTimeout time.Duration
-	handle        RuntimeTransport
-	closed        bool
+	mu                   sync.Mutex
+	conn                 *grpc.ClientConn
+	client               axonpb.InvocationClient
+	endpoint             string
+	invokeTimeout        time.Duration
+	handle               RuntimeTransport
+	closeHandleTransport bool
+	closed               bool
 }
 
 // OpenDirectDaemonRuntimeTransport opens a direct daemon Runtime transport.
@@ -227,11 +290,12 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 		)
 	}
 	return &DirectDaemonRuntimeTransport{
-		conn:          conn,
-		client:        axonpb.NewInvocationClient(conn),
-		endpoint:      endpoint,
-		invokeTimeout: invokeTimeout,
-		handle:        options.HandleTransport,
+		conn:                 conn,
+		client:               axonpb.NewInvocationClient(conn),
+		endpoint:             endpoint,
+		invokeTimeout:        invokeTimeout,
+		handle:               options.HandleTransport,
+		closeHandleTransport: options.CloseHandleTransport,
 	}, nil
 }
 
@@ -381,17 +445,28 @@ func (t *DirectDaemonRuntimeTransport) Close(ctx context.Context) error {
 		return nil
 	}
 	conn := t.conn
+	handle := t.handle
+	closeHandle := t.closeHandleTransport
 	t.conn = nil
 	t.client = nil
+	t.handle = nil
+	t.closeHandleTransport = false
 	t.closed = true
 	t.mu.Unlock()
+	var closeErr error
 	if conn == nil {
+		if closeHandle && handle != nil {
+			return handle.Close(ctx)
+		}
 		return nil
 	}
 	if err := conn.Close(); err != nil {
-		return transportRuntimeError("close direct runtime transport failed", err)
+		closeErr = transportRuntimeError("close direct runtime transport failed", err)
 	}
-	return nil
+	if closeHandle && handle != nil {
+		closeErr = errors.Join(closeErr, handle.Close(ctx))
+	}
+	return closeErr
 }
 
 func (t *DirectDaemonRuntimeTransport) requireOpen(ctx context.Context) (axonpb.InvocationClient, time.Duration, error) {
