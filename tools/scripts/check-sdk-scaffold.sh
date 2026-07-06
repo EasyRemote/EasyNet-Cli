@@ -227,6 +227,7 @@ for path in \
   tools/scripts/check-backend-sdk-only-boundary.sh \
   tools/scripts/check-backend-route-family-coverage.sh \
   tools/scripts/check-daemon-latest-input-boundary.sh \
+  tools/scripts/check-sdk-conformance-reports.sh \
   tools/scripts/check-easyremote-sdk-boundary.sh \
   tools/scripts/check-sdk-cutover-readiness.sh \
   tools/scripts/check-sdk-parity-matrix.sh \
@@ -610,6 +611,7 @@ validate_declared_file_list case_files sdk/conformance/cases .yaml
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-sdk-conformance-reports.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-product-smokes.sh" --self-test >/dev/null
