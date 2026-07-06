@@ -37,7 +37,7 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertIn("import ctypes", body)
         self.assertIn("easynet_abi_version", body)
 
-    def test_python_sdk_root_does_not_export_product_aliases(self) -> None:
+    def test_python_sdk_root_exports_sdk_profiles_not_product_aliases(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         self.assertFalse((root / "easyremote_profiles.py").exists())
         exported = set(getattr(easynet_sdk, "__all__", ()))
@@ -49,14 +49,18 @@ class ImportBoundaryTests(unittest.TestCase):
             "StreamChatCompletionRequest",
             "DaemonLifecycleFacade",
             "DaemonHandleFacade",
+        ):
+            self.assertNotIn(name, exported)
+            self.assertFalse(hasattr(easynet_sdk, name), name)
+        for name in (
             "GatewayLifecycleFacade",
             "GatewayConfig",
             "GatewayRuntime",
             "GatewayLifecycleState",
             "GatewayDaemonHandle",
         ):
-            self.assertNotIn(name, exported)
-            self.assertFalse(hasattr(easynet_sdk, name), name)
+            self.assertIn(name, exported)
+            self.assertTrue(hasattr(easynet_sdk, name), name)
 
     def test_python_sdk_root_does_not_export_direct_runtime_internals(self) -> None:
         exported = set(getattr(easynet_sdk, "__all__", ()))
