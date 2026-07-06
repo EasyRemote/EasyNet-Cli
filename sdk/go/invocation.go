@@ -326,6 +326,9 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 	if b.causalContext == nil {
 		return InvocationDraft{}, invalidInvocation("causal_context is required", nil)
 	}
+	if err := validateInvocationNonceBase64(b.nonceBase64); err != nil {
+		return InvocationDraft{}, err
+	}
 	if b.hasArgs == b.hasArguments {
 		return InvocationDraft{}, invalidInvocation("exactly one of args or arguments_base64 is required", nil)
 	}
@@ -357,6 +360,17 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 		callerSignature: copySignature(b.callerSignature),
 		hasArgs:         b.hasArgs,
 	}, nil
+}
+
+func validateInvocationNonceBase64(value string) error {
+	raw, err := decodeBase64Field(value, "nonce_base64")
+	if err != nil {
+		return err
+	}
+	if len(raw) != 16 {
+		return invalidInvocation("nonce_base64 must decode to 16 bytes", nil)
+	}
+	return nil
 }
 
 func setRequiredString(

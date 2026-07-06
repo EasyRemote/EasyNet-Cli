@@ -141,6 +141,27 @@ func TestInvocationBuilderRejectsDualArgumentCarriers(t *testing.T) {
 	}
 }
 
+func TestInvocationBuilderRejectsMalformedNonce(t *testing.T) {
+	for _, nonce := range []string{"not base64", "AQIDBA=="} {
+		_, err := NewInvocationBuilder().
+			WithCallerURA("easynet:///r/example/agent/alice.sdk").
+			WithCalleeURA("easynet:///r/example/device/dev-a").
+			WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+			WithSubjectURA("easynet:///r/example/device/dev-a").
+			WithNonceBase64(nonce).
+			WithCausalContext(map[string]any{"form": "none"}).
+			WithJSONArgs(map[string]any{}).
+			WithContentType("application/json").
+			Build()
+		if err == nil {
+			t.Fatalf("Build succeeded for nonce %q, want invalid argument", nonce)
+		}
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("error code for nonce %q = %v, want %s", nonce, err, ErrInvalidArgument)
+		}
+	}
+}
+
 func TestInvocationDraftFromJSONRejectsUnknownField(t *testing.T) {
 	_, err := NewInvocationDraftFromJSON([]byte(`{
 		"caller_ura": "easynet:///r/example/agent/alice.sdk",

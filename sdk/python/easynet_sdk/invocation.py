@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 from dataclasses import dataclass, field, replace
@@ -270,6 +271,7 @@ class InvocationBuilder:
         content_type = _required_builder_string(self._content_type, "content_type")
         if self._causal_context is None:
             raise _invalid_invocation("causal_context is required")
+        _validate_nonce_base64(nonce_base64)
         if self._has_args == self._has_arguments:
             raise _invalid_invocation("exactly one of args or arguments_base64 is required")
         if self._has_arguments:
@@ -299,6 +301,15 @@ class InvocationBuilder:
             _has_args=self._has_args,
             _runtime=self._runtime,
         )
+
+
+def _validate_nonce_base64(value: str) -> None:
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except binascii.Error as exc:
+        raise _invalid_invocation("nonce_base64 must be base64", exc) from exc
+    if len(raw) != 16:
+        raise _invalid_invocation("nonce_base64 must decode to 16 bytes")
 
 
 def _required_builder_string(value: Optional[str], field_name: str) -> str:
