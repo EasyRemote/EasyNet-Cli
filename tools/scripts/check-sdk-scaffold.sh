@@ -194,6 +194,7 @@ for path in \
   tools/scripts/check-backend-sdk-only-boundary.sh \
   tools/scripts/check-backend-route-family-coverage.sh \
   tools/scripts/check-easyremote-sdk-boundary.sh \
+  tools/scripts/check-sdk-cutover-readiness.sh \
   tools/scripts/check-sdk-parity-matrix.sh \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \

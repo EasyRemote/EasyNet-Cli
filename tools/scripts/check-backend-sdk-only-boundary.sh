@@ -18,6 +18,7 @@ import sdk "easynet.run/cli/sdk/go"
 
 var _ = sdk.ErrInvalidArgument
 EOF
+  "$0" "$tmp" >/dev/null
   "$0" "$tmp/backend" >/dev/null
   cat >"$tmp/backend/internal/service/forbidden.go" <<'EOF'
 package service
@@ -75,12 +76,23 @@ import sys
 from pathlib import Path
 
 
-backend = Path(sys.argv[1]).resolve()
+def resolve_backend_root(candidate: Path) -> Path:
+    candidate = candidate.resolve()
+    if (candidate / "go.mod").exists():
+        return candidate
+    nested = candidate / "backend"
+    if (nested / "go.mod").exists():
+        return nested
+    return candidate
+
+
+input_root = Path(sys.argv[1]).resolve()
+backend = resolve_backend_root(input_root)
 if not backend.exists():
-    print(f"backend root does not exist: {backend}", file=sys.stderr)
+    print(f"backend root does not exist: {input_root}", file=sys.stderr)
     sys.exit(2)
 if not (backend / "go.mod").exists():
-    print(f"backend root is missing go.mod: {backend}", file=sys.stderr)
+    print(f"backend root is missing go.mod: {input_root}", file=sys.stderr)
     sys.exit(2)
 
 ignored_dirs = {
