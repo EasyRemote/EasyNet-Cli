@@ -68,8 +68,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   single-receipt and cross-invocation chain Axon signature verification over
   full audit-bundle receipts, and invocation-history list/get/trace carrier
   builders exist for Rust/C ABI over daemon `invocation.history.*` and
-  `invocation.trace.get`; Python now exposes the same read models through the
-  Receipt facade and C ABI Runtime Core invoke. RFC-007 receipt URA
+  `invocation.trace.get`; Go and Python now expose the same opaque
+  receipt-URA-plus-hash causal context projection through the Receipt facade,
+  and Python exposes the same read models through the Receipt facade and C ABI
+  Runtime Core invoke. RFC-007 receipt URA
   construction and broader language-facade cutovers remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, Directory subscribe stream
