@@ -1563,10 +1563,10 @@ type Draft struct {
 }
 
 type PrepareOptions struct {
-    ResolveDescriptor bool
-    FillNonce         bool
-    RequireUserSig    bool
-    ExpiresIn         time.Duration
+    ExpiresIn          time.Duration
+    SignerID           string
+    PolicyRef          string
+    LocalDaemonSigning bool
 }
 
 type PreparedInvocation struct {
