@@ -46,6 +46,7 @@ export const PUBLICATION_PROFILE = "publication";
 export const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50;
 export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 export const HOST_BINDING_PROFILE = "host_binding";
+export const HEALTH_PROFILE = "health";
 export const HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json";
 export const HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value))";
 export const HOST_STREAM_EMPTY_OUTPUT_HASH =
@@ -152,6 +153,183 @@ export class Client {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class RuntimeHealth {
+  constructor(fields) {
+    const value = objectValue(fields, "runtime health");
+    this.apiReady = requiredHealthBoolean(value.api_ready, "api_ready");
+    this.daemonReady = requiredHealthBoolean(value.daemon_ready, "daemon_ready");
+    this.invocationReady = requiredHealthBoolean(value.invocation_ready, "invocation_ready");
+    this.directoryReady = requiredHealthBoolean(value.directory_ready, "directory_ready");
+    this.trustReady = requiredHealthBoolean(value.trust_ready, "trust_ready");
+    this.runtimeReady = requiredHealthBoolean(value.runtime_ready, "runtime_ready");
+    this.version = optionalHealthString(value.version, "version");
+    this.abiVersion = optionalHealthNonNegativeInteger(value.abi_version, "abi_version");
+    this.mismatch = optionalHealthObject(value.mismatch, "mismatch");
+    this.diagnostics = healthDiagnostics(value.diagnostics ?? []);
+  }
+
+  static fromJSON(raw) {
+    return new RuntimeHealth(parseJSON(raw, "runtime health"));
+  }
+
+  apiAlive() {
+    return this.apiReady && this.daemonReady;
+  }
+
+  ready() {
+    return this.runtimeReady;
+  }
+
+  toJSON() {
+    return {
+      api_ready: this.apiReady,
+      daemon_ready: this.daemonReady,
+      invocation_ready: this.invocationReady,
+      directory_ready: this.directoryReady,
+      trust_ready: this.trustReady,
+      runtime_ready: this.runtimeReady,
+      version: this.version,
+      abi_version: this.abiVersion,
+      mismatch: this.mismatch,
+      diagnostics: this.diagnostics,
+    };
+  }
+}
+
+export class DiagnosticCheck {
+  constructor(fields) {
+    const value = objectValue(fields, "diagnostic check");
+    this.name = requiredHealthString(value.name, "checks.name");
+    this.ready = requiredHealthBoolean(value.ready, "checks.ready");
+    this.message = optionalHealthString(value.message, "checks.message");
+  }
+
+  toJSON() {
+    return {
+      name: this.name,
+      ready: this.ready,
+      message: this.message,
+    };
+  }
+}
+
+export class DiagnosticsReport {
+  constructor(fields) {
+    const value = objectValue(fields, "diagnostics report");
+    this.profile = requiredHealthString(value.profile, "profile");
+    if (this.profile !== HEALTH_PROFILE) {
+      throw invalidHealth("profile must be health");
+    }
+    this.kind = requiredHealthString(value.kind, "kind");
+    if (this.kind !== "diagnostics_report") {
+      throw invalidHealth("kind must be diagnostics_report");
+    }
+    this.state = requiredHealthString(value.state, "state");
+    this.ready = requiredHealthBoolean(value.ready, "ready");
+    this.version = requiredHealthString(value.version, "version");
+    this.abiVersion = requiredHealthNonNegativeInteger(value.abi_version, "abi_version");
+    this.controlEndpoint = requiredHealthString(value.control_endpoint, "control_endpoint");
+    this.invocationEndpoint = optionalHealthString(value.invocation_endpoint, "invocation_endpoint");
+    if (!Array.isArray(value.checks) || value.checks.length === 0) {
+      throw invalidHealth("checks must be non-empty");
+    }
+    this.checks = value.checks.map((check) => new DiagnosticCheck(check));
+    this.diagnostics = healthDiagnostics(value.diagnostics ?? []);
+  }
+
+  static fromJSON(raw) {
+    return new DiagnosticsReport(parseJSON(raw, "diagnostics report"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      state: this.state,
+      ready: this.ready,
+      version: this.version,
+      abi_version: this.abiVersion,
+      control_endpoint: this.controlEndpoint,
+      invocation_endpoint: this.invocationEndpoint,
+      checks: this.checks.map((check) => check.toJSON()),
+      diagnostics: this.diagnostics,
+    };
+  }
+}
+
+export class HealthClient {
+  constructor(transport) {
+    if (!transport || typeof transport.runtimeHealth !== "function") {
+      throw invalidSDK("health transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async runtimeHealth() {
+    const transport = this.requireOpen();
+    try {
+      return RuntimeHealth.fromJSON(await transport.runtimeHealth());
+    } catch (error) {
+      if (error instanceof SDKError) {
+        throw error;
+      }
+      throw new SDKError({
+        code: ErrorCode.ROUTE_UNAVAILABLE,
+        stage: "transport",
+        retry: RetryHint.SAFE,
+        message: "runtime health transport failed",
+        cause: error,
+      });
+    }
+  }
+
+  async diagnostics() {
+    const transport = this.requireOpen();
+    if (typeof transport.runtimeDiagnostics !== "function") {
+      throw new SDKError({
+        code: ErrorCode.NOT_IMPLEMENTED,
+        stage: "transport",
+        retry: RetryHint.NEVER,
+        message: "health diagnostics transport is not available",
+      });
+    }
+    try {
+      return DiagnosticsReport.fromJSON(await transport.runtimeDiagnostics());
+    } catch (error) {
+      if (error instanceof SDKError) {
+        throw error;
+      }
+      throw new SDKError({
+        code: ErrorCode.ROUTE_UNAVAILABLE,
+        stage: "transport",
+        retry: RetryHint.SAFE,
+        message: "runtime diagnostics transport failed",
+        cause: error,
+      });
+    }
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("health client is closed");
     }
     return this.transport;
   }
@@ -1914,6 +2092,65 @@ function hostRejectUnknownFields(value, allowed) {
   }
 }
 
+function requiredHealthString(value, field) {
+  if (typeof value !== "string" || value === "") {
+    throw invalidHealth(`${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalHealthString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw invalidHealth(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredHealthBoolean(value, field) {
+  if (typeof value !== "boolean") {
+    throw invalidHealth(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function requiredHealthNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidHealth(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function optionalHealthNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return requiredHealthNonNegativeInteger(value, field);
+}
+
+function optionalHealthObject(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    return objectValue(value, field);
+  } catch (error) {
+    if (error instanceof SDKError) {
+      throw invalidHealth(`${field} must be an object or null`);
+    }
+    throw error;
+  }
+}
+
+function healthDiagnostics(value) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw invalidHealth("diagnostics must be an array of strings");
+  }
+  return [...value];
+}
+
 function jsonPayloadBytes(value, field) {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     if (value.length === 0) {
@@ -2250,6 +2487,16 @@ function invalidHostBinding(message) {
     stage: "host_binding",
     retry: RetryHint.NEVER,
     source: HOST_BINDING_PROFILE,
+    message,
+  });
+}
+
+function invalidHealth(message) {
+  return new SDKError({
+    code: ErrorCode.INVALID_ARGUMENT,
+    stage: "decode",
+    retry: RetryHint.NEVER,
+    source: HEALTH_PROFILE,
     message,
   });
 }

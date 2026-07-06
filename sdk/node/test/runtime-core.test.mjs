@@ -11,6 +11,7 @@ import {
   HOST_STREAM_HASH_ALGORITHM,
   HostBindingClient,
   HostStreamHashState,
+  HealthClient,
   IdentityClient,
   InvocationBuilder,
   LocalHostBindingTransport,
@@ -110,6 +111,143 @@ test("feature discovery decodes canonical Runtime Core facts", async () => {
   await assert.rejects(
     () => client.requireABI(5),
     (error) => error instanceof SDKError && error.code === ErrorCode.VERSION_MISMATCH,
+  );
+});
+
+test("HealthClient decodes runtime health and diagnostics DTOs", async () => {
+  const calls = [];
+  const client = new HealthClient({
+    runtimeHealth: () => {
+      calls.push("health");
+      return JSON.stringify({
+        api_ready: true,
+        daemon_ready: true,
+        invocation_ready: true,
+        directory_ready: true,
+        trust_ready: true,
+        runtime_ready: true,
+        version: "0.1.0",
+        abi_version: 4,
+        mismatch: null,
+        diagnostics: [],
+      });
+    },
+    runtimeDiagnostics: () => {
+      calls.push("diagnostics");
+      return JSON.stringify({
+        profile: "health",
+        kind: "diagnostics_report",
+        state: "Running",
+        ready: true,
+        version: "0.91.30",
+        abi_version: 4,
+        control_endpoint: "/tmp/easynet/control.json",
+        invocation_endpoint: "/tmp/easynet/daemon.sock",
+        checks: [{ name: "runtime", ready: true, message: null }],
+        diagnostics: [],
+      });
+    },
+  });
+
+  const health = await client.runtimeHealth();
+  const diagnostics = await client.diagnostics();
+
+  assert.equal(health.apiAlive(), true);
+  assert.equal(health.ready(), true);
+  assert.equal(health.abiVersion, 4);
+  assert.equal(health.toJSON().runtime_ready, true);
+  assert.equal(diagnostics.profile, "health");
+  assert.equal(diagnostics.kind, "diagnostics_report");
+  assert.equal(diagnostics.checks.length, 1);
+  assert.deepEqual(calls, ["health", "diagnostics"]);
+});
+
+test("HealthClient preserves API liveness separate from runtime readiness", async () => {
+  const client = new HealthClient({
+    runtimeHealth: () =>
+      JSON.stringify({
+        api_ready: true,
+        daemon_ready: true,
+        invocation_ready: false,
+        directory_ready: true,
+        trust_ready: true,
+        runtime_ready: false,
+        diagnostics: ["invocation endpoint unavailable"],
+      }),
+  });
+
+  const health = await client.runtimeHealth();
+
+  assert.equal(health.apiAlive(), true);
+  assert.equal(health.ready(), false);
+  assert.equal(health.invocationReady, false);
+  assert.deepEqual(health.diagnostics, ["invocation endpoint unavailable"]);
+  await assert.rejects(
+    () => client.diagnostics(),
+    (error) => error instanceof SDKError && error.code === ErrorCode.NOT_IMPLEMENTED,
+  );
+});
+
+test("HealthClient rejects malformed payloads and wraps transport failure", async () => {
+  await assert.rejects(
+    () =>
+      new HealthClient({
+        runtimeHealth: () =>
+          JSON.stringify({
+            api_ready: true,
+            daemon_ready: true,
+            invocation_ready: true,
+            directory_ready: true,
+            trust_ready: true,
+            runtime_ready: true,
+            abi_version: true,
+          }),
+      }).runtimeHealth(),
+    (error) =>
+      error instanceof SDKError &&
+      error.code === ErrorCode.INVALID_ARGUMENT &&
+      error.source === "health",
+  );
+
+  const down = new Error("daemon unavailable");
+  await assert.rejects(
+    () =>
+      new HealthClient({
+        runtimeHealth: () => {
+          throw down;
+        },
+      }).runtimeHealth(),
+    (error) =>
+      error instanceof SDKError &&
+      error.code === ErrorCode.ROUTE_UNAVAILABLE &&
+      error.cause === down,
+  );
+});
+
+test("HealthClient closes transport and rejects closed use", async () => {
+  const calls = [];
+  const client = new HealthClient({
+    runtimeHealth: () =>
+      JSON.stringify({
+        api_ready: true,
+        daemon_ready: true,
+        invocation_ready: true,
+        directory_ready: true,
+        trust_ready: true,
+        runtime_ready: true,
+        diagnostics: [],
+      }),
+    close: () => {
+      calls.push("close");
+    },
+  });
+
+  await client.close();
+  await client.close();
+  assert.deepEqual(calls, ["close"]);
+  await assert.rejects(
+    () => client.runtimeHealth(),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });
 

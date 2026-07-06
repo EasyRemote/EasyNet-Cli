@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Health distinguishes API liveness from daemon runtime readiness.
 steps:
   - action: read_health

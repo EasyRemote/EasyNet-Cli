@@ -15,6 +15,7 @@ export declare const PUBLICATION_PROFILE: "publication";
 export declare const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: 50;
 export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 export declare const HOST_BINDING_PROFILE: "host_binding";
+export declare const HEALTH_PROFILE: "health";
 export declare const HOST_STREAM_FRAME_SCHEMA: "host-stream-frame.schema.json";
 export declare const HOST_STREAM_HASH_ALGORITHM: "sha256(prev_hash || seq_be || canonical_json(value))";
 export declare const HOST_STREAM_EMPTY_OUTPUT_HASH: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -63,6 +64,93 @@ export class Client {
   constructor(transport: DiscoveryTransport);
   featureDiscovery(): Promise<FeatureSet>;
   requireABI(expected: number): Promise<FeatureSet>;
+  close(): Promise<void>;
+}
+
+export interface RuntimeHealthFields {
+  api_ready: boolean;
+  daemon_ready: boolean;
+  invocation_ready: boolean;
+  directory_ready: boolean;
+  trust_ready: boolean;
+  runtime_ready: boolean;
+  version?: string | null;
+  abi_version?: number | null;
+  mismatch?: Record<string, unknown> | null;
+  diagnostics?: string[];
+}
+
+export class RuntimeHealth {
+  apiReady: boolean;
+  daemonReady: boolean;
+  invocationReady: boolean;
+  directoryReady: boolean;
+  trustReady: boolean;
+  runtimeReady: boolean;
+  version: string | null;
+  abiVersion: number | null;
+  mismatch: Record<string, unknown> | null;
+  diagnostics: string[];
+  constructor(fields: RuntimeHealthFields);
+  static fromJSON(raw: Uint8Array | string): RuntimeHealth;
+  apiAlive(): boolean;
+  ready(): boolean;
+  toJSON(): Required<RuntimeHealthFields>;
+}
+
+export interface DiagnosticCheckFields {
+  name: string;
+  ready: boolean;
+  message?: string | null;
+}
+
+export class DiagnosticCheck {
+  name: string;
+  ready: boolean;
+  message: string | null;
+  constructor(fields: DiagnosticCheckFields);
+  toJSON(): Required<DiagnosticCheckFields>;
+}
+
+export interface DiagnosticsReportFields {
+  profile: "health";
+  kind: "diagnostics_report";
+  state: string;
+  ready: boolean;
+  version: string;
+  abi_version: number;
+  control_endpoint: string;
+  invocation_endpoint?: string | null;
+  checks: DiagnosticCheckFields[];
+  diagnostics?: string[];
+}
+
+export class DiagnosticsReport {
+  profile: "health";
+  kind: "diagnostics_report";
+  state: string;
+  ready: boolean;
+  version: string;
+  abiVersion: number;
+  controlEndpoint: string;
+  invocationEndpoint: string | null;
+  checks: DiagnosticCheck[];
+  diagnostics: string[];
+  constructor(fields: DiagnosticsReportFields);
+  static fromJSON(raw: Uint8Array | string): DiagnosticsReport;
+  toJSON(): Required<DiagnosticsReportFields>;
+}
+
+export interface HealthTransport {
+  runtimeHealth(): Promise<Uint8Array | string> | Uint8Array | string;
+  runtimeDiagnostics?(): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class HealthClient {
+  constructor(transport: HealthTransport);
+  runtimeHealth(): Promise<RuntimeHealth>;
+  diagnostics(): Promise<DiagnosticsReport>;
   close(): Promise<void>;
 }
 
