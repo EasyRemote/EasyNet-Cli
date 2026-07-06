@@ -115,6 +115,7 @@ from .consumer_boundary import (
 )
 from .profile_bridge import (
     DaemonProfileBridge,
+    ProfileBridgeAddressing,
     ProfileBridgeDispatcher,
 )
 from .daemon import (
@@ -505,6 +506,7 @@ __all__ = [
     "GatewayRuntime",
     "GatewayLifecycleState",
     "DaemonProfileBridge",
+    "ProfileBridgeAddressing",
     "ProfileBridgeDispatcher",
     "StreamValueAdapter",
     "StreamValue",

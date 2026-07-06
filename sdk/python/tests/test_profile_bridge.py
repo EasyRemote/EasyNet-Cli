@@ -1,8 +1,10 @@
 import unittest
 from collections.abc import Mapping
+from pathlib import Path
 
 from easynet_sdk import (
     AdminAgentListRequest,
+    AdminAgentStartRequest,
     AdminGatewayStatusRequest,
     AdminJoinHubRequest,
     AdminLeaveHubRequest,
@@ -12,7 +14,9 @@ from easynet_sdk import (
     DeleteDeviceSessionRequest,
     DaemonProfileBridge,
     ErrorCode,
+    MissionRunRequest,
     MissionRunFileRequest,
+    MissionTrackRequest,
     PairingPreflightRequest,
     RevokeDeviceRequest,
     SDKError,
@@ -215,46 +219,71 @@ class DaemonProfileBridgeTests(unittest.TestCase):
         self.assertEqual(base.subject_ura, base.caller_ura)
         self.assertEqual(base.nonce_base64, "AQIDBAUGBwgJCgsMDQ4PEA==")
 
-    def test_unsupported_profile_operations_fail_closed(self) -> None:
-        bridge = DaemonProfileBridge(MemoryProfileDispatcher())
+    def test_profile_bridge_builds_admin_and_mission_carriers(self) -> None:
+        addressing = RecordingProfileAddressing()
+        bridge = DaemonProfileBridge(
+            MemoryProfileDispatcher(),
+            addressing=addressing,
+            nonce_factory=lambda: bytes(range(1, 17)),
+        )
+        admin = bridge.admin_facade()._client  # noqa: SLF001
+        mission = bridge.mission_facade()._client  # noqa: SLF001
+        mission_path = Path("/tmp/easynet-sdk-profile-bridge-demo.eal")
+        mission_path.write_text("mission demo\nlet r = local.observe_health()\n")
+        self.addCleanup(lambda: mission_path.unlink(missing_ok=True))
 
-        with self.assertRaises(SDKError) as caught:
-            bridge.admin_facade()._client.build_agent_list_invocation(  # noqa: SLF001
-                AdminAgentListRequest(bridge.admin_base())
+        agent_list = admin.build_agent_list_invocation(
+            AdminAgentListRequest(bridge.admin_base())
+        )
+        agent_start = admin.build_agent_start_invocation(
+            AdminAgentStartRequest(
+                bridge.admin_base(),
+                name="codex",
+                agent_type="codex",
+                model="gpt-5",
             )
-
-        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
-        self.assertEqual(
-            caught.exception.details["profile"],
-            "admin_gateway",
         )
-        self.assertEqual(
-            caught.exception.details["source_ref"],
-            "python_sdk.profile.admin_gateway",
-        )
-        self.assertEqual(
-            caught.exception.details["profile_method"],
-            "build_agent_list_invocation",
-        )
-
-        with self.assertRaises(SDKError) as mission_caught:
-            bridge.mission_facade()._client.build_run_file_invocation(  # noqa: SLF001
-                MissionRunFileRequest(bridge.mission_base(), path="/tmp/demo.eal")
+        run = mission.build_run_eal_invocation(
+            MissionRunRequest(
+                bridge.mission_base(),
+                source="mission demo\nlet r = local.observe_health()",
+                label="demo",
             )
+        )
+        run_file = mission.build_run_file_invocation(
+            MissionRunFileRequest(
+                bridge.mission_base(), path=str(mission_path), label="file-demo"
+            )
+        )
 
-        self.assertTrue(is_code(mission_caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(agent_list.metadata["carrier_owner"], "daemon_sdk")
+        self.assertEqual(agent_list.metadata["system_ability"], "agent.list")
         self.assertEqual(
-            mission_caught.exception.details["profile"],
-            "mission",
+            agent_list.descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0",
         )
+        self.assertEqual(agent_start.args["name"], "codex")
+        self.assertEqual(agent_start.args["agent_type"], "codex")
+        self.assertEqual(run.metadata["system_ability"], "mission.run")
+        self.assertEqual(run.args["label"], "demo")
+        self.assertEqual(run_file.args["label"], "file-demo")
+        self.assertIn("local.observe_health()", run_file.args["source"])
         self.assertEqual(
-            mission_caught.exception.details["source_ref"],
-            "python_sdk.profile.mission",
+            addressing.calls,
+            [
+                ("easynet:///r/example/device/dev-a", "agent.list", "1.0.0"),
+                ("easynet:///r/example/device/dev-a", "agent.start", "1.0.0"),
+                ("easynet:///r/example/device/dev-a", "mission.run", "1.0.0"),
+                ("easynet:///r/example/device/dev-a", "mission.run", "1.0.0"),
+            ],
         )
-        self.assertEqual(
-            mission_caught.exception.details["profile_method"],
-            "build_run_file_invocation",
-        )
+
+        with self.assertRaises(SDKError) as bad_mission:
+            mission.build_track_invocation(
+                MissionTrackRequest(bridge.mission_base(), mission_id="/tmp/run")
+            )
+        self.assertTrue(is_code(bad_mission.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(bad_mission.exception.stage, "mission")
 
     def test_mission_bad_response_uses_mission_error_stage(self) -> None:
         bridge = DaemonProfileBridge(BadMissionResponseDispatcher())
@@ -439,6 +468,24 @@ class MemoryProfileDispatcher:
                 ],
             }
         raise AssertionError(f"unexpected ability {ability}")
+
+
+class RecordingProfileAddressing:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def owner_ability_descriptor_ref(
+        self,
+        owner_ura: str,
+        ability_name: str,
+        descriptor_version: str = "1.0.0",
+    ) -> str:
+        self.calls.append((owner_ura, ability_name, descriptor_version))
+        owner_tail = owner_ura.removeprefix("easynet:///r/example/device/")
+        return (
+            f"easynet:///r/example/ability/device.{owner_tail}."
+            f"{ability_name}@{descriptor_version}"
+        )
 
 
 class BadMissionResponseDispatcher(MemoryProfileDispatcher):

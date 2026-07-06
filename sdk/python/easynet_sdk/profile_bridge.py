@@ -14,6 +14,7 @@ from .admin import (
     AgentLifecycleAdapter,
 )
 from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
+from .identity import owner_ability_descriptor_ref as _sdk_owner_ability_descriptor_ref
 from .mission import (
     MissionExecutionAdapter,
     MissionCarrierBase,
@@ -60,6 +61,34 @@ class ProfileBridgeDispatcher(Protocol):
 NonceFactory = Callable[[], bytes]
 
 
+class ProfileBridgeAddressing(Protocol):
+    """Narrow Axon-delegated addressing seam used by carrier builders."""
+
+    def owner_ability_descriptor_ref(
+        self,
+        owner_ura: str,
+        ability_name: str,
+        descriptor_version: str = _DESCRIPTOR_VERSION,
+    ) -> str:
+        """Return the canonical descriptor ref for an owner ability."""
+
+
+class _DefaultProfileBridgeAddressing:
+    """Default SDK identity facade over Axon-delegated addressing helpers."""
+
+    def owner_ability_descriptor_ref(
+        self,
+        owner_ura: str,
+        ability_name: str,
+        descriptor_version: str = _DESCRIPTOR_VERSION,
+    ) -> str:
+        return _sdk_owner_ability_descriptor_ref(
+            owner_ura,
+            ability_name,
+            descriptor_version,
+        )
+
+
 class DaemonProfileBridge:
     """SDK-owned Admin/Mission bridge for host applications."""
 
@@ -67,22 +96,24 @@ class DaemonProfileBridge:
         self,
         dispatcher: ProfileBridgeDispatcher,
         *,
+        addressing: ProfileBridgeAddressing | None = None,
         nonce_factory: NonceFactory | None = None,
         descriptor_version: str = _DESCRIPTOR_VERSION,
     ) -> None:
         self._dispatcher = dispatcher
+        self._addressing = addressing or _DefaultProfileBridgeAddressing()
         self._nonce_factory = nonce_factory or (lambda: os.urandom(16))
         self._descriptor_version = descriptor_version
 
     def admin_facade(self) -> AgentLifecycleAdapter:
         return AgentLifecycleAdapter(
-            AdminClient(_AdminBridgeTransport(self._dispatcher)),
+            AdminClient(_AdminBridgeTransport(self._dispatcher, self._addressing)),
             self.admin_base(),
         )
 
     def mission_facade(self) -> MissionExecutionAdapter:
         return MissionExecutionAdapter(
-            MissionClient(_MissionBridgeTransport(self._dispatcher)),
+            MissionClient(_MissionBridgeTransport(self._dispatcher, self._addressing)),
             self.mission_base(),
         )
 
@@ -124,26 +155,109 @@ class DaemonProfileBridge:
 
 
 class _AdminBridgeTransport:
-    def __init__(self, dispatcher: ProfileBridgeDispatcher) -> None:
+    def __init__(
+        self,
+        dispatcher: ProfileBridgeDispatcher,
+        addressing: ProfileBridgeAddressing,
+    ) -> None:
         self._dispatcher = dispatcher
+        self._addressing = addressing
 
     def build_agent_list_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("build_agent_list_invocation")
+        request = _json_object(
+            request_json, "profile bridge agent list invocation request", _invalid_admin
+        )
+        return _system_invocation_json(
+            request,
+            _ADMIN_PROFILE,
+            _AGENT_LIST.value,
+            {},
+            _invalid_admin,
+            self._addressing,
+        )
 
     def build_agent_start_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("build_agent_start_invocation")
+        request = _json_object(
+            request_json, "profile bridge agent start invocation request", _invalid_admin
+        )
+        return _system_invocation_json(
+            request,
+            _ADMIN_PROFILE,
+            _AGENT_START.value,
+            _admin_agent_start_args(request),
+            _invalid_admin,
+            self._addressing,
+        )
 
     def build_agent_stop_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("build_agent_stop_invocation")
+        request = _json_object(
+            request_json, "profile bridge agent stop invocation request", _invalid_admin
+        )
+        return _system_invocation_json(
+            request,
+            _ADMIN_PROFILE,
+            _AGENT_STOP.value,
+            _admin_agent_stop_args(request),
+            _invalid_admin,
+            self._addressing,
+        )
 
     def build_agent_refresh_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("build_agent_refresh_invocation")
+        request = _json_object(
+            request_json,
+            "profile bridge agent refresh invocation request",
+            _invalid_admin,
+        )
+        args: dict[str, object] = {}
+        if request.get("name"):
+            args["name"] = _required_admin_string(request, "name")
+        return _system_invocation_json(
+            request,
+            _ADMIN_PROFILE,
+            _AGENT_REFRESH.value,
+            args,
+            _invalid_admin,
+            self._addressing,
+        )
 
     def build_session_list_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("build_session_list_invocation")
+        request = _json_object(
+            request_json,
+            "profile bridge session list invocation request",
+            _invalid_admin,
+        )
+        args: dict[str, object] = {}
+        if "include_terminated" in request:
+            args["include_terminated"] = _optional_bool(
+                request.get("include_terminated"), "include_terminated"
+            )
+        return _system_invocation_json(
+            request,
+            _ADMIN_PROFILE,
+            _SESSION_LIST.value,
+            args,
+            _invalid_admin,
+            self._addressing,
+        )
 
     def build_revoke_device_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_admin_profile("build_revoke_device_invocation")
+        request = _json_object(
+            request_json,
+            "profile bridge device revoke invocation request",
+            _invalid_admin,
+        )
+        args = {
+            "agent_ura": _required_admin_string(request, "device_ura"),
+            "reason": _required_admin_string(request, "reason"),
+        }
+        return _system_invocation_json(
+            request,
+            _ADMIN_PROFILE,
+            _FEDERATION_REVOKE.value,
+            args,
+            _invalid_admin,
+            self._addressing,
+        )
 
     def gateway_status(self, request_json: bytes) -> bytes:
         request = _json_object(
@@ -373,20 +487,86 @@ class _AdminBridgeTransport:
 
 
 class _MissionBridgeTransport:
-    def __init__(self, dispatcher: ProfileBridgeDispatcher) -> None:
+    def __init__(
+        self,
+        dispatcher: ProfileBridgeDispatcher,
+        addressing: ProfileBridgeAddressing,
+    ) -> None:
         self._dispatcher = dispatcher
+        self._addressing = addressing
 
     def build_run_eal_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_mission_profile("build_run_eal_invocation")
+        request = _json_object(
+            request_json, "profile bridge mission run invocation request", _invalid_mission
+        )
+        args: dict[str, object] = {
+            "source": _required_mission_string(request, "source")
+        }
+        if request.get("label"):
+            args["label"] = _required_mission_string(request, "label")
+        return _system_invocation_json(
+            request,
+            _MISSION_PROFILE,
+            _MISSION_RUN.value,
+            args,
+            _invalid_mission,
+            self._addressing,
+        )
 
     def build_run_file_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_mission_profile("build_run_file_invocation")
+        request = _json_object(
+            request_json,
+            "profile bridge mission run-file invocation request",
+            _invalid_mission,
+        )
+        path = _required_mission_string(request, "path")
+        source = _mission_source_file(path)
+        args: dict[str, object] = {
+            "source": source,
+            "label": (
+                _required_mission_string(request, "label")
+                if request.get("label")
+                else path
+            ),
+        }
+        return _system_invocation_json(
+            request,
+            _MISSION_PROFILE,
+            _MISSION_RUN.value,
+            args,
+            _invalid_mission,
+            self._addressing,
+        )
 
     def build_track_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_mission_profile("build_track_invocation")
+        request = _json_object(
+            request_json, "profile bridge mission track invocation request", _invalid_mission
+        )
+        run_id = _required_mission_string(request, "mission_id")
+        _validate_mission_id(run_id)
+        return _system_invocation_json(
+            request,
+            _MISSION_PROFILE,
+            _MISSION_TRACK.value,
+            {"run_id": run_id},
+            _invalid_mission,
+            self._addressing,
+        )
 
     def build_cancel_invocation(self, request_json: bytes) -> bytes:
-        return _unsupported_mission_profile("build_cancel_invocation")
+        request = _json_object(
+            request_json, "profile bridge mission cancel invocation request", _invalid_mission
+        )
+        run_id = _required_mission_string(request, "mission_id")
+        _validate_mission_id(run_id)
+        return _system_invocation_json(
+            request,
+            _MISSION_PROFILE,
+            _MISSION_CANCEL.value,
+            {"run_id": run_id},
+            _invalid_mission,
+            self._addressing,
+        )
 
     def run_eal(self, request_json: bytes) -> bytes:
         request = _json_object(
@@ -1058,6 +1238,208 @@ def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
+def _system_invocation_json(
+    request: Mapping[str, object],
+    profile: str,
+    system_ability: str,
+    args: Mapping[str, object],
+    invalid: Callable[[str], SDKError],
+    addressing: ProfileBridgeAddressing,
+) -> bytes:
+    caller_ura = _required_profile_string(request, "caller_ura", invalid)
+    callee_ura = _required_profile_string(request, "callee_ura", invalid)
+    subject_ura = _required_profile_string(request, "subject_ura", invalid)
+    descriptor_version = _required_profile_string(
+        request, "descriptor_version", invalid
+    )
+    nonce_base64 = _required_profile_string(request, "nonce_base64", invalid)
+    causal_context = _required_profile_mapping(request, "causal_context", invalid)
+    metadata = _optional_profile_mapping(request.get("metadata"), "metadata", invalid)
+    _validate_nonce_base64(nonce_base64, invalid)
+    descriptor_ref = _system_descriptor_ref(
+        addressing,
+        callee_ura,
+        system_ability,
+        descriptor_version,
+        invalid,
+    )
+    return _json_bytes(
+        {
+            "caller_ura": caller_ura,
+            "callee_ura": callee_ura,
+            "descriptor_ref": descriptor_ref,
+            "subject_ura": subject_ura,
+            "nonce_base64": nonce_base64,
+            "causal_context": causal_context,
+            "args": dict(args),
+            "content_type": "application/json",
+            "metadata": {
+                **metadata,
+                "profile": profile,
+                "system_ability": system_ability,
+                "carrier_owner": "daemon_sdk",
+            },
+        }
+    )
+
+
+def _admin_agent_start_args(request: Mapping[str, object]) -> dict[str, object]:
+    args: dict[str, object] = {
+        "name": _required_admin_string(request, "name"),
+    }
+    agent_type = _optional_profile_string(
+        request.get("agent_type"), "agent_type", _invalid_admin
+    )
+    entry = request.get("entry")
+    if agent_type is None and entry is None:
+        raise _invalid_admin("either agent_type or entry is required")
+    if agent_type is not None:
+        args["agent_type"] = agent_type
+    if entry is not None:
+        if not isinstance(entry, Mapping):
+            raise _invalid_admin("entry must be an object")
+        entry_obj = dict(entry)
+        entry_agent_type = _optional_profile_string(
+            entry_obj.get("agent_type"), "entry.agent_type", _invalid_admin
+        )
+        if (
+            agent_type is not None
+            and entry_agent_type is not None
+            and agent_type != entry_agent_type
+        ):
+            raise _invalid_admin("entry.agent_type must match top-level agent_type")
+        args["entry"] = entry_obj
+    for field_name in ("model", "label", "command", "root_path"):
+        value = _optional_profile_string(
+            request.get(field_name), field_name, _invalid_admin
+        )
+        if value is not None:
+            args[field_name] = value
+    command_args = request.get("command_args")
+    if command_args is not None:
+        args["command_args"] = list(_string_array(command_args, "command_args"))
+    for field_name in (
+        "model_present",
+        "materialize_directory",
+        "update_existing_spec",
+        "project_workspace",
+    ):
+        value = _optional_bool(request.get(field_name), field_name)
+        if value is not None:
+            args[field_name] = value
+    return args
+
+
+def _admin_agent_stop_args(request: Mapping[str, object]) -> dict[str, object]:
+    name = _optional_profile_string(request.get("name"), "name", _invalid_admin)
+    agent_ura = _optional_profile_string(
+        request.get("agent_ura"), "agent_ura", _invalid_admin
+    )
+    if name is None and agent_ura is None:
+        raise _invalid_admin("either name or agent_ura is required")
+    args: dict[str, object] = {}
+    if name is not None:
+        args["name"] = name
+    if agent_ura is not None:
+        args["agent_ura"] = agent_ura
+    return args
+
+
+def _system_descriptor_ref(
+    addressing: ProfileBridgeAddressing,
+    callee_ura: str,
+    system_ability: str,
+    descriptor_version: str,
+    invalid: Callable[[str], SDKError],
+) -> str:
+    try:
+        return addressing.owner_ability_descriptor_ref(
+            callee_ura,
+            system_ability,
+            descriptor_version,
+        )
+    except SDKError as exc:
+        raise invalid(f"descriptor_ref projection failed: {exc.message}") from exc
+    except Exception as exc:
+        raise invalid(f"descriptor_ref projection failed: {exc}") from exc
+
+
+def _required_profile_string(
+    value: Mapping[str, object],
+    field_name: str,
+    invalid: Callable[[str], SDKError],
+) -> str:
+    raw = value.get(field_name)
+    if not isinstance(raw, str) or not raw.strip():
+        raise invalid(f"{field_name} is required")
+    if raw.strip() != raw:
+        raise invalid(f"{field_name} must not contain surrounding whitespace")
+    return raw
+
+
+def _optional_profile_string(
+    value: object, field_name: str, invalid: Callable[[str], SDKError]
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise invalid(f"{field_name} must be a string")
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _required_profile_mapping(
+    value: Mapping[str, object],
+    field_name: str,
+    invalid: Callable[[str], SDKError],
+) -> dict[str, object]:
+    raw = value.get(field_name)
+    if not isinstance(raw, Mapping):
+        raise invalid(f"{field_name} must be an object")
+    return dict(raw)
+
+
+def _optional_profile_mapping(
+    value: object, field_name: str, invalid: Callable[[str], SDKError]
+) -> dict[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise invalid(f"{field_name} must be an object")
+    return dict(value)
+
+
+def _validate_nonce_base64(value: str, invalid: Callable[[str], SDKError]) -> None:
+    try:
+        decoded = base64.b64decode(value.encode("ascii"), validate=True)
+    except Exception as exc:
+        raise invalid("nonce_base64 must be valid base64") from exc
+    if not decoded:
+        raise invalid("nonce_base64 must not decode to empty bytes")
+
+
+def _mission_source_file(path: str) -> str:
+    if not path.startswith("/"):
+        raise _invalid_mission("path must be an absolute path")
+    if any(part == ".." for part in path.split("/")):
+        raise _invalid_mission("path must not contain parent-directory segments")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+    except OSError as exc:
+        raise _invalid_mission("path must be an existing EAL source file") from exc
+    if not source.strip():
+        raise _invalid_mission("EAL source file must not be empty")
+    return source
+
+
+def _validate_mission_id(value: str) -> None:
+    if "/" in value or "\\" in value or "://" in value:
+        raise _invalid_mission("mission_id must not be path-like")
+    if any(part == ".." for part in value.split("-")):
+        raise _invalid_mission("mission_id must not contain parent traversal")
+
+
 def _required_admin_string(value: Mapping[str, object], field_name: str) -> str:
     raw = value.get(field_name)
     if not isinstance(raw, str) or not raw.strip():
@@ -1216,40 +1598,4 @@ def _invalid_mission(message: str) -> SDKError:
         retryable=False,
         message=message,
         details=profile_error_details(_MISSION_PROFILE),
-    )
-
-
-def _unsupported_admin_profile(method_name: str) -> bytes:
-    raise SDKError(
-        code=ErrorCode.NOT_IMPLEMENTED,
-        stage="admin_gateway",
-        retry=RetryHint.NEVER,
-        retryable=False,
-        message=(
-            f"Admin profile bridge does not support SDK profile method "
-            f"{method_name}; use the EasyNet-Cli SDK/Admin backend facade for "
-            "Hub, pairing, session, gateway, and invocation-builder operations"
-        ),
-        details=profile_error_details(
-            _ADMIN_PROFILE,
-            details={"profile_method": method_name},
-        ),
-    )
-
-
-def _unsupported_mission_profile(method_name: str) -> bytes:
-    raise SDKError(
-        code=ErrorCode.NOT_IMPLEMENTED,
-        stage="mission",
-        retry=RetryHint.NEVER,
-        retryable=False,
-        message=(
-            f"Mission profile bridge does not support SDK profile method "
-            f"{method_name}; use the EasyNet-Cli SDK/Mission backend facade for "
-            "file execution and invocation-builder operations"
-        ),
-        details=profile_error_details(
-            _MISSION_PROFILE,
-            details={"profile_method": method_name},
-        ),
     )
