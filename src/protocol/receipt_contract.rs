@@ -33,11 +33,11 @@
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::VerifyingKey;
 use easynet_axon::invocation::{
     canonical_receipt_bytes_with_hosted, verify_receipt_signature_with_hosted, AxonError,
     CalleeSignature, KeyResolver, ReceiptJson,
 };
+use ed25519_dalek::VerifyingKey;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -258,9 +258,16 @@ fn project_axon_receipt_verification(input: &Value) -> Result<Option<Value>, Rec
     let resolver = InlineReceiptKeyResolver::from_value(keys_value)?;
     let receipt_ura = optional_string(obj, "receipt_ura");
     let receipt = serde_json::from_value::<ReceiptJson>(receipt_value.clone()).map_err(|err| {
-        ReceiptError::InvalidField("receipt", format!("invalid Axon receipt bundle JSON: {err}"))
+        ReceiptError::InvalidField(
+            "receipt",
+            format!("invalid Axon receipt bundle JSON: {err}"),
+        )
     })?;
-    Ok(Some(verify_axon_receipt_json(&receipt, receipt_ura, &resolver)))
+    Ok(Some(verify_axon_receipt_json(
+        &receipt,
+        receipt_ura,
+        &resolver,
+    )))
 }
 
 fn verify_axon_receipt_json(
@@ -346,9 +353,10 @@ impl InlineReceiptKeyResolver {
 
 impl KeyResolver for InlineReceiptKeyResolver {
     fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-        self.keys.get(agent_ura).copied().ok_or_else(|| {
-            AxonError::invalid_argument(format!("no_pubkey_for_agent:{agent_ura}"))
-        })
+        self.keys
+            .get(agent_ura)
+            .copied()
+            .ok_or_else(|| AxonError::invalid_argument(format!("no_pubkey_for_agent:{agent_ura}")))
     }
 }
 
@@ -833,11 +841,13 @@ mod tests {
         assert_eq!(verification["invocation_id"], "inv-axon");
         assert_eq!(verification["metadata"]["source"], "axon");
         assert_eq!(verification["metadata"]["assurance"], "cryptographic");
-        assert!(verification["metadata"]["self_hash_hex"]
-            .as_str()
-            .unwrap()
-            .len()
-            == 64);
+        assert!(
+            verification["metadata"]["self_hash_hex"]
+                .as_str()
+                .unwrap()
+                .len()
+                == 64
+        );
     }
 
     #[test]
@@ -957,6 +967,7 @@ mod tests {
     }
 
     fn signed_axon_receipt_fixture() -> (Value, String) {
+        use easynet_axon::invocation::axiom::{AuthorityBinding, InvocationUsage};
         use easynet_axon::invocation::bundle::{
             AuthorityJson, CausalJson, IdentityJson, InvocationAuthorityProofJson, ReceiptJson,
         };
@@ -964,7 +975,6 @@ mod tests {
             sign_receipt, AgentIdentity, CausalContext, EntityRef, EntityRefKind,
             InvocationAuthorityProof, ReceiptBody, ReceiptProofFacts, SubjectIdentity, UraProfile,
         };
-        use easynet_axon::invocation::axiom::{AuthorityBinding, InvocationUsage};
         use ed25519_dalek::SigningKey;
 
         let signing_key = SigningKey::from_bytes(&[7u8; 32]);
@@ -1014,8 +1024,7 @@ mod tests {
             subject_binding: subject.clone(),
             invocation_nonce: [9u8; 16],
             causal_binding: CausalContext::None,
-            ability_binding: "easynet:///r/example/ability/alice.worker.echo@1.0.0"
-                .to_string(),
+            ability_binding: "easynet:///r/example/ability/alice.worker.echo@1.0.0".to_string(),
             authority_binding: authority.clone(),
             usage: InvocationUsage::default(),
             proof_facts,
