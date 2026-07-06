@@ -206,11 +206,11 @@ class MemoryCompatibilityTransport:
         self._remember("list_models", request_json)
         return MODEL_PAGE_JSON
 
-    def create_chat_completion(self, request_json: bytes) -> bytes:
+    def chat_completions(self, request_json: bytes) -> bytes:
         self._remember("create_chat", request_json)
         return CHAT_COMPLETION_JSON
 
-    def stream_chat_completion(self, request_json: bytes) -> bytes:
+    def stream_chat_completions(self, request_json: bytes) -> bytes:
         self._remember("stream_chat", request_json)
         return CHAT_STREAM_JSON
 
@@ -218,7 +218,7 @@ class MemoryCompatibilityTransport:
         self._remember("upload_file", request_json)
         return FILE_JSON
 
-    def retrieve_file(self, request_json: bytes) -> bytes:
+    def get_file(self, request_json: bytes) -> bytes:
         self._remember("retrieve_file", request_json)
         return FILE_JSON
 
@@ -444,9 +444,6 @@ class CompatibilityClientTests(unittest.TestCase):
             retrieve_draft.descriptor_ref,
             "easynet:///r/example/ability/device.dev-a.openai.files.retrieve@1.0.0",
         )
-        get_draft = client.build_file_get_invocation(file_request(compat_base()))
-        self.assertEqual(get_draft.descriptor_ref, retrieve_draft.descriptor_ref)
-
         delete_draft = client.build_file_delete_invocation(file_delete_request(compat_base()))
         self.assertEqual(
             delete_draft.descriptor_ref,
@@ -469,11 +466,11 @@ class CompatibilityClientTests(unittest.TestCase):
             base.nonce_base64,
             base.causal_context,
         )
-        chat = client.create_chat_completion(CompatibilityChatCompletionRequest(base, chat_request()))
+        chat = client.chat_completions(CompatibilityChatCompletionRequest(base, chat_request()))
         self.assertEqual(chat.object, "chat.completion")
         self.assertEqual(len(chat.choices), 1)
 
-        stream = client.stream_chat_completion(
+        stream = client.stream_chat_completions(
             CompatibilityStreamChatCompletionRequest(base, chat_request())
         )
         self.assertTrue(stream.stream)
@@ -483,13 +480,9 @@ class CompatibilityClientTests(unittest.TestCase):
         self.assertEqual(uploaded.id, "file-easynet-docs-1")
         self.assertEqual(uploaded.bytes, 19)
 
-        retrieved = client.retrieve_file(file_request(compat_base()))
+        retrieved = client.get_file(file_request(compat_base()))
         self.assertEqual(retrieved.id, uploaded.id)
         self.assertEqual(retrieved.filename, "prompt.jsonl")
-
-        got = client.get_file(file_request(compat_base()))
-        self.assertEqual(got.id, uploaded.id)
-        self.assertEqual(got.filename, "prompt.jsonl")
 
         daemon_deleted = client.delete_file(file_delete_request(compat_base()))
         self.assertTrue(daemon_deleted.deleted)
@@ -519,7 +512,7 @@ class CompatibilityClientTests(unittest.TestCase):
         )
         self.assertIn("project_model_page", runtime_carrier.seen)
 
-        runtime_stream = runtime_client.stream_chat_completion(
+        runtime_stream = runtime_client.stream_chat_completions(
             CompatibilityStreamChatCompletionRequest(base, chat_request())
         )
         self.assertTrue(runtime_stream.stream)

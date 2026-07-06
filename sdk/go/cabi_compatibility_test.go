@@ -83,9 +83,9 @@ func TestCABICompatibilityTransportBuildsInvokesAndProjects(t *testing.T) {
 		t.Fatalf("uploaded file = %#v", uploaded)
 	}
 
-	retrieved, err := client.RetrieveFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	retrieved, err := client.GetFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
 	if err != nil {
-		t.Fatalf("RetrieveFile: %v", err)
+		t.Fatalf("GetFile: %v", err)
 	}
 	if retrieved.ID != uploaded.ID || retrieved.Filename != "prompt.jsonl" {
 		t.Fatalf("retrieved file = %#v", retrieved)

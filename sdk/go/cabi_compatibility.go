@@ -162,11 +162,11 @@ func (t *CABICompatibilityTransport) ListModels(ctx context.Context, requestJSON
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildListModels, t.symbols.projectModelPage, "C ABI compatibility list models failed")
 }
 
-func (t *CABICompatibilityTransport) CreateChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *CABICompatibilityTransport) ChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildChat, t.symbols.projectChat, "C ABI compatibility chat completion failed")
 }
 
-func (t *CABICompatibilityTransport) StreamChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *CABICompatibilityTransport) StreamChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildStreamChat, t.symbols.projectChatStream, "C ABI compatibility stream chat completion failed")
 }
 
@@ -174,7 +174,7 @@ func (t *CABICompatibilityTransport) UploadFile(ctx context.Context, requestJSON
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildFileUpload, t.symbols.projectFileUpload, "C ABI compatibility file upload failed")
 }
 
-func (t *CABICompatibilityTransport) RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *CABICompatibilityTransport) GetFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	return t.invokeAndProject(ctx, requestJSON, t.symbols.buildFileRetrieve, t.symbols.projectFile, "C ABI compatibility file retrieve failed")
 }
 

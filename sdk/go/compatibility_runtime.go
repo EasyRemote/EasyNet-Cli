@@ -107,7 +107,7 @@ func (t *CompatibilityRuntimeTransport) ListModels(ctx context.Context, requestJ
 	return t.invoke(ctx, requestJSON, base, compatibilityAbilityListModels)
 }
 
-func (t *CompatibilityRuntimeTransport) CreateChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *CompatibilityRuntimeTransport) ChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	base, err := decodeCompatibilityChatCompletionForRuntime(requestJSON)
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (t *CompatibilityRuntimeTransport) CreateChatCompletion(ctx context.Context
 	return t.invoke(ctx, requestJSON, base, compatibilityAbilityChatCompletions)
 }
 
-func (t *CompatibilityRuntimeTransport) StreamChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *CompatibilityRuntimeTransport) StreamChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	base, err := decodeCompatibilityStreamChatCompletionForRuntime(requestJSON)
 	if err != nil {
 		return nil, err
@@ -131,7 +131,7 @@ func (t *CompatibilityRuntimeTransport) UploadFile(ctx context.Context, requestJ
 	return t.invoke(ctx, requestJSON, base, compatibilityAbilityFileUpload)
 }
 
-func (t *CompatibilityRuntimeTransport) RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *CompatibilityRuntimeTransport) GetFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	base, err := decodeCompatibilityFileRetrieveForRuntime(requestJSON)
 	if err != nil {
 		return nil, err

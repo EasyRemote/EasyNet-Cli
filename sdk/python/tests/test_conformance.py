@@ -1189,11 +1189,11 @@ class SharedCompatibilityTransport:
         assert_json_equivalent(request_json, self.expected_list_request)
         return self.model_page_json
 
-    def create_chat_completion(self, request_json: bytes) -> bytes:
+    def chat_completions(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, self.expected_chat_request)
         return self.chat_completion_json
 
-    def stream_chat_completion(self, request_json: bytes) -> bytes:
+    def stream_chat_completions(self, request_json: bytes) -> bytes:
         assert_json_equivalent(request_json, shared_compatibility_stream_request_json())
         return self.chat_stream_json
 
@@ -1205,7 +1205,7 @@ class SharedCompatibilityTransport:
             message="not used by shared compatibility conformance fixture test",
         )
 
-    def retrieve_file(self, request_json: bytes) -> bytes:
+    def get_file(self, request_json: bytes) -> bytes:
         raise SDKError(
             code=ErrorCode.NOT_IMPLEMENTED,
             stage="test",
@@ -3826,14 +3826,14 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "easynet:///r/example/ability/alice.codex.chat",
         )
 
-        chat = compatibility.create_chat_completion(
+        chat = compatibility.chat_completions(
             shared_compatibility_chat_completion_request()
         )
         self.assertEqual(chat.kind, "chat_completion")
         self.assertEqual(chat.model, "easynet:///r/example/ability/alice.codex.chat")
         self.assertEqual(len(chat.choices), 1)
 
-        stream = compatibility.stream_chat_completion(
+        stream = compatibility.stream_chat_completions(
             shared_compatibility_stream_chat_completion_request()
         )
         self.assertEqual(stream.kind, "chat_completion_stream")
@@ -4293,21 +4293,19 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 {
                     "build_chat_completion_invocation": "compatibility.chat.build_completion_invocation",
                     "build_file_delete_invocation": "compatibility.file.build_delete_invocation",
-                    "build_file_get_invocation": "compatibility.file.retrieve",
                     "build_file_retrieve_invocation": "compatibility.file.retrieve",
                     "build_file_upload_invocation": "compatibility.file.build_upload_invocation",
                     "build_list_models_invocation": "compatibility.models.build_list_invocation",
                     "build_stream_chat_completion_invocation": "compatibility.chat.build_stream_invocation",
                     "close": "compatibility.close",
-                    "create_chat_completion": "compatibility.chat.create_completion",
+                    "chat_completions": "compatibility.chat.completions",
                     "delete_file": "compatibility.file.delete",
                     "get_file": "compatibility.file.retrieve",
                     "list_models": "compatibility.models.list",
                     "project_file": "compatibility.file.project",
                     "project_file_delete_result": "compatibility.file.project_delete_result",
                     "project_file_upload": "compatibility.file.project_upload",
-                    "retrieve_file": "compatibility.file.retrieve",
-                    "stream_chat_completion": "compatibility.chat.stream_completion",
+                    "stream_chat_completions": "compatibility.chat.stream_completions",
                     "upload_file": "compatibility.file.upload",
                 },
             ),
@@ -4413,7 +4411,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             (
                 "backend_hub",
                 "compatibility",
-                ((CompatibilityClient, ("list_models", "create_chat_completion", "stream_chat_completion", "upload_file", "retrieve_file", "delete_file")),),
+                ((CompatibilityClient, ("list_models", "chat_completions", "stream_chat_completions", "upload_file", "get_file", "delete_file")),),
             ),
             (
                 "backend_hub",

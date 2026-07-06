@@ -43,6 +43,20 @@ class ImportBoundaryTests(unittest.TestCase):
         exported = set(getattr(easynet_sdk, "__all__", ()))
         leaked = sorted(name for name in exported if name.startswith("EasyRemote"))
         self.assertEqual(leaked, [])
+        for name in (
+            "ListModelsRequest",
+            "ChatCompletionRequest",
+            "StreamChatCompletionRequest",
+            "DaemonLifecycleFacade",
+            "DaemonHandleFacade",
+            "GatewayLifecycleFacade",
+            "GatewayConfig",
+            "GatewayRuntime",
+            "GatewayLifecycleState",
+            "GatewayDaemonHandle",
+        ):
+            self.assertNotIn(name, exported)
+            self.assertFalse(hasattr(easynet_sdk, name), name)
 
     def test_python_sdk_root_does_not_export_direct_runtime_internals(self) -> None:
         exported = set(getattr(easynet_sdk, "__all__", ()))

@@ -4293,7 +4293,7 @@ class CABITransportTests(unittest.TestCase):
         }
 
         models = client.list_models(CompatibilityListModelsRequest(base=base))
-        chat = client.create_chat_completion(
+        chat = client.chat_completions(
             CompatibilityChatCompletionRequest(base=base, request=chat_request)
         )
         uploaded = client.upload_file(
@@ -4305,7 +4305,7 @@ class CABITransportTests(unittest.TestCase):
                 filename="prompt.jsonl",
             )
         )
-        retrieved = client.retrieve_file(
+        retrieved = client.get_file(
             CompatibilityFileRequest(
                 base=base,
                 id="file-easynet-docs-1",
@@ -4387,7 +4387,7 @@ class CABITransportTests(unittest.TestCase):
             auth_token="tok_example",
         )
 
-        stream = client.stream_chat_completion(
+        stream = client.stream_chat_completions(
             CompatibilityStreamChatCompletionRequest(
                 base=base,
                 request={
@@ -4446,7 +4446,7 @@ class CABITransportTests(unittest.TestCase):
         )
 
         with self.assertRaises(TimeoutError):
-            transport.stream_chat_completion(request.to_json_bytes())
+            transport.stream_chat_completions(request.to_json_bytes())
 
         self.assertEqual(
             [item[0] for item in raw.profile_requests],

@@ -159,11 +159,6 @@ class CompatibilityFileDeleteRequest:
         return _json_bytes(_file_delete_payload(self.base, self))
 
 
-ListModelsRequest = CompatibilityListModelsRequest
-ChatCompletionRequest = CompatibilityChatCompletionRequest
-StreamChatCompletionRequest = CompatibilityStreamChatCompletionRequest
-
-
 @dataclass(frozen=True)
 class CompatibilityModel:
     profile: str
@@ -358,16 +353,16 @@ class CompatibilityTransport(Protocol):
     def list_models(self, request_json: bytes) -> bytes:
         ...
 
-    def create_chat_completion(self, request_json: bytes) -> bytes:
+    def chat_completions(self, request_json: bytes) -> bytes:
         ...
 
-    def stream_chat_completion(self, request_json: bytes) -> bytes:
+    def stream_chat_completions(self, request_json: bytes) -> bytes:
         ...
 
     def upload_file(self, request_json: bytes) -> bytes:
         ...
 
-    def retrieve_file(self, request_json: bytes) -> bytes:
+    def get_file(self, request_json: bytes) -> bytes:
         ...
 
     def delete_file(self, request_json: bytes) -> bytes:
@@ -434,7 +429,7 @@ class RuntimeCompatibilityTransport:
             output_message="compatibility model output_json must be an object",
         )
 
-    def create_chat_completion(self, request_json: bytes) -> bytes:
+    def chat_completions(self, request_json: bytes) -> bytes:
         return self._invoke_projected(
             request_json,
             build_method="build_chat_completion_invocation",
@@ -443,7 +438,7 @@ class RuntimeCompatibilityTransport:
             output_message="compatibility chat output_json must be an object",
         )
 
-    def stream_chat_completion(self, request_json: bytes) -> bytes:
+    def stream_chat_completions(self, request_json: bytes) -> bytes:
         self._require_open()
         draft = InvocationDraft.from_json(
             self.carrier.build_stream_chat_completion_invocation(request_json)
@@ -495,7 +490,7 @@ class RuntimeCompatibilityTransport:
             output_message="compatibility file upload output_json must be an object",
         )
 
-    def retrieve_file(self, request_json: bytes) -> bytes:
+    def get_file(self, request_json: bytes) -> bytes:
         return self._invoke_projected(
             request_json,
             build_method="build_file_retrieve_invocation",
@@ -635,9 +630,6 @@ class CompatibilityClient:
             "compatibility file-retrieve invocation failed",
         )
 
-    def build_file_get_invocation(self, request: CompatibilityFileRequest) -> InvocationDraft:
-        return self.build_file_retrieve_invocation(request)
-
     def build_file_delete_invocation(self, request: CompatibilityFileDeleteRequest) -> InvocationDraft:
         self._require_open()
         return self._build_invocation(
@@ -656,24 +648,24 @@ class CompatibilityClient:
             raise _transport_error("compatibility list models failed", exc) from exc
         return CompatibilityModelPage.from_json(raw)
 
-    def create_chat_completion(
+    def chat_completions(
         self, request: CompatibilityChatCompletionRequest
     ) -> CompatibilityChatCompletion:
         self._require_open()
         try:
-            raw = self.transport.create_chat_completion(request.to_json_bytes())
+            raw = self.transport.chat_completions(request.to_json_bytes())
         except SDKError:
             raise
         except Exception as exc:
             raise _transport_error("compatibility chat completion failed", exc) from exc
         return CompatibilityChatCompletion.from_json(raw)
 
-    def stream_chat_completion(
+    def stream_chat_completions(
         self, request: CompatibilityStreamChatCompletionRequest
     ) -> CompatibilityChatCompletionStream:
         self._require_open()
         try:
-            raw = self.transport.stream_chat_completion(request.to_json_bytes())
+            raw = self.transport.stream_chat_completions(request.to_json_bytes())
         except SDKError:
             raise
         except Exception as exc:
@@ -690,18 +682,15 @@ class CompatibilityClient:
             raise _transport_error("compatibility file upload failed", exc) from exc
         return CompatibilityFile.from_json(raw)
 
-    def retrieve_file(self, request: CompatibilityFileRequest) -> CompatibilityFile:
+    def get_file(self, request: CompatibilityFileRequest) -> CompatibilityFile:
         self._require_open()
         try:
-            raw = self.transport.retrieve_file(request.to_json_bytes())
+            raw = self.transport.get_file(request.to_json_bytes())
         except SDKError:
             raise
         except Exception as exc:
             raise _transport_error("compatibility file retrieve failed", exc) from exc
         return CompatibilityFile.from_json(raw)
-
-    def get_file(self, request: CompatibilityFileRequest) -> CompatibilityFile:
-        return self.retrieve_file(request)
 
     def delete_file(self, request: CompatibilityFileDeleteRequest) -> CompatibilityFileDeleteResult:
         self._require_open()

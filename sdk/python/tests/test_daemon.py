@@ -8,7 +8,6 @@ from easynet_sdk import (
     CompatibilityClient,
     ConnectOptions,
     DaemonControl,
-    DaemonLifecycleFacade,
     DaemonLifecycleState,
     DaemonMode,
     DaemonStartProjection,
@@ -33,6 +32,7 @@ from easynet_sdk import (
     is_code,
     start_daemon,
 )
+from easynet_sdk.daemon import DaemonLifecycleFacade
 
 
 class MemoryRuntimeTransport:

@@ -14,7 +14,6 @@ from .ability_invocation import (
 )
 from .client import Client, DiscoveryTransport, FeatureSet, Version
 from .compatibility import (
-    ChatCompletionRequest,
     CompatibilityCarrierBase,
     CompatibilityChatCompletion,
     CompatibilityChatCompletionChunk,
@@ -31,9 +30,7 @@ from .compatibility import (
     CompatibilityModelPage,
     CompatibilityStreamChatCompletionRequest,
     CompatibilityTransport,
-    ListModelsRequest,
     RuntimeCompatibilityTransport,
-    StreamChatCompletionRequest,
 )
 from .admin import (
     AdminAgentListRequest,
@@ -62,11 +59,6 @@ from .admin import (
     AgentLifecycleRecord,
     AgentStartProjection,
     AgentStopProjection,
-    GatewayConfig,
-    GatewayDaemonHandle,
-    GatewayLifecycleFacade,
-    GatewayRuntime,
-    GatewayLifecycleState,
     GatewayListener,
     GatewayStatus,
     JoinResult,
@@ -135,8 +127,6 @@ from .daemon import (
     AttachOptions,
     DaemonControl,
     DaemonHandle,
-    DaemonHandleFacade,
-    DaemonLifecycleFacade,
     DaemonLifecycleState,
     DaemonMode,
     DaemonStartProjection,
@@ -462,7 +452,6 @@ from .wrappers import (
 
 __all__ = [
     "Client",
-    "ChatCompletionRequest",
     "CompatibilityCarrierBase",
     "CompatibilityChatCompletion",
     "CompatibilityChatCompletionChunk",
@@ -538,11 +527,6 @@ __all__ = [
     "BidiChannel",
     "BidiSessionAdapter",
     "FrameStream",
-    "GatewayConfig",
-    "GatewayDaemonHandle",
-    "GatewayLifecycleFacade",
-    "GatewayRuntime",
-    "GatewayLifecycleState",
     "DaemonProfileBridge",
     "ProfileBridgeAddressing",
     "ProfileBridgeDispatcher",
@@ -550,8 +534,6 @@ __all__ = [
     "StreamValue",
     "UnaryDispatchPool",
     "UnaryInvocationTransport",
-    "DaemonHandleFacade",
-    "DaemonLifecycleFacade",
     "DaemonStartProjection",
     "DaemonControl",
     "DaemonHandle",
@@ -671,7 +653,6 @@ __all__ = [
     "JoinResult",
     "LeaveResult",
     "LocalResourceRefRequest",
-    "ListModelsRequest",
     "MAX_DIRECTORY_PAGE_SIZE",
     "MAX_EVENT_PAGE_SIZE",
     "MAX_SIGNING_KEY_PAGE_SIZE",
@@ -787,7 +768,6 @@ __all__ = [
     "BidiTerminalFrame",
     "BidiTransport",
     "StreamCancel",
-    "StreamChatCompletionRequest",
     "StreamEvent",
     "StreamHandle",
     "StreamState",

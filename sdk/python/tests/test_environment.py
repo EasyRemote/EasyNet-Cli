@@ -535,7 +535,7 @@ class SdkEnvironmentTests(unittest.TestCase):
             compatibility.list_models(
                 CompatibilityListModelsRequest(base=_compatibility_base())
             )
-            compatibility.create_chat_completion(
+            compatibility.chat_completions(
                 CompatibilityChatCompletionRequest(
                     base=_compatibility_base(),
                     request={
@@ -578,7 +578,7 @@ class SdkEnvironmentTests(unittest.TestCase):
                     filename="prompt.jsonl",
                 )
             )
-            compatibility.retrieve_file(
+            compatibility.get_file(
                 CompatibilityFileRequest(
                     base=_compatibility_base(),
                     id="file-easynet-docs-1",

@@ -88,10 +88,6 @@ type CompatibilityFileDeleteRequest struct {
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
-type ListModelsRequest = CompatibilityListModelsRequest
-type ChatCompletionRequest = CompatibilityChatCompletionRequest
-type StreamChatCompletionRequest = CompatibilityStreamChatCompletionRequest
-
 type CompatibilityModel struct {
 	Profile    string         `json:"profile"`
 	Kind       string         `json:"kind"`
@@ -176,10 +172,10 @@ type CompatibilityTransport interface {
 	BuildFileRetrieveInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildFileDeleteInvocation(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListModels(ctx context.Context, requestJSON []byte) ([]byte, error)
-	CreateChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error)
-	StreamChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error)
+	StreamChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error)
 	UploadFile(ctx context.Context, requestJSON []byte) ([]byte, error)
-	RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GetFile(ctx context.Context, requestJSON []byte) ([]byte, error)
 	DeleteFile(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
@@ -192,10 +188,10 @@ type CompatibilityTransportFunc struct {
 	BuildFileRetrieveInvocationFunc         func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	BuildFileDeleteInvocationFunc           func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ListModelsFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	CreateChatCompletionFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	StreamChatCompletionFunc                func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	ChatCompletionsFunc                     func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	StreamChatCompletionsFunc               func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	UploadFileFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
-	RetrieveFileFunc                        func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	GetFileFunc                             func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	DeleteFileFunc                          func(ctx context.Context, requestJSON []byte) ([]byte, error)
 }
 
@@ -248,18 +244,18 @@ func (f CompatibilityTransportFunc) ListModels(ctx context.Context, requestJSON 
 	return f.ListModelsFunc(ctx, requestJSON)
 }
 
-func (f CompatibilityTransportFunc) CreateChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
-	if f.CreateChatCompletionFunc == nil {
+func (f CompatibilityTransportFunc) ChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.ChatCompletionsFunc == nil {
 		return nil, invalidProfileClient(compatibilityProfile, "compatibility chat-completion transport function is required")
 	}
-	return f.CreateChatCompletionFunc(ctx, requestJSON)
+	return f.ChatCompletionsFunc(ctx, requestJSON)
 }
 
-func (f CompatibilityTransportFunc) StreamChatCompletion(ctx context.Context, requestJSON []byte) ([]byte, error) {
-	if f.StreamChatCompletionFunc == nil {
+func (f CompatibilityTransportFunc) StreamChatCompletions(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.StreamChatCompletionsFunc == nil {
 		return nil, invalidProfileClient(compatibilityProfile, "compatibility stream-chat-completion transport function is required")
 	}
-	return f.StreamChatCompletionFunc(ctx, requestJSON)
+	return f.StreamChatCompletionsFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) UploadFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -269,11 +265,11 @@ func (f CompatibilityTransportFunc) UploadFile(ctx context.Context, requestJSON 
 	return f.UploadFileFunc(ctx, requestJSON)
 }
 
-func (f CompatibilityTransportFunc) RetrieveFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
-	if f.RetrieveFileFunc == nil {
+func (f CompatibilityTransportFunc) GetFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.GetFileFunc == nil {
 		return nil, invalidProfileClient(compatibilityProfile, "compatibility file-retrieve transport function is required")
 	}
-	return f.RetrieveFileFunc(ctx, requestJSON)
+	return f.GetFileFunc(ctx, requestJSON)
 }
 
 func (f CompatibilityTransportFunc) DeleteFile(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -316,10 +312,6 @@ func (c *CompatibilityClient) BuildFileRetrieveInvocation(ctx context.Context, r
 	return c.buildInvocation(ctx, req, validateCompatibilityFileCarrierRequest, marshalCompatibilityFileRequest, c.transport.BuildFileRetrieveInvocation, "compatibility file-retrieve invocation failed")
 }
 
-func (c *CompatibilityClient) BuildFileGetInvocation(ctx context.Context, req CompatibilityFileRequest) (InvocationDraft, error) {
-	return c.BuildFileRetrieveInvocation(ctx, req)
-}
-
 func (c *CompatibilityClient) BuildFileDeleteInvocation(ctx context.Context, req CompatibilityFileDeleteRequest) (InvocationDraft, error) {
 	return c.buildInvocation(ctx, req, validateCompatibilityFileDeleteCarrierRequest, marshalCompatibilityFileDeleteRequest, c.transport.BuildFileDeleteInvocation, "compatibility file-delete invocation failed")
 }
@@ -347,15 +339,11 @@ func (c *CompatibilityClient) ChatCompletions(ctx context.Context, req Compatibi
 	if err != nil {
 		return CompatibilityChatCompletion{}, err
 	}
-	raw, err := c.transport.CreateChatCompletion(ctx, requestJSON)
+	raw, err := c.transport.ChatCompletions(ctx, requestJSON)
 	if err != nil {
 		return CompatibilityChatCompletion{}, wrapCompatibilityTransportError("compatibility chat completion failed", err)
 	}
 	return NewCompatibilityChatCompletionFromJSON(raw)
-}
-
-func (c *CompatibilityClient) CreateChatCompletion(ctx context.Context, req CompatibilityChatCompletionRequest) (CompatibilityChatCompletion, error) {
-	return c.ChatCompletions(ctx, req)
 }
 
 func (c *CompatibilityClient) StreamChatCompletions(ctx context.Context, req CompatibilityStreamChatCompletionRequest) (CompatibilityChatCompletionStream, error) {
@@ -366,15 +354,11 @@ func (c *CompatibilityClient) StreamChatCompletions(ctx context.Context, req Com
 	if err != nil {
 		return CompatibilityChatCompletionStream{}, err
 	}
-	raw, err := c.transport.StreamChatCompletion(ctx, requestJSON)
+	raw, err := c.transport.StreamChatCompletions(ctx, requestJSON)
 	if err != nil {
 		return CompatibilityChatCompletionStream{}, wrapCompatibilityTransportError("compatibility stream chat completion failed", err)
 	}
 	return NewCompatibilityChatCompletionStreamFromJSON(raw)
-}
-
-func (c *CompatibilityClient) StreamChatCompletion(ctx context.Context, req CompatibilityStreamChatCompletionRequest) (CompatibilityChatCompletionStream, error) {
-	return c.StreamChatCompletions(ctx, req)
 }
 
 func (c *CompatibilityClient) UploadFile(ctx context.Context, req CompatibilityFileUploadRequest) (CompatibilityFile, error) {
@@ -392,7 +376,7 @@ func (c *CompatibilityClient) UploadFile(ctx context.Context, req CompatibilityF
 	return NewCompatibilityFileFromJSON(raw)
 }
 
-func (c *CompatibilityClient) RetrieveFile(ctx context.Context, req CompatibilityFileRequest) (CompatibilityFile, error) {
+func (c *CompatibilityClient) GetFile(ctx context.Context, req CompatibilityFileRequest) (CompatibilityFile, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return CompatibilityFile{}, err
 	}
@@ -400,15 +384,11 @@ func (c *CompatibilityClient) RetrieveFile(ctx context.Context, req Compatibilit
 	if err != nil {
 		return CompatibilityFile{}, err
 	}
-	raw, err := c.transport.RetrieveFile(ctx, requestJSON)
+	raw, err := c.transport.GetFile(ctx, requestJSON)
 	if err != nil {
 		return CompatibilityFile{}, wrapCompatibilityTransportError("compatibility file retrieve failed", err)
 	}
 	return NewCompatibilityFileFromJSON(raw)
-}
-
-func (c *CompatibilityClient) GetFile(ctx context.Context, req CompatibilityFileRequest) (CompatibilityFile, error) {
-	return c.RetrieveFile(ctx, req)
 }
 
 func (c *CompatibilityClient) DeleteFile(ctx context.Context, req CompatibilityFileDeleteRequest) (CompatibilityFileDeleteResult, error) {

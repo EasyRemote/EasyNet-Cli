@@ -66,12 +66,12 @@ func (m *memoryCompatibilityTransport) ListModels(_ context.Context, requestJSON
 	return []byte(m.modelPage), nil
 }
 
-func (m *memoryCompatibilityTransport) CreateChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
+func (m *memoryCompatibilityTransport) ChatCompletions(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("create_chat", requestJSON)
 	return []byte(m.chatCompletion), nil
 }
 
-func (m *memoryCompatibilityTransport) StreamChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
+func (m *memoryCompatibilityTransport) StreamChatCompletions(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("stream_chat", requestJSON)
 	return []byte(m.chatStream), nil
 }
@@ -81,7 +81,7 @@ func (m *memoryCompatibilityTransport) UploadFile(_ context.Context, requestJSON
 	return []byte(m.file), nil
 }
 
-func (m *memoryCompatibilityTransport) RetrieveFile(_ context.Context, requestJSON []byte) ([]byte, error) {
+func (m *memoryCompatibilityTransport) GetFile(_ context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember("retrieve_file", requestJSON)
 	return []byte(m.file), nil
 }
@@ -239,14 +239,6 @@ func TestCompatibilityBuildsOpenAIInvocations(t *testing.T) {
 	if retrieveDraft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.openai.files.retrieve@1.0.0" {
 		t.Fatalf("file retrieve descriptor = %q", retrieveDraft.DescriptorRef())
 	}
-	getDraft, err := client.BuildFileGetInvocation(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if getDraft.DescriptorRef() != retrieveDraft.DescriptorRef() {
-		t.Fatalf("file get descriptor = %q", getDraft.DescriptorRef())
-	}
-
 	deleteDraft, err := client.BuildFileDeleteInvocation(context.Background(), compatibilityFileDeleteRequest(compatibilityBaseForTest()))
 	if err != nil {
 		t.Fatal(err)
@@ -303,21 +295,6 @@ func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
 		t.Fatalf("normative stream method did not force stream=true: %#v", request)
 	}
 
-	legacyChat, err := client.CreateChatCompletion(context.Background(), chatReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacyChat.ID != chat.ID {
-		t.Fatalf("legacy chat wrapper diverged: %#v vs %#v", legacyChat, chat)
-	}
-	legacyStream, err := client.StreamChatCompletion(context.Background(), streamReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if legacyStream.DoneSentinel != stream.DoneSentinel {
-		t.Fatalf("legacy stream wrapper diverged: %#v vs %#v", legacyStream, stream)
-	}
-
 	uploaded, err := client.UploadFile(context.Background(), compatibilityFileUploadRequest(compatibilityBaseForTest()))
 	if err != nil {
 		t.Fatal(err)
@@ -326,19 +303,12 @@ func TestCompatibilityProjectsModelsChatStreamAndFiles(t *testing.T) {
 		t.Fatalf("unexpected uploaded file projection: %#v", uploaded)
 	}
 
-	retrieved, err := client.RetrieveFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
+	retrieved, err := client.GetFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if retrieved.ID != uploaded.ID || retrieved.Filename != "prompt.jsonl" {
 		t.Fatalf("unexpected retrieved file projection: %#v", retrieved)
-	}
-	got, err := client.GetFile(context.Background(), compatibilityFileRequest(compatibilityBaseForTest()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.ID != uploaded.ID || got.Filename != "prompt.jsonl" {
-		t.Fatalf("unexpected get file projection: %#v", got)
 	}
 
 	daemonDeleted, err := client.DeleteFile(context.Background(), compatibilityFileDeleteRequest(compatibilityBaseForTest()))

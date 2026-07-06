@@ -2897,23 +2897,19 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Operations: map[string]string{
 				"BuildChatCompletionInvocation":       "compatibility.chat.build_completion_invocation",
 				"BuildFileDeleteInvocation":           "compatibility.file.build_delete_invocation",
-				"BuildFileGetInvocation":              "compatibility.file.retrieve",
 				"BuildFileRetrieveInvocation":         "compatibility.file.retrieve",
 				"BuildFileUploadInvocation":           "compatibility.file.build_upload_invocation",
 				"BuildListModelsInvocation":           "compatibility.models.build_list_invocation",
 				"BuildStreamChatCompletionInvocation": "compatibility.chat.build_stream_invocation",
 				"ChatCompletions":                     "compatibility.chat.completions",
 				"Close":                               "compatibility.close",
-				"CreateChatCompletion":                "compatibility.chat.create_completion",
 				"DeleteFile":                          "compatibility.file.delete",
 				"GetFile":                             "compatibility.file.retrieve",
 				"ListModels":                          "compatibility.models.list",
 				"ProjectFile":                         "compatibility.file.project",
 				"ProjectFileDeleteResult":             "compatibility.file.project_delete_result",
 				"ProjectFileUpload":                   "compatibility.file.project_upload",
-				"RetrieveFile":                        "compatibility.file.retrieve",
 				"StreamChatCompletions":               "compatibility.chat.stream_completions",
-				"StreamChatCompletion":                "compatibility.chat.stream_completion",
 				"UploadFile":                          "compatibility.file.upload",
 			},
 		},
@@ -2928,11 +2924,11 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"BuildListModelsInvocation":           "compatibility.models.build_list_invocation",
 				"BuildStreamChatCompletionInvocation": "compatibility.chat.build_stream_invocation",
 				"Close":                               "compatibility.close",
-				"CreateChatCompletion":                "compatibility.chat.create_completion",
+				"ChatCompletions":                     "compatibility.chat.completions",
 				"DeleteFile":                          "compatibility.file.delete",
 				"ListModels":                          "compatibility.models.list",
-				"RetrieveFile":                        "compatibility.file.retrieve",
-				"StreamChatCompletion":                "compatibility.chat.stream_completion",
+				"GetFile":                             "compatibility.file.retrieve",
+				"StreamChatCompletions":               "compatibility.chat.stream_completions",
 				"UploadFile":                          "compatibility.file.upload",
 			},
 		},
@@ -3096,7 +3092,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "backend_hub",
 			Profile:  "compatibility",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*CompatibilityClient)(nil)), Methods: []string{"ListModels", "ChatCompletions", "StreamChatCompletions", "UploadFile", "RetrieveFile", "DeleteFile"}},
+				{Type: reflect.TypeOf((*CompatibilityClient)(nil)), Methods: []string{"ListModels", "ChatCompletions", "StreamChatCompletions", "UploadFile", "GetFile", "DeleteFile"}},
 			},
 		},
 		{
@@ -3861,12 +3857,12 @@ func (t *sharedCompatibilityTransport) ListModels(_ context.Context, requestJSON
 	return t.modelPageJSON, nil
 }
 
-func (t *sharedCompatibilityTransport) CreateChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
+func (t *sharedCompatibilityTransport) ChatCompletions(_ context.Context, requestJSON []byte) ([]byte, error) {
 	assertJSONEquivalent(t.t, requestJSON, t.expectedChatRequest)
 	return t.chatCompletionJSON, nil
 }
 
-func (t *sharedCompatibilityTransport) StreamChatCompletion(_ context.Context, requestJSON []byte) ([]byte, error) {
+func (t *sharedCompatibilityTransport) StreamChatCompletions(_ context.Context, requestJSON []byte) ([]byte, error) {
 	expectedStreamRequest := sharedCompatibilityStreamRequestJSON(t.t, t.expectedStreamRequest)
 	assertJSONEquivalent(t.t, requestJSON, expectedStreamRequest)
 	return t.chatStreamJSON, nil
@@ -3876,7 +3872,7 @@ func (t *sharedCompatibilityTransport) UploadFile(context.Context, []byte) ([]by
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 
-func (t *sharedCompatibilityTransport) RetrieveFile(context.Context, []byte) ([]byte, error) {
+func (t *sharedCompatibilityTransport) GetFile(context.Context, []byte) ([]byte, error) {
 	return nil, &SDKError{Code: ErrNotImplemented, Stage: "test", Retry: RetryNever}
 }
 

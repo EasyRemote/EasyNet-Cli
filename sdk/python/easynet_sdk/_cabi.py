@@ -1924,14 +1924,14 @@ class CABICompatibilityTransport(_CABIProfileTransport):
             project_symbol="easynet_compatibility_project_model_page",
         )
 
-    def create_chat_completion(self, request_json: bytes) -> bytes:
+    def chat_completions(self, request_json: bytes) -> bytes:
         return self._invoke_output_projected(
             request_json,
             build_symbol="easynet_compatibility_build_chat_completion_invocation",
             project_symbol="easynet_compatibility_project_chat_completion",
         )
 
-    def stream_chat_completion(self, request_json: bytes) -> bytes:
+    def stream_chat_completions(self, request_json: bytes) -> bytes:
         stream = self._open_runtime_stream(
             request_json,
             build_symbol="easynet_compatibility_build_stream_chat_completion_invocation",
@@ -1979,7 +1979,7 @@ class CABICompatibilityTransport(_CABIProfileTransport):
             project_symbol="easynet_compatibility_project_file_upload",
         )
 
-    def retrieve_file(self, request_json: bytes) -> bytes:
+    def get_file(self, request_json: bytes) -> bytes:
         return self._invoke_output_projected(
             request_json,
             build_symbol="easynet_compatibility_build_file_retrieve_invocation",
