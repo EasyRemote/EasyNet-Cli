@@ -30,7 +30,16 @@
 // submit path for returned carriers; Axon remains the verifier authority for
 // full cryptographic receipt verification.
 
+use std::collections::BTreeMap;
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ed25519_dalek::VerifyingKey;
+use easynet_axon::invocation::{
+    canonical_receipt_bytes_with_hosted, verify_receipt_signature_with_hosted, AxonError,
+    CalleeSignature, KeyResolver, ReceiptJson,
+};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string_field, required_string, system_descriptor_ref,
@@ -76,6 +85,9 @@ pub(crate) fn project_receipt_summary(input: &Value) -> Result<Value, ReceiptErr
 }
 
 pub(crate) fn project_receipt_verification(input: &Value) -> Result<Value, ReceiptError> {
+    if let Some(verification) = project_axon_receipt_verification(input)? {
+        return Ok(verification);
+    }
     Ok(ReceiptProjection::from_value_lossy(input)?.verification_json())
 }
 
@@ -233,6 +245,161 @@ fn optional_timeout_ms(obj: &Map<String, Value>) -> Result<Option<u64>, ReceiptE
             "must be a non-negative integer".to_string(),
         )),
     }
+}
+
+fn project_axon_receipt_verification(input: &Value) -> Result<Option<Value>, ReceiptError> {
+    let obj = object(input, "ReceiptVerificationRequest")?;
+    let Some(receipt_value) = obj.get("receipt") else {
+        return Ok(None);
+    };
+    let Some(keys_value) = obj.get("public_keys") else {
+        return Ok(None);
+    };
+    let resolver = InlineReceiptKeyResolver::from_value(keys_value)?;
+    let receipt_ura = optional_string(obj, "receipt_ura");
+    let receipt = serde_json::from_value::<ReceiptJson>(receipt_value.clone()).map_err(|err| {
+        ReceiptError::InvalidField("receipt", format!("invalid Axon receipt bundle JSON: {err}"))
+    })?;
+    Ok(Some(verify_axon_receipt_json(&receipt, receipt_ura, &resolver)))
+}
+
+fn verify_axon_receipt_json(
+    receipt: &ReceiptJson,
+    receipt_ura: Option<String>,
+    resolver: &InlineReceiptKeyResolver,
+) -> Value {
+    let invocation_id = Some(receipt.invocation_id.clone());
+    let verified_result = (|| -> Result<String, AxonError> {
+        let (body, signature, algorithm) = receipt.to_body()?;
+        let (signer_binding, host_attestation) = receipt.hosted_attestation()?;
+        let hosted = ReceiptJson::hosted_attestation_ref(&signer_binding, &host_attestation);
+        let signature = CalleeSignature {
+            algorithm,
+            signature,
+            key_id_hint: String::new(),
+        };
+        verify_receipt_signature_with_hosted(&body, hosted, &signature, resolver)?;
+        let canonical = canonical_receipt_bytes_with_hosted(&body, hosted);
+        Ok(hex::encode(Sha256::digest(canonical)))
+    })();
+
+    match verified_result {
+        Ok(self_hash_hex) => json!({
+            "verified": true,
+            "receipt_ura": receipt_ura,
+            "invocation_id": invocation_id,
+            "method": "axon_receipt_signature",
+            "reason": "",
+            "metadata": {
+                "source": "axon",
+                "assurance": "cryptographic",
+                "verifier": "easynet_axon::invocation::verify_receipt_signature_with_hosted",
+                "signature_algorithm": receipt.callee_signature_alg,
+                "self_hash_hex": self_hash_hex,
+            },
+        }),
+        Err(err) => json!({
+            "verified": false,
+            "receipt_ura": receipt_ura,
+            "invocation_id": invocation_id,
+            "method": "axon_receipt_signature",
+            "reason": err.reason,
+            "metadata": {
+                "source": "axon",
+                "assurance": "cryptographic",
+                "verifier": "easynet_axon::invocation::verify_receipt_signature_with_hosted",
+                "signature_algorithm": receipt.callee_signature_alg,
+            },
+        }),
+    }
+}
+
+struct InlineReceiptKeyResolver {
+    keys: BTreeMap<String, VerifyingKey>,
+}
+
+impl InlineReceiptKeyResolver {
+    fn from_value(value: &Value) -> Result<Self, ReceiptError> {
+        let obj = value.as_object().ok_or_else(|| {
+            ReceiptError::InvalidField("public_keys", "must be an object".to_string())
+        })?;
+        if obj.is_empty() {
+            return Err(ReceiptError::InvalidField(
+                "public_keys",
+                "must contain at least one signer URA".to_string(),
+            ));
+        }
+        let mut keys = BTreeMap::new();
+        for (agent_ura, value) in obj {
+            let key_bytes = public_key_bytes(value)?;
+            let key = VerifyingKey::from_bytes(&key_bytes).map_err(|err| {
+                ReceiptError::InvalidField(
+                    "public_keys",
+                    format!("invalid Ed25519 public key for {agent_ura}: {err}"),
+                )
+            })?;
+            keys.insert(agent_ura.clone(), key);
+        }
+        Ok(Self { keys })
+    }
+}
+
+impl KeyResolver for InlineReceiptKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        self.keys.get(agent_ura).copied().ok_or_else(|| {
+            AxonError::invalid_argument(format!("no_pubkey_for_agent:{agent_ura}"))
+        })
+    }
+}
+
+fn public_key_bytes(value: &Value) -> Result<[u8; 32], ReceiptError> {
+    let raw = match value {
+        Value::String(raw) => decode_public_key(raw)?,
+        Value::Object(obj) => {
+            if let Some(raw) = optional_string(obj, "public_key_hex") {
+                decode_hex_public_key(&raw)?
+            } else if let Some(raw) = optional_string(obj, "public_key_base64") {
+                decode_base64_public_key(&raw)?
+            } else {
+                return Err(ReceiptError::InvalidField(
+                    "public_keys",
+                    "key object must contain public_key_hex or public_key_base64".to_string(),
+                ));
+            }
+        }
+        _ => {
+            return Err(ReceiptError::InvalidField(
+                "public_keys",
+                "key value must be a string or object".to_string(),
+            ))
+        }
+    };
+    raw.as_slice().try_into().map_err(|_| {
+        ReceiptError::InvalidField(
+            "public_keys",
+            format!("Ed25519 public key must be 32 bytes, got {}", raw.len()),
+        )
+    })
+}
+
+fn decode_public_key(raw: &str) -> Result<Vec<u8>, ReceiptError> {
+    let raw = raw.trim();
+    if raw.strip_prefix("hex:").is_some() || raw.len() == 64 {
+        return decode_hex_public_key(raw.strip_prefix("hex:").unwrap_or(raw));
+    }
+    decode_base64_public_key(raw.strip_prefix("base64:").unwrap_or(raw))
+}
+
+fn decode_hex_public_key(raw: &str) -> Result<Vec<u8>, ReceiptError> {
+    hex::decode(raw.trim()).map_err(|err| {
+        ReceiptError::InvalidField("public_keys", format!("invalid public key hex: {err}"))
+    })
+}
+
+fn decode_base64_public_key(raw: &str) -> Result<Vec<u8>, ReceiptError> {
+    BASE64.decode(raw.trim()).map_err(|err| {
+        ReceiptError::InvalidField("public_keys", format!("invalid public key base64: {err}"))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -649,6 +816,52 @@ mod tests {
     }
 
     #[test]
+    fn project_verification_delegates_full_receipt_signature_to_axon() {
+        let (receipt, public_key_hex) = signed_axon_receipt_fixture();
+
+        let verification = project_receipt_verification(&json!({
+            "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+            "receipt": receipt,
+            "public_keys": {
+                "easynet:///r/example/agent/alice.worker": public_key_hex
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], true);
+        assert_eq!(verification["method"], "axon_receipt_signature");
+        assert_eq!(verification["invocation_id"], "inv-axon");
+        assert_eq!(verification["metadata"]["source"], "axon");
+        assert_eq!(verification["metadata"]["assurance"], "cryptographic");
+        assert!(verification["metadata"]["self_hash_hex"]
+            .as_str()
+            .unwrap()
+            .len()
+            == 64);
+    }
+
+    #[test]
+    fn project_verification_rejects_tampered_axon_receipt_signature() {
+        let (mut receipt, public_key_hex) = signed_axon_receipt_fixture();
+        receipt["callee_signature_hex"] = json!("00".repeat(64));
+
+        let verification = project_receipt_verification(&json!({
+            "receipt": receipt,
+            "public_keys": {
+                "easynet:///r/example/agent/alice.worker": public_key_hex
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(verification["verified"], false);
+        assert_eq!(verification["method"], "axon_receipt_signature");
+        assert!(verification["reason"]
+            .as_str()
+            .unwrap()
+            .contains("callee_signature_invalid"));
+    }
+
+    #[test]
     fn project_chain_verification_reports_continuity_without_crypto_upgrade() {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
@@ -741,5 +954,118 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(causal["verified"], false);
+    }
+
+    fn signed_axon_receipt_fixture() -> (Value, String) {
+        use easynet_axon::invocation::bundle::{
+            AuthorityJson, CausalJson, IdentityJson, InvocationAuthorityProofJson, ReceiptJson,
+        };
+        use easynet_axon::invocation::{
+            sign_receipt, AgentIdentity, CausalContext, EntityRef, EntityRefKind,
+            InvocationAuthorityProof, ReceiptBody, ReceiptProofFacts, SubjectIdentity, UraProfile,
+        };
+        use easynet_axon::invocation::axiom::{AuthorityBinding, InvocationUsage};
+        use ed25519_dalek::SigningKey;
+
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let profile = UraProfile::EasynetStrictV2;
+        let caller = AgentIdentity::new("easynet:///r/example/agent/alice.sdk", profile);
+        let callee = AgentIdentity::new("easynet:///r/example/agent/alice.worker", profile);
+        let subject = SubjectIdentity::from_callee(&callee);
+        let authority = AuthorityBinding::Self_ {
+            principal_ura: caller.ura.clone(),
+        };
+        let authority_proof = InvocationAuthorityProof {
+            proof_type: "self".to_string(),
+            binding: Some(authority.clone()),
+            proof_payload: Vec::new(),
+            proof_hash: [0u8; 32],
+            issuer: None,
+            signature: None,
+            admission_hook: "sdk-test".to_string(),
+        };
+        let proof_facts = ReceiptProofFacts {
+            subject_ref: Some(EntityRef::new(
+                EntityRefKind::Agent,
+                callee.ura.clone(),
+                profile,
+            )),
+            descriptor_version: "1.0.0".to_string(),
+            schema_hash: [1u8; 32],
+            impl_hash: [2u8; 32],
+            runtime_env: "sdk-test".to_string(),
+            authority_proof,
+            input_hash: [3u8; 32],
+            output_hash: [4u8; 32],
+            parent_receipts: Vec::new(),
+        };
+        let body = ReceiptBody {
+            index: 0,
+            invocation_id: "inv-axon".to_string(),
+            receipt_type: "terminal".to_string(),
+            state: "completed".to_string(),
+            timestamp_unix_ms: 1783100000123,
+            prev_receipt_hash: [0u8; 32],
+            payload_digest: [5u8; 32],
+            reason: String::new(),
+            cleanup_complete: true,
+            caller_binding: caller.clone(),
+            callee_binding: callee.clone(),
+            subject_binding: subject.clone(),
+            invocation_nonce: [9u8; 16],
+            causal_binding: CausalContext::None,
+            ability_binding: "easynet:///r/example/ability/alice.worker.echo@1.0.0"
+                .to_string(),
+            authority_binding: authority.clone(),
+            usage: InvocationUsage::default(),
+            proof_facts,
+        };
+        let signature = sign_receipt(&signing_key, &body, "test-key");
+        let receipt = ReceiptJson {
+            index: body.index,
+            invocation_id: body.invocation_id,
+            receipt_type: body.receipt_type,
+            state: body.state,
+            timestamp_unix_ms: body.timestamp_unix_ms,
+            prev_receipt_hash_hex: hex::encode(body.prev_receipt_hash),
+            payload_sha256_hex: hex::encode(body.payload_digest),
+            reason: body.reason,
+            cleanup_complete: body.cleanup_complete,
+            caller_binding: IdentityJson::from_agent(&body.caller_binding),
+            callee_binding: IdentityJson::from_agent(&body.callee_binding),
+            subject_binding: IdentityJson::from_subject(&body.subject_binding),
+            invocation_nonce_hex: hex::encode(body.invocation_nonce),
+            causal_binding: CausalJson::from_ctx(&body.causal_binding),
+            ability_binding: body.ability_binding,
+            authority_binding: AuthorityJson::from_binding(&body.authority_binding),
+            callee_signature_hex: hex::encode(signature.signature),
+            callee_signature_alg: signature.algorithm,
+            signer_binding: None,
+            host_attestation_hex: None,
+            usage_tokens_in: body.usage.tokens_in,
+            usage_tokens_out: body.usage.tokens_out,
+            usage_duration_ms: body.usage.duration_ms,
+            usage_external_calls: body.usage.external_calls,
+            subject_ref: body
+                .proof_facts
+                .subject_ref
+                .as_ref()
+                .map(easynet_axon::invocation::bundle::EntityRefJson::from_entity_ref),
+            descriptor_version: body.proof_facts.descriptor_version,
+            schema_hash_hex: hex::encode(body.proof_facts.schema_hash),
+            impl_hash_hex: hex::encode(body.proof_facts.impl_hash),
+            runtime_env: body.proof_facts.runtime_env,
+            authority_proof: InvocationAuthorityProofJson::from_proof(
+                &body.proof_facts.authority_proof,
+            ),
+            input_hash_hex: hex::encode(body.proof_facts.input_hash),
+            output_hash_hex: hex::encode(body.proof_facts.output_hash),
+            parent_receipts: Vec::new(),
+        };
+
+        (
+            serde_json::to_value(receipt).unwrap(),
+            hex::encode(signing_key.verifying_key().to_bytes()),
+        )
     }
 }
