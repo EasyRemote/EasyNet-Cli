@@ -18,8 +18,8 @@ await/cancel/events/free-handle adapters, runtime connection state, runtime heal
 facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
 detach/open-runtime/connect-local/open-runtime-profiles state seams,
 RuntimeProfileBundle factories for Runtime Core-backed Directory, Receipt,
-Publication, Admin + Gateway, Events, Surface, Compatibility, and Wrapper
-clients, schema-backed SDK error projection
+Publication, Mission, Admin + Gateway, Events, Surface, Compatibility, and
+Wrapper clients, schema-backed SDK error projection
 with stable error classes and profile source-ref accessors, complete Invocation
 draft construction, prepared/signed Invocation DTOs, unary
 InvocationResult projection, local Ed25519 signer provider over daemon/Axon
@@ -46,10 +46,10 @@ package validation and plugin install, published-ability read-model seams, and c
 exposes binding DTO, envelope decode, item/error/terminal frame encoding,
 output-hash folding seams, and hash cursor invariant guardrails plus close state
 seams. MissionClient exposes run/run-file/track/cancel
-Invocation carrier builders plus MissionStatus and MissionEventPage projection
-seams, bounded Mission event tailing, Runtime Core-backed Mission event
-streams, MissionPlan EAL rendering, complete child Invocation fact conformance,
-and close state seams. AdminClient
+Invocation carrier builders, Runtime Core-backed run/run-file/track/cancel/events
+execution and event streams, daemon MissionStatus and MissionEventPage
+projection, bounded Mission event tailing, MissionPlan EAL rendering, complete
+child Invocation fact conformance, and close state seams. AdminClient
 exposes agent list/start/stop/refresh and session-list Invocation carrier
 builders, explicit daemon-owned GatewayStatus provider seams, GatewayStatus,
 AdminAgentPage, lifecycle-result, pairing token, device credential, credential
@@ -69,7 +69,7 @@ file, terminal, remote desktop, browser, and media session Invocation carrier
 builders, Runtime Core stream/bidi session entry points, transport-backed helper
 close state seams, and record projections. Direct UDS transport,
 Axon-backed receipt verification,
-concrete publication/host-binding/mission
+concrete publication/host-binding
 carriers, concrete Admin trust/session carriers,
 certificate policy, Events daemon filtering/live adapters, concrete surface health
 carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,

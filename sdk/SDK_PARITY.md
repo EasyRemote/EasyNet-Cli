@@ -38,7 +38,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | receipt | Receipt | provider-backed | provider-backed | Go/Python opaque `ReceiptRef`/`ReceiptChain` anchors, Axon-backed single-receipt verification, cross-invocation chain signature, and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
-| mission | Mission | provider-backed | provider-backed | SDK plan rendering, Runtime Core-backed Mission event stream adapters, and complete child Invocation fact conformance exist; daemon-side child Invocation execution, scheduler policy, and backend automation cutover remain incomplete outside the SDK facade. |
+| mission | Mission | provider-backed | provider-backed | SDK plan rendering, Runtime Core-backed Mission execution/event stream adapters, and complete child Invocation fact conformance exist; daemon-side child Invocation execution, scheduler policy, and backend automation cutover remain incomplete outside the SDK facade. |
 | admin + gateway | Admin + Gateway | provider-backed | provider-backed | Certificate policy, trust persistence, and product pairing lifecycle cutover remain outside the daemon SDK. |
 | events | Events | provider-backed | provider-backed | Daemon-side filtering plus external SSE/WebSocket fanout and product cutovers remain incomplete. |
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
@@ -93,12 +93,13 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   user-code execution, and downstream product cutover remain outside the daemon
   SDK.
 - Mission carrier/status/events guardrails exist for Rust/C ABI over
-  `mission.run/track/cancel/events`; Go/Python C ABI transports now execute
-  run/run-file/track/cancel/events through Runtime Core invoke, and Go/Python
-  expose bounded page-based Mission event tail state machines, Runtime Core-backed
-  Mission event stream adapters, and complete child Invocation fact conformance.
-  Daemon-side child Invocation execution, scheduler/retry policy, and backend
-  automation cutover remain incomplete.
+  `mission.run/track/cancel/events`; Go has Runtime Core-backed
+  run/run-file/track/cancel/events execution and event streams, Python has
+  `RuntimeMissionTransport` carrier/projection composition over Runtime Core,
+  and Go/Python expose bounded page-based Mission event tail state machines
+  plus complete child Invocation fact conformance. Daemon-side child Invocation
+  execution, scheduler/retry policy, and backend automation cutover remain
+  incomplete.
 - Events Directory/device/invocation stream carrier guardrails, session stream
   carrier guardrails, DirectoryEvent/drop/terminal projection guardrails, and
   bounded device event history carrier/page guardrails exist for Rust/C ABI over
@@ -190,13 +191,13 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   user-code execution, and downstream product cutover remain incomplete outside
   the daemon SDK.
 - Go Mission facade exposes `MissionClient` run/run-file/track/cancel/events
-  Invocation carrier builders, C ABI-backed run/run-file/track/cancel/events
-  execution through Runtime Core invoke, daemon `MissionStatus` and
-  `MissionEventPage` projection seams, bounded page-based Mission event tailing,
-  Runtime Core-backed Mission event streams, SDK-owned `MissionPlan` EAL
-  rendering, complete child Invocation fact conformance, and close state seams;
-  daemon-side child Invocation execution, scheduler/retry policy, and backend
-  automation cutover remain incomplete.
+  Invocation carrier builders, Runtime Core-backed run/run-file/track/cancel/events
+  execution, local run-file source marshalling to daemon `mission.run`, daemon
+  `MissionStatus` and `MissionEventPage` projection, bounded page-based Mission
+  event tailing, Runtime Core-backed Mission event streams, SDK-owned
+  `MissionPlan` EAL rendering, complete child Invocation fact conformance, and
+  close state seams; daemon-side child Invocation execution, scheduler/retry
+  policy, and backend automation cutover remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
   session-list, hub join/leave, pairing preflight/create/validate, credential
   verification, device-session create/delete, device-revoke Runtime
@@ -363,10 +364,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   pairing/hub lifecycle cutover and RFC-007 receipt URA construction remain
   incomplete.
 - Python Mission facade exposes `MissionClient` run/run-file/track/cancel/events
-  Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
-  through Runtime Core invoke, C ABI-backed mission events execution through
-  Runtime Core invoke, daemon `MissionStatus` and `MissionEventPage`
-  projection seams, an SDK-owned `MissionExecutionAdapter` with
+  Invocation carrier builders, `RuntimeMissionTransport` carrier/projection
+  composition over Runtime Core run/run-file/track/cancel/events execution and
+  event streams, C ABI-backed mission carrier/projection providers, daemon
+  `MissionStatus` and `MissionEventPage` projection seams, an SDK-owned
+  `MissionExecutionAdapter` with
   event-page projection, SDK-owned Daemon profile bridge dispatch/projection
   glue, page-based Mission event access, SDK-owned bounded Mission event
   projection tailing, Runtime Core-backed Mission event streams, SDK-owned

@@ -9,8 +9,15 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
+from .errors import (
+    ErrorCode,
+    RetryHint,
+    SDKError,
+    canonical_failure_code,
+    profile_error_details,
+)
 from .invocation import InvocationDraft
+from .runtime import RuntimeClient
 from .stream import StreamCancel, StreamHandle, StreamState
 
 
@@ -887,6 +894,156 @@ class MissionEventStreamTransport(Protocol):
         ...
 
 
+@runtime_checkable
+class MissionRuntimeCarrier(MissionTransport, Protocol):
+    """Mission carrier/projection provider used by Runtime-backed transports."""
+
+    def build_events_invocation(self, request_json: bytes) -> bytes:
+        ...
+
+    def project_status(self, status_json: bytes) -> bytes:
+        ...
+
+    def project_events(self, events_json: bytes) -> bytes:
+        ...
+
+
+@dataclass
+class RuntimeMissionTransport:
+    """Mission transport that executes profile operations through Runtime Core."""
+
+    carrier: MissionRuntimeCarrier
+    runtime: RuntimeClient
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def build_run_eal_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_run_eal_invocation", request_json)
+
+    def build_run_file_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_run_file_invocation", request_json)
+
+    def build_track_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_track_invocation", request_json)
+
+    def build_cancel_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_cancel_invocation", request_json)
+
+    def run_eal(self, request_json: bytes) -> bytes:
+        return self._invoke_status(
+            request_json,
+            build_method="build_run_eal_invocation",
+            failure_message="mission run invocation failed",
+        )
+
+    def run_file(self, request_json: bytes) -> bytes:
+        return self._invoke_status(
+            request_json,
+            build_method="build_run_file_invocation",
+            failure_message="mission run-file invocation failed",
+        )
+
+    def track(self, request_json: bytes) -> bytes:
+        return self._invoke_status(
+            request_json,
+            build_method="build_track_invocation",
+            failure_message="mission track invocation failed",
+        )
+
+    def cancel(self, request_json: bytes) -> bytes:
+        return self._invoke_status(
+            request_json,
+            build_method="build_cancel_invocation",
+            failure_message="mission cancel invocation failed",
+        )
+
+    def events(self, request_json: bytes) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(
+            self.carrier.build_events_invocation(request_json)
+        )
+        output = self._invoke_output(draft, "mission events invocation failed")
+        projection = _mission_runtime_projection_request(
+            request_json,
+            output,
+            ("mission_id", "cursor_sequence"),
+        )
+        raw = self.carrier.project_events(_json_bytes(projection))
+        MissionEventPage.from_json(raw)
+        return raw
+
+    def open_event_stream(self, request_json: bytes) -> StreamHandle:
+        self._require_open()
+        draft = InvocationDraft.from_json(
+            self.carrier.build_events_invocation(request_json)
+        )
+        return self.runtime.invoke_stream(draft)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        for owned in (self.runtime, self.carrier):
+            close = getattr(owned, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            except Exception as exc:
+                if first_error is None:
+                    first_error = _transport_error("mission runtime close failed", exc)
+        if first_error is not None:
+            raise first_error
+
+    def _delegate(self, method_name: str, request_json: bytes) -> bytes:
+        self._require_open()
+        return getattr(self.carrier, method_name)(request_json)
+
+    def _invoke_status(
+        self,
+        request_json: bytes,
+        *,
+        build_method: str,
+        failure_message: str,
+    ) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        output = self._invoke_output(draft, failure_message)
+        raw = self.carrier.project_status(_json_bytes(output))
+        MissionStatus.from_json(raw)
+        return raw
+
+    def _invoke_output(
+        self,
+        draft: InvocationDraft,
+        failure_message: str,
+    ) -> Mapping[str, object]:
+        result = self.runtime.invoke(draft)
+        if not result.ok:
+            raise SDKError(
+                code=canonical_failure_code(result.error.code if result.error else None),
+                stage="mission",
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                message=failure_message,
+            )
+        output = result.output_json
+        if not isinstance(output, dict):
+            raise _invalid_mission("mission invocation output_json must be an object")
+        return output
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_mission("mission runtime transport is closed")
+        if self.carrier is None:
+            raise _invalid_mission("mission carrier transport is required")
+        if self.runtime is None:
+            raise _invalid_mission("runtime client is required")
+
+
 @dataclass(frozen=True)
 class MissionClient:
     """Mission profile facade."""
@@ -1200,6 +1357,19 @@ def _optional_sdk_error(value: object, field_name: str) -> Optional[SDKError]:
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _mission_runtime_projection_request(
+    request_json: bytes,
+    output: Mapping[str, object],
+    passthrough_keys: tuple[str, ...],
+) -> dict[str, object]:
+    projection = dict(output)
+    request = _json_object(request_json, "mission runtime projection request")
+    for key in passthrough_keys:
+        if key in request:
+            projection[key] = request[key]
+    return projection
 
 
 def _json_object(raw: bytes | str, label: str) -> dict[str, object]:

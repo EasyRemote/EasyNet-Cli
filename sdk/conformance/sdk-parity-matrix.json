@@ -219,7 +219,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_mission.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "SDK plan rendering, Runtime Core-backed Mission event stream adapters, and complete child Invocation fact conformance exist; daemon-side child Invocation execution, scheduler policy, and backend automation cutover remain incomplete outside the SDK facade."
+      "remaining": "SDK plan rendering, Runtime Core-backed Mission execution/event stream adapters, and complete child Invocation fact conformance exist; daemon-side child Invocation execution, scheduler policy, and backend automation cutover remain incomplete outside the SDK facade."
     },
     {
       "capability_id": "admin_gateway",

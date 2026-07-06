@@ -41,6 +41,9 @@ func TestRuntimeProfileBundleBuildsRuntimeBackedClients(t *testing.T) {
 	if _, err := bundle.Events(ctx); err != nil {
 		t.Fatalf("Events: %v", err)
 	}
+	if _, err := bundle.Missions(ctx); err != nil {
+		t.Fatalf("Missions: %v", err)
+	}
 	if _, err := bundle.Surface(ctx); err != nil {
 		t.Fatalf("Surface: %v", err)
 	}

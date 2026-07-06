@@ -420,6 +420,7 @@ class DaemonTests(unittest.TestCase):
                 "runtime",
                 "host_binding",
                 "mission",
+                "runtime",
                 "admin",
                 "events",
                 "surface",

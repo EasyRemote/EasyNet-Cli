@@ -138,6 +138,16 @@ func (b *RuntimeProfileBundle) Events(ctx context.Context) (*EventClient, error)
 	return trackRuntimeProfileClient(ctx, b, client, err)
 }
 
+// Missions opens a Runtime Core-backed Mission profile client.
+func (b *RuntimeProfileBundle) Missions(ctx context.Context) (*MissionClient, error) {
+	runtime, identity, _, err := b.clients(ctx)
+	if err != nil {
+		return nil, err
+	}
+	client, err := NewRuntimeMissionClient(runtime, identity)
+	return trackRuntimeProfileClient(ctx, b, client, err)
+}
+
 // Surface opens a Runtime Core-backed Surface profile client.
 func (b *RuntimeProfileBundle) Surface(ctx context.Context) (*SurfaceClient, error) {
 	runtime, identity, _, err := b.clients(ctx)

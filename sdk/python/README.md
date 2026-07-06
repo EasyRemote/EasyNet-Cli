@@ -101,12 +101,12 @@ Invocation JSON codecs, raw URA/DescriptorRef helpers, raw host-stream
 frame/hash codecs, raw admin/mission carrier strings, and raw lower-layer
 Axon/ABI dependencies in consumer manifests.
 MissionClient exposes run/run-file/track/cancel
-Invocation carrier builders, C ABI-backed run/run-file/track/cancel execution
-through Runtime Core invoke, plus MissionStatus and MissionEventPage projection
-seams, an SDK-owned `MissionExecutionAdapter` over typed Mission profile
-requests, SDK-owned `DaemonProfileBridge` dispatch/projection glue,
-page-based Mission event access, SDK-owned bounded Mission event
-projection tailing, Runtime Core-backed Mission event streams, SDK-owned
+Invocation carrier builders, `RuntimeMissionTransport` carrier/projection
+composition over Runtime Core run/run-file/track/cancel/events execution and
+event streams, MissionStatus and MissionEventPage projection seams, an
+SDK-owned `MissionExecutionAdapter` over typed Mission profile requests,
+SDK-owned `DaemonProfileBridge` dispatch/projection glue, page-based Mission
+event access, SDK-owned bounded Mission event projection tailing, SDK-owned
 `MissionPlan` EAL rendering and complete child Invocation fact conformance
 projection, and close state seams. AdminClient
 exposes agent list/start/stop/refresh, session-list, hub join/leave, pairing

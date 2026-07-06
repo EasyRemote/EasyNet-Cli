@@ -2,7 +2,15 @@ import json
 import unittest
 from dataclasses import replace
 
-from easynet_sdk import MissionExecutionAdapter, ErrorCode, SDKError, StreamHandle, is_code
+from easynet_sdk import (
+    MissionExecutionAdapter,
+    ErrorCode,
+    RuntimeClient,
+    RuntimeMissionTransport,
+    SDKError,
+    StreamHandle,
+    is_code,
+)
 from easynet_sdk.mission import (
     MissionPlan,
     MissionCancelRequest,
@@ -56,6 +64,18 @@ MISSION_CANCEL_INVOCATION_JSON = b"""{
   "args": {"run_id": "2026-07-04_010203_weather"},
   "content_type": "application/json",
   "metadata": {"request_id": "mission-cancel-1", "profile": "mission", "system_ability": "mission.cancel", "carrier_owner": "daemon_sdk"}
+}"""
+
+MISSION_EVENTS_INVOCATION_JSON = b"""{
+  "caller_ura": "easynet:///r/example/agent/alice.sdk",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0",
+  "subject_ura": "easynet:///r/example/device/dev-a",
+  "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+  "causal_context": {"form": "none"},
+  "args": {"run_id": "2026-07-04_010203_weather", "cursor_sequence": 4, "limit": 100},
+  "content_type": "application/json",
+  "metadata": {"request_id": "mission-events-1", "profile": "mission", "system_ability": "mission.events", "carrier_owner": "daemon_sdk"}
 }"""
 
 MISSION_STATUS_JSON = b"""{
@@ -319,6 +339,10 @@ class MemoryMissionTransport:
         self._remember("build_cancel_invocation", request_json)
         return self.cancel_invocation_json
 
+    def build_events_invocation(self, request_json: bytes) -> bytes:
+        self._remember("build_events_invocation", request_json)
+        return MISSION_EVENTS_INVOCATION_JSON
+
     def run_eal(self, request_json: bytes) -> bytes:
         self._remember("run_eal", request_json)
         return self.run_status_json
@@ -340,6 +364,12 @@ class MemoryMissionTransport:
         if self.events_jsons:
             return self.events_jsons.pop(0)
         return self.events_json
+
+    def project_status(self, status_json: bytes) -> bytes:
+        return status_json
+
+    def project_events(self, events_json: bytes) -> bytes:
+        return events_json
 
     def open_event_stream(self, request_json: bytes) -> StreamHandle:
         self._remember("open_event_stream", request_json)
@@ -383,6 +413,43 @@ class _MemoryMissionStreamTransport:
 
     def close(self) -> None:
         self._mission_transport.stream_close_calls += 1
+
+
+class MemoryMissionRuntimeTransport:
+    def __init__(self, output_json: bytes = MISSION_STATUS_JSON) -> None:
+        self.output_json = output_json
+        self.seen_draft: dict[str, object] | None = None
+        self.close_calls = 0
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        return _runtime_result_json(draft_json, self.output_json)
+
+    def open_stream(self, draft_json: bytes) -> tuple[_MemoryMissionStreamTransport, bytes]:
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        return (
+            _MemoryMissionStreamTransport(MemoryMissionTransport()),
+            b'{"stream_id":"mission-events-runtime","state":"Open"}',
+        )
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+def _runtime_result_json(draft_json: bytes, output_json: bytes) -> bytes:
+    return json.dumps(
+        {
+            "ok": True,
+            "tuple": json.loads(draft_json.decode("utf-8")),
+            "terminal_state": "Succeeded",
+            "output_content_type": "application/json",
+            "output_json": json.loads(output_json.decode("utf-8")),
+            "elapsed_ms": 1,
+            "receipt": {},
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def base() -> MissionCarrierBase:
@@ -630,6 +697,80 @@ class MissionTests(unittest.TestCase):
         assert transport.seen_request is not None
         self.assertEqual(transport.seen_request["mission_id"], "2026-07-04_010203_weather")
         self.assertEqual(transport.seen_request["cursor_sequence"], 4)
+
+    def test_runtime_mission_transport_invokes_status_through_runtime_core(self) -> None:
+        carrier = MemoryMissionTransport()
+        runtime_transport = MemoryMissionRuntimeTransport(MISSION_STATUS_JSON)
+        client = MissionClient(
+            RuntimeMissionTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        status = client.track(
+            MissionTrackRequest(
+                base=base(),
+                mission_id="2026-07-04_010203_weather",
+            )
+        )
+
+        self.assertEqual(status.mission_id, "2026-07-04_010203_weather")
+        self.assertTrue(status.terminal)
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0",
+        )
+        self.assertEqual(runtime_transport.seen_draft["caller_ura"], base().caller_ura)
+        self.assertEqual(runtime_transport.seen_draft["subject_ura"], base().subject_ura)
+        self.assertEqual(runtime_transport.seen_draft["args"]["run_id"], "2026-07-04_010203_weather")
+
+    def test_runtime_mission_transport_rejects_legacy_status_output(self) -> None:
+        client = MissionClient(
+            RuntimeMissionTransport(
+                carrier=MemoryMissionTransport(),
+                runtime=RuntimeClient(
+                    MemoryMissionRuntimeTransport(b'{"run_id":"legacy","status":"completed"}')
+                ),
+            )
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.track(
+                MissionTrackRequest(
+                    base=base(),
+                    mission_id="2026-07-04_010203_weather",
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_runtime_mission_transport_opens_event_stream(self) -> None:
+        runtime_transport = MemoryMissionRuntimeTransport(MISSION_EVENT_PAGE_JSON)
+        client = MissionClient(
+            RuntimeMissionTransport(
+                carrier=MemoryMissionTransport(),
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+
+        stream = client.open_event_stream(
+            MissionEventListRequest(
+                base=base(),
+                mission_id="2026-07-04_010203_weather",
+                cursor_sequence=4,
+                limit=100,
+            )
+        )
+        event = stream.next()
+
+        self.assertEqual(stream.stream_id, "mission-events-runtime")
+        self.assertEqual(event.event_type, "progress")
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0",
+        )
 
     def test_client_opens_runtime_event_stream(self) -> None:
         transport = MemoryMissionTransport()

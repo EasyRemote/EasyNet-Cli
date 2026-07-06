@@ -279,6 +279,7 @@ from .mission import (
     MissionPlan,
     MissionPlanStep,
     MissionPlanStepOutput,
+    MissionRuntimeCarrier,
     MissionCancelRequest,
     MissionCarrierBase,
     MissionChildInvocation,
@@ -298,6 +299,7 @@ from .mission import (
     MissionStatus,
     MissionTrackRequest,
     MissionTransport,
+    RuntimeMissionTransport,
 )
 from .system_abilities import AdminSystemAbility, MissionSystemAbility
 from .runtime import (
@@ -660,6 +662,7 @@ __all__ = [
     "MissionPlan",
     "MissionPlanStep",
     "MissionPlanStepOutput",
+    "MissionRuntimeCarrier",
     "MissionCancelRequest",
     "MissionCarrierBase",
     "MissionChildInvocation",
@@ -680,6 +683,7 @@ __all__ = [
     "MissionSystemAbility",
     "MissionTrackRequest",
     "MissionTransport",
+    "RuntimeMissionTransport",
     "PageQuery",
     "PairingPreflight",
     "PairingPreflightRequest",

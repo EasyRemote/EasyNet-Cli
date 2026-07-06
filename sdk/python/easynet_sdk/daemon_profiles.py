@@ -11,7 +11,7 @@ from .events import EventClient
 from .health import HealthClient
 from .host_binding import HostBindingClient
 from .identity import AddressingClient, IdentityClient
-from .mission import MissionClient
+from .mission import MissionClient, RuntimeMissionTransport
 from .publication import PublicationClient, RuntimePublicationTransport
 from .receipt import ReceiptClient
 from .runtime import RuntimeClient
@@ -68,7 +68,14 @@ class DaemonHandleProfiles:
     def missions(self, options: ConnectOptions = ConnectOptions()) -> MissionClient:
         """Open a Mission profile client scoped to this daemon handle."""
 
-        return MissionClient(self._open_profile("mission", options))
+        carrier = self._open_profile("mission", options)
+        runtime_transport = self._open_profile("runtime", options)
+        return MissionClient(
+            RuntimeMissionTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
 
     def admin(self, options: ConnectOptions = ConnectOptions()) -> AdminClient:
         """Open an Admin + Gateway profile client scoped to this daemon handle."""
