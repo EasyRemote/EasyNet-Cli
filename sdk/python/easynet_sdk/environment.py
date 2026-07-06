@@ -8,7 +8,7 @@ from typing import Protocol, TypeVar
 from .ability_invocation import AbilityInvocationClient
 from .client import Client, FeatureSet
 from .admin import AdminClient
-from .compatibility import CompatibilityClient
+from .compatibility import CompatibilityClient, RuntimeCompatibilityTransport
 from .connection import (
     ConnectOptions,
     ControlDiscoveryRuntimeConnector,
@@ -347,9 +347,18 @@ class SdkEnvironment:
 
         from . import _cabi
 
+        control_path = self.resolved_control_path()
+        carrier = self._profile_transport(_cabi.open_cabi_compatibility_transport)
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=control_path,
+            library_path=self.library_path,
+        )
         return self._track(
             CompatibilityClient(
-                self._profile_transport(_cabi.open_cabi_compatibility_transport)
+                RuntimeCompatibilityTransport(
+                    carrier=carrier,
+                    runtime=RuntimeClient(runtime_transport),
+                )
             )
         )
 

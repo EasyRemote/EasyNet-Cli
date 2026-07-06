@@ -426,6 +426,7 @@ class DaemonTests(unittest.TestCase):
                 "surface",
                 "runtime",
                 "compatibility",
+                "runtime",
                 "wrapper",
                 "runtime",
                 "runtime",

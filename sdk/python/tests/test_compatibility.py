@@ -11,6 +11,8 @@ from easynet_sdk import (
     CompatibilityFileUploadRequest,
     CompatibilityListModelsRequest,
     CompatibilityStreamChatCompletionRequest,
+    RuntimeClient,
+    RuntimeCompatibilityTransport,
     SDKError,
     is_code,
 )
@@ -224,6 +226,81 @@ class MemoryCompatibilityTransport:
         self._remember("delete_file", request_json)
         return FILE_DELETE_RESULT_JSON
 
+    def project_model_page(self, models_json: bytes) -> bytes:
+        self._remember("project_model_page", models_json)
+        return MODEL_PAGE_JSON
+
+    def project_chat_completion(self, completion_json: bytes) -> bytes:
+        self._remember("project_chat_completion", completion_json)
+        return CHAT_COMPLETION_JSON
+
+    def project_chat_stream(self, stream_json: bytes) -> bytes:
+        self._remember("project_chat_stream", stream_json)
+        return CHAT_STREAM_JSON
+
+    def project_file_upload(self, file_json: bytes) -> bytes:
+        self._remember("project_file_upload", file_json)
+        return FILE_JSON
+
+    def project_file(self, file_json: bytes) -> bytes:
+        self._remember("project_file", file_json)
+        return FILE_JSON
+
+    def project_file_delete_result(self, result_json: bytes) -> bytes:
+        self._remember("project_file_delete_result", result_json)
+        return FILE_DELETE_RESULT_JSON
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class MemoryCompatibilityRuntimeTransport:
+    def __init__(self, output_json: object) -> None:
+        self.output_json = output_json
+        self.seen_draft: dict[str, object] | None = None
+        self.stream_transport = MemoryCompatibilityStreamTransport()
+        self.close_calls = 0
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen_draft = json.loads(draft_json)
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_draft,
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": self.output_json,
+                "elapsed_ms": 1,
+                "receipt": {},
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+    def open_stream(self, draft_json: bytes):
+        self.seen_draft = json.loads(draft_json)
+        return self.stream_transport, b'{"stream_id":"compat-stream","state":"Open"}'
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class MemoryCompatibilityStreamTransport:
+    def __init__(self) -> None:
+        self.events = [
+            b'{"sequence":1,"kind":"data","state":"Open","payload_json":{"delta":"hel"}}',
+            b'{"sequence":2,"kind":"data","state":"Open","payload_json":{"delta":"lo"}}',
+            b'{"sequence":3,"kind":"terminal","state":"Completed","terminal":true}',
+        ]
+        self.close_calls = 0
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        return self.events.pop(0)
+
+    def cancel(self, reason: str) -> bytes:
+        return b'{"stream_id":"compat-stream","cancelled":true,"state":"Cancelled","terminal":true}'
+
     def close(self) -> None:
         self.close_calls += 1
 
@@ -417,6 +494,40 @@ class CompatibilityClientTests(unittest.TestCase):
         daemon_deleted = client.delete_file(file_delete_request(compat_base()))
         self.assertTrue(daemon_deleted.deleted)
         self.assertEqual(daemon_deleted.id, "file-easynet-docs-1")
+
+        runtime_carrier = MemoryCompatibilityTransport()
+        runtime_transport = MemoryCompatibilityRuntimeTransport(
+            {
+                "object": "list",
+                "data": [{"id": "easynet:///r/example/ability/alice.codex.chat"}],
+            }
+        )
+        runtime_client = CompatibilityClient(
+            RuntimeCompatibilityTransport(
+                carrier=runtime_carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
+        runtime_models = runtime_client.list_models(
+            CompatibilityListModelsRequest(compat_base())
+        )
+        self.assertEqual(runtime_models.kind, "model_page")
+        assert runtime_transport.seen_draft is not None
+        self.assertEqual(
+            runtime_transport.seen_draft["metadata"]["system_ability"],
+            "openai.list_models",
+        )
+        self.assertIn("project_model_page", runtime_carrier.seen)
+
+        runtime_stream = runtime_client.stream_chat_completion(
+            CompatibilityStreamChatCompletionRequest(base, chat_request())
+        )
+        self.assertTrue(runtime_stream.stream)
+        self.assertEqual(runtime_transport.stream_transport.close_calls, 1)
+        self.assertEqual(
+            runtime_carrier.seen["project_chat_stream"]["chunks"],
+            [{"delta": "hel"}, {"delta": "lo"}],
+        )
 
         file = client.project_file_upload(
             CompatibilityFileUploadRequest(

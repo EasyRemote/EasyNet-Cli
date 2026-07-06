@@ -7,8 +7,15 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 
 from ._lifecycle import ClientLifecycle
-from .errors import ErrorCode, RetryHint, SDKError, profile_error_details
+from .errors import (
+    ErrorCode,
+    RetryHint,
+    SDKError,
+    canonical_failure_code,
+    profile_error_details,
+)
 from .invocation import InvocationDraft
+from .runtime import RuntimeClient
 
 
 _PROFILE = "compatibility"
@@ -365,6 +372,213 @@ class CompatibilityTransport(Protocol):
 
     def delete_file(self, request_json: bytes) -> bytes:
         ...
+
+
+class CompatibilityRuntimeCarrier(CompatibilityTransport, Protocol):
+    """Compatibility carrier/projection provider used by RuntimeCompatibilityTransport."""
+
+    def project_model_page(self, models_json: bytes) -> bytes:
+        ...
+
+    def project_chat_completion(self, completion_json: bytes) -> bytes:
+        ...
+
+    def project_chat_stream(self, stream_json: bytes) -> bytes:
+        ...
+
+    def project_file_upload(self, file_json: bytes) -> bytes:
+        ...
+
+    def project_file(self, file_json: bytes) -> bytes:
+        ...
+
+    def project_file_delete_result(self, result_json: bytes) -> bytes:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@dataclass
+class RuntimeCompatibilityTransport:
+    """Compatibility transport that executes live operations through Runtime Core."""
+
+    carrier: CompatibilityRuntimeCarrier
+    runtime: RuntimeClient
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def build_list_models_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_list_models_invocation", request_json)
+
+    def build_chat_completion_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_chat_completion_invocation", request_json)
+
+    def build_stream_chat_completion_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_stream_chat_completion_invocation", request_json)
+
+    def build_file_upload_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_file_upload_invocation", request_json)
+
+    def build_file_retrieve_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_file_retrieve_invocation", request_json)
+
+    def build_file_delete_invocation(self, request_json: bytes) -> bytes:
+        return self._delegate("build_file_delete_invocation", request_json)
+
+    def list_models(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_list_models_invocation",
+            project_method="project_model_page",
+            failure_message="compatibility list-models invocation failed",
+            output_message="compatibility model output_json must be an object",
+        )
+
+    def create_chat_completion(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_chat_completion_invocation",
+            project_method="project_chat_completion",
+            failure_message="compatibility chat-completion invocation failed",
+            output_message="compatibility chat output_json must be an object",
+        )
+
+    def stream_chat_completion(self, request_json: bytes) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(
+            self.carrier.build_stream_chat_completion_invocation(request_json)
+        )
+        stream = self.runtime.invoke_stream(draft)
+        failed = False
+        try:
+            chunks: list[object] = []
+            while True:
+                event = stream.next()
+                if event.error is not None:
+                    raise _invalid_compatibility(
+                        "compatibility stream event carried an error"
+                    )
+                if event.terminal:
+                    break
+                if event.payload_json is None:
+                    raise _invalid_compatibility(
+                        "compatibility stream chunk is missing payload_json"
+                    )
+                chunks.append(event.payload_json)
+            raw = self.carrier.project_chat_stream(
+                _json_bytes(
+                    {
+                        "stream": True,
+                        "chunks": chunks,
+                        "done_sentinel": "[DONE]",
+                    }
+                )
+            )
+            CompatibilityChatCompletionStream.from_json(raw)
+            return raw
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                stream.close()
+            except SDKError:
+                if not failed:
+                    raise
+
+    def upload_file(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_file_upload_invocation",
+            project_method="project_file_upload",
+            failure_message="compatibility file-upload invocation failed",
+            output_message="compatibility file upload output_json must be an object",
+        )
+
+    def retrieve_file(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_file_retrieve_invocation",
+            project_method="project_file",
+            failure_message="compatibility file-retrieve invocation failed",
+            output_message="compatibility file output_json must be an object",
+        )
+
+    def delete_file(self, request_json: bytes) -> bytes:
+        return self._invoke_projected(
+            request_json,
+            build_method="build_file_delete_invocation",
+            project_method="project_file_delete_result",
+            failure_message="compatibility file-delete invocation failed",
+            output_message="compatibility file delete output_json must be an object",
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: SDKError | None = None
+        for owned in (self.runtime, self.carrier):
+            close = getattr(owned, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            except Exception as exc:
+                if first_error is None:
+                    first_error = SDKError(
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
+                        stage="compatibility",
+                        retry=RetryHint.SAFE,
+                        retryable=True,
+                        message="compatibility runtime transport close failed",
+                        cause=exc,
+                    )
+        if first_error is not None:
+            raise first_error
+
+    def _delegate(self, method_name: str, request_json: bytes) -> bytes:
+        self._require_open()
+        return getattr(self.carrier, method_name)(request_json)
+
+    def _invoke_projected(
+        self,
+        request_json: bytes,
+        *,
+        build_method: str,
+        project_method: str,
+        failure_message: str,
+        output_message: str,
+    ) -> bytes:
+        self._require_open()
+        draft = InvocationDraft.from_json(getattr(self.carrier, build_method)(request_json))
+        result = self.runtime.invoke(draft)
+        if not result.ok:
+            raise SDKError(
+                code=canonical_failure_code(result.error.code if result.error else None),
+                stage="compatibility",
+                retry=RetryHint.UNKNOWN,
+                retryable=False,
+                message=failure_message,
+                cause=result.error,
+            )
+        output = result.output_json
+        if not isinstance(output, dict):
+            raise _invalid_compatibility(output_message)
+        raw = getattr(self.carrier, project_method)(_json_bytes(output))
+        _validate_runtime_projection(project_method, raw)
+        return raw
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise _invalid_compatibility("compatibility runtime transport is closed")
+        if self.carrier is None:
+            raise _invalid_compatibility("compatibility carrier transport is required")
+        if self.runtime is None:
+            raise _invalid_compatibility("runtime client is required")
 
 
 @dataclass(frozen=True)
@@ -876,6 +1090,17 @@ def _json_object(raw: bytes | str, label: str) -> Mapping[str, object]:
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _validate_runtime_projection(project_method: str, raw: bytes) -> None:
+    if project_method == "project_model_page":
+        CompatibilityModelPage.from_json(raw)
+    elif project_method == "project_chat_completion":
+        CompatibilityChatCompletion.from_json(raw)
+    elif project_method in {"project_file_upload", "project_file"}:
+        CompatibilityFile.from_json(raw)
+    elif project_method == "project_file_delete_result":
+        CompatibilityFileDeleteResult.from_json(raw)
 
 
 def _put_non_empty(value: dict[str, object], key: str, item: str) -> None:

@@ -32,6 +32,7 @@ from .compatibility import (
     CompatibilityStreamChatCompletionRequest,
     CompatibilityTransport,
     ListModelsRequest,
+    RuntimeCompatibilityTransport,
     StreamChatCompletionRequest,
 )
 from .admin import (
@@ -465,6 +466,7 @@ __all__ = [
     "CompatibilityModelPage",
     "CompatibilityStreamChatCompletionRequest",
     "CompatibilityTransport",
+    "RuntimeCompatibilityTransport",
     "BrowserSessionRecord",
     "ConnectOptions",
     "ConnectionState",

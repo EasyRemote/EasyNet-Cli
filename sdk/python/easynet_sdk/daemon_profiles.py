@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .ability_invocation import AbilityInvocationClient
 from .admin import AdminClient
-from .compatibility import CompatibilityClient
+from .compatibility import CompatibilityClient, RuntimeCompatibilityTransport
 from .connection import ConnectOptions
 from .directory import DirectoryClient
 from .events import EventClient
@@ -104,7 +104,14 @@ class DaemonHandleProfiles:
     ) -> CompatibilityClient:
         """Open a Compatibility profile client scoped to this daemon handle."""
 
-        return CompatibilityClient(self._open_profile("compatibility", options))
+        carrier = self._open_profile("compatibility", options)
+        runtime_transport = self._open_profile("runtime", options)
+        return CompatibilityClient(
+            RuntimeCompatibilityTransport(
+                carrier=carrier,
+                runtime=RuntimeClient(runtime_transport),
+            )
+        )
 
     def wrappers(self, options: ConnectOptions = ConnectOptions()) -> WrapperClient:
         """Open a Convenience Wrapper profile client scoped to this daemon handle."""
