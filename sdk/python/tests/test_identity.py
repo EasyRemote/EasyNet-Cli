@@ -19,6 +19,7 @@ from easynet_sdk import (
     StaticSignatureProvider,
     InvocationSignature,
     is_code,
+    parse_ability_descriptor_ref,
 )
 
 
@@ -219,6 +220,36 @@ class IdentityTests(unittest.TestCase):
             projection.ability_ura,
             "easynet:///r/example/ability/device.dev-a.observe.health",
         )
+        assert transport.seen_request is not None
+        self.assertEqual(
+            transport.seen_request["descriptor_ref"],
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+
+    def test_parse_ability_descriptor_ref_delegates_to_addressing(self) -> None:
+        transport = MemoryIdentityTransport()
+        transport.descriptor_json = (
+            b'{"kind":"descriptor_ref","valid":true,'
+            b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+            b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+            b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+            b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+            b'"metadata":{"grammar_owner":"axon"}}'
+        )
+        ref = parse_ability_descriptor_ref(
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+            addressing=AddressingClient(transport),
+        )
+
+        self.assertEqual(
+            ref.raw,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            ref.ability_ura,
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(ref.version, "1.0.0")
         assert transport.seen_request is not None
         self.assertEqual(
             transport.seen_request["descriptor_ref"],

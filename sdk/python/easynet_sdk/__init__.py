@@ -209,7 +209,10 @@ from .health import (
     HealthTransport,
     RuntimeHealth,
 )
-from .ability_descriptor import AbilityDescriptorRef, parse_ability_descriptor_ref
+from .ability_descriptor import (
+    AbilityDescriptorRef,
+    parse_ability_descriptor_ref,
+)
 from .identity import (
     AddressingClient,
     AddressingTransport,
