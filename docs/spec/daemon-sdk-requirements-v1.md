@@ -170,7 +170,7 @@ language.
    for URA, DescriptorRef, Invocation, receipt, stream, bidi, or federation
    semantics, SDK work MUST call, wrap, generate from, or validate against that
    implementation. It MUST NOT introduce a parallel grammar, hash input,
-   canonical JSON order, receipt URI shape, terminal-state taxonomy, or helper
+   canonical JSON order, receipt URA shape, terminal-state taxonomy, or helper
    fixture because doing so would become a second protocol source.
 
 ### 5.1 SDK Profiles
