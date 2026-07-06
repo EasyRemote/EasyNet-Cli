@@ -1263,6 +1263,7 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 	requireCaseExpectation(t, missionCase, "rejects_incomplete_invocation_tuple: true")
 	requireCaseExpectation(t, missionCase, "rejects_path_like_mission_id: true")
 	requireCaseExpectation(t, missionCase, "child_receipts_only_when_anchored: true")
+	requireCaseExpectation(t, missionCase, "mission_events_live_tail: bounded_page_state_machine")
 
 	mission, err := NewMissionClient(&sharedMissionTransport{
 		t:                      t,
@@ -2225,6 +2226,7 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 				"Events":                 "mission.events",
 				"RunEAL":                 "mission.run_eal",
 				"RunFile":                "mission.run_file",
+				"TailEvents":             "mission.tail_events",
 				"Track":                  "mission.track",
 			},
 		},
@@ -2542,7 +2544,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "easyremote",
 			Profile:  "mission",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*MissionClient)(nil)), Methods: []string{"BuildRunEALInvocation", "RunEAL", "RunFile", "Track", "Cancel", "Events"}},
+				{Type: reflect.TypeOf((*MissionClient)(nil)), Methods: []string{"BuildRunEALInvocation", "RunEAL", "RunFile", "Track", "Cancel", "Events", "TailEvents"}},
 			},
 		},
 		{

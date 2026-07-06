@@ -43,4 +43,4 @@ expect:
   child_receipts_only_when_anchored: true
   events_system_ability: mission.events
   mission_events_page_projection: true
-  mission_events_live_tail: scaffold_only
+  mission_events_live_tail: bounded_page_state_machine

@@ -2454,7 +2454,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             mission_case, "mission_events_page_projection: true"
         )
         self._require_case_expectation(
-            mission_case, "mission_events_live_tail: scaffold_only"
+            mission_case, "mission_events_live_tail: bounded_page_state_machine"
         )
 
         mission = MissionClient(SharedMissionTransport())
@@ -3503,6 +3503,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                     "events": "mission.events",
                     "run_eal": "mission.run_eal",
                     "run_file": "mission.run_file",
+                    "tail_events": "mission.tail_events",
                     "track": "mission.track",
                 },
             ),
@@ -3737,7 +3738,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             (
                 "easyremote",
                 "mission",
-                ((MissionClient, ("build_run_eal_invocation", "run_eal", "run_file", "track", "cancel", "events")),),
+                ((MissionClient, ("build_run_eal_invocation", "run_eal", "run_file", "track", "cancel", "events", "tail_events")),),
             ),
             (
                 "easyremote",

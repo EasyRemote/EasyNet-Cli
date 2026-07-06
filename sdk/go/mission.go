@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const missionProfile = "mission"
@@ -135,6 +136,32 @@ type MissionEventPage struct {
 	DroppedCount       int64          `json:"dropped_count"`
 	Events             []MissionEvent `json:"events"`
 	Metadata           map[string]any `json:"metadata"`
+}
+
+// MissionEventTailSleep lets tests and integrations control bounded tail sleeps.
+type MissionEventTailSleep func(ctx context.Context, delay time.Duration) error
+
+// MissionEventTailOptions configures the SDK-owned Mission event tail state machine.
+type MissionEventTailOptions struct {
+	CursorSequence int64
+	Limit          int
+	MaxEmptyPages  int
+	PollInterval   time.Duration
+	Sleep          MissionEventTailSleep
+}
+
+// MissionEventTailer is a bounded facade state machine over daemon Mission
+// event pages. The daemon owns event storage and projection; the SDK owns only
+// cursor progress, terminal closure, and drop detection.
+type MissionEventTailer struct {
+	client         *MissionClient
+	request        MissionEventListRequest
+	options        MissionEventTailOptions
+	cursorSequence int64
+	buffer         []MissionEvent
+	emptyPages     int
+	closed         bool
+	terminalSeen   bool
 }
 
 // MissionTransport supplies daemon Mission operations behind the facade.
@@ -289,6 +316,33 @@ func (c *MissionClient) Events(ctx context.Context, req MissionEventListRequest)
 	return NewMissionEventPageFromJSON(raw)
 }
 
+func (c *MissionClient) TailEvents(ctx context.Context, req MissionEventListRequest, opts MissionEventTailOptions) (*MissionEventTailer, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return nil, err
+	}
+	if opts.CursorSequence == 0 {
+		opts.CursorSequence = req.CursorSequence
+	}
+	if opts.Limit == 0 {
+		opts.Limit = req.Limit
+	}
+	options, err := validateMissionEventTailOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	req.CursorSequence = options.CursorSequence
+	req.Limit = options.Limit
+	if err := validateMissionEventListRequest(req); err != nil {
+		return nil, err
+	}
+	return &MissionEventTailer{
+		client:         c,
+		request:        req,
+		options:        options,
+		cursorSequence: options.CursorSequence,
+	}, nil
+}
+
 func (c *MissionClient) buildInvocation(ctx context.Context, req any, validate func(any) error, fn func(context.Context, []byte) ([]byte, error), label string) (InvocationDraft, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return InvocationDraft{}, err
@@ -331,6 +385,108 @@ func (c *MissionClient) requireReady(ctx context.Context) error {
 		return invalidProfileClient(missionProfile, "mission client is not initialized")
 	}
 	return c.lifecycle.RequireOpen(ctx, "mission")
+}
+
+func (t *MissionEventTailer) CursorSequence() int64 {
+	if t == nil {
+		return 0
+	}
+	return t.cursorSequence
+}
+
+func (t *MissionEventTailer) Close() {
+	if t == nil {
+		return
+	}
+	t.closed = true
+}
+
+func (t *MissionEventTailer) Closed() bool {
+	return t == nil || t.closed
+}
+
+func (t *MissionEventTailer) Next(ctx context.Context) (MissionEvent, bool, error) {
+	if t == nil || t.client == nil {
+		return MissionEvent{}, false, invalidProfileClient(missionProfile, "mission event tailer is not initialized")
+	}
+	if ctx == nil {
+		return MissionEvent{}, false, invalidProfileClient(missionProfile, "context is required")
+	}
+	if len(t.buffer) == 0 {
+		if err := t.fillBuffer(ctx); err != nil {
+			return MissionEvent{}, false, err
+		}
+	}
+	if len(t.buffer) == 0 {
+		return MissionEvent{}, false, nil
+	}
+	event := t.buffer[0]
+	t.buffer = t.buffer[1:]
+	if event.Terminal {
+		t.terminalSeen = true
+		t.Close()
+	}
+	return event, true, nil
+}
+
+func (t *MissionEventTailer) fillBuffer(ctx context.Context) error {
+	for !t.closed && !t.terminalSeen {
+		request := t.request
+		request.CursorSequence = t.cursorSequence
+		request.Limit = t.options.Limit
+		previousCursor := t.cursorSequence
+		page, err := t.client.Events(ctx, request)
+		if err != nil {
+			return err
+		}
+		if page.DroppedCount > 0 {
+			return missionEventTailDroppedError(page)
+		}
+		t.cursorSequence = page.NextCursorSequence
+		for _, event := range page.Events {
+			t.buffer = append(t.buffer, event)
+			if event.Terminal {
+				t.terminalSeen = true
+				break
+			}
+		}
+		if len(t.buffer) > 0 {
+			return nil
+		}
+		if page.HasMore && t.cursorSequence == previousCursor {
+			return invalidProfilePayload(missionProfile, "mission event tail made no cursor progress", nil)
+		}
+		if page.HasMore {
+			continue
+		}
+		t.emptyPages++
+		if t.emptyPages > t.options.MaxEmptyPages {
+			t.Close()
+			return nil
+		}
+		if err := t.sleep(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *MissionEventTailer) sleep(ctx context.Context) error {
+	delay := t.options.PollInterval
+	if delay <= 0 {
+		return nil
+	}
+	if t.options.Sleep != nil {
+		return t.options.Sleep(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func NewMissionStatusFromJSON(raw []byte) (MissionStatus, error) {
@@ -549,6 +705,25 @@ func validateMissionEventListRequest(req any) error {
 	return nil
 }
 
+func validateMissionEventTailOptions(opts MissionEventTailOptions) (MissionEventTailOptions, error) {
+	if opts.CursorSequence < 0 {
+		return MissionEventTailOptions{}, invalidProfilePayload(missionProfile, "mission event cursor_sequence must be non-negative", nil)
+	}
+	if opts.Limit < 0 {
+		return MissionEventTailOptions{}, invalidProfilePayload(missionProfile, "mission event limit must be non-negative", nil)
+	}
+	if opts.Limit > 1000 {
+		return MissionEventTailOptions{}, invalidProfilePayload(missionProfile, "mission event limit exceeds bounds", nil)
+	}
+	if opts.MaxEmptyPages < 0 {
+		return MissionEventTailOptions{}, invalidProfilePayload(missionProfile, "mission event max_empty_pages must be non-negative", nil)
+	}
+	if opts.PollInterval < 0 {
+		return MissionEventTailOptions{}, invalidProfilePayload(missionProfile, "mission event poll_interval must be non-negative", nil)
+	}
+	return opts, nil
+}
+
 func validateMissionCarrierBase(base MissionCarrierBase) error {
 	if base.CallerURA == "" || base.CalleeURA == "" || base.SubjectURA == "" ||
 		base.DescriptorVersion == "" || base.NonceBase64 == "" || base.CausalContext == nil {
@@ -565,6 +740,22 @@ func validateMissionID(missionID string) error {
 		return invalidProfilePayload(missionProfile, "mission_id must not be path-like", nil)
 	}
 	return nil
+}
+
+func missionEventTailDroppedError(page MissionEventPage) error {
+	return &SDKError{
+		Code:      ErrProtocol,
+		Stage:     missionProfile,
+		Retry:     RetrySafe,
+		Retryable: true,
+		Message:   "mission event tail dropped daemon events",
+		Details: profileErrorDetails(missionProfile, map[string]any{
+			"reason":          "mission_events_dropped",
+			"mission_id":      page.MissionID,
+			"cursor_sequence": page.CursorSequence,
+			"dropped_count":   page.DroppedCount,
+		}),
+	}
 }
 
 func missionEventTypeIsTerminal(eventType string) bool {

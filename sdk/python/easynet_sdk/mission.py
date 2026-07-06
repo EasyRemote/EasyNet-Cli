@@ -310,9 +310,11 @@ class MissionEventTailer:
                     },
                 )
             self._cursor_sequence = page.next_cursor_sequence
-            self._buffer.extend(page.events)
-            if any(event.terminal for event in page.events):
-                self._terminal_seen = True
+            for event in page.events:
+                self._buffer.append(event)
+                if event.terminal:
+                    self._terminal_seen = True
+                    break
             if self._buffer:
                 return
             if page.has_more and self._cursor_sequence == previous_cursor:
@@ -904,6 +906,32 @@ class MissionClient:
         except Exception as exc:
             raise _transport_error("mission events failed", exc) from exc
         return MissionEventPage.from_json(raw)
+
+    def tail_events(
+        self,
+        request: MissionEventListRequest,
+        *,
+        options: MissionEventTailOptions | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> MissionEventTailer:
+        self._require_open()
+        validated = (
+            options
+            or MissionEventTailOptions(
+                cursor_sequence=request.cursor_sequence,
+                limit=request.limit,
+            )
+        ).validated()
+        return MissionEventTailer(
+            self,
+            replace(
+                request,
+                cursor_sequence=validated.cursor_sequence,
+                limit=validated.limit,
+            ),
+            options=validated,
+            sleep=sleep,
+        )
 
     def _invocation(
         self, request_json: bytes, fn: Callable[[bytes], bytes], label: str

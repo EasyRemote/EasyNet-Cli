@@ -3,7 +3,9 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 )
 
 type memoryMissionTransport struct {
@@ -13,7 +15,9 @@ type memoryMissionTransport struct {
 	cancelInvocationJSON  string
 	statusJSON            string
 	eventsJSON            string
+	eventsJSONs           []string
 	seenRequest           map[string]any
+	seenEventRequests     []map[string]any
 	closeCalls            int
 }
 
@@ -63,6 +67,14 @@ func (m *memoryMissionTransport) Cancel(ctx context.Context, requestJSON []byte)
 
 func (m *memoryMissionTransport) Events(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	m.remember(requestJSON)
+	var seen map[string]any
+	_ = json.Unmarshal(requestJSON, &seen)
+	m.seenEventRequests = append(m.seenEventRequests, seen)
+	if len(m.eventsJSONs) > 0 {
+		raw := m.eventsJSONs[0]
+		m.eventsJSONs = m.eventsJSONs[1:]
+		return []byte(raw), nil
+	}
 	return []byte(m.eventsJSON), nil
 }
 
@@ -189,6 +201,156 @@ func TestMissionEventsProjection(t *testing.T) {
 	}
 	if transport.seenRequest["mission_id"] != "2026-07-04_010203_weather" || transport.seenRequest["cursor_sequence"] != float64(4) {
 		t.Fatalf("events request not forwarded: %#v", transport.seenRequest)
+	}
+}
+
+func TestMissionEventTailerYieldsUntilTerminal(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	transport.eventsJSONs = []string{
+		missionEventTailPage1JSON,
+		missionEventTailPage2JSON,
+	}
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	tailer, err := client.TailEvents(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	}, MissionEventTailOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("TailEvents: %v", err)
+	}
+
+	first, ok, err := tailer.Next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("Next first = (%#v, %v, %v)", first, ok, err)
+	}
+	second, ok, err := tailer.Next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("Next second = (%#v, %v, %v)", second, ok, err)
+	}
+	_, ok, err = tailer.Next(context.Background())
+	if err != nil || ok {
+		t.Fatalf("Next after terminal = (_, %v, %v), want closed", ok, err)
+	}
+	if first.EventType != "progress" || second.EventType != "completed" || !tailer.Closed() || tailer.CursorSequence() != 2 {
+		t.Fatalf("unexpected tail state: first=%#v second=%#v cursor=%d closed=%v", first, second, tailer.CursorSequence(), tailer.Closed())
+	}
+	if got := []any{transport.seenEventRequests[0]["cursor_sequence"], transport.seenEventRequests[1]["cursor_sequence"]}; got[0] != float64(0) || got[1] != float64(1) {
+		t.Fatalf("cursor sequence requests = %#v", got)
+	}
+	if transport.seenEventRequests[0]["limit"] != float64(10) {
+		t.Fatalf("limit not forwarded: %#v", transport.seenEventRequests[0])
+	}
+}
+
+func TestMissionEventTailerStopsWithinPageAfterTerminal(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	transport.eventsJSONs = []string{missionEventTailTerminalThenStrayPageJSON}
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	tailer, err := client.TailEvents(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	}, MissionEventTailOptions{})
+	if err != nil {
+		t.Fatalf("TailEvents: %v", err)
+	}
+
+	first, ok, err := tailer.Next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("Next terminal = (%#v, %v, %v)", first, ok, err)
+	}
+	second, ok, err := tailer.Next(context.Background())
+	if err != nil || ok {
+		t.Fatalf("Next after terminal = (%#v, %v, %v), want closed", second, ok, err)
+	}
+	if first.EventType != "completed" || !tailer.Closed() {
+		t.Fatalf("terminal tail state = event=%#v closed=%v", first, tailer.Closed())
+	}
+}
+
+func TestMissionEventTailerReportsDroppedEvents(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	transport.eventsJSONs = []string{missionEventDroppedPageJSON}
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	tailer, err := client.TailEvents(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	}, MissionEventTailOptions{})
+	if err != nil {
+		t.Fatalf("TailEvents: %v", err)
+	}
+
+	_, _, err = tailer.Next(context.Background())
+	if !IsCode(err, ErrProtocol) {
+		t.Fatalf("dropped tail error = %v, want %s", err, ErrProtocol)
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Details["reason"] != "mission_events_dropped" {
+		t.Fatalf("missing dropped-event details: %#v", err)
+	}
+}
+
+func TestMissionEventTailerRejectsNoCursorProgress(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	transport.eventsJSONs = []string{missionEventNoProgressPageJSON}
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	tailer, err := client.TailEvents(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	}, MissionEventTailOptions{})
+	if err != nil {
+		t.Fatalf("TailEvents: %v", err)
+	}
+	if _, _, err := tailer.Next(context.Background()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("no-progress error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestMissionEventTailerEmptyPageBudgetAndValidation(t *testing.T) {
+	transport := newMemoryMissionTransport()
+	transport.eventsJSONs = []string{missionEventEmptyPageJSON, missionEventEmptyPageJSON}
+	client, err := NewMissionClient(transport)
+	if err != nil {
+		t.Fatalf("NewMissionClient: %v", err)
+	}
+	sleeps := 0
+	tailer, err := client.TailEvents(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	}, MissionEventTailOptions{
+		MaxEmptyPages:  1,
+		PollInterval:   time.Millisecond,
+		Sleep:          func(context.Context, time.Duration) error { sleeps++; return nil },
+		CursorSequence: 9,
+	})
+	if err != nil {
+		t.Fatalf("TailEvents: %v", err)
+	}
+	if _, ok, err := tailer.Next(context.Background()); err != nil || ok {
+		t.Fatalf("empty budget Next = (_, %v, %v), want stop", ok, err)
+	}
+	if !tailer.Closed() || sleeps != 1 {
+		t.Fatalf("empty budget state: closed=%v sleeps=%d", tailer.Closed(), sleeps)
+	}
+	if transport.seenEventRequests[0]["cursor_sequence"] != float64(9) {
+		t.Fatalf("initial cursor not forwarded: %#v", transport.seenEventRequests[0])
+	}
+	if _, err := client.TailEvents(context.Background(), MissionEventListRequest{
+		MissionCarrierBase: baseMissionCarrier(),
+		MissionID:          "2026-07-04_010203_weather",
+	}, MissionEventTailOptions{Limit: 1001}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("invalid tail options error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -347,5 +509,128 @@ const missionEventPageFixtureJSON = `{
       "metadata": {}
     }
   ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventTailPage1JSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 1,
+  "has_more": true,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 0,
+      "event_type": "progress",
+      "occurred_unix_ms": 1000,
+      "terminal": false,
+      "payload": {"delta": "hello"},
+      "receipt": {},
+      "metadata": {"step_id": "s1"}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventTailPage2JSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 1,
+  "next_cursor_sequence": 2,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 1,
+      "event_type": "completed",
+      "occurred_unix_ms": 1001,
+      "terminal": true,
+      "payload": {"reply": "done"},
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventTailTerminalThenStrayPageJSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 2,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 0,
+      "event_type": "completed",
+      "occurred_unix_ms": 1000,
+      "terminal": true,
+      "payload": {"reply": "done"},
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    },
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "2026-07-04_010203_weather",
+      "sequence": 1,
+      "event_type": "progress",
+      "occurred_unix_ms": 1001,
+      "terminal": false,
+      "payload": {"delta": "stray"},
+      "receipt": {},
+      "metadata": {}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventDroppedPageJSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 3,
+  "has_more": false,
+  "dropped_count": 2,
+  "events": [],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventNoProgressPageJSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 0,
+  "has_more": true,
+  "dropped_count": 0,
+  "events": [],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}`
+
+const missionEventEmptyPageJSON = `{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "2026-07-04_010203_weather",
+  "cursor_sequence": 9,
+  "next_cursor_sequence": 9,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [],
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }`

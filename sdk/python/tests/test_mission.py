@@ -8,6 +8,7 @@ from easynet_sdk.mission import (
     MissionCarrierBase,
     MissionClient,
     MissionEventListRequest,
+    MissionEventTailOptions,
     MissionRunFileRequest,
     MissionRunRequest,
     MissionStatus,
@@ -219,6 +220,43 @@ MISSION_EVENT_TAIL_PAGE_2_JSON = b"""{
       "terminal": true,
       "payload": {"reply": "done"},
       "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    }
+  ],
+  "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
+}"""
+
+MISSION_EVENT_TAIL_TERMINAL_THEN_STRAY_PAGE_JSON = b"""{
+  "profile": "mission",
+  "kind": "mission_event_page",
+  "mission_id": "run-1",
+  "cursor_sequence": 0,
+  "next_cursor_sequence": 2,
+  "has_more": false,
+  "dropped_count": 0,
+  "events": [
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "run-1",
+      "sequence": 0,
+      "event_type": "completed",
+      "occurred_unix_ms": 1000,
+      "terminal": true,
+      "payload": {"reply": "done"},
+      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "metadata": {}
+    },
+    {
+      "profile": "mission",
+      "kind": "mission_event",
+      "mission_id": "run-1",
+      "sequence": 1,
+      "event_type": "progress",
+      "occurred_unix_ms": 1001,
+      "terminal": false,
+      "payload": {"delta": "stray"},
+      "receipt": {},
       "metadata": {}
     }
   ],
@@ -527,6 +565,46 @@ class MissionTests(unittest.TestCase):
         assert transport.seen_request is not None
         self.assertEqual(transport.seen_request["mission_id"], "2026-07-04_010203_weather")
         self.assertEqual(transport.seen_request["cursor_sequence"], 4)
+
+    def test_client_tails_mission_events_until_terminal(self) -> None:
+        transport = MemoryMissionTransport()
+        transport.events_jsons = [
+            MISSION_EVENT_TAIL_PAGE_1_JSON,
+            MISSION_EVENT_TAIL_PAGE_2_JSON,
+        ]
+        client = MissionClient(transport)
+
+        tail = client.tail_events(
+            MissionEventListRequest(
+                base=base(),
+                mission_id="2026-07-04_010203_weather",
+            ),
+            options=MissionEventTailOptions(limit=10),
+        )
+        events = list(tail)
+
+        self.assertEqual([event.event_type for event in events], ["progress", "completed"])
+        self.assertEqual(events[1].payload, {"reply": "done"})
+        self.assertEqual(tail.cursor_sequence, 2)
+        self.assertEqual(
+            [call["cursor_sequence"] for call in transport.seen_calls["events"]],
+            [0, 1],
+        )
+        self.assertEqual(transport.seen_calls["events"][0]["limit"], 10)
+
+    def test_client_tail_stops_within_page_after_terminal(self) -> None:
+        transport = MemoryMissionTransport()
+        transport.events_jsons = [MISSION_EVENT_TAIL_TERMINAL_THEN_STRAY_PAGE_JSON]
+        client = MissionClient(transport)
+
+        tail = client.tail_events(
+            MissionEventListRequest(base=base(), mission_id="2026-07-04_010203_weather")
+        )
+
+        events = list(tail)
+
+        self.assertEqual([event.event_type for event in events], ["completed"])
+        self.assertEqual(tail.cursor_sequence, 2)
 
     def test_rejects_incomplete_carrier_and_path_like_mission_id(self) -> None:
         client = MissionClient(MemoryMissionTransport())

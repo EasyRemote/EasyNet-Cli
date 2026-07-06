@@ -87,7 +87,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   SDK.
 - Mission carrier/status/events guardrails exist for Rust/C ABI over
   `mission.run/track/cancel/events`; Go/Python C ABI transports now execute
-  run/run-file/track/cancel/events through Runtime Core invoke. Stream-backed
+  run/run-file/track/cancel/events through Runtime Core invoke, and Go/Python
+  expose bounded page-based Mission event tail state machines. Stream-backed
   live adapters, daemon-backed child Invocation execution behavior conformance,
   scheduler/retry policy, and backend automation cutover remain incomplete.
 - Events Directory/device/invocation stream carrier guardrails, session stream
@@ -181,8 +182,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 - Go Mission facade exposes `MissionClient` run/run-file/track/cancel/events
   Invocation carrier builders, C ABI-backed run/run-file/track/cancel/events
   execution through Runtime Core invoke, daemon `MissionStatus` and
-  `MissionEventPage` projection seams, and close state seams; concrete live-tail adapters, child Invocation behavior conformance,
-  scheduler/retry policy, and backend automation cutover remain incomplete.
+  `MissionEventPage` projection seams, bounded page-based Mission event tailing,
+  and close state seams; daemon stream-backed live adapters, child Invocation
+  behavior conformance, scheduler/retry policy, and backend automation cutover
+  remain incomplete.
 - Go Admin + Gateway facade exposes `AdminClient` agent list/start/stop/refresh,
   session-list, hub join/leave, pairing preflight/create/validate, credential
   verification, device-session create/delete, device-revoke Runtime
