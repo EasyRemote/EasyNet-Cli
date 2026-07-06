@@ -1,5 +1,3 @@
-//go:build easynet_direct_runtime
-
 package easynet
 
 import (
@@ -27,6 +25,7 @@ const (
 	defaultDirectRuntimeInvokeTimeout = 60 * time.Second
 	defaultDirectRuntimeTransportName = "direct-axon-grpc-uds"
 	defaultURAProfile                 = "easynet-strict-v2"
+	directSignedDescriptorRefMetadata = "x-easynet-signed-descriptor-ref"
 )
 
 // DirectDaemonRuntimeConnector opens a concrete daemon Runtime Core transport
@@ -800,8 +799,8 @@ func directInvokeRequestFromDraftJSON(raw []byte) (InvocationDraft, *axonpb.Invo
 	}
 	return draft, &axonpb.InvokeRequest{
 		Envelope:        fields.envelope,
-		Target:          directInvocationTarget(draft),
-		FunctionName:    draft.DescriptorRef(),
+		Target:          fields.target,
+		FunctionName:    fields.abilityName,
 		Arguments:       fields.arguments,
 		ContentType:     draft.ContentType(),
 		Metadata:        fields.metadata,
@@ -820,8 +819,8 @@ func directStreamRequestFromDraftJSON(raw []byte) (InvocationDraft, *axonpb.Invo
 	}
 	return draft, &axonpb.InvokeServerStreamRequest{
 		Envelope:        fields.envelope,
-		Target:          directInvocationTarget(draft),
-		FunctionName:    draft.DescriptorRef(),
+		Target:          fields.target,
+		FunctionName:    fields.abilityName,
 		Arguments:       fields.arguments,
 		ContentType:     draft.ContentType(),
 		Metadata:        fields.metadata,
@@ -831,6 +830,8 @@ func directStreamRequestFromDraftJSON(raw []byte) (InvocationDraft, *axonpb.Invo
 
 type directInvokeFieldSet struct {
 	envelope        *axonpb.Envelope
+	target          *axonpb.InvocationTarget
+	abilityName     string
 	arguments       []byte
 	metadata        map[string]string
 	contentEnvelope *axonpb.ContentEnvelope
@@ -849,7 +850,11 @@ func directInvokeFields(draft InvocationDraft) (directInvokeFieldSet, error) {
 	if err != nil {
 		return directInvokeFieldSet{}, err
 	}
-	metadata, err := directMetadata(draft.Metadata())
+	abilityName, err := directLocalAbilityName(draft)
+	if err != nil {
+		return directInvokeFieldSet{}, err
+	}
+	metadata, err := directMetadata(draft)
 	if err != nil {
 		return directInvokeFieldSet{}, err
 	}
@@ -867,8 +872,10 @@ func directInvokeFields(draft InvocationDraft) (directInvokeFieldSet, error) {
 			CausalContext:   causal,
 			CallerSignature: callerSignature,
 		},
-		arguments: args,
-		metadata:  metadata,
+		target:      directInvocationTarget(abilityName),
+		abilityName: abilityName,
+		arguments:   args,
+		metadata:    metadata,
 		contentEnvelope: &axonpb.ContentEnvelope{
 			ContentType: draft.ContentType(),
 			Encoding:    "identity",
@@ -894,7 +901,7 @@ func directBidiOpenFrame(draft InvocationDraft, streams []*axonpb.StreamDescript
 		Mac:      mac,
 		Payload: &axonpb.InvokeBidiUp_EnvelopeOpen{EnvelopeOpen: &axonpb.EnvelopeOpen{
 			Envelope:        fields.envelope,
-			Target:          directInvocationTarget(draft),
+			Target:          fields.target,
 			InitialArgs:     fields.arguments,
 			ArgsContentType: draft.ContentType(),
 			Streams:         streams,
@@ -904,16 +911,31 @@ func directBidiOpenFrame(draft InvocationDraft, streams []*axonpb.StreamDescript
 	}, nil
 }
 
-func directInvocationTarget(draft InvocationDraft) *axonpb.InvocationTarget {
+func directInvocationTarget(abilityName string) *axonpb.InvocationTarget {
 	return &axonpb.InvocationTarget{
-		AbilityName: draft.DescriptorRef(),
+		AbilityName: abilityName,
 		TypedTarget: &axonpb.InvocationTarget_Ability{
 			Ability: &axonpb.AbilityTarget{
-				AbilityName:  draft.DescriptorRef(),
-				FunctionName: draft.DescriptorRef(),
+				AbilityName:  abilityName,
+				FunctionName: abilityName,
 			},
 		},
 	}
+}
+
+func directLocalAbilityName(draft InvocationDraft) (string, error) {
+	ref, err := ParseAbilityDescriptorRef(draft.DescriptorRef())
+	if err != nil {
+		return "", invalidRuntimePayload(fmt.Sprintf("project descriptor_ref: %v", err), err)
+	}
+	abilityName, ok := PublicAbilityNameFromAbilityURA(draft.CalleeURA(), ref.AbilityURA)
+	if !ok || strings.TrimSpace(abilityName) == "" {
+		return "", invalidRuntimePayload(
+			fmt.Sprintf("descriptor_ref %q is not owned by callee %q", draft.DescriptorRef(), draft.CalleeURA()),
+			nil,
+		)
+	}
+	return abilityName, nil
 }
 
 func directAgentIdentity(ura string) *axonpb.AgentIdentity {
@@ -936,39 +958,36 @@ func directCallerSignature(draft InvocationDraft) (*axonpb.CallerSignature, erro
 	}, nil
 }
 
-func directMetadata(metadata map[string]any) (map[string]string, error) {
+func directMetadata(draft InvocationDraft) (map[string]string, error) {
 	result := map[string]string{}
-	for key, value := range metadata {
+	for key, value := range draft.Metadata() {
 		stringValue, ok := value.(string)
 		if !ok {
 			return nil, invalidRuntimePayload("metadata must be a string-to-string map for Axon InvokeRequest", nil)
 		}
 		result[key] = stringValue
 	}
+	result[directSignedDescriptorRefMetadata] = draft.DescriptorRef()
 	return result, nil
 }
 
 func directCausalContext(value map[string]any) (*axonpb.CausalContext, error) {
-	form, _ := value["form"].(string)
-	if form == "" {
-		form, _ = value["kind"].(string)
+	causal, err := causalContextForInvocationDraft(value)
+	if err != nil {
+		return nil, err
 	}
-	switch form {
-	case "", "none", "empty", "null":
+	switch causal.Kind {
+	case CausalContextNull:
 		return &axonpb.CausalContext{Form: &axonpb.CausalContext_None{None: &axonpb.Empty{}}}, nil
-	case "scalar":
-		ref, err := directReceiptRef(value)
+	case CausalContextScalar:
+		ref, err := directReceiptRef(causal.Scalar)
 		if err != nil {
 			return nil, err
 		}
 		return &axonpb.CausalContext{Form: &axonpb.CausalContext_Scalar{Scalar: ref}}, nil
-	case "list":
-		rawPrior, ok := value["prior"].([]any)
-		if !ok {
-			return nil, invalidRuntimePayload("causal_context.prior must be an array", nil)
-		}
-		prior := make([]*axonpb.ReceiptRef, 0, len(rawPrior))
-		for _, item := range rawPrior {
+	case CausalContextVector:
+		prior := make([]*axonpb.ReceiptRef, 0, len(causal.Vector))
+		for _, item := range causal.Vector {
 			ref, err := directReceiptRef(item)
 			if err != nil {
 				return nil, err
@@ -976,37 +995,30 @@ func directCausalContext(value map[string]any) (*axonpb.CausalContext, error) {
 			prior = append(prior, ref)
 		}
 		return &axonpb.CausalContext{Form: &axonpb.CausalContext_List{List: &axonpb.ReceiptList{Prior: prior}}}, nil
-	case "merkle":
-		rootHex, _ := value["root_hex"].(string)
-		root, err := hex.DecodeString(rootHex)
+	case CausalContextDAG:
+		root, err := hex.DecodeString(causal.DAGRootHex)
 		if err != nil {
 			return nil, invalidRuntimePayload(fmt.Sprintf("decode root_hex: %v", err), err)
 		}
-		proofURA, _ := value["proof_ura"].(string)
-		if proofURA == "" {
-			return nil, invalidRuntimePayload("proof_ura is required", nil)
-		}
-		return &axonpb.CausalContext{Form: &axonpb.CausalContext_Merkle{Merkle: &axonpb.MerkleRoot{Root: root, ProofUra: proofURA}}}, nil
+		return &axonpb.CausalContext{Form: &axonpb.CausalContext_Merkle{Merkle: &axonpb.MerkleRoot{Root: root, ProofUra: causal.DAGProofURA}}}, nil
 	default:
-		return nil, invalidRuntimePayload(fmt.Sprintf("unknown causal_context form: %s", form), nil)
+		return nil, invalidRuntimePayload("unknown causal_context kind", nil)
 	}
 }
 
 func directReceiptRef(value any) (*axonpb.ReceiptRef, error) {
-	item, ok := value.(map[string]any)
+	ref, ok := value.(CausalReceiptRef)
 	if !ok {
-		return nil, invalidRuntimePayload("causal receipt ref must be an object", nil)
+		return nil, invalidRuntimePayload("causal receipt ref must be a CausalReceiptRef", nil)
 	}
-	receiptURA, _ := item["receipt_ura"].(string)
-	hashHex, _ := item["receipt_hash_hex"].(string)
-	if receiptURA == "" || hashHex == "" {
+	if ref.URA == "" || ref.HashHex == "" {
 		return nil, invalidRuntimePayload("receipt_ura and receipt_hash_hex are required", nil)
 	}
-	receiptHash, err := hex.DecodeString(hashHex)
+	receiptHash, err := hex.DecodeString(ref.HashHex)
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("decode receipt_hash_hex: %v", err), err)
 	}
-	return &axonpb.ReceiptRef{ReceiptUra: receiptURA, ReceiptHash: receiptHash}, nil
+	return &axonpb.ReceiptRef{ReceiptUra: ref.URA, ReceiptHash: receiptHash}, nil
 }
 
 func directBidiStreamDescriptors(raw []byte) ([]*axonpb.StreamDescriptor, error) {

@@ -1,5 +1,3 @@
-//go:build easynet_direct_runtime
-
 package easynet
 
 import (
@@ -136,6 +134,12 @@ func TestDirectDaemonRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	if daemon.seenInvoke == nil || daemon.seenInvoke.GetEnvelope().GetCaller().GetUra() != "easynet:///r/example/agent/alice" {
 		t.Fatalf("daemon did not receive caller envelope: %#v", daemon.seenInvoke)
 	}
+	if daemon.seenInvoke.GetFunctionName() != "er.weather" {
+		t.Fatalf("function name = %q, want er.weather", daemon.seenInvoke.GetFunctionName())
+	}
+	if got := daemon.seenInvoke.GetMetadata()[directSignedDescriptorRefMetadata]; got != directRuntimeDraft(t).DescriptorRef() {
+		t.Fatalf("signed descriptor metadata = %q", got)
+	}
 	if got := string(daemon.seenInvoke.GetArguments()); got != `{"city":"Singapore"}` {
 		t.Fatalf("arguments = %s", got)
 	}
@@ -167,7 +171,7 @@ func TestDirectDaemonRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	if !terminal.Terminal() || stream.State() != StreamTerminalFrameSeen {
 		t.Fatalf("terminal = %v state %s", terminal.Terminal(), stream.State())
 	}
-	if daemon.seenStream == nil || daemon.seenStream.GetFunctionName() != directRuntimeDraft(t).DescriptorRef() {
+	if daemon.seenStream == nil || daemon.seenStream.GetFunctionName() != "er.weather" {
 		t.Fatalf("daemon did not receive stream request")
 	}
 	if err := stream.Close(context.Background()); err != nil {
@@ -210,6 +214,9 @@ func TestDirectDaemonRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	}
 	if len(daemon.seenBidi) < 2 || daemon.seenBidi[0].GetEnvelopeOpen() == nil {
 		t.Fatalf("daemon did not receive bidi open and data frames")
+	}
+	if got := daemon.seenBidi[0].GetEnvelopeOpen().GetMetadata()[directSignedDescriptorRefMetadata]; got != directRuntimeDraft(t).DescriptorRef() {
+		t.Fatalf("signed descriptor metadata = %q", got)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close bidi: %v", err)
