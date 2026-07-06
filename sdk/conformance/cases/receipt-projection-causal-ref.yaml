@@ -5,13 +5,15 @@ required_for:
   - c_abi
   - go
   - python
-description: Receipt projection normalizes summary DTOs, refuses to claim summary-only cryptographic verification, and builds causal refs only from explicit receipt URA plus hash facts.
+description: Receipt projection normalizes summary DTOs, refuses to claim summary-only cryptographic verification, and builds causal refs only from explicit opaque receipt URA plus hash facts.
 steps:
   - action: project_receipt_summary
     fixture: receipt.summary.v4.json
   - action: verify_receipt_summary
     fixture: receipt.summary.v4.json
   - action: require_cryptographic_verification
+  - action: project_opaque_receipt_ref
+    fixture: receipt-ref.v4.json
   - action: build_causal_ref
     fixture: receipt.summary.v4.json
 expect:
@@ -20,5 +22,8 @@ expect:
   summary_verified: false
   verify_summary_claims_cryptographic_validity: false
   require_cryptographic_summary_result: err_invalid_arg
+  opaque_receipt_ref_fixture: receipt-ref.v4.json
+  receipt_ref_constructs_receipt_ura: false
+  receipt_ref_requires_receipt_ura_and_hash: true
   causal_ref_requires_receipt_ura_and_hash: true
   causal_ref_fixture_result: err_invalid_arg

@@ -177,7 +177,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_receipt.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Axon-backed cross-invocation causal DAG verification exists for full audit bundles; RFC-007 receipt URA construction remains incomplete."
+      "remaining": "Go/Python opaque ReceiptRef and ReceiptChain anchors plus Axon-backed cross-invocation causal DAG verification exist for full audit bundles; RFC-007 receipt URA construction remains incomplete."
     },
     {
       "capability_id": "publication",

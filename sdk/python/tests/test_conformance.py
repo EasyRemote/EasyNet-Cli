@@ -97,6 +97,7 @@ from easynet_sdk import (
     PublicationClient,
     ReceiptClient,
     ReceiptFetchRequest,
+    ReceiptRef,
     ReceiptSummary,
     ReceiptVerification,
     ResourceRef,
@@ -2126,16 +2127,24 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "project_receipt_summary",
             "verify_receipt_summary",
             "require_cryptographic_verification",
+            "project_opaque_receipt_ref",
             "build_causal_ref",
         ):
             self._require_case_action(receipt_case, action)
         self._require_case_fixture(receipt_case, "receipt.summary.v4.json")
+        self._require_case_fixture(receipt_case, "receipt-ref.v4.json")
         self._require_case_expectation(receipt_case, "summary_verified: false")
         self._require_case_expectation(
             receipt_case, "verify_summary_claims_cryptographic_validity: false"
         )
         self._require_case_expectation(
             receipt_case, "require_cryptographic_summary_result: err_invalid_arg"
+        )
+        self._require_case_expectation(
+            receipt_case, "receipt_ref_constructs_receipt_ura: false"
+        )
+        self._require_case_expectation(
+            receipt_case, "receipt_ref_requires_receipt_ura_and_hash: true"
         )
         self._require_case_expectation(
             receipt_case, "causal_ref_fixture_result: err_invalid_arg"
@@ -2145,6 +2154,12 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertFalse(summary.verified)
         self.assertEqual(summary.state, "completed")
         self.assertIsNone(summary.receipt_ura)
+        receipt_ref = ReceiptRef.from_json(shared_fixture("receipt-ref.v4.json"))
+        self.assertEqual(receipt_ref.receipt_hash_hex, "a" * 64)
+        self.assertEqual(
+            json.loads(receipt_ref.to_json_bytes().decode("utf-8")),
+            json.loads(shared_fixture("receipt-ref.v4.json").decode("utf-8")),
+        )
 
         verification = ReceiptVerification.from_json(
             b'{"verified":false,"method":"summary-only",'

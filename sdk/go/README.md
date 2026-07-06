@@ -35,7 +35,7 @@ It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref proje
 invocation-history list/get/trace read-model methods, explicit daemon/Axon
 projection provider seams for Runtime-backed project/verify/verify-chain/causal-ref,
 optional C ABI v4 concrete transport over Runtime Core invoke, and close state
-seams over opaque receipt refs,
+seams over opaque `ReceiptRef`/`ReceiptChain` anchors,
 plus PublicationClient resource-ref,
 package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
 install projection, explicit daemon-local provider seams for Runtime-backed

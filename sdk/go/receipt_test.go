@@ -359,6 +359,40 @@ func TestReceiptVerifyChainRejectsDuplicateReceiptHash(t *testing.T) {
 	}
 }
 
+func TestReceiptChainReturnsCopySafeReceipts(t *testing.T) {
+	chain, err := NewReceiptChain([]ReceiptRef{{
+		ReceiptURA:     "easynet:///r/example/receipt/receipt-1",
+		ReceiptHashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Metadata:       map[string]any{"source": "daemon"},
+	}})
+	if err != nil {
+		t.Fatalf("NewReceiptChain: %v", err)
+	}
+
+	receipts := chain.Receipts()
+	receipts[0].ReceiptURA = "mutated"
+
+	again := chain.Receipts()
+	if again[0].ReceiptURA != "easynet:///r/example/receipt/receipt-1" {
+		t.Fatalf("Receipts leaked mutable slice: %#v", again)
+	}
+}
+
+func TestReceiptRefRejectsInvalidAnchors(t *testing.T) {
+	if _, err := NewReceiptRefFromJSON(nil); err == nil {
+		t.Fatalf("NewReceiptRefFromJSON accepted empty input")
+	}
+	if _, err := NewReceiptRefFromMap(map[string]any{
+		"receipt_ura":      "easynet:///r/example/receipt/receipt-1",
+		"receipt_hash_hex": "aa",
+	}); err == nil {
+		t.Fatalf("NewReceiptRefFromMap accepted short hash")
+	}
+	if _, err := NewReceiptChain(nil); err == nil {
+		t.Fatalf("NewReceiptChain accepted empty input")
+	}
+}
+
 func TestReceiptCausalRefRejectsEmptyProjection(t *testing.T) {
 	transport := &memoryReceiptTransport{causalRefJSON: `{"metadata":{}}`}
 	client, err := NewReceiptClient(transport)
@@ -382,6 +416,120 @@ func TestReceiptCausalRefRejectsContextWithoutReceiptHash(t *testing.T) {
 	_, err := NewCausalRefFromJSON([]byte(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/receipt/receipt-1"},"metadata":{}}`))
 	if err == nil {
 		t.Fatalf("CausalRef accepted causal_context without receipt hash")
+	}
+}
+
+func TestReceiptRefDelegatesCausalContextProjection(t *testing.T) {
+	transport := &memoryReceiptTransport{
+		causalRefJSON: `{"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","verified":false,"causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
+	}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+	invocationID := "inv-example-1"
+	ref := ReceiptRef{
+		ReceiptURA:     " easynet:///r/example/receipt/receipt-1 ",
+		ReceiptHashHex: "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		InvocationID:   &invocationID,
+		Metadata:       map[string]any{"source": "runtime"},
+	}
+
+	causalContext, err := ref.CausalContext(context.Background(), client)
+	if err != nil {
+		t.Fatalf("CausalContext: %v", err)
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal([]byte(transport.seenReceiptRaw), &forwarded); err != nil {
+		t.Fatalf("forwarded receipt ref: %v", err)
+	}
+	if forwarded["receipt_ura"] != "easynet:///r/example/receipt/receipt-1" || forwarded["receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("receipt ref not normalized: %#v", forwarded)
+	}
+	if causalContext["form"] != "scalar" || causalContext["receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("unexpected causal context: %#v", causalContext)
+	}
+}
+
+func TestReceiptRefFromInvocationResultRequiresAnchor(t *testing.T) {
+	draft, err := BuildReceiptFetchInvocation(baseReceiptFetchRequest())
+	if err != nil {
+		t.Fatalf("BuildReceiptFetchInvocation: %v", err)
+	}
+	tupleJSON, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+	result, err := NewInvocationResultFromJSON([]byte(`{"ok":true,"tuple":` + string(tupleJSON) + `,"terminal_state":"Completed","output_json":{},"receipt":{"receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"error":null}`))
+	if err != nil {
+		t.Fatalf("NewInvocationResultFromJSON: %v", err)
+	}
+
+	ref, err := NewReceiptRefFromInvocationResult(result)
+	if err != nil {
+		t.Fatalf("NewReceiptRefFromInvocationResult: %v", err)
+	}
+	if ref.InvocationID == nil || *ref.InvocationID != "inv-example-1" {
+		t.Fatalf("invocation id not preserved: %#v", ref)
+	}
+
+	unanchored, err := NewInvocationResultFromJSON([]byte(`{"ok":true,"tuple":` + string(tupleJSON) + `,"terminal_state":"Completed","output_json":{},"receipt":{"invocation_id":"inv-example-1"},"error":null}`))
+	if err != nil {
+		t.Fatalf("NewInvocationResultFromJSON unanchored: %v", err)
+	}
+	if _, err := NewReceiptRefFromInvocationResult(unanchored); err == nil {
+		t.Fatalf("unanchored invocation result accepted")
+	}
+	if _, err := NewReceiptRefFromMap(map[string]any{
+		"receipt_ura":      "easynet:///r/example/receipt/receipt-1",
+		"receipt_hash_hex": "aa",
+	}); err == nil {
+		t.Fatalf("short receipt hash accepted")
+	}
+}
+
+func TestReceiptChainDelegatesContinuityProjection(t *testing.T) {
+	transport := &memoryReceiptTransport{
+		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
+	}
+	client, err := NewReceiptClient(transport)
+	if err != nil {
+		t.Fatalf("NewReceiptClient: %v", err)
+	}
+	firstIndex := 0
+	secondIndex := 1
+	prevHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	chain, err := NewReceiptChain([]ReceiptRef{
+		{
+			ReceiptURA:     "easynet:///r/example/receipt/receipt-1",
+			ReceiptHashHex: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Index:          &firstIndex,
+		},
+		{
+			ReceiptURA:         "easynet:///r/example/receipt/receipt-2",
+			ReceiptHashHex:     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			PrevReceiptHashHex: &prevHash,
+			Index:              &secondIndex,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewReceiptChain: %v", err)
+	}
+
+	result, err := chain.VerifyContinuity(context.Background(), client, map[string]any{"request_id": "chain-ref-1"})
+	if err != nil {
+		t.Fatalf("VerifyContinuity: %v", err)
+	}
+
+	if !result.Continuous || transport.seenChainRequest["metadata"].(map[string]any)["request_id"] != "chain-ref-1" {
+		t.Fatalf("unexpected continuity result: %#v request=%#v", result, transport.seenChainRequest)
+	}
+	receipts := transport.seenChainRequest["receipts"].([]any)
+	first := receipts[0].(map[string]any)
+	second := receipts[1].(map[string]any)
+	if first["receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || second["prev_receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("receipt refs not normalized in chain request: %#v", receipts)
 	}
 }
 

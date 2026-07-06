@@ -1,0 +1,9 @@
+{
+  "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+  "receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "invocation_id": "inv-example-1",
+  "index": 0,
+  "metadata": {
+    "source": "daemon"
+  }
+}

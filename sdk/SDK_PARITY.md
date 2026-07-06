@@ -35,7 +35,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
-| receipt | Receipt | provider-backed | provider-backed | Axon-backed single-receipt verification plus cross-invocation chain signature and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
+| receipt | Receipt | provider-backed | provider-backed | Go/Python opaque `ReceiptRef`/`ReceiptChain` anchors, Axon-backed single-receipt verification, cross-invocation chain signature, and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
 | host binding | Host Binding | provider-backed | provider-backed | Product host process startup, user-code execution, and downstream product cutover remain outside the daemon SDK. |
 | mission | Mission | provider-backed | provider-backed | SDK plan rendering and complete child Invocation fact conformance exist; daemon-side child Invocation execution, live stream adapters, and scheduler policy remain incomplete outside the SDK facade. |
@@ -70,9 +70,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   full audit-bundle receipts, and invocation-history list/get/trace carrier
   builders exist for Rust/C ABI over daemon `invocation.history.*` and
   `invocation.trace.get`; Go and Python now expose the same opaque
-  receipt-URA-plus-hash causal context projection through the Receipt facade,
-  and Python exposes the same read models through the Receipt facade and C ABI
-  Runtime Core invoke. RFC-007 receipt URA
+  `ReceiptRef`/`ReceiptChain` receipt-URA-plus-hash object graph and causal
+  context projection through the Receipt facade, and Python exposes the same
+  read models through the Receipt facade and C ABI Runtime Core invoke. RFC-007 receipt URA
   construction and broader language-facade cutovers remain incomplete.
 - Directory read-model carrier/page guardrails, `namespace.resolve`
   carrier/resolved-ref projection guardrails, Directory subscribe stream
@@ -167,8 +167,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   projection, `invocation.history.get` fetch Invocation carrier construction,
   invocation-history list/get/trace read-model methods, optional C ABI v4
   concrete transport for fetch/list/get/trace/project/verify/verify-chain/
-  causal-ref over Runtime Core invoke, explicit daemon/Axon projection provider
-  seams for Runtime-backed project/verify/verify-chain/causal-ref,
+  causal-ref over Runtime Core invoke, typed `ReceiptRef` and `ReceiptChain`
+  wrappers that delegate causal-context and continuity projection through the
+  client, explicit daemon/Axon projection provider seams for Runtime-backed project/verify/verify-chain/causal-ref,
   Axon-backed cross-invocation parent-receipt DAG closure projection, and close
   state seams over opaque receipt refs; receipt URA construction after RFC-007
   and backend history/metrics cutover remain incomplete.

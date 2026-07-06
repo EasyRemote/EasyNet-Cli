@@ -119,9 +119,208 @@ type CausalRef struct {
 	Metadata       map[string]any `json:"metadata"`
 }
 
+// ReceiptRef is an opaque daemon/Axon-returned receipt anchor.
+//
+// The SDK validates the anchor facts needed for child causal context, but it
+// never constructs receipt URAs or treats a hash pair as verification evidence.
+type ReceiptRef struct {
+	ReceiptURA         string         `json:"receipt_ura"`
+	ReceiptHashHex     string         `json:"receipt_hash_hex"`
+	InvocationID       *string        `json:"invocation_id,omitempty"`
+	PrevReceiptHashHex *string        `json:"prev_receipt_hash_hex,omitempty"`
+	Index              *int           `json:"index,omitempty"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
+}
+
+// ReceiptChain is an ordered list of opaque receipt anchors whose continuity is
+// projected by the Receipt profile transport.
+type ReceiptChain struct {
+	receipts []ReceiptRef
+}
+
 // ToCausalContext returns the child-Invocation causal_context projection.
 func (r CausalRef) ToCausalContext() map[string]any {
 	return copyMap(r.CausalContext)
+}
+
+// ToJSON encodes the opaque receipt anchor for daemon/Axon receipt APIs.
+func (r ReceiptRef) ToJSON() ([]byte, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	receiptHash, err := normalizeReceiptHashHex(r.ReceiptHashHex)
+	if err != nil {
+		return nil, err
+	}
+	value := map[string]any{
+		"receipt_ura":      strings.TrimSpace(r.ReceiptURA),
+		"receipt_hash_hex": receiptHash,
+	}
+	if r.InvocationID != nil && strings.TrimSpace(*r.InvocationID) != "" {
+		value["invocation_id"] = strings.TrimSpace(*r.InvocationID)
+	}
+	if r.PrevReceiptHashHex != nil && strings.TrimSpace(*r.PrevReceiptHashHex) != "" {
+		prevHash, err := normalizeReceiptHashHex(*r.PrevReceiptHashHex)
+		if err != nil {
+			return nil, err
+		}
+		value["prev_receipt_hash_hex"] = prevHash
+	}
+	if r.Index != nil {
+		value["index"] = *r.Index
+	}
+	if len(r.Metadata) > 0 {
+		value["metadata"] = copyMap(r.Metadata)
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, invalidProfilePayload(receiptProfile, fmt.Sprintf("encode receipt ref JSON: %v", err), err)
+	}
+	return raw, nil
+}
+
+// CausalContext delegates receipt-to-causal-context projection through ReceiptClient.
+func (r ReceiptRef) CausalContext(ctx context.Context, client *ReceiptClient) (map[string]any, error) {
+	if client == nil {
+		return nil, invalidProfileClient(receiptProfile, "receipt client is required")
+	}
+	raw, err := r.ToJSON()
+	if err != nil {
+		return nil, err
+	}
+	return client.CausalContext(ctx, raw)
+}
+
+// NewReceiptRefFromJSON decodes an opaque receipt anchor.
+func NewReceiptRefFromJSON(raw []byte) (ReceiptRef, error) {
+	if len(raw) == 0 {
+		return ReceiptRef{}, invalidProfilePayload(receiptProfile, "receipt ref JSON is required", nil)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return ReceiptRef{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("decode receipt ref JSON: %v", err), err)
+	}
+	return NewReceiptRefFromMap(obj)
+}
+
+// NewReceiptRefFromMap projects daemon/Axon receipt anchor facts into ReceiptRef.
+func NewReceiptRefFromMap(obj map[string]any) (ReceiptRef, error) {
+	receiptURA, ok := receiptStringField(obj, "receipt_ura")
+	if !ok {
+		return ReceiptRef{}, invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
+	}
+	receiptHash, ok := receiptHashField(obj)
+	if !ok {
+		return ReceiptRef{}, invalidProfilePayload(receiptProfile, "receipt_hash_hex is required", nil)
+	}
+	if err := validateReceiptHashHex(receiptHash); err != nil {
+		return ReceiptRef{}, err
+	}
+	var prevHash *string
+	if value, ok := receiptStringField(obj, "prev_receipt_hash_hex"); ok {
+		normalized, err := normalizeReceiptHashHex(value)
+		if err != nil {
+			return ReceiptRef{}, err
+		}
+		prevHash = &normalized
+	}
+	invocationID := optionalReceiptStringPtr(obj, "invocation_id")
+	index, err := optionalReceiptIndex(obj, "index")
+	if err != nil {
+		return ReceiptRef{}, err
+	}
+	metadata := map[string]any{}
+	if rawMetadata, ok := obj["metadata"]; ok && rawMetadata != nil {
+		decoded, ok := rawMetadata.(map[string]any)
+		if !ok {
+			return ReceiptRef{}, invalidProfilePayload(receiptProfile, "metadata must be an object", nil)
+		}
+		metadata = copyMap(decoded)
+	}
+	return ReceiptRef{
+		ReceiptURA:         receiptURA,
+		ReceiptHashHex:     receiptHash,
+		InvocationID:       invocationID,
+		PrevReceiptHashHex: prevHash,
+		Index:              index,
+		Metadata:           metadata,
+	}, nil
+}
+
+// NewReceiptRefFromInvocationResult extracts a causal anchor from a runtime result.
+func NewReceiptRefFromInvocationResult(result InvocationResult) (ReceiptRef, error) {
+	receipt := result.Receipt()
+	if len(receipt) == 0 || string(receipt) == "null" {
+		return ReceiptRef{}, invalidProfilePayload(receiptProfile, "invocation result has no receipt summary", nil)
+	}
+	return NewReceiptRefFromJSON(receipt)
+}
+
+// NewReceiptChain creates an ordered receipt anchor collection.
+func NewReceiptChain(receipts []ReceiptRef) (ReceiptChain, error) {
+	if len(receipts) == 0 {
+		return ReceiptChain{}, invalidProfilePayload(receiptProfile, "at least one receipt ref is required", nil)
+	}
+	copied := make([]ReceiptRef, len(receipts))
+	for index, receipt := range receipts {
+		if err := receipt.validate(); err != nil {
+			return ReceiptChain{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("receipt[%d] invalid: %v", index, err), err)
+		}
+		copied[index] = receipt
+	}
+	return ReceiptChain{receipts: copied}, nil
+}
+
+// NewReceiptChainFromJSON decodes ordered receipt anchors.
+func NewReceiptChainFromJSON(receipts []json.RawMessage) (ReceiptChain, error) {
+	if len(receipts) == 0 {
+		return ReceiptChain{}, invalidProfilePayload(receiptProfile, "at least one receipt ref is required", nil)
+	}
+	refs := make([]ReceiptRef, len(receipts))
+	for index, raw := range receipts {
+		ref, err := NewReceiptRefFromJSON(raw)
+		if err != nil {
+			return ReceiptChain{}, invalidProfilePayload(receiptProfile, fmt.Sprintf("receipt[%d] invalid: %v", index, err), err)
+		}
+		refs[index] = ref
+	}
+	return NewReceiptChain(refs)
+}
+
+// Receipts returns a copy of the ordered receipt anchors.
+func (c ReceiptChain) Receipts() []ReceiptRef {
+	return append([]ReceiptRef(nil), c.receipts...)
+}
+
+// ToJSONReceipts serializes each anchor for daemon/Axon continuity checks.
+func (c ReceiptChain) ToJSONReceipts() ([]json.RawMessage, error) {
+	if len(c.receipts) == 0 {
+		return nil, invalidProfilePayload(receiptProfile, "at least one receipt ref is required", nil)
+	}
+	result := make([]json.RawMessage, len(c.receipts))
+	for index, receipt := range c.receipts {
+		raw, err := receipt.ToJSON()
+		if err != nil {
+			return nil, invalidProfilePayload(receiptProfile, fmt.Sprintf("receipt[%d] invalid: %v", index, err), err)
+		}
+		result[index] = json.RawMessage(raw)
+	}
+	return result, nil
+}
+
+// VerifyContinuity delegates chain continuity projection through ReceiptClient.
+func (c ReceiptChain) VerifyContinuity(ctx context.Context, client *ReceiptClient, metadata map[string]any) (ReceiptChainVerification, error) {
+	if client == nil {
+		return ReceiptChainVerification{}, invalidProfileClient(receiptProfile, "receipt client is required")
+	}
+	receipts, err := c.ToJSONReceipts()
+	if err != nil {
+		return ReceiptChainVerification{}, err
+	}
+	return client.VerifyChain(ctx, ReceiptChainVerificationRequest{
+		Receipts: receipts,
+		Metadata: copyMap(metadata),
+	})
 }
 
 // ReceiptTransport supplies receipt operations behind the SDK facade.
@@ -424,6 +623,22 @@ func (c *ReceiptClient) CausalRef(ctx context.Context, receiptJSON []byte) (Caus
 		return CausalRef{}, wrapReceiptTransportError("receipt causal-ref failed", err)
 	}
 	return NewCausalRefFromJSON(raw)
+}
+
+func (c *ReceiptClient) CausalContext(ctx context.Context, receiptJSON []byte) (map[string]any, error) {
+	causal, err := c.CausalRef(ctx, receiptJSON)
+	if err != nil {
+		return nil, err
+	}
+	return causal.ToCausalContext(), nil
+}
+
+func (c *ReceiptClient) CausalContextFromInvocationResult(ctx context.Context, result InvocationResult) (map[string]any, error) {
+	ref, err := NewReceiptRefFromInvocationResult(result)
+	if err != nil {
+		return nil, err
+	}
+	return ref.CausalContext(ctx, c)
 }
 
 func (c *ReceiptClient) requireReady(ctx context.Context) error {
@@ -732,13 +947,84 @@ func receiptHashField(obj map[string]any) (string, bool) {
 		if !ok {
 			continue
 		}
-		value = strings.TrimPrefix(value, "sha256:")
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value != "" {
-			return value, true
+		normalized, err := normalizeReceiptHashHex(value)
+		if err == nil && normalized != "" {
+			return normalized, true
 		}
 	}
 	return "", false
+}
+
+func (r ReceiptRef) validate() error {
+	if strings.TrimSpace(r.ReceiptURA) == "" {
+		return invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
+	}
+	if err := validateReceiptHashHex(r.ReceiptHashHex); err != nil {
+		return err
+	}
+	if r.PrevReceiptHashHex != nil {
+		if err := validateReceiptHashHex(*r.PrevReceiptHashHex); err != nil {
+			return err
+		}
+	}
+	if r.Index != nil && *r.Index < 0 {
+		return invalidProfilePayload(receiptProfile, "receipt index must be non-negative", nil)
+	}
+	return nil
+}
+
+func validateReceiptHashHex(value string) error {
+	normalized, err := normalizeReceiptHashHex(value)
+	if err != nil {
+		return err
+	}
+	if _, err := hex.DecodeString(normalized); err != nil || len(normalized) != 64 {
+		return invalidProfilePayload(receiptProfile, "receipt hash must decode to exactly 32 bytes", err)
+	}
+	return nil
+}
+
+func normalizeReceiptHashHex(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(strings.ToLower(value), "sha256:")
+	if value == "" {
+		return "", invalidProfilePayload(receiptProfile, "receipt_hash_hex is required", nil)
+	}
+	if _, err := hex.DecodeString(value); err != nil || len(value) != 64 {
+		return "", invalidProfilePayload(receiptProfile, "receipt hash must decode to exactly 32 bytes", err)
+	}
+	return value, nil
+}
+
+func optionalReceiptStringPtr(obj map[string]any, key string) *string {
+	value, ok := receiptStringField(obj, key)
+	if !ok {
+		return nil
+	}
+	return &value
+}
+
+func optionalReceiptIndex(obj map[string]any, key string) (*int, error) {
+	raw, ok := obj[key]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	var index int
+	switch value := raw.(type) {
+	case float64:
+		if value < 0 || value != float64(int(value)) {
+			return nil, invalidProfilePayload(receiptProfile, "receipt index must be a non-negative integer", nil)
+		}
+		index = int(value)
+	case int:
+		if value < 0 {
+			return nil, invalidProfilePayload(receiptProfile, "receipt index must be non-negative", nil)
+		}
+		index = value
+	default:
+		return nil, invalidProfilePayload(receiptProfile, "receipt index must be a non-negative integer", nil)
+	}
+	return &index, nil
 }
 
 func wrapReceiptTransportError(message string, cause error) error {

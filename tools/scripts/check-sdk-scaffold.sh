@@ -271,6 +271,7 @@ schema_files=(
   prepared-invocation.schema.json
   identity.schema.json
   receipt.schema.json
+  receipt-ref.schema.json
   receipt-fetch-request.schema.json
   error.schema.json
   feature-discovery.schema.json
@@ -372,6 +373,7 @@ fixture_files=(
   identity.descriptor-ref.v4.json
   receipt-fetch-request.v4.json
   receipt-fetch-invocation.v4.json
+  receipt-ref.v4.json
   receipt.summary.v4.json
   runtime.error.v4.json
   event.directory.v4.json

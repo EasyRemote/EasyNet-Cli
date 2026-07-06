@@ -398,6 +398,10 @@
       "schema": "receipt-fetch-request.schema.json"
     },
     {
+      "fixture": "receipt-ref.v4.json",
+      "schema": "receipt-ref.schema.json"
+    },
+    {
       "fixture": "receipt.summary.v4.json",
       "schema": "receipt.schema.json"
     },

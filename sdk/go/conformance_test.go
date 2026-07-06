@@ -1011,13 +1011,17 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	for _, action := range []string{
 		"project_receipt_summary",
 		"verify_receipt_summary",
+		"project_opaque_receipt_ref",
 		"build_causal_ref",
 	} {
 		requireCaseAction(t, receiptCase, action)
 	}
 	requireCaseFixture(t, receiptCase, "receipt.summary.v4.json")
+	requireCaseFixture(t, receiptCase, "receipt-ref.v4.json")
 	requireCaseExpectation(t, receiptCase, "summary_verified: false")
 	requireCaseExpectation(t, receiptCase, "verify_summary_claims_cryptographic_validity: false")
+	requireCaseExpectation(t, receiptCase, "receipt_ref_constructs_receipt_ura: false")
+	requireCaseExpectation(t, receiptCase, "receipt_ref_requires_receipt_ura_and_hash: true")
 	requireCaseExpectation(t, receiptCase, "causal_ref_fixture_result: err_invalid_arg")
 
 	summary, err := NewReceiptSummaryFromJSON(sharedFixture(t, root, "receipt.summary.v4.json"))
@@ -1039,6 +1043,15 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	if _, err := NewCausalRefFromJSON([]byte(`{"metadata":{}}`)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("summary-only causal ref did not produce InvalidArgument: %v", err)
 	}
+	receiptRef, err := NewReceiptRefFromJSON(sharedFixture(t, root, "receipt-ref.v4.json"))
+	if err != nil {
+		t.Fatalf("NewReceiptRefFromJSON(shared fixture): %v", err)
+	}
+	receiptRefJSON, err := receiptRef.ToJSON()
+	if err != nil {
+		t.Fatalf("receipt ref JSON: %v", err)
+	}
+	assertJSONEquivalent(t, receiptRefJSON, sharedFixture(t, root, "receipt-ref.v4.json"))
 
 	chainCase := sharedCase(t, root, "receipt-axon-chain-verification.yaml")
 	requireCaseID(t, chainCase, "receipt/axon_chain_verification")
@@ -2565,19 +2578,21 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Owner: "receipt",
 			Type:  reflect.TypeOf((*ReceiptClient)(nil)),
 			Operations: map[string]string{
-				"BuildFetchInvocation":       "receipt.build_fetch_invocation",
-				"BuildGetHistoryInvocation":  "receipt.history.build_get_invocation",
-				"BuildListHistoryInvocation": "receipt.history.build_list_invocation",
-				"BuildTraceInvocation":       "receipt.trace.build_get_invocation",
-				"CausalRef":                  "receipt.causal_ref",
-				"Close":                      "receipt.close",
-				"Fetch":                      "receipt.fetch",
-				"GetHistory":                 "receipt.history.get",
-				"GetTrace":                   "receipt.trace.get",
-				"ListHistory":                "receipt.history.list",
-				"Project":                    "receipt.project",
-				"Verify":                     "receipt.verify",
-				"VerifyChain":                "receipt.verify_chain",
+				"BuildFetchInvocation":              "receipt.build_fetch_invocation",
+				"BuildGetHistoryInvocation":         "receipt.history.build_get_invocation",
+				"BuildListHistoryInvocation":        "receipt.history.build_list_invocation",
+				"BuildTraceInvocation":              "receipt.trace.build_get_invocation",
+				"CausalContext":                     "receipt.causal_context",
+				"CausalContextFromInvocationResult": "receipt.causal_context_from_invocation_result",
+				"CausalRef":                         "receipt.causal_ref",
+				"Close":                             "receipt.close",
+				"Fetch":                             "receipt.fetch",
+				"GetHistory":                        "receipt.history.get",
+				"GetTrace":                          "receipt.trace.get",
+				"ListHistory":                       "receipt.history.list",
+				"Project":                           "receipt.project",
+				"Verify":                            "receipt.verify",
+				"VerifyChain":                       "receipt.verify_chain",
 			},
 		},
 		{
@@ -2878,7 +2893,7 @@ func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 			Consumer: "backend_hub",
 			Profile:  "receipt",
 			Surfaces: []sharedConsumerCoverageSurface{
-				{Type: reflect.TypeOf((*ReceiptClient)(nil)), Methods: []string{"Fetch", "Project", "Verify", "CausalRef", "ListHistory", "GetHistory", "GetTrace"}},
+				{Type: reflect.TypeOf((*ReceiptClient)(nil)), Methods: []string{"Fetch", "Project", "Verify", "CausalRef", "CausalContext", "CausalContextFromInvocationResult", "ListHistory", "GetHistory", "GetTrace"}},
 			},
 		},
 		{
