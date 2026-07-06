@@ -276,6 +276,7 @@ from .invocation import (
     InvocationBuilder,
     InvocationDraft,
     InvocationSignature,
+    new_invocation_nonce_base64,
 )
 from .mission import (
     MissionEventProjectionTailer,

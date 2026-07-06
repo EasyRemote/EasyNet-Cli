@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Optional
 
 from .authority import AuthorityMetadata, validate_authority_metadata
 from .errors import ErrorCode, RetryHint, SDKError
+
+
+def new_invocation_nonce_base64() -> str:
+    """Return a fresh 16-byte Invocation nonce encoded for the shared DTO."""
+
+    return base64.b64encode(os.urandom(16)).decode("ascii")
 
 
 @dataclass(frozen=True)

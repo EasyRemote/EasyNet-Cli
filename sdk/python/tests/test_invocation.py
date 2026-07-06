@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 
@@ -7,10 +8,15 @@ from easynet_sdk import (
     InvocationDraft,
     SDKError,
     is_code,
+    new_invocation_nonce_base64,
 )
 
 
 class InvocationTests(unittest.TestCase):
+    def test_new_invocation_nonce_base64_returns_sixteen_bytes(self) -> None:
+        nonce = new_invocation_nonce_base64()
+        self.assertEqual(len(base64.b64decode(nonce)), 16)
+
     def test_builder_builds_complete_tuple(self) -> None:
         draft = (
             InvocationBuilder()

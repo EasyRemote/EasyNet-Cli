@@ -1,6 +1,7 @@
 package easynet
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 )
@@ -34,6 +35,20 @@ func TestInvocationBuilderBuildsCompleteTuple(t *testing.T) {
 	}
 	if _, ok := value["arguments_base64"]; ok {
 		t.Fatalf("arguments_base64 present with args: %s", raw)
+	}
+}
+
+func TestNewInvocationNonceBase64ReturnsSixteenBytes(t *testing.T) {
+	nonce, err := NewInvocationNonceBase64()
+	if err != nil {
+		t.Fatalf("NewInvocationNonceBase64: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(nonce)
+	if err != nil {
+		t.Fatalf("decode nonce: %v", err)
+	}
+	if len(raw) != 16 {
+		t.Fatalf("nonce length = %d, want 16", len(raw))
 	}
 }
 

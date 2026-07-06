@@ -1,6 +1,8 @@
 package easynet
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -29,6 +31,17 @@ type InvocationDraft struct {
 	metadata        map[string]any
 	callerSignature *InvocationSignature
 	hasArgs         bool
+}
+
+// NewInvocationNonceBase64 returns a fresh 16-byte Invocation nonce encoded
+// for the shared Invocation DTO. It is a Runtime Core construction default:
+// callers may use it before Build, but the filled nonce remains inspectable.
+func NewInvocationNonceBase64() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generate invocation nonce: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(nonce[:]), nil
 }
 
 // NewInvocationDraftFromJSON decodes and validates the shared Invocation JSON DTO.
