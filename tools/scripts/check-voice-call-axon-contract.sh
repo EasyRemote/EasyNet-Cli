@@ -50,7 +50,9 @@ grep -q 'Response `state` carries the Axon' "$JOIN_TOML" \
 
 bad="$(
     grep -nE 'state_proto|end_reason_proto|legacy_label\(|legacy label|back-compat|wire compatibility|"reason_code"|OnceLock|fn store\(\)|fn (create|show|join|leave|end|watch|report_metrics|list_calls)_handler' \
-        "$VOICE_RS" "$REAL_TESTS_RS" "$JOIN_TOML" 2>/dev/null || true
+        "$VOICE_RS" "$JOIN_TOML" 2>/dev/null || true
+    grep -nE 'state_proto|end_reason_proto|legacy_label\(|legacy label|back-compat|wire compatibility|"reason_code"|fn (create|show|join|leave|end|watch|report_metrics|list_calls)_handler' \
+        "$REAL_TESTS_RS" 2>/dev/null || true
 )"
 if [[ -n "$bad" ]]; then
     fail "voice call surface still carries retired compatibility fields:

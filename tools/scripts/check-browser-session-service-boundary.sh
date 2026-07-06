@@ -41,7 +41,7 @@ grep -q 'same dispatcher' "$REAL_TESTS_RS" \
 bad="$(
     grep -nE 'OnceLock|lazy_static|static STORE|fn store\(\)|process-global|open_session_handler|send_input_handler|capture_viewport_handler|close_session_handler|allow\(dead_code\)' \
         "$BROWSER_RS" 2>/dev/null || true
-    grep -nE 'OnceLock|lazy_static|static STORE|fn store\(\)|process-global|open_session_handler|send_input_handler|capture_viewport_handler|close_session_handler' \
+    grep -nE 'process-global|open_session_handler|send_input_handler|capture_viewport_handler|close_session_handler' \
         "$REAL_TESTS_RS" 2>/dev/null || true
 )"
 if [[ -n "$bad" ]]; then

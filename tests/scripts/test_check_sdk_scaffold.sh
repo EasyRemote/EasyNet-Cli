@@ -15,6 +15,12 @@ make_sandbox() {
   cp -R "$ROOT/sdk" "$dir/sdk"
   mkdir -p "$dir/src/bin"
   cp "$ROOT/src/bin/sdk-conformance-runner.rs" "$dir/src/bin/sdk-conformance-runner.rs"
+  mkdir -p "$dir/tools/scripts"
+  cp "$ROOT/tools/scripts/check-sdk-scaffold.sh" "$dir/tools/scripts/check-sdk-scaffold.sh"
+  cp "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" "$dir/tools/scripts/check-backend-sdk-only-boundary.sh"
+  cp "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" "$dir/tools/scripts/check-backend-route-family-coverage.sh"
+  cp "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" "$dir/tools/scripts/check-easyremote-sdk-boundary.sh"
+  cp "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" "$dir/tools/scripts/check-sdk-parity-matrix.sh"
   cp "$ROOT/PROJECT_STRUCTURE.md" "$dir/PROJECT_STRUCTURE.md"
 }
 
