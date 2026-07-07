@@ -104,8 +104,8 @@ pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryErro
         .and_then(|obj| obj.get("answer").filter(|value| !value.is_null()))
         .unwrap_or(input);
     let obj = object(answer, "ResolveAnswer")?;
-    let answer_kind = required_string(obj, "answerKind")?.to_string();
-    let canonical_name = optional_string_field(obj, "canonicalName")?;
+    let answer_kind = required_string(obj, "answer_kind")?.to_string();
+    let canonical_name = optional_string_field(obj, "canonical_name")?;
     let negative = obj.get("negative").cloned().unwrap_or(Value::Null);
     if !negative.is_null() && !negative.is_object() {
         return Err(DirectoryError::InvalidField(
@@ -124,13 +124,13 @@ pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryErro
             "must be an array".to_string(),
         ));
     }
-    let owner_ura = optional_string_field(obj, "ownerUra")?;
+    let owner_ura = optional_string_field(obj, "owner_ura")?;
     if let Some(owner_ura) = owner_ura.as_deref() {
-        validate_owner_ura(owner_ura, "ownerUra")?;
+        validate_owner_ura(owner_ura, "owner_ura")?;
     }
-    let ability_ura = optional_string_field(obj, "abilityUra")?;
+    let ability_ura = optional_string_field(obj, "ability_ura")?;
     if let Some(ability_ura) = ability_ura.as_deref() {
-        validate_ability_ura(ability_ura, "abilityUra")?;
+        validate_ability_ura(ability_ura, "ability_ura")?;
     }
     let query_name = resolve_query_name(obj, canonical_name.as_deref(), &negative);
 
@@ -142,15 +142,15 @@ pub(crate) fn project_resolved_ref(input: &Value) -> Result<Value, DirectoryErro
         "canonical_name": canonical_name,
         "owner_ura": owner_ura,
         "ability_ura": ability_ura,
-        "route_ura": optional_string_field(obj, "routeUra")?,
-        "next_hop": obj.get("nextHop").cloned().unwrap_or(Value::Null),
-        "selected_route": obj.get("selectedRoute").cloned().unwrap_or(Value::Null),
-        "route_candidates": obj.get("routeCandidates").cloned().unwrap_or_else(|| json!([])),
+        "route_ura": optional_string_field(obj, "route_ura")?,
+        "next_hop": obj.get("next_hop").cloned().unwrap_or(Value::Null),
+        "selected_route": obj.get("selected_route").cloned().unwrap_or(Value::Null),
+        "route_candidates": obj.get("route_candidates").cloned().unwrap_or_else(|| json!([])),
         "records": records,
         "negative": negative,
-        "release_profile": optional_string_field(obj, "releaseProfile")?,
+        "release_profile": optional_string_field(obj, "release_profile")?,
         "authority": obj.get("authority").cloned().unwrap_or(Value::Null),
-        "cache_policy": obj.get("cachePolicy").cloned().unwrap_or(Value::Null),
+        "cache_policy": obj.get("cache_policy").cloned().unwrap_or(Value::Null),
         "metadata": {
             "profile": DIRECTORY_PROFILE,
             "source": ABILITY_NAMESPACE_RESOLVE,
@@ -842,14 +842,14 @@ fn resolve_query_name(
     canonical_name: Option<&str>,
     negative: &Value,
 ) -> Option<String> {
-    optional_string_field(obj, "queryName")
+    optional_string_field(obj, "query_name")
         .ok()
         .flatten()
         .or_else(|| canonical_name.map(str::to_string))
         .or_else(|| {
             negative
                 .as_object()
-                .and_then(|negative| optional_string_field(negative, "queryName").ok().flatten())
+                .and_then(|negative| optional_string_field(negative, "query_name").ok().flatten())
         })
 }
 
@@ -1340,25 +1340,25 @@ mod tests {
     #[test]
     fn project_resolved_ref_preserves_final_route_answer() {
         let answer = json!({
-            "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
-            "canonicalName": "easynet:///r/example/device/dev-a",
-            "ownerUra": "easynet:///r/example/device/dev-a",
-            "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
-            "routeUra": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
-            "nextHop": {
-                "localDeviceAbility": {
-                    "deviceUra": "easynet:///r/example/device/dev-a",
-                    "dispatchName": "agent.list"
+            "answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+            "canonical_name": "easynet:///r/example/device/dev-a",
+            "owner_ura": "easynet:///r/example/device/dev-a",
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+            "route_ura": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
+            "next_hop": {
+                "local_device_ability": {
+                    "device_ura": "easynet:///r/example/device/dev-a",
+                    "dispatch_name": "agent.list"
                 }
             },
-            "selectedRoute": {
+            "selected_route": {
                 "reason": "ROUTE_REASON_LOCAL_DEVICE"
             },
-            "routeCandidates": [],
+            "route_candidates": [],
             "records": [],
-            "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
-            "authority": {"authorityUra": "easynet:///r/example/hub"},
-            "cachePolicy": {"ttlMs": 0}
+            "release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+            "authority": {"authority_ura": "easynet:///r/example/hub"},
+            "cache_policy": {"ttl_ms": 0}
         });
 
         let resolved = project_resolved_ref(&answer).unwrap();
@@ -1371,7 +1371,7 @@ mod tests {
             "easynet:///r/example/ability/device.dev-a.agent.list"
         );
         assert_eq!(
-            resolved["metadata"]["raw_answer"]["nextHop"]["localDeviceAbility"]["dispatchName"],
+            resolved["metadata"]["raw_answer"]["next_hop"]["local_device_ability"]["dispatch_name"],
             "agent.list"
         );
     }
@@ -1382,10 +1382,10 @@ mod tests {
             "ok": true,
             "terminal_state": "Completed",
             "output_json": {
-                "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
-                "canonicalName": "easynet:///r/example/device/dev-a",
-                "ownerUra": "easynet:///r/example/device/dev-a",
-                "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+                "canonical_name": "easynet:///r/example/device/dev-a",
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
                 "records": []
             }
         });
@@ -1403,15 +1403,15 @@ mod tests {
     #[test]
     fn project_resolved_ref_preserves_negative_answer() {
         let answer = json!({
-            "answerKind": "RESOLVE_ANSWER_KIND_NEGATIVE",
-            "nextHop": {"noRoute": {}},
+            "answer_kind": "RESOLVE_ANSWER_KIND_NEGATIVE",
+            "next_hop": {"no_route": {}},
             "records": [],
             "negative": {
                 "reason": "NEGATIVE_REASON_NXDOMAIN",
-                "queryName": "easynet:///r/example/device/missing",
+                "query_name": "easynet:///r/example/device/missing",
                 "detail": "owner is not online"
             },
-            "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL"
+            "release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL"
         });
 
         let resolved = project_resolved_ref(&answer).unwrap();
@@ -1425,18 +1425,18 @@ mod tests {
     }
 
     #[test]
-    fn project_resolved_ref_rejects_snake_case_provider_aliases() {
+    fn project_resolved_ref_rejects_legacy_provider_aliases() {
         let answer = json!({
-            "answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
-            "canonical_name": "easynet:///r/example/device/dev-a",
-            "owner_ura": "easynet:///r/example/device/dev-a",
-            "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+            "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+            "canonicalName": "easynet:///r/example/device/dev-a",
+            "ownerUra": "easynet:///r/example/device/dev-a",
+            "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
             "records": []
         });
 
         let err = project_resolved_ref(&answer).unwrap_err();
 
-        assert!(format!("{err}").contains("answerKind"));
+        assert!(format!("{err}").contains("answer_kind"));
     }
 
     #[test]
