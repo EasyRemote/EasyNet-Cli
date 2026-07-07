@@ -33,7 +33,7 @@ private let companionPackageId = "easynet.desktop.menubar"
 private let companionPackageVersion = "0.1.0"
 private let hotKeySignature = fourCharCode("ENCB")
 private let hotKeyIdValue: UInt32 = 1
-private let statusIconPointSize: CGFloat = 18
+private let statusIconPointSize = NSSize(width: 18, height: 18)
 
 struct ClipEntry: Decodable {
     let id: String
@@ -216,9 +216,9 @@ final class CompanionHeartbeatWriter {
             .appendingPathComponent("status.json", isDirectory: false)
     }
 
-    func write(daemon: DaemonRuntimeStatus) {
+    func write(daemon: DaemonRuntimeStatus, statusItem: CompanionStatusItemSnapshot? = nil) {
         let now = UInt64(Date().timeIntervalSince1970 * 1000)
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "schema_version": "1",
             "package_id": companionPackageId,
             "package_version": companionPackageVersion,
@@ -232,6 +232,9 @@ final class CompanionHeartbeatWriter {
                 "invocation_accepting": daemon.invocationAccepting,
             ],
         ]
+        if let statusItem {
+            payload["status_item"] = statusItem.asJsonObject()
+        }
         do {
             try FileManager.default.createDirectory(
                 at: statusURL.deletingLastPathComponent(),
@@ -257,6 +260,52 @@ final class CompanionHeartbeatWriter {
 
 enum CompanionProcessStart {
     static let startedAtUnixMs = UInt64(Date().timeIntervalSince1970 * 1000)
+}
+
+struct CompanionStatusItemSnapshot {
+    let title: String
+    let hasButton: Bool
+    let hasWindow: Bool
+    let windowVisible: Bool
+    let obscuredByNotch: Bool
+    let buttonFrame: NSRect
+    let windowFrame: NSRect?
+    let screenFrame: NSRect?
+    let auxiliaryTopLeftArea: NSRect?
+    let auxiliaryTopRightArea: NSRect?
+
+    func asJsonObject() -> [String: Any] {
+        var object: [String: Any] = [
+            "title": title,
+            "has_button": hasButton,
+            "has_window": hasWindow,
+            "window_visible": windowVisible,
+            "obscured_by_notch": obscuredByNotch,
+            "button_frame": rectObject(buttonFrame),
+        ]
+        if let windowFrame {
+            object["window_frame"] = rectObject(windowFrame)
+        }
+        if let screenFrame {
+            object["screen_frame"] = rectObject(screenFrame)
+        }
+        if let auxiliaryTopLeftArea {
+            object["auxiliary_top_left_area"] = rectObject(auxiliaryTopLeftArea)
+        }
+        if let auxiliaryTopRightArea {
+            object["auxiliary_top_right_area"] = rectObject(auxiliaryTopRightArea)
+        }
+        return object
+    }
+
+    private func rectObject(_ rect: NSRect) -> [String: Double] {
+        [
+            "x": rect.origin.x,
+            "y": rect.origin.y,
+            "width": rect.size.width,
+            "height": rect.size.height,
+        ]
+    }
 }
 
 final class ClipboardPanelController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
@@ -482,8 +531,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-
         panelController = ClipboardPanelController(store: store)
         installStatusItem()
         installHotKey()
@@ -523,6 +570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = item.button {
             button.image = statusImage()
+            button.title = ""
             button.imagePosition = .imageOnly
             button.imageScaling = .scaleProportionallyDown
             button.alignment = .center
@@ -549,6 +597,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Quit EasyNet Menu Bar", action: #selector(quit), keyEquivalent: "q"))
         statusMenu = menu
         item.menu = menu
+    }
+
+    private func statusImage() -> NSImage {
+        if let url = Bundle.main.url(forResource: "easynet-template", withExtension: "png"),
+           let image = NSImage(contentsOf: url)
+        {
+            image.size = statusIconPointSize
+            image.isTemplate = false
+            image.accessibilityDescription = appName
+            return image
+        }
+        let image = NSImage(size: statusIconPointSize, flipped: false) { rect in
+            NSColor.labelColor.setFill()
+            "E".draw(
+                in: rect.insetBy(dx: 3, dy: 1),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
+                    .foregroundColor: NSColor.labelColor,
+                ]
+            )
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = appName
+        return image
     }
 
     private func installHotKey() {
@@ -607,7 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateDaemonStatus() {
         let status = statusProbe.read()
         let running = status.running
-        heartbeat.write(daemon: status)
+        heartbeat.write(daemon: status, statusItem: statusItemSnapshot())
         daemonStatusItem?.title = running ? "Daemon: running" : "Daemon: stopped"
         statusItem?.button?.toolTip = running
             ? "EasyNet is running in the background"
@@ -615,83 +688,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.alphaValue = running ? 1.0 : 0.38
     }
 
-    private func statusImage() -> NSImage {
-        let size = NSSize(width: statusIconPointSize, height: statusIconPointSize)
-        let image = NSImage(size: size, flipped: false) { rect in
-            Self.drawEasyNetStatusGlyph(in: rect.insetBy(dx: 1.2, dy: 1.4))
-            return true
+    private func statusItemSnapshot() -> CompanionStatusItemSnapshot {
+        guard let button = statusItem?.button else {
+            return CompanionStatusItemSnapshot(
+                title: "",
+                hasButton: false,
+                hasWindow: false,
+                windowVisible: false,
+                obscuredByNotch: false,
+                buttonFrame: .zero,
+                windowFrame: nil,
+                screenFrame: nil,
+                auxiliaryTopLeftArea: nil,
+                auxiliaryTopRightArea: nil
+            )
         }
-        image.isTemplate = true
-        image.size = size
-        image.accessibilityDescription = appName
-        return image
+        let window = button.window
+        let notch = Self.notchObservation(for: window?.frame)
+        return CompanionStatusItemSnapshot(
+            title: button.title,
+            hasButton: true,
+            hasWindow: window != nil,
+            windowVisible: window?.isVisible ?? false,
+            obscuredByNotch: notch.obscured,
+            buttonFrame: button.frame,
+            windowFrame: window?.frame,
+            screenFrame: notch.screenFrame,
+            auxiliaryTopLeftArea: notch.leftArea,
+            auxiliaryTopRightArea: notch.rightArea
+        )
     }
 
-    private static func drawEasyNetStatusGlyph(in rect: NSRect) {
-        NSColor.black.setStroke()
-        NSColor.black.setFill()
-
-        let left = rect.minX + 3.1
-        let hubX = rect.minX + 5.5
-        let topY = rect.maxY - 3.2
-        let midY = rect.midY
-        let botY = rect.minY + 3.2
-        let topEnd = rect.maxX - 3.9
-        let midEnd = rect.maxX - 2.2
-        let botEnd = rect.maxX - 3.9
-
-        let circuits = NSBezierPath()
-        circuits.lineWidth = 1.85
-        circuits.lineCapStyle = .round
-        circuits.lineJoinStyle = .round
-        circuits.move(to: NSPoint(x: left, y: topY))
-        circuits.line(to: NSPoint(x: hubX, y: topY))
-        circuits.line(to: NSPoint(x: hubX + 2.4, y: midY))
-        circuits.line(to: NSPoint(x: hubX, y: botY))
-        circuits.line(to: NSPoint(x: left, y: botY))
-        circuits.move(to: NSPoint(x: hubX, y: topY))
-        circuits.curve(
-            to: NSPoint(x: topEnd, y: topY),
-            controlPoint1: NSPoint(x: hubX + 3.0, y: topY + 1.2),
-            controlPoint2: NSPoint(x: topEnd - 2.1, y: topY + 1.0)
-        )
-        circuits.move(to: NSPoint(x: hubX + 2.4, y: midY))
-        circuits.line(to: NSPoint(x: midEnd, y: midY))
-        circuits.move(to: NSPoint(x: hubX, y: botY))
-        circuits.curve(
-            to: NSPoint(x: botEnd, y: botY),
-            controlPoint1: NSPoint(x: hubX + 3.0, y: botY - 1.2),
-            controlPoint2: NSPoint(x: botEnd - 2.1, y: botY - 1.0)
-        )
-        circuits.stroke()
-
-        let nodeRadius: CGFloat = 1.45
-        [
-            NSPoint(x: topEnd, y: topY),
-            NSPoint(x: midEnd, y: midY),
-            NSPoint(x: botEnd, y: botY),
-        ].forEach { point in
-            NSBezierPath(
-                ovalIn: NSRect(
-                    x: point.x - nodeRadius,
-                    y: point.y - nodeRadius,
-                    width: nodeRadius * 2,
-                    height: nodeRadius * 2
-                )
-            ).fill()
+    private static func notchObservation(
+        for frame: NSRect?
+    ) -> (obscured: Bool, screenFrame: NSRect?, leftArea: NSRect?, rightArea: NSRect?) {
+        guard let frame,
+              let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) })
+        else {
+            return (false, nil, nil, nil)
         }
-
-        let spine = NSBezierPath()
-        spine.lineWidth = 1.35
-        spine.lineCapStyle = .round
-        spine.move(to: NSPoint(x: left, y: botY))
-        spine.curve(
-            to: NSPoint(x: left, y: topY),
-            controlPoint1: NSPoint(x: rect.minX + 0.1, y: rect.minY + 5.4),
-            controlPoint2: NSPoint(x: rect.minX + 0.1, y: rect.maxY - 5.4)
+        guard #available(macOS 12.0, *) else {
+            return (false, screen.frame, nil, nil)
+        }
+        let left = screen.auxiliaryTopLeftArea ?? .zero
+        let right = screen.auxiliaryTopRightArea ?? .zero
+        let hasNotch = screen.safeAreaInsets.top > 0 && (!left.isEmpty || !right.isEmpty)
+        let inVisibleMenuArea = left.intersects(frame) || right.intersects(frame)
+        return (
+            hasNotch && !inVisibleMenuArea,
+            screen.frame,
+            left.isEmpty ? nil : left,
+            right.isEmpty ? nil : right
         )
-        spine.stroke()
     }
+
 }
 
 private func compactTime(_ raw: String) -> String {
@@ -714,5 +764,6 @@ private func fourCharCode(_ string: String) -> FourCharCode {
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
+app.setActivationPolicy(.accessory)
 app.delegate = delegate
 app.run()

@@ -201,6 +201,10 @@ impl BuiltinPluginBinding {
         self.provider.expected_entrypoint()
     }
 
+    pub fn installable_package_root(&self) -> Option<PathBuf> {
+        self.provider.installable_package_root()
+    }
+
     pub fn enabled_env_var(&self) -> Option<&'static str> {
         self.provider.enabled_env_var()
     }
@@ -245,14 +249,16 @@ impl PluginPackage {
         let specs = binding.ability_specs();
         validate_builtin_specs(&manifest, &specs)?;
         let descriptors = builtin_descriptors(&manifest, &specs)?;
-        let root = Path::new(binding.manifest_path())
+        let source_root = Path::new(binding.manifest_path())
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
+        let root = binding.installable_package_root().unwrap_or(source_root);
+        let manifest_path = root.join("plugin.toml");
         let hash = hash_installable_surface(&root)?;
         Ok(Self {
             root,
-            manifest_path: PathBuf::from(binding.manifest_path()),
+            manifest_path,
             manifest,
             descriptors,
             hash,
@@ -786,6 +792,119 @@ layer = "control"
         };
 
         assert!(matches!(err, PluginHostError::BuiltinSpecMismatch { .. }));
+    }
+
+    #[test]
+    fn plugin_host_builtin_package_uses_provider_installable_root() {
+        struct MaterializedProvider {
+            manifest: &'static str,
+            root: PathBuf,
+        }
+
+        impl PluginProvider for MaterializedProvider {
+            fn package_id(&self) -> &'static str {
+                "test.desktop.menubar"
+            }
+
+            fn provider_kind(&self) -> PluginProviderKind {
+                PluginProviderKind::DesktopCompanion
+            }
+
+            fn manifest_body(&self) -> &'static str {
+                self.manifest
+            }
+
+            fn manifest_path(&self) -> &'static str {
+                "plugins/test-desktop/plugin.toml"
+            }
+
+            fn expected_entrypoint(&self) -> &'static str {
+                "dist/macos/Test.app"
+            }
+
+            fn installable_package_root(&self) -> Option<PathBuf> {
+                Some(self.root.clone())
+            }
+
+            fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+                Vec::new()
+            }
+
+            fn contribute(
+                &self,
+                _: &mut crate::daemon::plugins::PluginContributionBuilder,
+                _: PluginRuntimeLimits,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let materialized = tempfile::tempdir().expect("materialized root");
+        let manifest = r#"
+schema_version = "1"
+id = "test.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/macos/Test.app"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "Test Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/test.desktop.menubar/status.json"
+
+[companion.macos]
+bundle_id = "test.desktop.menubar"
+app_bundle = "dist/macos/Test.app"
+supervisor = "launch_agent"
+launch_agent_label = "test.desktop.menubar"
+session = "aqua"
+"#;
+        std::fs::write(materialized.path().join("plugin.toml"), manifest)
+            .expect("materialized manifest");
+        std::fs::create_dir_all(
+            materialized
+                .path()
+                .join("dist/macos/Test.app/Contents/MacOS"),
+        )
+        .expect("materialized app dir");
+        std::fs::write(
+            materialized
+                .path()
+                .join("dist/macos/Test.app/Contents/MacOS/Test"),
+            "binary",
+        )
+        .expect("materialized app binary");
+
+        let package = PluginPackage::from_builtin(BuiltinPluginBinding::new(
+            ProviderBackedBuiltinBinding::new(Arc::new(MaterializedProvider {
+                manifest: Box::leak(manifest.to_string().into_boxed_str()),
+                root: materialized.path().to_path_buf(),
+            })),
+        ))
+        .expect("builtin package");
+
+        assert_eq!(package.root(), materialized.path());
+        assert_eq!(
+            package.manifest_path(),
+            &materialized.path().join("plugin.toml")
+        );
+        assert!(package
+            .hash()
+            .as_str()
+            .eq(hash_installable_surface(materialized.path())
+                .unwrap()
+                .as_str()));
     }
 
     #[test]

@@ -24,6 +24,7 @@
 // - Daemon plugin host boundary, not product behavior.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::daemon::plugins::contribution::PluginContributionBuilder;
@@ -51,6 +52,9 @@ pub trait PluginProvider: Send + Sync {
     fn manifest_body(&self) -> &'static str;
     fn manifest_path(&self) -> &'static str;
     fn expected_entrypoint(&self) -> &'static str;
+    fn installable_package_root(&self) -> Option<PathBuf> {
+        None
+    }
     fn enabled_env_var(&self) -> Option<&'static str> {
         None
     }
@@ -86,6 +90,10 @@ impl ProviderBackedBuiltinBinding {
 
     pub fn expected_entrypoint(&self) -> &'static str {
         self.provider.expected_entrypoint()
+    }
+
+    pub fn installable_package_root(&self) -> Option<PathBuf> {
+        self.provider.installable_package_root()
     }
 
     pub fn enabled_env_var(&self) -> Option<&'static str> {

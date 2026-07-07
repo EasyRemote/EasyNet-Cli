@@ -125,6 +125,17 @@ impl PluginProvider for DesktopMenubarProvider {
         "dist/macos/EasyNetMenuBar.app"
     }
 
+    fn installable_package_root(&self) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            option_env!("EASYNET_DESKTOP_MENUBAR_PACKAGE_ROOT").map(PathBuf::from)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+
     fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
         Vec::new()
     }

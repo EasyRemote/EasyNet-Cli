@@ -53,6 +53,7 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
             ));
         };
         let target = installed_app_path(plan, app_bundle);
+        stop_companion_processes(plan);
         copy_dir_replacing(app_bundle, &target)?;
         Ok(CompanionActionReport::changed(format!(
             "installed app bundle at {}",
@@ -124,16 +125,35 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
     fn start(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         let plist = launch_agent_path(plan)?;
         let uid = current_uid();
-        let _ = Command::new("launchctl")
-            .arg("bootstrap")
-            .arg(format!("gui/{uid}"))
-            .arg(&plist)
-            .status();
         let label = launch_agent_label(plan)?;
+        stop_stale_companion_processes(plan);
+        let domain = format!("gui/{uid}");
+        let service = format!("{domain}/{label}");
+        let _ = Command::new("launchctl")
+            .arg("bootout")
+            .arg(&service)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let bootstrap = Command::new("launchctl")
+            .arg("bootstrap")
+            .arg(&domain)
+            .arg(&plist)
+            .status()
+            .map_err(|source| PluginHostError::WriteFailed {
+                path: PathBuf::from("launchctl"),
+                source,
+            })?;
+        if !bootstrap.success() {
+            return Err(PluginHostError::InvalidCompanionManifest {
+                id: plan.package_id.clone(),
+                reason: format!("launchctl bootstrap failed with {bootstrap}"),
+            });
+        }
         let status = Command::new("launchctl")
             .arg("kickstart")
             .arg("-k")
-            .arg(format!("gui/{uid}/{label}"))
+            .arg(&service)
             .status()
             .map_err(|source| PluginHostError::WriteFailed {
                 path: PathBuf::from("launchctl"),
@@ -156,19 +176,42 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
             .arg("bootout")
             .arg(format!("gui/{uid}/{label}"))
             .status();
+        stop_companion_processes(plan);
         Ok(CompanionActionReport::changed("requested LaunchAgent stop"))
     }
 
     fn supervisor_state(&self, plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
-        match launch_agent_path(plan) {
-            Ok(path) if path.exists() => CompanionSupervisorState::InstalledEnabled,
-            Ok(_) => CompanionSupervisorState::NotInstalled,
-            Err(_) => CompanionSupervisorState::InstallError,
-        }
+        let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
+            return CompanionSupervisorState::UnsupportedPlatform;
+        };
+        let installed_app = installed_app_path(plan, app_bundle);
+        let plist = match launch_agent_path(plan) {
+            Ok(path) => path,
+            Err(_) => return CompanionSupervisorState::InstallError,
+        };
+        supervisor_state_for_paths(plan, &installed_app, &plist)
     }
 
     fn observe(&self, plan: &DesktopCompanionPlan) -> CompanionObservation {
         observe_status_file_or_process(plan)
+    }
+}
+
+fn supervisor_state_for_paths(
+    plan: &DesktopCompanionPlan,
+    installed_app: &Path,
+    plist: &Path,
+) -> CompanionSupervisorState {
+    if !installed_app.exists() {
+        return CompanionSupervisorState::NotInstalled;
+    }
+    if !plist.exists() {
+        return CompanionSupervisorState::InstalledDisabled;
+    }
+    match launch_agent_points_at_plan(plist, plan) {
+        Ok(true) => CompanionSupervisorState::InstalledEnabled,
+        Ok(false) => CompanionSupervisorState::InstalledDisabled,
+        Err(_) => CompanionSupervisorState::EnableError,
     }
 }
 
@@ -184,7 +227,7 @@ pub(crate) fn render_launch_agent_plist(plan: &DesktopCompanionPlan) -> Result<S
             reason: "not a macOS companion plan".to_string(),
         });
     };
-    let executable = app_executable_path(&installed_app_path(plan, app_bundle));
+    let installed_app = installed_app_path(plan, app_bundle);
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -194,6 +237,8 @@ pub(crate) fn render_launch_agent_plist(plan: &DesktopCompanionPlan) -> Result<S
   <string>{}</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/usr/bin/open</string>
+    <string>-g</string>
     <string>{}</string>
   </array>
   <key>LimitLoadToSessionType</key>
@@ -206,7 +251,7 @@ pub(crate) fn render_launch_agent_plist(plan: &DesktopCompanionPlan) -> Result<S
 </plist>
 "#,
         xml_escape(launch_agent_label),
-        xml_escape(&executable.display().to_string())
+        xml_escape(&installed_app.display().to_string())
     ))
 }
 
@@ -269,11 +314,9 @@ fn app_executable_path(app_bundle: &Path) -> PathBuf {
     app_bundle.join("Contents/MacOS").join(stem)
 }
 
-fn expected_app_executable_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
+fn expected_app_bundle_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
     match &plan.spec {
-        PlatformCompanionSpec::Macos { app_bundle, .. } => {
-            Ok(app_executable_path(&installed_app_path(plan, app_bundle)))
-        }
+        PlatformCompanionSpec::Macos { app_bundle, .. } => Ok(installed_app_path(plan, app_bundle)),
         _ => Err(PluginHostError::InvalidCompanionManifest {
             id: plan.package_id.clone(),
             reason: "not a macOS companion plan".to_string(),
@@ -282,7 +325,7 @@ fn expected_app_executable_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> 
 }
 
 fn launch_agent_points_at_plan(plist: &Path, plan: &DesktopCompanionPlan) -> Result<bool> {
-    let expected = expected_app_executable_path(plan)?.display().to_string();
+    let expected = expected_app_bundle_path(plan)?.display().to_string();
     let body = std::fs::read_to_string(plist).map_err(|source| PluginHostError::ReadFailed {
         path: plist.to_path_buf(),
         source,
@@ -290,18 +333,65 @@ fn launch_agent_points_at_plan(plist: &Path, plan: &DesktopCompanionPlan) -> Res
     Ok(body.contains(&expected))
 }
 
+fn stop_stale_companion_processes(plan: &DesktopCompanionPlan) {
+    let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
+        return;
+    };
+    let expected = app_executable_path(&installed_app_path(plan, app_bundle))
+        .display()
+        .to_string();
+    let Some(process_name) = plan.spec.executable_name() else {
+        return;
+    };
+    for (pid, command) in find_processes_by_name(&process_name) {
+        if command.contains(&expected) {
+            continue;
+        }
+        let _ = Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+fn stop_companion_processes(plan: &DesktopCompanionPlan) {
+    let Some(process_name) = plan.spec.executable_name() else {
+        return;
+    };
+    for (pid, _) in find_processes_by_name(&process_name) {
+        let _ = Command::new("kill")
+            .arg(pid.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
 fn find_process_by_name(name: &str) -> Option<u64> {
+    find_processes_by_name(name)
+        .into_iter()
+        .next()
+        .map(|(pid, _)| pid)
+}
+
+fn find_processes_by_name(name: &str) -> Vec<(u64, String)> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,comm="])
         .output()
-        .ok()?;
+        .ok();
+    let Some(output) = output else {
+        return Vec::new();
+    };
     let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().find_map(|line| {
-        let mut parts = line.trim().splitn(2, char::is_whitespace);
-        let pid = parts.next()?.trim().parse::<u64>().ok()?;
-        let command = parts.next().unwrap_or_default();
-        command.contains(name).then_some(pid)
-    })
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.trim().splitn(2, char::is_whitespace);
+            let pid = parts.next()?.trim().parse::<u64>().ok()?;
+            let command = parts.next().unwrap_or_default().to_string();
+            command.contains(name).then_some((pid, command))
+        })
+        .collect()
 }
 
 fn current_uid() -> u32 {
@@ -333,7 +423,7 @@ mod tests {
     };
 
     #[test]
-    fn launch_agent_plist_points_to_app_executable_directly() {
+    fn launch_agent_plist_opens_installed_app_bundle() {
         let plan = DesktopCompanionPlan {
             package_id: "easynet.desktop.menubar".to_string(),
             package_version: "0.1.0".to_string(),
@@ -354,9 +444,11 @@ mod tests {
 
         let plist = render_launch_agent_plist(&plan).expect("plist");
 
-        assert!(plist.contains("Contents/MacOS/EasyNetMenuBar"));
+        assert!(plist.contains("/usr/bin/open"));
+        assert!(plist.contains("<string>-g</string>"));
+        assert!(plist.contains("EasyNetMenuBar.app"));
         assert!(plist.contains(".easynet/apps/easynet.desktop.menubar/0.1.0"));
-        assert!(!plist.contains("/usr/bin/open"));
+        assert!(!plist.contains("Contents/MacOS/EasyNetMenuBar"));
         assert!(plist.contains("LimitLoadToSessionType"));
     }
 
@@ -376,6 +468,45 @@ mod tests {
         )
         .expect("write other plist");
         assert!(!launch_agent_points_at_plan(&other, &plan).expect("no match"));
+    }
+
+    #[test]
+    fn supervisor_state_is_specific_to_installed_app_and_plist_target() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan = test_plan("0.1.0");
+        let installed_app = temp.path().join("EasyNetMenuBar.app");
+        let plist = temp.path().join("tech.silan.easynet.menubar.plist");
+
+        assert_eq!(
+            supervisor_state_for_paths(&plan, &installed_app, &plist),
+            CompanionSupervisorState::NotInstalled
+        );
+
+        std::fs::create_dir_all(&installed_app).expect("installed app");
+        assert_eq!(
+            supervisor_state_for_paths(&plan, &installed_app, &plist),
+            CompanionSupervisorState::InstalledDisabled
+        );
+
+        std::fs::write(
+            &plist,
+            render_launch_agent_plist(&test_plan("0.2.0")).expect("other plist"),
+        )
+        .expect("write mismatched plist");
+        assert_eq!(
+            supervisor_state_for_paths(&plan, &installed_app, &plist),
+            CompanionSupervisorState::InstalledDisabled
+        );
+
+        std::fs::write(
+            &plist,
+            render_launch_agent_plist(&plan).expect("matching plist"),
+        )
+        .expect("write matching plist");
+        assert_eq!(
+            supervisor_state_for_paths(&plan, &installed_app, &plist),
+            CompanionSupervisorState::InstalledEnabled
+        );
     }
 
     fn test_plan(version: &str) -> DesktopCompanionPlan {
