@@ -12,7 +12,7 @@ use super::planner::{DesktopCompanionPlan, PlatformCompanionSpec};
 use super::status::{
     CompanionObservation, CompanionObservedState, CompanionSessionStatus, CompanionSupervisorState,
 };
-use super::{companion_status_file, CompanionActionReport, DesktopCompanionSupervisor};
+use super::{CompanionActionReport, DesktopCompanionSupervisor};
 
 pub struct MacosDesktopCompanionSupervisor;
 
@@ -113,8 +113,9 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
                 source,
             })?;
         }
-        let status_file = companion_status_file(&plan.package_id);
-        let _ = std::fs::remove_file(status_file);
+        if let Some(status_file) = &plan.status_file {
+            let _ = std::fs::remove_file(status_file);
+        }
         Ok(CompanionActionReport::changed(
             "removed macOS companion artifacts",
         ))
@@ -228,8 +229,8 @@ fn observe_status_file_or_process(plan: &DesktopCompanionPlan) -> CompanionObser
 }
 
 fn read_status_file(plan: &DesktopCompanionPlan) -> Option<CompanionObservation> {
-    let path = companion_status_file(&plan.package_id);
-    CompanionStatusFileObserver::current().observe_path(plan, &path)
+    let path = plan.status_file.as_deref()?;
+    CompanionStatusFileObserver::current().observe_path(plan, path)
 }
 
 fn launch_agent_label(plan: &DesktopCompanionPlan) -> Result<&str> {

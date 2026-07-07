@@ -11,6 +11,7 @@ pub mod macos;
 pub mod planner;
 pub mod state_store;
 pub mod status;
+mod status_file;
 pub mod windows;
 
 use serde_json::json;
@@ -616,14 +617,6 @@ fn current_supervisor() -> Box<dyn DesktopCompanionSupervisor + Send + Sync> {
     }
 }
 
-pub fn companion_status_file(package_id: &str) -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".easynet/companions")
-        .join(package_id)
-        .join("status.json")
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -797,7 +790,7 @@ lifecycle = "user_session"
 boot_policy = "ensure_running_after_daemon_ready"
 stop_policy = "keep_running"
 health = "status_file"
-status_file = "state/easynet-menubar.status.json"
+status_file = "companions/test.desktop.menubar/status.json"
 
 [companion.macos]
 bundle_id = "tech.silan.easynet.menubar"

@@ -634,7 +634,7 @@ lifecycle = "user_session"
 boot_policy = "ensure_running_after_daemon_ready"
 stop_policy = "keep_running"
 health = "status_file"
-status_file = "state/easynet-menubar.status.json"
+status_file = "companions/easynet.desktop.menubar/status.json"
 
 [companion.macos]
 bundle_id = "tech.silan.easynet.menubar"

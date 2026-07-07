@@ -11,6 +11,8 @@ use crate::daemon::plugins::manifest::{
 };
 use crate::daemon::plugins::package::SharedPluginPackage;
 
+use super::status_file::CompanionStatusFilePath;
+
 /// Platform-specific executable and supervisor declaration selected from a
 /// `desktop_companion` package manifest.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,9 +133,9 @@ impl DesktopCompanionPlanner {
             boot_policy: companion.boot_policy(),
             stop_policy: companion.stop_policy(),
             health: companion.health(),
-            status_file: companion
-                .status_file()
-                .map(|status_file| package.root().join(status_file)),
+            status_file: companion.status_file().map(|status_file| {
+                CompanionStatusFilePath::resolve(package.root(), status_file).into_path_buf()
+            }),
         })
     }
 }
@@ -154,5 +156,73 @@ pub fn current_platform() -> &'static str {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         "unknown"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::daemon::plugins::package::PluginPackage;
+
+    use super::*;
+
+    #[test]
+    fn planner_resolves_manifest_status_file_into_plan() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+
+        let plan = DesktopCompanionPlanner::new("macos")
+            .plan_package(&package)
+            .expect("plan");
+
+        let status_file = plan.status_file.expect("status file");
+        assert!(status_file.ends_with("companions/easynet.desktop.menubar/status.json"));
+        assert!(!status_file.starts_with(root.path()));
+    }
+
+    fn write_companion_package(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS"))
+            .expect("app bundle dir");
+        std::fs::write(
+            root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS/EasyNetMenuBar"),
+            "",
+        )
+        .expect("app executable");
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/easynet.desktop.menubar/status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect("manifest");
     }
 }

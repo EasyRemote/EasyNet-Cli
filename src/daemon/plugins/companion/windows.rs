@@ -12,7 +12,7 @@ use super::planner::{DesktopCompanionPlan, PlatformCompanionSpec};
 use super::status::{
     CompanionObservation, CompanionObservedState, CompanionSessionStatus, CompanionSupervisorState,
 };
-use super::{companion_status_file, CompanionActionReport, DesktopCompanionSupervisor};
+use super::{CompanionActionReport, DesktopCompanionSupervisor};
 
 pub struct WindowsDesktopCompanionSupervisor;
 
@@ -141,7 +141,9 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                 })?;
             }
         }
-        let _ = std::fs::remove_file(companion_status_file(&plan.package_id));
+        if let Some(status_file) = &plan.status_file {
+            let _ = std::fs::remove_file(status_file);
+        }
         Ok(CompanionActionReport::changed(
             "removed Windows companion state",
         ))
@@ -207,10 +209,12 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     }
 
     fn observe(&self, plan: &DesktopCompanionPlan) -> CompanionObservation {
-        let path = companion_status_file(&plan.package_id);
-        if let Some(observation) = CompanionStatusFileObserver::current().observe_path(plan, &path)
-        {
-            return observation;
+        if let Some(path) = plan.status_file.as_deref() {
+            if let Some(observation) =
+                CompanionStatusFileObserver::current().observe_path(plan, path)
+            {
+                return observation;
+            }
         }
         if let PlatformCompanionSpec::Windows { exe, .. } = &plan.spec {
             if let Some(pid) = find_windows_process_by_image(exe) {
