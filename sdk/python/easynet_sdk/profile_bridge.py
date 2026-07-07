@@ -654,7 +654,7 @@ def _admin_result_json(
             "profile": _ADMIN_PROFILE,
             "kind": kind,
             "operation": operation.value,
-            "state": str(raw.get("state") or raw.get("status") or "ok"),
+            "state": str(raw.get("state") or "ok"),
             "agent_ura": _optional_string(
                 raw.get("agent_ura"), "agent_ura", _invalid_admin
             ),
@@ -703,11 +703,11 @@ def _device_session_page_json(response: Mapping[str, object]) -> bytes:
         {
             "profile": _ADMIN_PROFILE,
             "kind": "device_sessions",
-            "state": str(raw.get("state") or raw.get("status") or "ok"),
+            "state": str(raw.get("state") or "ok"),
             "items": [
                 _device_session(row, source=_SESSION_LIST, request={}) for row in rows
             ],
-            "next_cursor": raw.get("next_cursor") or raw.get("nextCursor"),
+            "next_cursor": raw.get("next_cursor"),
             "metadata": {
                 **_mapping_or_empty(raw.get("metadata")),
                 "profile": _ADMIN_PROFILE,
@@ -736,9 +736,7 @@ def _device_session(
     return {
         "profile": _ADMIN_PROFILE,
         "kind": "device_session",
-        "session_id": _first_admin_string(
-            raw, "session_id", "sessionId", "id", "session"
-        ),
+        "session_id": _first_admin_string(raw, "session_id"),
         "device_ura": _first_admin_string_with_default(
             raw,
             (
@@ -747,15 +745,13 @@ def _device_session(
                 else ""
             ),
             "device_ura",
-            "deviceUra",
         ),
         "hub_ura": _first_admin_string_with_default(
             raw,
             _required_admin_string(request, "hub_ura") if "hub_ura" in request else "",
             "hub_ura",
-            "hubUra",
         ),
-        "state": str(raw.get("state") or raw.get("status") or "active"),
+        "state": str(raw.get("state") or "active"),
         "session_kind": _first_admin_string_with_default(
             raw,
             (
@@ -764,21 +760,13 @@ def _device_session(
                 else ""
             ),
             "session_kind",
-            "sessionKind",
-            "kind",
         ),
         "created_unix_ms": _positive_admin_int(
-            raw.get("created_unix_ms")
-            or raw.get("createdUnixMs")
-            or raw.get("created_at_ms"),
+            raw.get("created_unix_ms"),
             "created_unix_ms",
         ),
         "expires_unix_ms": _non_negative_admin_int(
-            raw.get("expires_unix_ms")
-            or raw.get("expiresUnixMs")
-            or raw.get("expires_at_ms")
-            or request.get("expires_unix_ms")
-            or 0,
+            raw.get("expires_unix_ms") or request.get("expires_unix_ms") or 0,
             "expires_unix_ms",
         ),
         "metadata": {
@@ -800,21 +788,20 @@ def _pairing_preflight_json(
         {
             "profile": _ADMIN_PROFILE,
             "kind": "pairing_preflight",
-            "state": str(raw.get("state") or raw.get("status") or "unknown"),
+            "state": str(raw.get("state") or "unknown"),
             "hub_ura": _first_admin_string_with_default(
-                raw, _required_admin_string(request, "hub_ura"), "hub_ura", "hubUra"
+                raw, _required_admin_string(request, "hub_ura"), "hub_ura"
             ),
             "device_ura": _first_admin_string_with_default(
                 raw,
                 _required_admin_string(request, "device_ura"),
                 "device_ura",
-                "deviceUra",
             ),
             "pairing_required": _admin_bool(raw.get("pairing_required"), fallback=True),
             "trust_ready": _admin_bool(raw.get("trust_ready"), fallback=False),
             "scopes": list(
                 _string_array(
-                    raw.get("scopes") or raw.get("requested_scopes"), "scopes"
+                    raw.get("scopes"), "scopes"
                 )
             ),
             "metadata": {
@@ -837,28 +824,22 @@ def _pairing_token_json(
         {
             "profile": _ADMIN_PROFILE,
             "kind": "pairing_token",
-            "token_id": _first_admin_string(raw, "token_id", "tokenId", "id"),
-            "token": _first_admin_string(raw, "token", "pairing_token", "pairingToken"),
+            "token_id": _first_admin_string(raw, "token_id"),
+            "token": _first_admin_string(raw, "token"),
             "hub_ura": _first_admin_string_with_default(
-                raw, _required_admin_string(request, "hub_ura"), "hub_ura", "hubUra"
+                raw, _required_admin_string(request, "hub_ura"), "hub_ura"
             ),
             "device_ura": _first_admin_string_with_default(
                 raw,
                 _required_admin_string(request, "device_ura"),
                 "device_ura",
-                "deviceUra",
             ),
-            "state": str(raw.get("state") or raw.get("status") or "issued"),
+            "state": str(raw.get("state") or "issued"),
             "expires_unix_ms": _positive_admin_int(
-                raw.get("expires_unix_ms")
-                or raw.get("expiresUnixMs")
-                or raw.get("expires_at_ms")
-                or request.get("expires_unix_ms"),
+                raw.get("expires_unix_ms") or request.get("expires_unix_ms"),
                 "expires_unix_ms",
             ),
-            "scopes": list(
-                _string_array(raw.get("scopes") or raw.get("granted_scopes"), "scopes")
-            ),
+            "scopes": list(_string_array(raw.get("scopes"), "scopes")),
             "metadata": {
                 **_mapping_or_empty(raw.get("metadata")),
                 "profile": _ADMIN_PROFILE,
@@ -879,32 +860,23 @@ def _device_credential_json(
         {
             "profile": _ADMIN_PROFILE,
             "kind": "device_credential",
-            "credential_id": _first_admin_string(
-                raw, "credential_id", "credentialId", "id"
-            ),
+            "credential_id": _first_admin_string(raw, "credential_id"),
             "device_ura": _first_admin_string_with_default(
                 raw,
                 _required_admin_string(request, "device_ura"),
                 "device_ura",
-                "deviceUra",
             ),
-            "hub_ura": _first_admin_string(raw, "hub_ura", "hubUra"),
-            "state": str(raw.get("state") or raw.get("status") or "active"),
+            "hub_ura": _first_admin_string(raw, "hub_ura"),
+            "state": str(raw.get("state") or "active"),
             "issued_unix_ms": _positive_admin_int(
-                raw.get("issued_unix_ms")
-                or raw.get("issuedUnixMs")
-                or raw.get("created_unix_ms"),
+                raw.get("issued_unix_ms"),
                 "issued_unix_ms",
             ),
             "expires_unix_ms": _positive_admin_int(
-                raw.get("expires_unix_ms")
-                or raw.get("expiresUnixMs")
-                or raw.get("expires_at_ms"),
+                raw.get("expires_unix_ms"),
                 "expires_unix_ms",
             ),
-            "scopes": list(
-                _string_array(raw.get("scopes") or raw.get("granted_scopes"), "scopes")
-            ),
+            "scopes": list(_string_array(raw.get("scopes"), "scopes")),
             "metadata": {
                 **_mapping_or_empty(raw.get("metadata")),
                 "profile": _ADMIN_PROFILE,
@@ -933,26 +905,19 @@ def _credential_verification_json(
                 raw,
                 _required_admin_string(request, "credential_id"),
                 "credential_id",
-                "credentialId",
-                "id",
             ),
             "device_ura": _first_admin_string_with_default(
                 raw,
                 _required_admin_string(request, "device_ura"),
                 "device_ura",
-                "deviceUra",
             ),
             "hub_ura": _first_admin_string_with_default(
-                raw, _required_admin_string(request, "hub_ura"), "hub_ura", "hubUra"
+                raw, _required_admin_string(request, "hub_ura"), "hub_ura"
             ),
             "method": (
-                _first_admin_string(
-                    raw, "method", "verification_method", "verificationMethod"
-                )
+                _first_admin_string(raw, "method")
                 if _admin_bool(raw.get("verified"), fallback=False)
-                else _first_admin_optional_string(
-                    raw, "method", "verification_method", "verificationMethod"
-                )
+                else _first_admin_optional_string(raw, "method")
                 or ""
             ),
             "metadata": {

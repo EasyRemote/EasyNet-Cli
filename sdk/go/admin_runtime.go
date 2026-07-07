@@ -557,11 +557,11 @@ func projectAdminAgentPage(raw []byte) ([]byte, error) {
 			return nil, invalidProfilePayload(adminGatewayProfile, "agent row must be an object", nil)
 		}
 		items = append(items, map[string]any{
-			"name":       firstStringFromMap(obj, "name", "id"),
-			"agent_ura":  firstStringPtr(firstStringFromMap(obj, "agent_ura", "agentUra", "ura")),
-			"owner_ura":  firstStringPtr(firstStringFromMap(obj, "owner_ura", "ownerUra")),
-			"device_ura": firstStringPtr(firstStringFromMap(obj, "device_ura", "deviceUra")),
-			"state":      firstNonEmpty(firstStringFromMap(obj, "state", "status"), "unknown"),
+			"name":       firstStringFromMap(obj, "name"),
+			"agent_ura":  firstStringPtr(firstStringFromMap(obj, "agent_ura")),
+			"owner_ura":  firstStringPtr(firstStringFromMap(obj, "owner_ura")),
+			"device_ura": firstStringPtr(firstStringFromMap(obj, "device_ura")),
+			"state":      firstNonEmpty(firstStringFromMap(obj, "state"), "unknown"),
 			"runtime":    firstNonEmpty(firstStringFromMap(obj, "runtime"), "daemon"),
 			"model":      firstStringPtr(firstStringFromMap(obj, "model")),
 			"label":      firstStringPtr(firstStringFromMap(obj, "label")),
@@ -594,7 +594,7 @@ func projectAdminDeviceSessionPage(raw []byte) ([]byte, error) {
 		"kind":        "device_sessions",
 		"state":       firstNonEmpty(firstStringFromMap(payload, "state"), "ok"),
 		"items":       rows,
-		"next_cursor": firstValue(payload, "next_cursor", "nextCursor"),
+		"next_cursor": firstValue(payload, "next_cursor"),
 		"metadata": map[string]any{
 			"profile": adminGatewayProfile,
 			"source":  adminAbilitySessionList,
@@ -621,13 +621,13 @@ func projectAdminDeviceSession(raw []byte, request CreateDeviceSessionRequest) (
 	session := map[string]any{
 		"profile":         adminGatewayProfile,
 		"kind":            "device_session",
-		"session_id":      firstNonEmpty(firstStringFromMap(payload, "session_id", "sessionId", "id"), firstStringFromMap(payload, "session")),
-		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
-		"hub_ura":         firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
-		"state":           firstNonEmpty(firstStringFromMap(payload, "state", "status"), "active"),
-		"session_kind":    firstNonEmpty(firstStringFromMap(payload, "session_kind", "sessionKind", "kind"), strings.TrimSpace(request.SessionKind)),
-		"created_unix_ms": firstAdminNumericInt64(payload, "created_unix_ms", "createdUnixMs", "created_at_ms"),
-		"expires_unix_ms": firstNonZeroAdminInt64(firstAdminNumericInt64(payload, "expires_unix_ms", "expiresUnixMs", "expires_at_ms"), request.ExpiresUnixMS),
+		"session_id":      firstStringFromMap(payload, "session_id"),
+		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura"), strings.TrimSpace(request.DeviceURA)),
+		"hub_ura":         firstNonEmpty(firstStringFromMap(payload, "hub_ura"), strings.TrimSpace(request.HubURA)),
+		"state":           firstNonEmpty(firstStringFromMap(payload, "state"), "active"),
+		"session_kind":    firstNonEmpty(firstStringFromMap(payload, "session_kind"), strings.TrimSpace(request.SessionKind)),
+		"created_unix_ms": firstAdminNumericInt64(payload, "created_unix_ms"),
+		"expires_unix_ms": firstNonZeroAdminInt64(firstAdminNumericInt64(payload, "expires_unix_ms"), request.ExpiresUnixMS),
 		"metadata": map[string]any{
 			"profile":    adminGatewayProfile,
 			"source":     adminAbilitySessionCreate,
@@ -655,12 +655,12 @@ func projectPairingPreflight(raw []byte, request PairingPreflightRequest) ([]byt
 	preflight := map[string]any{
 		"profile":          adminGatewayProfile,
 		"kind":             "pairing_preflight",
-		"state":            firstNonEmpty(firstStringFromMap(payload, "state", "status"), "unknown"),
-		"hub_ura":          firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
-		"device_ura":       firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
+		"state":            firstNonEmpty(firstStringFromMap(payload, "state"), "unknown"),
+		"hub_ura":          firstNonEmpty(firstStringFromMap(payload, "hub_ura"), strings.TrimSpace(request.HubURA)),
+		"device_ura":       firstNonEmpty(firstStringFromMap(payload, "device_ura"), strings.TrimSpace(request.DeviceURA)),
 		"pairing_required": boolArg(payload, "pairing_required"),
 		"trust_ready":      boolArg(payload, "trust_ready"),
-		"scopes":           adminRequiredStringArray(payload, "scopes", "requested_scopes", "granted_scopes"),
+		"scopes":           adminRequiredStringArray(payload, "scopes"),
 		"metadata": map[string]any{
 			"profile":    adminGatewayProfile,
 			"source":     adminAbilityPairingPreflight,
@@ -681,13 +681,13 @@ func projectPairingToken(raw []byte, request CreatePairingRequest) ([]byte, erro
 	token := map[string]any{
 		"profile":         adminGatewayProfile,
 		"kind":            "pairing_token",
-		"token_id":        firstStringFromMap(payload, "token_id", "tokenId", "id"),
-		"token":           firstStringFromMap(payload, "token", "pairing_token", "pairingToken"),
-		"hub_ura":         firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
-		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
-		"state":           firstNonEmpty(firstStringFromMap(payload, "state", "status"), "issued"),
-		"expires_unix_ms": firstAdminNumericInt64(payload, "expires_unix_ms", "expiresUnixMs", "expires_at_ms"),
-		"scopes":          adminRequiredStringArray(payload, "scopes", "granted_scopes"),
+		"token_id":        firstStringFromMap(payload, "token_id"),
+		"token":           firstStringFromMap(payload, "token"),
+		"hub_ura":         firstNonEmpty(firstStringFromMap(payload, "hub_ura"), strings.TrimSpace(request.HubURA)),
+		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura"), strings.TrimSpace(request.DeviceURA)),
+		"state":           firstNonEmpty(firstStringFromMap(payload, "state"), "issued"),
+		"expires_unix_ms": firstAdminNumericInt64(payload, "expires_unix_ms"),
+		"scopes":          adminRequiredStringArray(payload, "scopes"),
 		"metadata": map[string]any{
 			"profile":    adminGatewayProfile,
 			"source":     adminAbilityPairingCreate,
@@ -708,13 +708,13 @@ func projectDeviceCredential(raw []byte, request ValidatePairingRequest) ([]byte
 	credential := map[string]any{
 		"profile":         adminGatewayProfile,
 		"kind":            "device_credential",
-		"credential_id":   firstStringFromMap(payload, "credential_id", "credentialId", "id"),
-		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
-		"hub_ura":         firstStringFromMap(payload, "hub_ura", "hubUra"),
-		"state":           firstNonEmpty(firstStringFromMap(payload, "state", "status"), "active"),
-		"issued_unix_ms":  firstAdminNumericInt64(payload, "issued_unix_ms", "issuedUnixMs", "created_unix_ms"),
-		"expires_unix_ms": firstAdminNumericInt64(payload, "expires_unix_ms", "expiresUnixMs", "expires_at_ms"),
-		"scopes":          adminRequiredStringArray(payload, "scopes", "granted_scopes"),
+		"credential_id":   firstStringFromMap(payload, "credential_id"),
+		"device_ura":      firstNonEmpty(firstStringFromMap(payload, "device_ura"), strings.TrimSpace(request.DeviceURA)),
+		"hub_ura":         firstStringFromMap(payload, "hub_ura"),
+		"state":           firstNonEmpty(firstStringFromMap(payload, "state"), "active"),
+		"issued_unix_ms":  firstAdminNumericInt64(payload, "issued_unix_ms"),
+		"expires_unix_ms": firstAdminNumericInt64(payload, "expires_unix_ms"),
+		"scopes":          adminRequiredStringArray(payload, "scopes"),
 		"metadata": map[string]any{
 			"profile":    adminGatewayProfile,
 			"source":     adminAbilityPairingValidate,
@@ -736,10 +736,10 @@ func projectDeviceCredentialVerification(raw []byte, request VerifyDeviceCredent
 		"profile":       adminGatewayProfile,
 		"kind":          "device_credential_verification",
 		"verified":      boolArg(payload, "verified"),
-		"credential_id": firstNonEmpty(firstStringFromMap(payload, "credential_id", "credentialId", "id"), strings.TrimSpace(request.CredentialID)),
-		"device_ura":    firstNonEmpty(firstStringFromMap(payload, "device_ura", "deviceUra"), strings.TrimSpace(request.DeviceURA)),
-		"hub_ura":       firstNonEmpty(firstStringFromMap(payload, "hub_ura", "hubUra"), strings.TrimSpace(request.HubURA)),
-		"method":        firstStringFromMap(payload, "method", "verification_method", "verificationMethod"),
+		"credential_id": firstNonEmpty(firstStringFromMap(payload, "credential_id"), strings.TrimSpace(request.CredentialID)),
+		"device_ura":    firstNonEmpty(firstStringFromMap(payload, "device_ura"), strings.TrimSpace(request.DeviceURA)),
+		"hub_ura":       firstNonEmpty(firstStringFromMap(payload, "hub_ura"), strings.TrimSpace(request.HubURA)),
+		"method":        firstStringFromMap(payload, "method"),
 		"metadata": map[string]any{
 			"profile":    adminGatewayProfile,
 			"source":     adminAbilityCredentialVerify,
@@ -765,10 +765,10 @@ func projectAdminLifecycleResult(raw []byte, operation string, deviceURA *string
 	if boolArg(payload, "runtime_not_ready") || boolArg(payload, "runtime_catalog_not_ready") {
 		state = "not_ready"
 	}
-	agentURA := firstStringPtr(firstStringFromMap(payload, "agent_ura", "agentUra"))
+	agentURA := firstStringPtr(firstStringFromMap(payload, "agent_ura"))
 	resolvedDeviceURA := deviceURA
 	if resolvedDeviceURA == nil {
-		resolvedDeviceURA = firstStringPtr(firstStringFromMap(payload, "device_ura", "deviceUra"))
+		resolvedDeviceURA = firstStringPtr(firstStringFromMap(payload, "device_ura"))
 	}
 	result := map[string]any{
 		"profile":                   adminGatewayProfile,

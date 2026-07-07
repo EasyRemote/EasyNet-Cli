@@ -222,6 +222,44 @@ func TestAdminRuntimeTransportCreatesAndDeletesDeviceSessionThroughRuntime(t *te
 	}
 }
 
+func TestAdminRuntimeTransportRejectsLegacyDeviceSessionAliases(t *testing.T) {
+	identity, err := NewIdentityClient(newAdminRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtimeTransport := &compatibilityRuntimeInvokeTransport{outputJSON: `{
+		"sessionId": "dev-session-1",
+		"deviceUra": "easynet:///r/example/device/dev-a",
+		"hubUra": "easynet:///r/example/hub/main",
+		"status": "active",
+		"sessionKind": "remote_desktop",
+		"createdUnixMs": 1767225600000,
+		"expiresUnixMs": 1893456000000
+	}`}
+	runtime, err := NewRuntimeClient(runtimeTransport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAdminClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeAdminClient: %v", err)
+	}
+
+	_, err = client.CreateDeviceSession(context.Background(), CreateDeviceSessionRequest{
+		AdminCarrierBase: adminBaseForTest(),
+		DeviceURA:        "easynet:///r/example/device/dev-a",
+		HubURA:           "easynet:///r/example/hub/main",
+		SessionKind:      "remote_desktop",
+		ExpiresUnixMS:    1893456000000,
+	})
+	if err == nil {
+		t.Fatalf("CreateDeviceSession accepted legacy alias-only output")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestAdminRuntimeTransportRunsHubAndPairingLifecycleThroughRuntime(t *testing.T) {
 	identityTransport := newAdminRuntimeIdentityTransport()
 	identity, err := NewIdentityClient(identityTransport)

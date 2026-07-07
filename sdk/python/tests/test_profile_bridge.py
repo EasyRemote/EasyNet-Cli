@@ -222,6 +222,28 @@ class DaemonProfileBridgeTests(unittest.TestCase):
         self.assertIn("canonical admin_gateway", caught.exception.message)
         self.assertEqual(dispatcher.calls, [("gateway.status", {})])
 
+    def test_admin_profile_rejects_legacy_device_session_aliases(self) -> None:
+        dispatcher = LegacyAdminAliasDispatcher()
+        bridge = DaemonProfileBridge(
+            dispatcher, nonce_factory=lambda: bytes(range(1, 17))
+        )
+        base = bridge.admin_base()
+
+        with self.assertRaises(SDKError) as caught:
+            bridge.admin_facade()._client.create_device_session(  # noqa: SLF001
+                CreateDeviceSessionRequest(
+                    base,
+                    "easynet:///r/example/device/dev-a",
+                    "easynet:///r/example/hub/main",
+                    "remote_desktop",
+                    1893456000000,
+                )
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("session_id", caught.exception.message)
+        self.assertEqual(dispatcher.calls[0][0], "session.create")
+
     def test_carrier_base_uses_dispatcher_device_and_sdk_nonce(self) -> None:
         bridge = DaemonProfileBridge(
             MemoryProfileDispatcher(), nonce_factory=lambda: bytes(range(1, 17))
@@ -504,6 +526,24 @@ class RawGatewayStatusDispatcher(MemoryProfileDispatcher):
                 "ready": True,
                 "running": True,
                 "state": "ready",
+            }
+        raise AssertionError(f"unexpected ability {ability}")
+
+
+class LegacyAdminAliasDispatcher(MemoryProfileDispatcher):
+    def invoke_system_ability(
+        self, ability: str, **kwargs: object
+    ) -> Mapping[str, object]:
+        self.calls.append((ability, dict(kwargs)))
+        if ability == "session.create":
+            return {
+                "sessionId": "dev-session-1",
+                "deviceUra": kwargs["device_ura"],
+                "hubUra": kwargs["hub_ura"],
+                "status": "active",
+                "sessionKind": kwargs["session_kind"],
+                "createdUnixMs": 1767225600000,
+                "expiresUnixMs": kwargs["expires_unix_ms"],
             }
         raise AssertionError(f"unexpected ability {ability}")
 
