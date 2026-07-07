@@ -2,7 +2,7 @@
 // ============================
 //
 // File: src/cli/skill_install.rs
-// Description: `easynet skill-install` — install EasyNet skill templates into
+// Description: `easynet mcp skill-install` — install EasyNet skill templates into
 //              Claude Code's ~/.claude/skills/ directory.
 //
 // Skills are bundled in the `skills/` directory of the EasyNet-Cli repo.
@@ -92,7 +92,7 @@ fn install_to(
         let skill_path = skills_src.join(name);
         anyhow::ensure!(
             skill_path.join("SKILL.md").exists(),
-            "bundled skill '{}' not found. Run 'easynet skill-install --list' to see available skills.",
+            "bundled skill '{}' not found. Run 'easynet mcp skill-install --list' to see available skills.",
             name
         );
         vec![name.clone()]
@@ -232,7 +232,7 @@ fn list_skills(dir: &Path) -> anyhow::Result<()> {
         eprintln!("  {} — {}", style(name).cyan(), desc);
     }
     eprintln!();
-    eprintln!("Install with: easynet skill-install [name|all]");
+    eprintln!("Install with: easynet mcp skill-install [name|all]");
     Ok(())
 }
 

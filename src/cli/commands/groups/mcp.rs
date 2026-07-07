@@ -19,13 +19,11 @@
 // interpretation C: a device is a hosting substrate, and the MCP server
 // is one of those substrate-local processes).
 //
-// `install` and `skill-install` were originally top-level commands
-// (`easynet mcp-install`, `easynet skill-install`). Pre-release we
-// consolidate them under `mcp` so the noun-verb shape matches every
-// other group (`device join`, `ability deploy`, `agent add`, …) and so
-// `easynet mcp --help` is a single place to discover the surface.
-// The legacy flat aliases stay (hidden) until the next minor release —
-// see `cli/mod.rs` for the deprecation hints.
+// `install` and `skill-install` live only under `mcp` so the noun-verb
+// shape matches every other group (`device join`, `ability deploy`,
+// `agent add`, …) and so `easynet mcp --help` is a single place to
+// discover the surface. No top-level spellings are registered for
+// these verbs.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

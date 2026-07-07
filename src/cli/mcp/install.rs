@@ -1,8 +1,8 @@
 // EasyNet CLI
 // ===========
 //
-// File: src/cli/mcp_install.rs
-// Description: `easynet mcp-install` — install/update MCP server entries for Claude Code / Codex.
+// File: src/cli/mcp/install.rs
+// Description: `easynet mcp install` — install/update MCP server entries for Claude Code / Codex.
 //
 // Goals:
 // - One command to add an `mcpServers.<name>` entry pointing at `easynet mcp serve`.
@@ -141,7 +141,7 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
     } else {
         output::warn("EASYNET_DENDRITE_BRIDGE_LIB not configured for this MCP server.");
         output::step("If MCP tools fail to connect, re-run with:");
-        output::step("  easynet mcp-install ... --bridge-lib /abs/path/to/libaxon_dendrite_bridge.(dylib|so|dll)");
+        output::step("  easynet mcp install ... --bridge-lib /abs/path/to/libaxon_dendrite_bridge.(dylib|so|dll)");
     }
     if let Some(node) = args.bound_node.as_deref() {
         output::detail("bound_node", node);

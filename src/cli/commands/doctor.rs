@@ -479,7 +479,7 @@ fn check_mcp_clients() -> Check {
             name: "mcp clients".to_string(),
             status: CheckStatus::Warn,
             detail: "no AI client wired up".to_string(),
-            hint: Some("Run 'easynet mcp-install' to register EasyNet with Claude Code/Codex."),
+            hint: Some("Run 'easynet mcp install' to register EasyNet with Claude Code/Codex."),
         }
     } else {
         Check {

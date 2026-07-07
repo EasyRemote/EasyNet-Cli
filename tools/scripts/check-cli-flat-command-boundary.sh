@@ -48,4 +48,12 @@ if [[ -n "$retired_agent_aliases" ]]; then
 $retired_agent_aliases"
 fi
 
+retired_mcp_flat_aliases="$(
+    grep -RInE 'easynet mcp-install|easynet skill-install|legacy flat aliases stay|hidden flat aliases|deprecation hints' src/cli 2>/dev/null || true
+)"
+if [[ -n "$retired_mcp_flat_aliases" ]]; then
+    fail "retired MCP flat aliases must stay removed from active CLI guidance:
+$retired_mcp_flat_aliases"
+fi
+
 echo "check-cli-flat-command-boundary: ok"

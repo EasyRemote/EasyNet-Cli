@@ -71,4 +71,24 @@ run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired agent discuss alias should exit 1 (got $rc)"
 
+# Reintroducing retired flat MCP command guidance must fail. The latest
+# surface is `easynet mcp install` and `easynet mcp skill-install`.
+SB="$(make_sandbox)"
+cat >> "$SB/src/cli/mcp/install.rs" <<'RS'
+// Retry with: easynet mcp-install --bridge-lib /abs/path/to/lib.
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired mcp-install guidance should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >> "$SB/src/cli/commands/skill_install.rs" <<'RS'
+// Install with: easynet skill-install all.
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired skill-install guidance should exit 1 (got $rc)"
+
 echo "test_check_cli_flat_command_boundary.sh: all cases passed"
