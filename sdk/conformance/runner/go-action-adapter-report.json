@@ -512,6 +512,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_companion/control",
+      "profile": "runtime_control",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": "Go companion control facade projects shared status/action DTOs and dispatches lifecycle actions through daemon transport providers."
+    },
+    {
       "case_id": "runtime_core/feature_discovery",
       "profile": "runtime_core",
       "status": "passed",

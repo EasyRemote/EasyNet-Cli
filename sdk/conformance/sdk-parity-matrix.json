@@ -68,6 +68,20 @@
       "remaining": "Product health route shaping remains outside the daemon SDK and is not SDK stability evidence."
     },
     {
+      "capability_id": "runtime_companion_control",
+      "profile": "runtime_control",
+      "shared_cases": ["sdk/conformance/cases/runtime-companion-control.yaml"],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/daemon_test.go"}, {"kind": "go_test", "ref": "sdk/go/cabi_runtime_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_daemon.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_cabi.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
+      },
+      "remaining": "Platform supervisor policy and companion package lifecycle remain daemon-owned; external product cutover remains outside the daemon SDK."
+    },
+    {
       "capability_id": "typed_errors",
       "profile": "runtime_core",
       "shared_cases": ["sdk/conformance/cases/error-typed-json.yaml", "sdk/conformance/cases/error-profile-source-refs.yaml", "sdk/conformance/cases/daemon-permission-denied.yaml"],

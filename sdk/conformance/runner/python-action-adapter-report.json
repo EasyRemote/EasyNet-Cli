@@ -536,6 +536,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_companion/control",
+      "profile": "runtime_control",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": "Python companion control facade projects shared status/action DTOs and dispatches lifecycle actions through daemon transport providers."
+    },
+    {
       "case_id": "runtime_core/feature_discovery",
       "profile": "runtime_core",
       "status": "passed",

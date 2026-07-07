@@ -587,7 +587,7 @@ func TestGoSDKExecutesSharedParityMatrixConformanceCase(t *testing.T) {
 	} {
 		requireCaseAction(t, parityCase, action)
 	}
-	requireCaseExpectation(t, parityCase, "capability_count: 21")
+	requireCaseExpectation(t, parityCase, "capability_count: 22")
 	requireCaseExpectation(t, parityCase, "product_boundary_count: 2")
 	requireCaseExpectation(t, parityCase, "missing_capability: false")
 	requireCaseExpectation(t, parityCase, "invalid_status: false")

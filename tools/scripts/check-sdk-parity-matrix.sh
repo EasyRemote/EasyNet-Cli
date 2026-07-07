@@ -37,6 +37,7 @@ REQUIRED_CAPABILITIES = (
     "daemon_lifecycle",
     "runtime_connection",
     "runtime_health",
+    "runtime_companion_control",
     "typed_errors",
     "complete_invocation_draft",
     "prepare_sign_submit",

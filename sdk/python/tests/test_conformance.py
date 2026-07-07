@@ -5030,7 +5030,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         ):
             self._require_case_action(parity_case, action)
         for expectation in (
-            "capability_count: 21",
+            "capability_count: 22",
             "product_boundary_count: 2",
             "missing_capability: false",
             "invalid_status: false",
