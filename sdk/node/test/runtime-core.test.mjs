@@ -843,7 +843,7 @@ test("IdentityClient delegates DescriptorRef and URA projections without local g
       return JSON.stringify({
         kind: "descriptor_ref",
         valid: true,
-        descriptor_ref: `${request.ability_ura}@${request.descriptor_version}`,
+        descriptor_ref: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         ability_ura: request.ability_ura,
         descriptor_version: request.descriptor_version,
         profile: "directory_identity",
@@ -867,10 +867,26 @@ test("IdentityClient delegates DescriptorRef and URA projections without local g
     },
   });
 
+  const projection = await identity.projectDescriptorRef({
+    descriptor_ref: "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  });
+  assert.equal(
+    projection.descriptor_ref,
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  );
+
   const ability = await identity.abilityURAFromDescriptorRef(
-    "opaque-descriptor-ref-from-identity-profile",
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
   );
   assert.equal(ability, "easynet:///r/example/ability/device.dev-a.observe.health");
+
+  const canonical = await identity.canonicalAbilityDescriptorRef(
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  );
+  assert.equal(
+    canonical,
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  );
 
   const descriptor = await identity.ownerAbilityDescriptorRef(
     "easynet:///r/example/device/dev-a",
@@ -881,7 +897,23 @@ test("IdentityClient delegates DescriptorRef and URA projections without local g
 
   const resource = await identity.resourceURA("easynet:///r/example/agent/alice.sdk", "docs");
   assert.equal(resource, "easynet:///r/example/resource/alice.docs");
-  assert.deepEqual(seen.map((item) => item.method), ["project", "owner", "build", "resource"]);
+  assert.deepEqual(seen.map((item) => item.method), [
+    "project",
+    "project",
+    "project",
+    "owner",
+    "build",
+    "resource",
+  ]);
+  assert.equal(
+    seen[0].request.descriptor_ref,
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  );
+  assert.equal(
+    seen[4].request.ability_ura,
+    "easynet:///r/example/ability/device.dev-a.observe.health",
+  );
+  assert.equal(seen[4].request.descriptor_version, "1.0.0");
 
   await assert.rejects(
     () => identity.projectDescriptorRef({ descriptor_ref: " descriptor " }),
@@ -1052,6 +1084,10 @@ test("ReceiptClient delegates fetch, projection, and causal refs without verific
 
   const fetched = await receipt.fetch(receiptFetch());
   assert.equal(fetched.verified, false);
+  assert.equal(
+    seen[0].request.descriptor_ref,
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  );
 
   const ref = new ReceiptRef({
     receipt_ura: "easynet:///r/example/resource/receipt.inv-1",
@@ -1066,6 +1102,11 @@ test("ReceiptClient delegates fetch, projection, and causal refs without verific
   assert.equal(verified.verified, false);
   assert.equal(causal.receipt_hash_hex, receiptHash);
   assert.deepEqual(seen.map((item) => item.method), ["fetch", "project", "verify", "causal"]);
+
+  await assert.rejects(
+    () => receipt.fetch({ ...receiptFetch(), descriptor_ref: "" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
 });
 
 test("ReceiptClient delegates carriers, history, and chain verification", async () => {
@@ -1112,6 +1153,10 @@ test("ReceiptClient delegates carriers, history, and chain verification", async 
   const verification = await chain.verifyContinuity(receipt, { source: "test" });
 
   assert.equal(built.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+  assert.equal(
+    seen[0].request.descriptor_ref,
+    "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+  );
   assert.equal(listed.profile, "receipt");
   assert.equal(trace.profile, "receipt");
   assert.equal(verification.receipt_count, 1);

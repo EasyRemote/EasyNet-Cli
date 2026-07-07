@@ -124,6 +124,18 @@
       "message": null
     },
     {
+      "case_id": "invocation/descriptor_ref_helper_delegation",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "invocation/canonical_material",
       "profile": "runtime_core",
       "status": "passed",

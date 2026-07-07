@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Invocation carriers consume daemon/Axon-projected DescriptorRef values and do not synthesize ability descriptor grammar inside SDK facades.
 steps:
   - action: project_descriptor_ref
