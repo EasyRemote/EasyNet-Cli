@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AdminClient,
   Client,
   CompatibilityClient,
   DEFAULT_DIRECTORY_PAGE_SIZE,
@@ -264,6 +265,144 @@ const missionDraftJSON = (descriptorRef, args = {}) =>
     .withJSONArgs(args)
     .withContentType("application/json")
     .withMetadata({ profile: "mission" })
+    .build()
+    .toJSONString();
+
+const adminBase = () => ({
+  caller_ura: "easynet:///r/example/agent/alice.sdk",
+  callee_ura: "easynet:///r/example/device/dev-a",
+  subject_ura: "easynet:///r/example/device/dev-a",
+  descriptor_version: "1.0.0",
+  nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+  causal_context: { form: "none" },
+  metadata: { request_id: "admin-1" },
+});
+
+const gatewayStatus = () => ({
+  profile: "admin_gateway",
+  gateway_id: "device:example:dev-a",
+  ready: true,
+  state: "ready",
+  process_live: true,
+  control_ready: true,
+  runtime_ready: true,
+  directory_ready: true,
+  trust_ready: true,
+  public_listener_ready: false,
+  listeners: [
+    { kind: "control", endpoint: "/tmp/easynet-control.sock", ready: true, public: false },
+    { kind: "invocation", endpoint: "/tmp/easynet-daemon.sock", ready: true, public: false },
+  ],
+  identity: { mode: "device", realm: "example", node_id: "dev-a" },
+  metadata: { profile: "admin_gateway", source: "daemon_lifecycle_status" },
+});
+
+const adminAgentRecords = () => ({
+  profile: "admin_gateway",
+  kind: "agent_records",
+  state: "ok",
+  items: [
+    {
+      name: "codex",
+      agent_ura: "easynet:///r/example/agent/alice.codex",
+      owner_ura: "easynet:///r/example/user/alice",
+      device_ura: null,
+      state: "registered",
+      runtime: "codex",
+      model: "gpt-5",
+      label: "primary",
+      abilities: [],
+      metadata: { profile: "admin_gateway", source: "agent.list" },
+    },
+  ],
+  next_cursor: null,
+  metadata: { profile: "admin_gateway", source: "agent.list", count: 1 },
+});
+
+const adminLifecycleResult = (overrides = {}) => ({
+  profile: "admin_gateway",
+  kind: "agent_lifecycle_result",
+  operation: "agent.start",
+  state: "ok",
+  agent_ura: "easynet:///r/example/agent/alice.codex",
+  ack: null,
+  runtime_not_ready: false,
+  runtime_catalog_not_ready: false,
+  metadata: { profile: "admin_gateway", source: "agent_lifecycle" },
+  ...overrides,
+});
+
+const pairingPreflight = () => ({
+  profile: "admin_gateway",
+  kind: "pairing_preflight",
+  state: "requires_pairing",
+  hub_ura: "easynet:///r/example/hub/main",
+  device_ura: "easynet:///r/example/device/dev-a",
+  pairing_required: true,
+  trust_ready: false,
+  scopes: ["invoke", "events"],
+  metadata: { profile: "admin_gateway", source: "pairing.preflight" },
+});
+
+const pairingToken = () => ({
+  profile: "admin_gateway",
+  kind: "pairing_token",
+  token_id: "pair-token-1",
+  token: "pair-token-value",
+  hub_ura: "easynet:///r/example/hub/main",
+  device_ura: "easynet:///r/example/device/dev-a",
+  state: "issued",
+  expires_unix_ms: 1893456000000,
+  scopes: ["invoke", "events"],
+  metadata: { profile: "admin_gateway", source: "pairing.create" },
+});
+
+const deviceCredential = () => ({
+  profile: "admin_gateway",
+  kind: "device_credential",
+  credential_id: "cred-dev-a",
+  device_ura: "easynet:///r/example/device/dev-a",
+  hub_ura: "easynet:///r/example/hub/main",
+  state: "active",
+  issued_unix_ms: 1767225600000,
+  expires_unix_ms: 1893456000000,
+  scopes: ["invoke", "events"],
+  metadata: { profile: "admin_gateway", source: "pairing.validate" },
+});
+
+const deviceSession = () => ({
+  profile: "admin_gateway",
+  kind: "device_session",
+  session_id: "dev-session-1",
+  device_ura: "easynet:///r/example/device/dev-a",
+  hub_ura: "easynet:///r/example/hub/main",
+  state: "active",
+  session_kind: "remote_desktop",
+  created_unix_ms: 1767225600000,
+  expires_unix_ms: 1893456000000,
+  metadata: { profile: "admin_gateway", source: "session.create" },
+});
+
+const deviceSessionPage = () => ({
+  profile: "admin_gateway",
+  kind: "device_sessions",
+  state: "ok",
+  items: [deviceSession()],
+  next_cursor: null,
+  metadata: { profile: "admin_gateway", source: "session.list" },
+});
+
+const adminDraftJSON = (descriptorRef, args = {}) =>
+  new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/alice.sdk")
+    .withCalleeURA("easynet:///r/example/device/dev-a")
+    .withDescriptorRef(descriptorRef)
+    .withSubjectURA("easynet:///r/example/device/dev-a")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs(args)
+    .withContentType("application/json")
+    .withMetadata({ profile: "admin_gateway" })
     .build()
     .toJSONString();
 
@@ -1814,6 +1953,216 @@ test("MissionClient delegates carriers, status projections, and event streams wi
       ...missionStatus(),
       parent_receipt_ura: null,
     }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("AdminClient delegates gateway carriers and projections without backend onboarding policy", async () => {
+  const seen = [];
+  const admin = new AdminClient({
+    buildAgentListInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_agent_list", request });
+      return adminDraftJSON("easynet:///r/example/ability/device.dev-a.agent.list@1.0.0");
+    },
+    buildAgentStartInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_agent_start", request });
+      return adminDraftJSON("easynet:///r/example/ability/device.dev-a.agent.start@1.0.0", {
+        name: request.name,
+        agent_type: request.agent_type,
+        model: request.model,
+        label: request.label,
+      });
+    },
+    buildAgentStopInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_agent_stop", request });
+      return adminDraftJSON("easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0", {
+        name: request.name,
+      });
+    },
+    buildAgentRefreshInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_agent_refresh", request });
+      return adminDraftJSON("easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0", {
+        name: request.name,
+      });
+    },
+    buildSessionListInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_session_list", request });
+      return adminDraftJSON("easynet:///r/example/ability/device.dev-a.session.list@1.0.0", {
+        include_terminated: request.include_terminated,
+      });
+    },
+    gatewayStatus: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "gateway_status", request });
+      return JSON.stringify(gatewayStatus());
+    },
+    listAgents: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "list_agents", request });
+      return JSON.stringify(adminAgentRecords());
+    },
+    startAgent: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "start_agent", request });
+      return JSON.stringify(adminLifecycleResult());
+    },
+    stopAgent: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "stop_agent", request });
+      return JSON.stringify(adminLifecycleResult({ operation: "agent.stop" }));
+    },
+    refreshAgent: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "refresh_agent", request });
+      return JSON.stringify(adminLifecycleResult({ operation: "agent.refresh" }));
+    },
+    listSessions: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "list_sessions", request });
+      return JSON.stringify(deviceSessionPage());
+    },
+    pairingPreflight: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "pairing_preflight", request });
+      return JSON.stringify(pairingPreflight());
+    },
+    createPairing: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "create_pairing", request });
+      return JSON.stringify(pairingToken());
+    },
+    validatePairing: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "validate_pairing", request });
+      return JSON.stringify(deviceCredential());
+    },
+    createDeviceSession: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "create_device_session", request });
+      return JSON.stringify(deviceSession());
+    },
+    deleteDeviceSession: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "delete_device_session", request });
+      return JSON.stringify(adminLifecycleResult({
+        kind: "device_admin_result",
+        operation: "session.delete",
+        state: "deleted",
+        agent_ura: null,
+        device_ura: "easynet:///r/example/device/dev-a",
+        ack: true,
+      }));
+    },
+    projectGatewayStatus: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectAgentRecords: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectAgentLifecycleResult: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectPairingPreflight: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectPairingToken: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectDeviceCredential: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectDeviceSession: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectDeviceSessionPage: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+    projectDeviceAdminResult: (requestJSON) => JSON.stringify(JSON.parse(Buffer.from(requestJSON).toString("utf8"))),
+  });
+
+  const startRequest = {
+    ...adminBase(),
+    name: "codex",
+    agent_type: "codex",
+    model: "gpt-5",
+    label: "primary",
+  };
+  const stopRequest = { ...adminBase(), name: "codex" };
+  const pairingRequest = {
+    ...adminBase(),
+    hub_ura: "easynet:///r/example/hub/main",
+    device_ura: "easynet:///r/example/device/dev-a",
+  };
+
+  const agentListDraft = await admin.buildAgentListInvocation(adminBase());
+  const agentStartDraft = await admin.buildAgentStartInvocation(startRequest);
+  const agentStopDraft = await admin.buildAgentStopInvocation(stopRequest);
+  const agentRefreshDraft = await admin.buildAgentRefreshInvocation(stopRequest);
+  const sessionListDraft = await admin.buildSessionListInvocation({ ...adminBase(), include_terminated: false });
+  const status = await admin.gatewayStatus({ require_public_listener: false });
+  const agents = await admin.listAgents(adminBase());
+  const start = await admin.startAgent(startRequest);
+  const stop = await admin.stopAgent(stopRequest);
+  const refresh = await admin.refreshAgent(stopRequest);
+  const sessions = await admin.listSessions({ ...adminBase(), include_terminated: false });
+  const preflight = await admin.pairingPreflight({ ...pairingRequest, requested_scopes: ["invoke", "events"] });
+  const token = await admin.createPairing({
+    ...pairingRequest,
+    expires_unix_ms: 1893456000000,
+    scopes: ["invoke", "events"],
+  });
+  const credential = await admin.validatePairing({
+    ...adminBase(),
+    token: "pair-token-value",
+    device_ura: "easynet:///r/example/device/dev-a",
+  });
+  const createdSession = await admin.createDeviceSession({
+    ...pairingRequest,
+    session_kind: "remote_desktop",
+    expires_unix_ms: 1893456000000,
+  });
+  const listedSessions = await admin.listDeviceSessions({ ...adminBase(), include_terminated: false });
+  const deletedSession = await admin.deleteDeviceSession({
+    ...adminBase(),
+    session_id: "dev-session-1",
+    reason: "done",
+  });
+  const projectedStatus = await admin.projectGatewayStatus(status);
+  const projectedAgents = await admin.projectAgentRecords(agents);
+  const projectedLifecycle = await admin.projectAgentLifecycleResult(start);
+  const projectedPreflight = await admin.projectPairingPreflight(preflight);
+  const projectedToken = await admin.projectPairingToken(token);
+  const projectedCredential = await admin.projectDeviceCredential(credential);
+  const projectedSession = await admin.projectDeviceSession(createdSession);
+  const projectedSessionPage = await admin.projectDeviceSessionPage(sessions);
+  const projectedDelete = await admin.projectDeviceAdminResult(deletedSession);
+
+  assert.equal(agentListDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0");
+  assert.equal(agentStartDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.agent.start@1.0.0");
+  assert.equal(agentStopDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0");
+  assert.equal(agentRefreshDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0");
+  assert.equal(sessionListDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.session.list@1.0.0");
+  assert.equal(status.ready, true);
+  assert.equal(status.publicListenerReady, false);
+  assert.equal(agents.items[0].name, "codex");
+  assert.equal(start.operation, "agent.start");
+  assert.equal(stop.operation, "agent.stop");
+  assert.equal(refresh.operation, "agent.refresh");
+  assert.equal(sessions.items[0].sessionKind, "remote_desktop");
+  assert.equal(preflight.pairingRequired, true);
+  assert.equal(token.tokenID, "pair-token-1");
+  assert.equal(credential.credentialID, "cred-dev-a");
+  assert.equal(createdSession.sessionID, "dev-session-1");
+  assert.equal(listedSessions.items.length, 1);
+  assert.equal(deletedSession.state, "deleted");
+  assert.equal(projectedStatus.gatewayID, "device:example:dev-a");
+  assert.equal(projectedAgents.items[0].runtime, "codex");
+  assert.equal(projectedLifecycle.agentURA, "easynet:///r/example/agent/alice.codex");
+  assert.equal(projectedPreflight.trustReady, false);
+  assert.equal(projectedToken.scopes[0], "invoke");
+  assert.equal(projectedCredential.state, "active");
+  assert.equal(projectedSession.hubURA, "easynet:///r/example/hub/main");
+  assert.equal(projectedSessionPage.items[0].deviceURA, "easynet:///r/example/device/dev-a");
+  assert.equal(projectedDelete.ack, true);
+  assert.equal(seen[1].request.name, "codex");
+  assert.equal(seen[4].request.include_terminated, false);
+  assert.equal(seen[12].request.expires_unix_ms, 1893456000000);
+
+  await assert.rejects(
+    () => admin.buildAgentStartInvocation({ ...startRequest, name: "system" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => admin.buildAgentStartInvocation({ ...adminBase(), name: "codex" }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });

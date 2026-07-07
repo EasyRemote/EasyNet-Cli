@@ -22,7 +22,7 @@ workspace entrypoint; it must not drift into a second status ledger.
 | Conformance | shared cases, fixtures, manifest runner, Rust/C ABI/Go/Python action-adapter reports, and Node seam action-adapter reports |
 | Go facade | provider-backed for the shipped P0 Hub/backend profiles listed in `SDK_PARITY.md` |
 | Python facade | provider-backed for the shipped P0 EasyRemote/local automation profiles listed in `SDK_PARITY.md` |
-| Node / TypeScript facade | Runtime Core seam over injected transports with Health, Directory + Identity, Receipt, Publication, Host Binding, Mission, Events, Surface, and Compatibility profile seams; daemon providers remain unsupported |
+| Node / TypeScript facade | Runtime Core seam over injected transports with Health, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, and Compatibility profile seams; daemon providers remain unsupported |
 | Java / JVM facade | unsupported |
 | Swift facade | unsupported |
 

@@ -49,6 +49,7 @@ export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
 export declare const EVENTS_PROFILE: "events";
 export declare const MISSION_PROFILE: "mission";
+export declare const ADMIN_GATEWAY_PROFILE: "admin_gateway";
 export declare const SURFACE_PROFILE: "surface";
 export declare const COMPATIBILITY_PROFILE: "compatibility";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
@@ -757,6 +758,353 @@ export class MissionClient {
   openEventStream(request: MissionEventListRequest): Promise<MissionEventStream>;
   projectStatus(value: MissionProjectionInput): Promise<MissionStatus>;
   projectEvents(value: MissionProjectionInput): Promise<MissionEventPage>;
+  close(): Promise<void>;
+}
+
+export interface AdminCarrierBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdminGatewayStatusRequest {
+  require_public_listener?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AdminAgentListRequest extends AdminCarrierBase {}
+
+export interface AdminAgentStartRequest extends AdminCarrierBase {
+  name: string;
+  agent_type?: string;
+  entry?: Record<string, unknown>;
+  model?: string;
+  label?: string;
+  command?: string;
+  command_args?: string[];
+  root_path?: string;
+  model_present?: boolean;
+  materialize_directory?: boolean;
+  update_existing_spec?: boolean;
+  project_workspace?: boolean;
+}
+
+export interface AdminAgentStopRequest extends AdminCarrierBase {
+  name?: string;
+  agent_ura?: string;
+}
+
+export interface AdminAgentRefreshRequest extends AdminCarrierBase {
+  name?: string;
+}
+
+export interface AdminSessionListRequest extends AdminCarrierBase {
+  include_terminated?: boolean;
+}
+
+export interface PairingPreflightRequest extends AdminCarrierBase {
+  hub_ura: string;
+  device_ura: string;
+  requested_scopes?: string[];
+}
+
+export interface CreatePairingRequest extends AdminCarrierBase {
+  hub_ura: string;
+  device_ura: string;
+  expires_unix_ms: number;
+  scopes?: string[];
+}
+
+export interface ValidatePairingRequest extends AdminCarrierBase {
+  token: string;
+  device_ura: string;
+}
+
+export interface CreateDeviceSessionRequest extends AdminCarrierBase {
+  device_ura: string;
+  hub_ura: string;
+  session_kind: string;
+  expires_unix_ms?: number;
+}
+
+export interface DeleteDeviceSessionRequest extends AdminCarrierBase {
+  session_id: string;
+  reason?: string;
+}
+
+export interface GatewayStatusFields {
+  profile: "admin_gateway";
+  gateway_id: string;
+  ready: boolean;
+  state: string;
+  process_live: boolean;
+  control_ready: boolean;
+  runtime_ready: boolean;
+  directory_ready: boolean;
+  trust_ready: boolean;
+  public_listener_ready: boolean;
+  listeners: Array<{ kind: string; endpoint: string; ready: boolean; public: boolean }>;
+  identity: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+}
+
+export class GatewayStatus {
+  profile: "admin_gateway";
+  gatewayID: string;
+  ready: boolean;
+  state: string;
+  processLive: boolean;
+  controlReady: boolean;
+  runtimeReady: boolean;
+  directoryReady: boolean;
+  trustReady: boolean;
+  publicListenerReady: boolean;
+  listeners: Array<{ kind: string; endpoint: string; ready: boolean; public: boolean }>;
+  identity: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: GatewayStatusFields);
+  static fromJSON(raw: Uint8Array | string): GatewayStatus;
+  toJSON(): GatewayStatusFields;
+}
+
+export interface AdminAgentRecordFields {
+  name: string;
+  agent_ura: string | null;
+  owner_ura: string | null;
+  device_ura: string | null;
+  state: string;
+  runtime: string;
+  model: string | null;
+  label: string | null;
+  abilities: string[];
+  metadata: Record<string, unknown>;
+}
+
+export class AdminAgentRecord {
+  name: string;
+  agentURA: string | null;
+  ownerURA: string | null;
+  deviceURA: string | null;
+  state: string;
+  runtime: string;
+  model: string | null;
+  label: string | null;
+  abilities: string[];
+  metadata: Record<string, unknown>;
+  constructor(fields: AdminAgentRecordFields);
+  toJSON(): AdminAgentRecordFields;
+}
+
+export interface AdminAgentPageFields {
+  profile: "admin_gateway";
+  kind: "agent_records";
+  state: string;
+  items: AdminAgentRecordFields[];
+  next_cursor: unknown;
+  metadata: Record<string, unknown>;
+}
+
+export class AdminAgentPage {
+  profile: "admin_gateway";
+  kind: "agent_records";
+  state: string;
+  items: AdminAgentRecord[];
+  nextCursor: unknown;
+  metadata: Record<string, unknown>;
+  constructor(fields: AdminAgentPageFields);
+  static fromJSON(raw: Uint8Array | string): AdminAgentPage;
+  toJSON(): AdminAgentPageFields;
+}
+
+export interface AdminGatewayResultFields {
+  profile: "admin_gateway";
+  kind: string;
+  operation?: string | null;
+  state: string;
+  agent_ura?: string | null;
+  device_ura?: string | null;
+  ack?: boolean | null;
+  runtime_not_ready?: boolean;
+  runtime_catalog_not_ready?: boolean;
+  items?: Record<string, unknown>[];
+  next_cursor?: unknown;
+  metadata: Record<string, unknown>;
+}
+
+export class AdminGatewayResult {
+  profile: "admin_gateway";
+  kind: string;
+  operation: string | null;
+  state: string;
+  agentURA: string | null;
+  deviceURA: string | null;
+  ack: boolean | null;
+  runtimeNotReady: boolean;
+  runtimeCatalogNotReady: boolean;
+  items: Record<string, unknown>[];
+  nextCursor: unknown;
+  metadata: Record<string, unknown>;
+  constructor(fields: AdminGatewayResultFields);
+  static fromJSON(raw: Uint8Array | string): AdminGatewayResult;
+  toJSON(): AdminGatewayResultFields;
+}
+
+export declare const AgentStartResult: typeof AdminGatewayResult;
+export declare const AgentStopResult: typeof AdminGatewayResult;
+export declare const AgentRefreshResult: typeof AdminGatewayResult;
+export declare const JoinResult: typeof AdminGatewayResult;
+export declare const LeaveResult: typeof AdminGatewayResult;
+export declare const DeviceAdminResult: typeof AdminGatewayResult;
+
+export class PairingPreflight {
+  profile: "admin_gateway";
+  kind: "pairing_preflight";
+  state: string;
+  hubURA: string;
+  deviceURA: string;
+  pairingRequired: boolean;
+  trustReady: boolean;
+  scopes: string[];
+  metadata: Record<string, unknown>;
+  constructor(fields: Record<string, unknown>);
+  static fromJSON(raw: Uint8Array | string): PairingPreflight;
+  toJSON(): Record<string, unknown>;
+}
+
+export class PairingToken {
+  profile: "admin_gateway";
+  kind: "pairing_token";
+  tokenID: string;
+  token: string;
+  hubURA: string;
+  deviceURA: string;
+  state: string;
+  expiresUnixMS: number;
+  scopes: string[];
+  metadata: Record<string, unknown>;
+  constructor(fields: Record<string, unknown>);
+  static fromJSON(raw: Uint8Array | string): PairingToken;
+  toJSON(): Record<string, unknown>;
+}
+
+export class DeviceCredential {
+  profile: "admin_gateway";
+  kind: "device_credential";
+  credentialID: string;
+  deviceURA: string;
+  hubURA: string;
+  state: string;
+  issuedUnixMS: number;
+  expiresUnixMS: number;
+  scopes: string[];
+  metadata: Record<string, unknown>;
+  constructor(fields: Record<string, unknown>);
+  static fromJSON(raw: Uint8Array | string): DeviceCredential;
+  toJSON(): Record<string, unknown>;
+}
+
+export class DeviceSession {
+  profile: "admin_gateway";
+  kind: "device_session";
+  sessionID: string;
+  deviceURA: string;
+  hubURA: string;
+  state: string;
+  sessionKind: string;
+  createdUnixMS: number;
+  expiresUnixMS: number;
+  metadata: Record<string, unknown>;
+  constructor(fields: Record<string, unknown>);
+  static fromJSON(raw: Uint8Array | string): DeviceSession;
+  toJSON(): Record<string, unknown>;
+}
+
+export class DeviceSessionPage {
+  profile: "admin_gateway";
+  kind: "device_sessions";
+  state: string;
+  items: DeviceSession[];
+  nextCursor: unknown;
+  metadata: Record<string, unknown>;
+  constructor(fields: Record<string, unknown>);
+  static fromJSON(raw: Uint8Array | string): DeviceSessionPage;
+  toJSON(): Record<string, unknown>;
+}
+
+export type AdminProjectionInput =
+  | Uint8Array
+  | string
+  | Record<string, unknown>
+  | GatewayStatus
+  | AdminAgentPage
+  | AdminGatewayResult
+  | PairingPreflight
+  | PairingToken
+  | DeviceCredential
+  | DeviceSession
+  | DeviceSessionPage;
+
+export interface AdminTransport {
+  buildAgentListInvocation(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildAgentStartInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildAgentStopInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildAgentRefreshInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildSessionListInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  gatewayStatus?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listAgents?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  startAgent?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  stopAgent?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  refreshAgent?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listSessions?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  pairingPreflight?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  createPairing?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  validatePairing?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  createDeviceSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  deleteDeviceSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectGatewayStatus?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectAgentRecords?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectAgentLifecycleResult?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectPairingPreflight?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectPairingToken?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectDeviceCredential?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectDeviceSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectDeviceSessionPage?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectDeviceAdminResult?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class AdminClient {
+  constructor(transport: AdminTransport);
+  buildAgentListInvocation(request: AdminAgentListRequest): Promise<InvocationDraft>;
+  buildAgentStartInvocation(request: AdminAgentStartRequest): Promise<InvocationDraft>;
+  buildAgentStopInvocation(request: AdminAgentStopRequest): Promise<InvocationDraft>;
+  buildAgentRefreshInvocation(request: AdminAgentRefreshRequest): Promise<InvocationDraft>;
+  buildSessionListInvocation(request: AdminSessionListRequest): Promise<InvocationDraft>;
+  gatewayStatus(request?: AdminGatewayStatusRequest): Promise<GatewayStatus>;
+  listAgents(request: AdminAgentListRequest): Promise<AdminAgentPage>;
+  startAgent(request: AdminAgentStartRequest): Promise<AdminGatewayResult>;
+  stopAgent(request: AdminAgentStopRequest): Promise<AdminGatewayResult>;
+  refreshAgent(request: AdminAgentRefreshRequest): Promise<AdminGatewayResult>;
+  listSessions(request: AdminSessionListRequest): Promise<DeviceSessionPage>;
+  pairingPreflight(request: PairingPreflightRequest): Promise<PairingPreflight>;
+  createPairing(request: CreatePairingRequest): Promise<PairingToken>;
+  validatePairing(request: ValidatePairingRequest): Promise<DeviceCredential>;
+  createDeviceSession(request: CreateDeviceSessionRequest): Promise<DeviceSession>;
+  listDeviceSessions(request: AdminSessionListRequest): Promise<DeviceSessionPage>;
+  deleteDeviceSession(request: DeleteDeviceSessionRequest): Promise<AdminGatewayResult>;
+  projectGatewayStatus(value: AdminProjectionInput): Promise<GatewayStatus>;
+  projectAgentRecords(value: AdminProjectionInput): Promise<AdminAgentPage>;
+  projectAgentLifecycleResult(value: AdminProjectionInput): Promise<AdminGatewayResult>;
+  projectPairingPreflight(value: AdminProjectionInput): Promise<PairingPreflight>;
+  projectPairingToken(value: AdminProjectionInput): Promise<PairingToken>;
+  projectDeviceCredential(value: AdminProjectionInput): Promise<DeviceCredential>;
+  projectDeviceSession(value: AdminProjectionInput): Promise<DeviceSession>;
+  projectDeviceSessionPage(value: AdminProjectionInput): Promise<DeviceSessionPage>;
+  projectDeviceAdminResult(value: AdminProjectionInput): Promise<AdminGatewayResult>;
   close(): Promise<void>;
 }
 

@@ -6,7 +6,8 @@ developer tooling. It must project the same object graph with promises,
 operations.
 
 Current status: Runtime Core, Health, Directory + Identity, Receipt,
-Publication, Host Binding, Mission, Events, Surface, and Compatibility seams.
+Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, and
+Compatibility seams.
 `index.js` and `index.d.ts` expose feature discovery, typed errors, profile
 source-ref accessors, Invocation draft construction, RuntimeClient dispatch seams, PreparedInvocation,
 SigningMaterial, InvocationSignature, SignedInvocation, stream/bidi lifecycle
@@ -17,7 +18,8 @@ DirectoryClient read-model resolve/list/subscribe seams, IdentityClient URA/Desc
 ReceiptClient fetch/projection/verification/causal-ref seams,
 PublicationClient resource/package/deploy/unpublish/read-model/lifecycle seams,
 HostBindingClient host-stream codec/hash/lifecycle seams, MissionClient
-run/track/cancel/event carrier and projection seams, EventClient
+run/track/cancel/event carrier and projection seams, AdminClient gateway,
+agent lifecycle, pairing, and device-session carrier/projection seams, EventClient
 directory/device/session/invocation carrier, stream, projection, and device
 history seams, SurfaceClient page carrier/projection/health seams, and
 CompatibilityClient OpenAI-compatible model/chat/file carrier and projection
@@ -32,7 +34,8 @@ bytes, acquire signer handles, or perform local daemon signing.
 This package has no daemon transport provider, C ABI bridge, local daemon
 signing provider, or package-stability claim yet. Its shared conformance
 adapter report covers only declared Runtime Core, Health, Directory + Identity,
-Errors, MEMC, Receipt, Publication, Host Binding, Mission, Events, Surface, and Compatibility seam
+Errors, MEMC, Receipt, Publication, Host Binding, Mission, Admin + Gateway,
+Events, Surface, and Compatibility seam
 cases; it must not claim provider-backed or cutover-ready status. Node also does
 not claim the shared C ABI callback-queue overflow case because daemon wire
 backpressure mapping is not implemented in this package.

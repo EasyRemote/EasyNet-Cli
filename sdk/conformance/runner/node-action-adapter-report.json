@@ -4,6 +4,18 @@
   "adapter_kind": "node_facade_conformance_tests",
   "records": [
     {
+      "case_id": "admin_gateway/carrier_status",
+      "profile": "admin_gateway",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "directory/list_pagination",
       "profile": "directory_identity",
       "status": "passed",

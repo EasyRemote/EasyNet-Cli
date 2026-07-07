@@ -66,6 +66,7 @@ export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
 export const EVENTS_PROFILE = "events";
 export const MISSION_PROFILE = "mission";
+export const ADMIN_GATEWAY_PROFILE = "admin_gateway";
 export const SURFACE_PROFILE = "surface";
 export const COMPATIBILITY_PROFILE = "compatibility";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
@@ -1164,6 +1165,484 @@ export class MissionClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("mission client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class GatewayStatus {
+  constructor(fields) {
+    const value = objectValue(fields, "gateway status");
+    this.profile = requiredAdminString(value.profile, "profile");
+    if (this.profile !== ADMIN_GATEWAY_PROFILE) {
+      throw invalidAdminGateway("invalid gateway status projection");
+    }
+    this.gatewayID = requiredAdminString(value.gateway_id, "gateway_id");
+    this.ready = adminBoolean(value.ready, "ready");
+    this.state = requiredAdminString(value.state, "state");
+    this.processLive = adminBoolean(value.process_live, "process_live");
+    this.controlReady = adminBoolean(value.control_ready, "control_ready");
+    this.runtimeReady = adminBoolean(value.runtime_ready, "runtime_ready");
+    this.directoryReady = adminBoolean(value.directory_ready, "directory_ready");
+    this.trustReady = adminBoolean(value.trust_ready, "trust_ready");
+    this.publicListenerReady = adminBoolean(value.public_listener_ready, "public_listener_ready");
+    this.listeners = adminObjectArray(value.listeners, "listeners");
+    for (const listener of this.listeners) {
+      requiredAdminString(listener.kind, "listener.kind");
+      requiredAdminString(listener.endpoint, "listener.endpoint");
+      adminBoolean(listener.ready, "listener.ready");
+      adminBoolean(listener.public, "listener.public");
+    }
+    this.identity = value.identity === null || value.identity === undefined ? null : objectValue(value.identity, "identity");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new GatewayStatus(parseJSON(raw, "gateway status"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      gateway_id: this.gatewayID,
+      ready: this.ready,
+      state: this.state,
+      process_live: this.processLive,
+      control_ready: this.controlReady,
+      runtime_ready: this.runtimeReady,
+      directory_ready: this.directoryReady,
+      trust_ready: this.trustReady,
+      public_listener_ready: this.publicListenerReady,
+      listeners: this.listeners,
+      identity: this.identity,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class AdminAgentRecord {
+  constructor(fields) {
+    const value = objectValue(fields, "admin agent record");
+    this.name = requiredAdminString(value.name, "name");
+    this.agentURA = adminOptionalString(value.agent_ura, "agent_ura");
+    this.ownerURA = adminOptionalString(value.owner_ura, "owner_ura");
+    this.deviceURA = adminOptionalString(value.device_ura, "device_ura");
+    this.state = requiredAdminString(value.state, "state");
+    this.runtime = requiredAdminString(value.runtime, "runtime");
+    this.model = adminOptionalString(value.model, "model");
+    this.label = adminOptionalString(value.label, "label");
+    if (!Array.isArray(value.abilities)) {
+      throw invalidAdminGateway("abilities must be an array");
+    }
+    this.abilities = value.abilities.map((ability) => requiredAdminString(ability, "ability"));
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  toJSON() {
+    return {
+      name: this.name,
+      agent_ura: this.agentURA,
+      owner_ura: this.ownerURA,
+      device_ura: this.deviceURA,
+      state: this.state,
+      runtime: this.runtime,
+      model: this.model,
+      label: this.label,
+      abilities: [...this.abilities],
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class AdminAgentPage {
+  constructor(fields) {
+    const value = objectValue(fields, "admin agent page");
+    this.profile = requiredAdminString(value.profile, "profile");
+    this.kind = requiredAdminString(value.kind, "kind");
+    if (this.profile !== ADMIN_GATEWAY_PROFILE || this.kind !== "agent_records") {
+      throw invalidAdminGateway("invalid admin agent page projection");
+    }
+    this.state = requiredAdminString(value.state, "state");
+    if (!Array.isArray(value.items)) {
+      throw invalidAdminGateway("agent items must be an array");
+    }
+    this.items = value.items.map((item) => new AdminAgentRecord(item));
+    this.nextCursor = value.next_cursor ?? null;
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new AdminAgentPage(parseJSON(raw, "admin agent page"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      state: this.state,
+      items: this.items.map((item) => item.toJSON()),
+      next_cursor: this.nextCursor,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class AdminGatewayResult {
+  constructor(fields) {
+    const value = objectValue(fields, "admin gateway result");
+    this.profile = requiredAdminString(value.profile, "profile");
+    this.kind = requiredAdminString(value.kind, "kind");
+    if (this.profile !== ADMIN_GATEWAY_PROFILE) {
+      throw invalidAdminGateway("invalid admin gateway result projection");
+    }
+    this.operation = adminOptionalString(value.operation, "operation");
+    this.state = requiredAdminString(value.state, "state");
+    this.agentURA = adminOptionalString(value.agent_ura, "agent_ura");
+    this.deviceURA = adminOptionalString(value.device_ura, "device_ura");
+    this.ack = value.ack === undefined || value.ack === null ? null : adminBoolean(value.ack, "ack");
+    this.runtimeNotReady = value.runtime_not_ready === undefined ? false : adminBoolean(value.runtime_not_ready, "runtime_not_ready");
+    this.runtimeCatalogNotReady = value.runtime_catalog_not_ready === undefined
+      ? false
+      : adminBoolean(value.runtime_catalog_not_ready, "runtime_catalog_not_ready");
+    this.items = value.items === undefined ? [] : adminObjectArray(value.items, "items");
+    this.nextCursor = value.next_cursor ?? null;
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new AdminGatewayResult(parseJSON(raw, "admin gateway result"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      operation: this.operation,
+      state: this.state,
+      agent_ura: this.agentURA,
+      device_ura: this.deviceURA,
+      ack: this.ack,
+      runtime_not_ready: this.runtimeNotReady,
+      runtime_catalog_not_ready: this.runtimeCatalogNotReady,
+      items: this.items,
+      next_cursor: this.nextCursor,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export const AgentStartResult = AdminGatewayResult;
+export const AgentStopResult = AdminGatewayResult;
+export const AgentRefreshResult = AdminGatewayResult;
+export const JoinResult = AdminGatewayResult;
+export const LeaveResult = AdminGatewayResult;
+export const DeviceAdminResult = AdminGatewayResult;
+
+export class PairingPreflight {
+  constructor(fields) {
+    const value = objectValue(fields, "pairing preflight");
+    validateAdminKind(value, "pairing_preflight");
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.state = requiredAdminString(value.state, "state");
+    this.hubURA = requiredAdminURA(value.hub_ura, "hub_ura");
+    this.deviceURA = requiredAdminURA(value.device_ura, "device_ura");
+    this.pairingRequired = adminBoolean(value.pairing_required, "pairing_required");
+    this.trustReady = adminBoolean(value.trust_ready, "trust_ready");
+    this.scopes = adminStringArray(value.scopes, "scopes");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new PairingPreflight(parseJSON(raw, "pairing preflight"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      state: this.state,
+      hub_ura: this.hubURA,
+      device_ura: this.deviceURA,
+      pairing_required: this.pairingRequired,
+      trust_ready: this.trustReady,
+      scopes: [...this.scopes],
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class PairingToken {
+  constructor(fields) {
+    const value = objectValue(fields, "pairing token");
+    validateAdminKind(value, "pairing_token");
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.tokenID = requiredAdminString(value.token_id, "token_id");
+    this.token = requiredAdminString(value.token, "token");
+    this.hubURA = requiredAdminURA(value.hub_ura, "hub_ura");
+    this.deviceURA = requiredAdminURA(value.device_ura, "device_ura");
+    this.state = requiredAdminString(value.state, "state");
+    this.expiresUnixMS = adminPositiveInteger(value.expires_unix_ms, "expires_unix_ms");
+    this.scopes = adminStringArray(value.scopes, "scopes");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new PairingToken(parseJSON(raw, "pairing token"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      token_id: this.tokenID,
+      token: this.token,
+      hub_ura: this.hubURA,
+      device_ura: this.deviceURA,
+      state: this.state,
+      expires_unix_ms: this.expiresUnixMS,
+      scopes: [...this.scopes],
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class DeviceCredential {
+  constructor(fields) {
+    const value = objectValue(fields, "device credential");
+    validateAdminKind(value, "device_credential");
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.credentialID = requiredAdminString(value.credential_id, "credential_id");
+    this.deviceURA = requiredAdminURA(value.device_ura, "device_ura");
+    this.hubURA = requiredAdminURA(value.hub_ura, "hub_ura");
+    this.state = requiredAdminString(value.state, "state");
+    this.issuedUnixMS = adminNonNegativeInteger(value.issued_unix_ms, "issued_unix_ms");
+    this.expiresUnixMS = adminPositiveInteger(value.expires_unix_ms, "expires_unix_ms");
+    this.scopes = adminStringArray(value.scopes, "scopes");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new DeviceCredential(parseJSON(raw, "device credential"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      credential_id: this.credentialID,
+      device_ura: this.deviceURA,
+      hub_ura: this.hubURA,
+      state: this.state,
+      issued_unix_ms: this.issuedUnixMS,
+      expires_unix_ms: this.expiresUnixMS,
+      scopes: [...this.scopes],
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class DeviceSession {
+  constructor(fields) {
+    const value = objectValue(fields, "device session");
+    validateAdminKind(value, "device_session");
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.sessionID = requiredAdminString(value.session_id, "session_id");
+    this.deviceURA = requiredAdminURA(value.device_ura, "device_ura");
+    this.hubURA = requiredAdminURA(value.hub_ura, "hub_ura");
+    this.state = requiredAdminString(value.state, "state");
+    this.sessionKind = requiredAdminString(value.session_kind, "session_kind");
+    this.createdUnixMS = adminNonNegativeInteger(value.created_unix_ms, "created_unix_ms");
+    this.expiresUnixMS = adminPositiveInteger(value.expires_unix_ms, "expires_unix_ms");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new DeviceSession(parseJSON(raw, "device session"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      session_id: this.sessionID,
+      device_ura: this.deviceURA,
+      hub_ura: this.hubURA,
+      state: this.state,
+      session_kind: this.sessionKind,
+      created_unix_ms: this.createdUnixMS,
+      expires_unix_ms: this.expiresUnixMS,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class DeviceSessionPage {
+  constructor(fields) {
+    const value = objectValue(fields, "device session page");
+    validateAdminKind(value, "device_sessions");
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.state = requiredAdminString(value.state, "state");
+    if (!Array.isArray(value.items)) {
+      throw invalidAdminGateway("device session items must be an array");
+    }
+    this.items = value.items.map((item) => new DeviceSession(item));
+    this.nextCursor = value.next_cursor ?? null;
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new DeviceSessionPage(parseJSON(raw, "device session page"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      state: this.state,
+      items: this.items.map((item) => item.toJSON()),
+      next_cursor: this.nextCursor,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class AdminClient {
+  constructor(transport) {
+    if (!transport || typeof transport.buildAgentListInvocation !== "function") {
+      throw invalidSDK("admin gateway transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async buildAgentListInvocation(request) {
+    return this.buildInvocation("buildAgentListInvocation", adminBaseRequest(request, "admin agent list request"));
+  }
+
+  async buildAgentStartInvocation(request) {
+    return this.buildInvocation("buildAgentStartInvocation", adminAgentStartRequest(request));
+  }
+
+  async buildAgentStopInvocation(request) {
+    return this.buildInvocation("buildAgentStopInvocation", adminAgentStopRequest(request));
+  }
+
+  async buildAgentRefreshInvocation(request) {
+    return this.buildInvocation("buildAgentRefreshInvocation", adminAgentRefreshRequest(request));
+  }
+
+  async buildSessionListInvocation(request) {
+    return this.buildInvocation("buildSessionListInvocation", adminSessionListRequest(request));
+  }
+
+  async buildInvocation(method, payload) {
+    return InvocationDraft.fromJSON(await callRaw(this.requireOpen(), method, payload));
+  }
+
+  async gatewayStatus(request = {}) {
+    return GatewayStatus.fromJSON(await callRaw(this.requireOpen(), "gatewayStatus", adminGatewayStatusRequest(request)));
+  }
+
+  async listAgents(request) {
+    return AdminAgentPage.fromJSON(await callRaw(this.requireOpen(), "listAgents", adminBaseRequest(request, "admin agent list request")));
+  }
+
+  async startAgent(request) {
+    return AdminGatewayResult.fromJSON(await callRaw(this.requireOpen(), "startAgent", adminAgentStartRequest(request)));
+  }
+
+  async stopAgent(request) {
+    return AdminGatewayResult.fromJSON(await callRaw(this.requireOpen(), "stopAgent", adminAgentStopRequest(request)));
+  }
+
+  async refreshAgent(request) {
+    return AdminGatewayResult.fromJSON(await callRaw(this.requireOpen(), "refreshAgent", adminAgentRefreshRequest(request)));
+  }
+
+  async listSessions(request) {
+    return DeviceSessionPage.fromJSON(await callRaw(this.requireOpen(), "listSessions", adminSessionListRequest(request)));
+  }
+
+  async pairingPreflight(request) {
+    return PairingPreflight.fromJSON(await callRaw(this.requireOpen(), "pairingPreflight", adminPairingPreflightRequest(request)));
+  }
+
+  async createPairing(request) {
+    return PairingToken.fromJSON(await callRaw(this.requireOpen(), "createPairing", adminCreatePairingRequest(request)));
+  }
+
+  async validatePairing(request) {
+    return DeviceCredential.fromJSON(await callRaw(this.requireOpen(), "validatePairing", adminValidatePairingRequest(request)));
+  }
+
+  async createDeviceSession(request) {
+    return DeviceSession.fromJSON(await callRaw(this.requireOpen(), "createDeviceSession", adminCreateDeviceSessionRequest(request)));
+  }
+
+  async listDeviceSessions(request) {
+    return this.listSessions(request);
+  }
+
+  async deleteDeviceSession(request) {
+    return AdminGatewayResult.fromJSON(await callRaw(this.requireOpen(), "deleteDeviceSession", adminDeleteDeviceSessionRequest(request)));
+  }
+
+  async projectGatewayStatus(value) {
+    return GatewayStatus.fromJSON(await callAdminProjection(this.requireOpen(), "projectGatewayStatus", value));
+  }
+
+  async projectAgentRecords(value) {
+    return AdminAgentPage.fromJSON(await callAdminProjection(this.requireOpen(), "projectAgentRecords", value));
+  }
+
+  async projectAgentLifecycleResult(value) {
+    return AdminGatewayResult.fromJSON(await callAdminProjection(this.requireOpen(), "projectAgentLifecycleResult", value));
+  }
+
+  async projectPairingPreflight(value) {
+    return PairingPreflight.fromJSON(await callAdminProjection(this.requireOpen(), "projectPairingPreflight", value));
+  }
+
+  async projectPairingToken(value) {
+    return PairingToken.fromJSON(await callAdminProjection(this.requireOpen(), "projectPairingToken", value));
+  }
+
+  async projectDeviceCredential(value) {
+    return DeviceCredential.fromJSON(await callAdminProjection(this.requireOpen(), "projectDeviceCredential", value));
+  }
+
+  async projectDeviceSession(value) {
+    return DeviceSession.fromJSON(await callAdminProjection(this.requireOpen(), "projectDeviceSession", value));
+  }
+
+  async projectDeviceSessionPage(value) {
+    return DeviceSessionPage.fromJSON(await callAdminProjection(this.requireOpen(), "projectDeviceSessionPage", value));
+  }
+
+  async projectDeviceAdminResult(value) {
+    return AdminGatewayResult.fromJSON(await callAdminProjection(this.requireOpen(), "projectDeviceAdminResult", value));
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("admin gateway client is closed");
     }
     return this.transport;
   }
@@ -3628,6 +4107,258 @@ function callMissionProjection(transport, method, value) {
   throw invalidMission("mission projection must be bytes, string, or object");
 }
 
+function adminCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+  ];
+}
+
+function adminGatewayStatusRequest(value) {
+  const payload = adminRequest(value, ["require_public_listener", "metadata"], "gateway status request");
+  if (payload.require_public_listener !== undefined) {
+    adminBoolean(payload.require_public_listener, "require_public_listener");
+  }
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+  return payload;
+}
+
+function adminBaseRequest(value, label) {
+  const payload = adminRequest(value, adminCarrierBaseFields(), label);
+  validateAdminCarrierBase(payload);
+  return payload;
+}
+
+function adminAgentStartRequest(value) {
+  const payload = adminRequest(
+    value,
+    [
+      ...adminCarrierBaseFields(),
+      "name",
+      "agent_type",
+      "entry",
+      "model",
+      "label",
+      "command",
+      "command_args",
+      "root_path",
+      "model_present",
+      "materialize_directory",
+      "update_existing_spec",
+      "project_workspace",
+    ],
+    "admin agent start request",
+  );
+  validateAdminCarrierBase(payload);
+  validateAdminAgentName(payload.name, "name");
+  if (payload.agent_type === undefined && payload.entry === undefined) {
+    throw invalidAdminGateway("agent_type or entry is required");
+  }
+  for (const field of ["agent_type", "model", "label", "command", "root_path"]) {
+    if (payload[field] !== undefined) {
+      requiredAdminString(payload[field], field);
+    }
+  }
+  if (payload.entry !== undefined) {
+    objectValue(payload.entry, "entry");
+  }
+  if (payload.command_args !== undefined) {
+    adminStringArray(payload.command_args, "command_args");
+  }
+  for (const field of ["model_present", "materialize_directory", "update_existing_spec", "project_workspace"]) {
+    if (payload[field] !== undefined) {
+      adminBoolean(payload[field], field);
+    }
+  }
+  return payload;
+}
+
+function adminAgentStopRequest(value) {
+  const payload = adminRequest(value, [...adminCarrierBaseFields(), "name", "agent_ura"], "admin agent stop request");
+  validateAdminCarrierBase(payload);
+  if (!payload.name && !payload.agent_ura) {
+    throw invalidAdminGateway("name or agent_ura is required");
+  }
+  if (payload.name !== undefined) {
+    validateAdminAgentName(payload.name, "name");
+  }
+  if (payload.agent_ura !== undefined) {
+    requiredAdminURA(payload.agent_ura, "agent_ura");
+  }
+  return payload;
+}
+
+function adminAgentRefreshRequest(value) {
+  const payload = adminRequest(value, [...adminCarrierBaseFields(), "name"], "admin agent refresh request");
+  validateAdminCarrierBase(payload);
+  if (payload.name !== undefined) {
+    validateAdminAgentName(payload.name, "name");
+  }
+  return payload;
+}
+
+function adminSessionListRequest(value) {
+  const payload = adminRequest(value, [...adminCarrierBaseFields(), "include_terminated"], "admin session list request");
+  validateAdminCarrierBase(payload);
+  if (payload.include_terminated !== undefined) {
+    adminBoolean(payload.include_terminated, "include_terminated");
+  }
+  return payload;
+}
+
+function adminPairingPreflightRequest(value) {
+  const payload = adminRequest(
+    value,
+    [...adminCarrierBaseFields(), "hub_ura", "device_ura", "requested_scopes"],
+    "admin pairing preflight request",
+  );
+  validateAdminCarrierBase(payload);
+  requiredAdminURA(payload.hub_ura, "hub_ura");
+  requiredAdminURA(payload.device_ura, "device_ura");
+  if (payload.requested_scopes !== undefined) {
+    adminStringArray(payload.requested_scopes, "requested_scopes");
+  }
+  return payload;
+}
+
+function adminCreatePairingRequest(value) {
+  const payload = adminRequest(
+    value,
+    [...adminCarrierBaseFields(), "hub_ura", "device_ura", "expires_unix_ms", "scopes"],
+    "admin pairing create request",
+  );
+  validateAdminCarrierBase(payload);
+  requiredAdminURA(payload.hub_ura, "hub_ura");
+  requiredAdminURA(payload.device_ura, "device_ura");
+  adminPositiveInteger(payload.expires_unix_ms, "expires_unix_ms");
+  if (payload.scopes !== undefined) {
+    adminStringArray(payload.scopes, "scopes");
+  }
+  return payload;
+}
+
+function adminValidatePairingRequest(value) {
+  const payload = adminRequest(
+    value,
+    [...adminCarrierBaseFields(), "token", "device_ura"],
+    "admin pairing validate request",
+  );
+  validateAdminCarrierBase(payload);
+  requiredAdminString(payload.token, "token");
+  requiredAdminURA(payload.device_ura, "device_ura");
+  return payload;
+}
+
+function adminCreateDeviceSessionRequest(value) {
+  const payload = adminRequest(
+    value,
+    [...adminCarrierBaseFields(), "device_ura", "hub_ura", "session_kind", "expires_unix_ms"],
+    "admin device session create request",
+  );
+  validateAdminCarrierBase(payload);
+  requiredAdminURA(payload.device_ura, "device_ura");
+  requiredAdminURA(payload.hub_ura, "hub_ura");
+  requiredAdminString(payload.session_kind, "session_kind");
+  if (payload.expires_unix_ms !== undefined) {
+    adminPositiveInteger(payload.expires_unix_ms, "expires_unix_ms");
+  }
+  return payload;
+}
+
+function adminDeleteDeviceSessionRequest(value) {
+  const payload = adminRequest(
+    value,
+    [...adminCarrierBaseFields(), "session_id", "reason"],
+    "admin device session delete request",
+  );
+  validateAdminCarrierBase(payload);
+  requiredAdminString(payload.session_id, "session_id");
+  if (payload.reason !== undefined) {
+    requiredAdminString(payload.reason, "reason");
+  }
+  return payload;
+}
+
+function adminRequest(value, allowed, label) {
+  const payload = objectValue(value, label);
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(payload)) {
+    if (!allowedSet.has(key)) {
+      throw invalidAdminGateway(`${key} is not an admin gateway field`);
+    }
+  }
+  for (const [key, raw] of Object.entries(payload)) {
+    if (typeof raw === "string" && raw.trim() !== raw) {
+      throw invalidAdminGateway(`${key} must not contain surrounding whitespace`);
+    }
+  }
+  return payload;
+}
+
+function validateAdminCarrierBase(payload) {
+  requiredAdminURA(payload.caller_ura, "caller_ura");
+  requiredAdminURA(payload.callee_ura, "callee_ura");
+  requiredAdminURA(payload.subject_ura, "subject_ura");
+  requiredAdminString(payload.descriptor_version, "descriptor_version");
+  requiredAdminString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+}
+
+function validateAdminAgentName(value, field) {
+  const text = requiredAdminString(value, field);
+  if (["system", "daemon", "gateway"].includes(text)) {
+    throw invalidAdminGateway("system agent lifecycle is not allowed");
+  }
+  return text;
+}
+
+function validateAdminKind(value, kind) {
+  if (requiredAdminString(value.profile, "profile") !== ADMIN_GATEWAY_PROFILE || requiredAdminString(value.kind, "kind") !== kind) {
+    throw invalidAdminGateway(`invalid ${kind} projection`);
+  }
+}
+
+function callAdminProjection(transport, method, value) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  if (
+    value instanceof GatewayStatus ||
+    value instanceof AdminAgentPage ||
+    value instanceof AdminGatewayResult ||
+    value instanceof PairingPreflight ||
+    value instanceof PairingToken ||
+    value instanceof DeviceCredential ||
+    value instanceof DeviceSession ||
+    value instanceof DeviceSessionPage
+  ) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value.toJSON()))));
+  }
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw invalidAdminGateway("admin gateway projection JSON is required");
+    }
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value))));
+  }
+  throw invalidAdminGateway("admin gateway projection must be bytes, string, or object");
+}
+
 function compatibilityCarrierBaseFields() {
   return [
     "caller_ura",
@@ -4426,6 +5157,66 @@ function missionObjectArray(value, field) {
     throw invalidMission(`${field} must be an array`);
   }
   return value.map((item) => objectValue(item, field));
+}
+
+function requiredAdminString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidAdminGateway(`${field} is required`);
+  }
+  return value;
+}
+
+function adminOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidAdminGateway(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredAdminURA(value, field) {
+  const text = requiredAdminString(value, field);
+  if (!text.startsWith("easynet:///r/")) {
+    throw invalidAdminGateway(`${field} must be a URA`);
+  }
+  return text;
+}
+
+function adminBoolean(value, field) {
+  if (typeof value !== "boolean") {
+    throw invalidAdminGateway(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function adminNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidAdminGateway(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function adminPositiveInteger(value, field) {
+  if (!Number.isInteger(value) || value < 1) {
+    throw invalidAdminGateway(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function adminObjectArray(value, field) {
+  if (!Array.isArray(value)) {
+    throw invalidAdminGateway(`${field} must be an array`);
+  }
+  return value.map((item) => objectValue(item, field));
+}
+
+function adminStringArray(value, field) {
+  if (!Array.isArray(value)) {
+    throw invalidAdminGateway(`${field} must be an array`);
+  }
+  return value.map((item) => requiredAdminString(item, field));
 }
 
 function requiredCompatibilityString(value, field) {
@@ -5640,6 +6431,10 @@ function invalidEvents(message, details = {}) {
 
 function invalidMission(message, details = {}) {
   return invalidProfile(MISSION_PROFILE, "mission", message, details);
+}
+
+function invalidAdminGateway(message, details = {}) {
+  return invalidProfile(ADMIN_GATEWAY_PROFILE, "admin_gateway", message, details);
 }
 
 function invalidSurface(message, details = {}) {
