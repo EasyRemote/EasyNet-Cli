@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: SDK returns a typed version mismatch before opening invocation traffic.
 steps:
   - action: load_fixture

@@ -53,5 +53,7 @@ run_report c_abi sdk/conformance/runner/c-abi-action-adapter-report.json >/dev/n
 run_report go sdk/conformance/runner/go-action-adapter-report.json >/dev/null
 run_report python sdk/conformance/runner/python-action-adapter-report.json >/dev/null
 run_report node sdk/conformance/runner/node-action-adapter-report.json >/dev/null
+run_report java sdk/conformance/runner/java-action-adapter-report.json >/dev/null
+run_report swift sdk/conformance/runner/swift-action-adapter-report.json >/dev/null
 
 echo "check-sdk-conformance-reports ok"

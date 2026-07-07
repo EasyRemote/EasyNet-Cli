@@ -303,7 +303,7 @@
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}, {"kind": "manifest", "ref": "sdk/conformance/runner/python-action-adapter-report.json"}, {"kind": "static_gate", "ref": "tools/scripts/check-sdk-scaffold.sh"}, {"kind": "static_gate", "ref": "src/bin/sdk-conformance-runner.rs"}]
       },
-      "remaining": "Non-P0 language action-adapter reports and external product cutover smokes remain incomplete outside the Go/Python SDK parity gate."
+      "remaining": "Provider-backed non-P0 daemon transport reports and external product cutover smokes remain incomplete outside the Go/Python SDK parity gate."
     }
   ],
   "product_boundary_rules": [

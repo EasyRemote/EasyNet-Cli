@@ -31,6 +31,7 @@ public final class RuntimeCoreSeamTest {
         };
     var client = new Client(transport);
     check(client.requireABI(4).profiles().get("runtime_core").equals("seam"), "feature profile");
+    expectSDKError(ErrorCode.VERSION_INCOMPATIBLE, () -> client.requireABI(5));
     client.close();
     expectSDKError(ErrorCode.INVALID_HANDLE, client::featureDiscovery);
     check(SDKError.validation("x", "bad").errorClass() == ErrorClass.VALIDATION, "error class");

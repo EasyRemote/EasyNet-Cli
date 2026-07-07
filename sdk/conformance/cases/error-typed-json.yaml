@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Stable ABI return codes project to schema-backed DaemonError JSON so bindings never parse human last-error strings.
 steps:
   - action: trigger_invalid_handle_error

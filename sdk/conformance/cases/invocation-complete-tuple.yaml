@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Builder rejects missing seven-tuple fields before prepare or submit.
 steps:
   - action: build_invocation

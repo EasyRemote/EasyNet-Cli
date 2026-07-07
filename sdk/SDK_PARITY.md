@@ -44,7 +44,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | surface | Surface | provider-backed | provider-backed | Backend route serving, browser auth, cache policy, and content UX remain product-owned and incomplete. |
 | compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
 | wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade. |
-| conformance runner | SDK Parity | provider-backed | provider-backed | Non-P0 language action-adapter reports and per-route live product smoke evidence remain incomplete outside the Go/Python SDK parity gate. |
+| conformance runner | SDK Parity | provider-backed | provider-backed | Provider-backed reports for non-P0 daemon transports and per-route live product smoke evidence remain incomplete outside the Go/Python SDK parity gate. |
 
 ## Known Gaps
 
@@ -487,8 +487,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   projection, and Wrapper record projection. The shared conformance runner now
   validates Rust/C ABI/Go/Python/Node/Java/Swift action-adapter reports against every
   declared shared case. The aggregate cutover readiness gate now runs EasyRemote and
-  backend product test smokes; broader non-P0 language coverage and per-route
-  live product smoke evidence remain incomplete.
+  backend product test smokes; provider-backed non-P0 daemon transport reports,
+  broader non-P0 profile coverage, and per-route live product smoke evidence
+  remain incomplete.
 - Node/TypeScript now exposes Runtime Core, Health, Authority, Directory + Identity,
   Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface,
   Compatibility, and Wrappers seams with feature discovery, typed errors, Invocation draft construction,

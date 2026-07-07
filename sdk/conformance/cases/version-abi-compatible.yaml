@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: SDK detects a compatible daemon and ABI version before runtime traffic.
 steps:
   - action: load_fixture

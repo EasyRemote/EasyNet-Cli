@@ -20,6 +20,8 @@ sdk/conformance/
     go-action-adapter-report.json
     python-action-adapter-report.json
     node-action-adapter-report.json
+    java-action-adapter-report.json
+    swift-action-adapter-report.json
 ```
 
 Cases are declarative. Fixtures are golden DTO payloads validated against
@@ -65,7 +67,7 @@ A language runner must:
   record, repository-local evidence, and an evidence kind owned by the report
   language.
 
-Rust, C ABI, Go, Python, and any shipped P1 seam report such as Node must
+Rust, C ABI, Go, Python, and shipped P1 seam reports such as Node, Java, and Swift must
 consume shared cases from `sdk/conformance/cases` and shared fixtures from
 `sdk/conformance/fixtures` for shipped local DTO/actions and projection-only
 profile behavior, including
@@ -82,6 +84,8 @@ cargo run --bin sdk-conformance-runner -- --language c_abi --adapter-report sdk/
 cargo run --bin sdk-conformance-runner -- --language go --adapter-report sdk/conformance/runner/go-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language python --adapter-report sdk/conformance/runner/python-action-adapter-report.json --format jsonl
 cargo run --bin sdk-conformance-runner -- --language node --adapter-report sdk/conformance/runner/node-action-adapter-report.json --format jsonl
+cargo run --bin sdk-conformance-runner -- --language java --adapter-report sdk/conformance/runner/java-action-adapter-report.json --format jsonl
+cargo run --bin sdk-conformance-runner -- --language swift --adapter-report sdk/conformance/runner/swift-action-adapter-report.json --format jsonl
 cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh

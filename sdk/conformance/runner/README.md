@@ -40,6 +40,14 @@ cargo run --bin sdk-conformance-runner -- \
 cargo run --bin sdk-conformance-runner -- \
   --language node \
   --adapter-report sdk/conformance/runner/node-action-adapter-report.json
+
+cargo run --bin sdk-conformance-runner -- \
+  --language java \
+  --adapter-report sdk/conformance/runner/java-action-adapter-report.json
+
+cargo run --bin sdk-conformance-runner -- \
+  --language swift \
+  --adapter-report sdk/conformance/runner/swift-action-adapter-report.json
 ```
 
 Minimum result record:
@@ -69,7 +77,7 @@ instead of being ignored. Evidence kind must match the report language, for
 example `rust_test`, `c_abi_test`, `go_test`, or `python_test`; cross-language
 evidence is rejected.
 
-Rust, C ABI, Go, Python, and any shipped P1 seam report such as Node must
+Rust, C ABI, Go, Python, and shipped P1 seam reports such as Node, Java, and Swift must
 consume shared cases from
 `sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
 shipped local DTO/actions and projection-only profile behavior, including
