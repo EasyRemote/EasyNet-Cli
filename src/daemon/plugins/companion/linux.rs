@@ -4,6 +4,7 @@
 use crate::daemon::plugins::errors::Result;
 
 use super::planner::{DesktopCompanionPlan, PlatformCompanionSpec};
+use super::session::DesktopCompanionSessionProbe;
 use super::status::{
     CompanionObservation, CompanionObservedState, CompanionSessionStatus, CompanionSupervisorState,
 };
@@ -23,13 +24,7 @@ impl DesktopCompanionSupervisor for LinuxDesktopCompanionSupervisor {
     }
 
     fn probe_session(&self) -> CompanionSessionStatus {
-        if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            CompanionSessionStatus::Available
-        } else {
-            CompanionSessionStatus::Unsupported {
-                reason: "no DISPLAY or WAYLAND_DISPLAY in environment".to_string(),
-            }
-        }
+        DesktopCompanionSessionProbe::current().probe("linux")
     }
 
     fn install(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {

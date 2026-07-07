@@ -4,7 +4,9 @@
 // File: src/daemon/plugins/load_plan.rs
 // Description: Convert package index entries into per-boot load decisions.
 
-use crate::daemon::plugins::companion::{DesktopCompanionPlan, DesktopCompanionPlanner};
+use crate::daemon::plugins::companion::{
+    DesktopCompanionPlan, DesktopCompanionPlanner, DesktopCompanionSessionProbe,
+};
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::SharedPluginPackage;
@@ -82,6 +84,7 @@ pub struct PluginLoadPlanner {
     platform: String,
     respect_env_gates: bool,
     companion_planner: DesktopCompanionPlanner,
+    companion_session_probe: DesktopCompanionSessionProbe,
 }
 
 impl PluginLoadPlanner {
@@ -90,6 +93,7 @@ impl PluginLoadPlanner {
         let platform = platform.into();
         Self {
             companion_planner: DesktopCompanionPlanner::new(platform.clone()),
+            companion_session_probe: DesktopCompanionSessionProbe::current(),
             platform,
             respect_env_gates: true,
         }
@@ -110,6 +114,7 @@ impl PluginLoadPlanner {
             platform: current_platform().to_string(),
             respect_env_gates: false,
             companion_planner: DesktopCompanionPlanner::current(),
+            companion_session_probe: DesktopCompanionSessionProbe::current(),
         }
     }
 
@@ -148,9 +153,11 @@ impl PluginLoadPlanner {
                 PluginKind::Builtin => (PluginLoadStatus::MissingBuiltinBinding, None),
                 PluginKind::Declarative => declarative_load_status(package),
                 PluginKind::Sidecar => sidecar_load_status(package),
-                PluginKind::DesktopCompanion => {
-                    companion_load_status(package, &self.companion_planner)
-                }
+                PluginKind::DesktopCompanion => companion_load_status(
+                    package,
+                    &self.companion_planner,
+                    &self.companion_session_probe,
+                ),
             };
         };
         if self.respect_env_gates {
@@ -167,6 +174,7 @@ impl PluginLoadPlanner {
 fn companion_load_status(
     package: &SharedPluginPackage,
     planner: &DesktopCompanionPlanner,
+    session_probe: &DesktopCompanionSessionProbe,
 ) -> (PluginLoadStatus, Option<DesktopCompanionPlan>) {
     if package.manifest().companion().is_none() {
         return (
@@ -177,7 +185,17 @@ fn companion_load_status(
         );
     }
     match planner.plan_package(package) {
-        Ok(plan) => (PluginLoadStatus::Loaded, Some(plan)),
+        Ok(plan) => {
+            let session = session_probe.probe(&plan.platform);
+            if let crate::daemon::plugins::CompanionSessionStatus::Unsupported { reason } = session
+            {
+                return (
+                    PluginLoadStatus::CompanionUnsupportedSession { reason },
+                    Some(plan),
+                );
+            }
+            (PluginLoadStatus::Loaded, Some(plan))
+        }
         Err(reason) => (
             PluginLoadStatus::CompanionUnsupportedPlatform {
                 current: if reason.is_empty() {
@@ -287,6 +305,7 @@ fn current_platform() -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::plugins::package::PluginPackage;
+    use crate::daemon::plugins::CompanionSessionStatus;
 
     #[test]
     fn desktop_companion_is_planned_but_not_runtime_loaded() {
@@ -302,6 +321,56 @@ mod tests {
         assert_eq!(entry.status(), &PluginLoadStatus::Loaded);
         assert!(entry.companion_plan().is_some());
         assert!(!entry.is_loaded());
+    }
+
+    #[test]
+    fn linux_companion_without_graphical_session_is_session_unsupported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_linux_companion_package(dir.path());
+        let package = std::sync::Arc::new(
+            PluginPackage::from_installed(dir.path(), None).expect("companion package"),
+        );
+        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+        let planner = linux_test_planner(CompanionSessionStatus::Unsupported {
+            reason: "headless test session".to_string(),
+        });
+        let plan = planner.plan(&index);
+        let entry = plan.entries().first().expect("plan entry");
+
+        assert_eq!(
+            entry.status(),
+            &PluginLoadStatus::CompanionUnsupportedSession {
+                reason: "headless test session".to_string()
+            }
+        );
+        assert!(entry.companion_plan().is_some());
+        assert!(!entry.is_loaded());
+    }
+
+    #[test]
+    fn linux_companion_with_graphical_session_loads_package_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_linux_companion_package(dir.path());
+        let package = std::sync::Arc::new(
+            PluginPackage::from_installed(dir.path(), None).expect("companion package"),
+        );
+        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+        let planner = linux_test_planner(CompanionSessionStatus::Available);
+        let plan = planner.plan(&index);
+        let entry = plan.entries().first().expect("plan entry");
+
+        assert_eq!(entry.status(), &PluginLoadStatus::Loaded);
+        assert!(entry.companion_plan().is_some());
+        assert!(!entry.is_loaded());
+    }
+
+    fn linux_test_planner(session: CompanionSessionStatus) -> PluginLoadPlanner {
+        PluginLoadPlanner {
+            platform: "linux".to_string(),
+            respect_env_gates: true,
+            companion_planner: DesktopCompanionPlanner::new("linux"),
+            companion_session_probe: DesktopCompanionSessionProbe::with_linux_status(session),
+        }
     }
 
     #[test]
@@ -362,6 +431,44 @@ app_bundle = "dist/macos/EasyNetMenuBar.app"
 supervisor = "launch_agent"
 launch_agent_label = "tech.silan.easynet.menubar"
 session = "aqua"
+"#,
+        )
+        .expect("manifest");
+    }
+
+    fn write_linux_companion_package(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("dist/linux")).expect("linux dist dir");
+        std::fs::write(root.join("dist/linux/easynet-tray"), "").expect("linux executable");
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "easynet.desktop.tray"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/linux/easynet-tray"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["linux"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Tray"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/easynet.desktop.tray/status.json"
+
+[companion.linux]
+exe = "dist/linux/easynet-tray"
+supervisor = "systemd_user"
+unit_name = "easynet-tray.service"
+session = "graphical"
 "#,
         )
         .expect("manifest");

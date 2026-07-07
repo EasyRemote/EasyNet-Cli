@@ -9,6 +9,7 @@ mod heartbeat;
 pub mod linux;
 pub mod macos;
 pub mod planner;
+mod session;
 pub mod state_store;
 pub mod status;
 mod status_file;
@@ -25,6 +26,7 @@ use crate::daemon::plugins::package::SharedPluginPackage;
 pub use planner::{
     current_platform, DesktopCompanionPlan, DesktopCompanionPlanner, PlatformCompanionSpec,
 };
+pub use session::DesktopCompanionSessionProbe;
 pub use state_store::DesktopCompanionStateStore;
 pub use status::{
     boot_policy_wire, health_wire, project_state, project_state_with_action_error,
