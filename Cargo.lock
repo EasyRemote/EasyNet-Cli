@@ -1815,6 +1815,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "easynet-plugin-remote-desktop"
+version = "0.1.0"
+dependencies = [
+ "easynet",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

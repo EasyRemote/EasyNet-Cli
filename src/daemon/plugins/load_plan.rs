@@ -161,7 +161,7 @@ impl PluginLoadPlanner {
             };
         };
         if self.respect_env_gates {
-            if let Some(env_var) = binding.enabled_env_var {
+            if let Some(env_var) = binding.enabled_env_var() {
                 if env_disabled(env_var) {
                     return (PluginLoadStatus::DisabledByEnv { env_var }, None);
                 }
@@ -407,7 +407,7 @@ schema_version = "1"
 id = "easynet.desktop.menubar"
 version = "0.1.0"
 kind = "desktop_companion"
-entrypoint = "platforms/macos/EasyNetMenuBar"
+entrypoint = "dist/macos/EasyNetMenuBar.app"
 abilities = []
 permissions = ["clipboard_read"]
 resources = ["desktop_session"]

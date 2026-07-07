@@ -150,6 +150,29 @@ pub enum PluginHostError {
     },
     #[error("plugin package {0} has no compiled builtin binding")]
     MissingBuiltinBinding(String),
+    #[error("native-static provider is missing for plugin package {0}")]
+    ProviderMissing(String),
+    #[error("native-static provider id mismatch: registry={registry}, provider={provider}")]
+    ProviderIdMismatch {
+        registry: &'static str,
+        provider: &'static str,
+    },
+    #[error(
+        "native-static provider manifest mismatch for {package}: manifest={manifest}, provider={provider}"
+    )]
+    ProviderManifestMismatch {
+        package: String,
+        manifest: String,
+        provider: &'static str,
+    },
+    #[error("native-static provider ability mismatch for {package}: {reason}")]
+    ProviderAbilityMismatch { package: String, reason: String },
+    #[error("native-static provider contribution failed for {package}: {reason}")]
+    ProviderContributionFailed { package: String, reason: String },
+    #[error("native-static provider registry duplicate for package {package}")]
+    ProviderRegistryDuplicate { package: &'static str },
+    #[error("plugin project boundary violation: {reason}")]
+    PluginProjectBoundaryViolation { reason: String },
     #[error("plugin package {0} is already installed")]
     PackageAlreadyInstalled(String),
     #[error("plugin package {0} is not installed")]

@@ -15,11 +15,17 @@ pub mod install;
 pub mod load_plan;
 pub mod manifest;
 pub mod package;
+pub mod provider;
+pub mod provider_registry;
 pub mod realtime;
 pub mod runtime_manager;
 pub mod sidecar;
 pub mod surface;
 pub mod wire;
+
+#[cfg(feature = "remote-desktop")]
+#[path = "../../../plugins/remote-desktop/src/embedded.rs"]
+pub mod remote_desktop;
 
 pub use broker::{
     PluginActivationBroker, PluginPolicyBroker, PluginRealtimeActivationOutcome,
@@ -50,6 +56,8 @@ pub use manifest::{
     PluginRealtimeTransport, PluginRuntimeLimits,
 };
 pub use package::PluginAbilityDescriptor;
+pub use provider::{PluginProvider, PluginProviderId, PluginProviderKind};
+pub use provider_registry::PluginProviderRegistry;
 pub use realtime::{
     activation_plans_for_manifest, PluginRealtimeActivationPlan, PluginRealtimeActivationStatus,
     PluginRealtimeTransportAdapterReadiness, PluginRealtimeTransportAdapterRegistry,
@@ -64,7 +72,7 @@ pub use surface::{
 };
 pub use wire::PluginWireRegistry;
 
-use crate::daemon::plugins::package::BuiltinPluginBinding;
+use crate::daemon::plugins::package::{BuiltinPluginAbilitySpec, BuiltinPluginBinding};
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -77,29 +85,52 @@ use serde_json::Value;
 /// packages live under their product resource owner, not under a separate
 /// top-level plugin source root.
 pub fn builtin_bindings() -> Vec<BuiltinPluginBinding> {
-    vec![
-        desktop_menubar_binding(),
-        #[cfg(feature = "remote-desktop")]
-        crate::daemon::resources::remote_desktop::binding(),
-    ]
+    let mut registry = PluginProviderRegistry::new();
+    registry
+        .register(desktop_menubar_provider())
+        .expect("desktop menubar provider registration is static and unique");
+    #[cfg(feature = "remote-desktop")]
+    registry
+        .register(crate::daemon::plugins::remote_desktop::provider())
+        .expect("remote desktop provider registration is static and unique");
+    registry
+        .into_builtin_bindings()
+        .expect("static provider binding projection must be valid")
 }
 
-fn desktop_menubar_binding() -> BuiltinPluginBinding {
-    fn ability_specs() -> Vec<package::BuiltinPluginAbilitySpec> {
+struct DesktopMenubarProvider;
+
+fn desktop_menubar_provider() -> Arc<dyn PluginProvider> {
+    Arc::new(DesktopMenubarProvider)
+}
+
+impl PluginProvider for DesktopMenubarProvider {
+    fn package_id(&self) -> &'static str {
+        "easynet.desktop.menubar"
+    }
+
+    fn provider_kind(&self) -> PluginProviderKind {
+        PluginProviderKind::DesktopCompanion
+    }
+
+    fn manifest_body(&self) -> &'static str {
+        include_str!("../../../plugins/desktop-menubar/plugin.toml")
+    }
+
+    fn manifest_path(&self) -> &'static str {
+        "plugins/desktop-menubar/plugin.toml"
+    }
+
+    fn expected_entrypoint(&self) -> &'static str {
+        "dist/macos/EasyNetMenuBar.app"
+    }
+
+    fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
         Vec::new()
     }
 
-    fn contribute(_: &mut PluginContributionBuilder, _: PluginRuntimeLimits) -> Result<()> {
+    fn contribute(&self, _: &mut PluginContributionBuilder, _: PluginRuntimeLimits) -> Result<()> {
         Ok(())
-    }
-
-    BuiltinPluginBinding {
-        manifest_path: "plugins/desktop-menubar/plugin.toml",
-        manifest_body: include_str!("../../../plugins/desktop-menubar/plugin.toml"),
-        expected_entrypoint: "dist/macos/EasyNetMenuBar.app",
-        enabled_env_var: None,
-        ability_specs,
-        contribute,
     }
 }
 
@@ -122,7 +153,8 @@ pub fn ability_descriptor_path(name: &str) -> Option<String> {
 pub fn description_for(name: &str) -> Option<&'static str> {
     let package = default_loaded_package_for_ability(name).ok()?;
     let binding = package.builtin_binding()?;
-    (binding.ability_specs)()
+    binding
+        .ability_specs()
         .iter()
         .find(|spec| spec.name == name)
         .map(|spec| (spec.description)())

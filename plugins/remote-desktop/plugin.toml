@@ -2,7 +2,7 @@ schema_version = "1"
 id = "easynet.remote_desktop"
 version = "0.1.0"
 kind = "builtin"
-entrypoint = "easynet_cli::daemon::resources::remote_desktop::contribute"
+entrypoint = "easynet_plugin_remote_desktop::provider"
 
 abilities = ["abilities/*.ability.toml"]
 permissions = [

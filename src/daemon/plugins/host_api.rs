@@ -198,7 +198,7 @@ fn collect_package_contribution(
             let binding = package.builtin_binding().ok_or_else(|| {
                 PluginHostError::MissingBuiltinBinding(package.id().as_str().to_string())
             })?;
-            (binding.contribute)(&mut builder, manifest.limits())?;
+            binding.contribute(&mut builder, manifest.limits())?;
         }
         PluginKind::Sidecar => {
             let command = SidecarCommand::from_package(package);

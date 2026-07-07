@@ -6,6 +6,12 @@ description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
 build = "build.rs"
 
+[workspace]
+members = [
+    ".",
+    "plugins/remote-desktop",
+]
+
 [features]
 default = ["axon-pb", "remote-desktop"]
 

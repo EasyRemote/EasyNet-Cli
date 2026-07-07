@@ -17,6 +17,7 @@ use crate::daemon::plugins::manifest::{
     validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginCallMode,
     PluginPackageManifest, PluginRuntimeLimits,
 };
+use crate::daemon::plugins::provider::ProviderBackedBuiltinBinding;
 
 /// Stable plugin package identifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -178,17 +179,43 @@ impl PluginAbilityDescriptor {
 ///
 /// What this is NOT: package metadata. If a field can live in `plugin.toml`, it
 /// belongs in [`PluginPackageManifest`] and is reached through the package.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct BuiltinPluginBinding {
-    pub manifest_path: &'static str,
-    pub manifest_body: &'static str,
-    pub expected_entrypoint: &'static str,
-    pub enabled_env_var: Option<&'static str>,
-    pub ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
-    pub contribute: fn(
-        &mut crate::daemon::plugins::contribution::PluginContributionBuilder,
-        PluginRuntimeLimits,
-    ) -> Result<()>,
+    provider: ProviderBackedBuiltinBinding,
+}
+
+impl BuiltinPluginBinding {
+    pub fn new(provider: ProviderBackedBuiltinBinding) -> Self {
+        Self { provider }
+    }
+
+    pub fn manifest_path(&self) -> &'static str {
+        self.provider.manifest_path()
+    }
+
+    pub fn manifest_body(&self) -> &'static str {
+        self.provider.manifest_body()
+    }
+
+    pub fn expected_entrypoint(&self) -> &'static str {
+        self.provider.expected_entrypoint()
+    }
+
+    pub fn enabled_env_var(&self) -> Option<&'static str> {
+        self.provider.enabled_env_var()
+    }
+
+    pub fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+        self.provider.ability_specs()
+    }
+
+    pub fn contribute(
+        &self,
+        builder: &mut crate::daemon::plugins::contribution::PluginContributionBuilder,
+        limits: PluginRuntimeLimits,
+    ) -> Result<()> {
+        self.provider.contribute(builder, limits)
+    }
 }
 
 /// Source class for a package in the package index.
@@ -212,19 +239,20 @@ pub struct PluginPackage {
 impl PluginPackage {
     /// Build one builtin package from a compiled binding.
     pub fn from_builtin(binding: BuiltinPluginBinding) -> Result<Self> {
-        let manifest = PluginPackageManifest::parse(binding.manifest_path, binding.manifest_body)?;
-        validate_builtin_entrypoint(&manifest, binding.expected_entrypoint)?;
-        let specs = (binding.ability_specs)();
+        let manifest =
+            PluginPackageManifest::parse(binding.manifest_path(), binding.manifest_body())?;
+        validate_builtin_entrypoint(&manifest, binding.expected_entrypoint())?;
+        let specs = binding.ability_specs();
         validate_builtin_specs(&manifest, &specs)?;
         let descriptors = builtin_descriptors(&manifest, &specs)?;
-        let root = Path::new(binding.manifest_path)
+        let root = Path::new(binding.manifest_path())
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let hash = hash_installable_surface(&root)?;
         Ok(Self {
             root,
-            manifest_path: PathBuf::from(binding.manifest_path),
+            manifest_path: PathBuf::from(binding.manifest_path()),
             manifest,
             descriptors,
             hash,
@@ -330,8 +358,8 @@ impl PluginPackage {
 
     /// Compiled builtin binding, when this package is builtin.
     pub fn builtin_binding(&self) -> Option<BuiltinPluginBinding> {
-        match self.source {
-            PluginPackageSource::Builtin(binding) => Some(binding),
+        match &self.source {
+            PluginPackageSource::Builtin(binding) => Some(binding.clone()),
             PluginPackageSource::Installed => None,
         }
     }
@@ -645,6 +673,50 @@ fn validate_package_child_path(root: &Path, allowed_root: &Path, path: &Path) ->
 pub(crate) mod tests {
     use super::*;
     use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginCallMode};
+    use crate::daemon::plugins::provider::{PluginProvider, PluginProviderKind};
+
+    struct TestBuiltinProvider {
+        manifest: &'static str,
+        ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
+        contribute: fn(
+            &mut crate::daemon::plugins::PluginContributionBuilder,
+            PluginRuntimeLimits,
+        ) -> Result<()>,
+    }
+
+    impl PluginProvider for TestBuiltinProvider {
+        fn package_id(&self) -> &'static str {
+            "test.plugin"
+        }
+
+        fn provider_kind(&self) -> PluginProviderKind {
+            PluginProviderKind::NativeStatic
+        }
+
+        fn manifest_body(&self) -> &'static str {
+            self.manifest
+        }
+
+        fn manifest_path(&self) -> &'static str {
+            "plugins/test/plugin.toml"
+        }
+
+        fn expected_entrypoint(&self) -> &'static str {
+            "test::register"
+        }
+
+        fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+            (self.ability_specs)()
+        }
+
+        fn contribute(
+            &self,
+            builder: &mut crate::daemon::plugins::PluginContributionBuilder,
+            limits: PluginRuntimeLimits,
+        ) -> Result<()> {
+            (self.contribute)(builder, limits)
+        }
+    }
 
     #[test]
     fn plugin_host_package_rejects_hash_mismatch() {
@@ -702,14 +774,13 @@ name = "test.echo"
 layer = "control"
 "#;
 
-        let err = match PluginPackage::from_builtin(BuiltinPluginBinding {
-            manifest_path: "plugins/test/plugin.toml",
-            manifest_body: manifest,
-            expected_entrypoint: "test::register",
-            enabled_env_var: None,
-            ability_specs,
-            contribute,
-        }) {
+        let err = match PluginPackage::from_builtin(BuiltinPluginBinding::new(
+            ProviderBackedBuiltinBinding::new(Arc::new(TestBuiltinProvider {
+                manifest,
+                ability_specs,
+                contribute,
+            })),
+        )) {
             Ok(_) => panic!("manifest layer must match compiled spec"),
             Err(err) => err,
         };

@@ -182,13 +182,7 @@ impl PluginSurfaceProjector {
                 .count();
             let has_abilities = !package.manifest().abilities().is_empty();
             let companion = if package.manifest().kind() == PluginKind::DesktopCompanion {
-                companion_manager
-                    .status_for_package(package)
-                    .ok()
-                    .and_then(|status| serde_json::to_value(status).ok())
-                    .and_then(|value| {
-                        crate::protocol::companion_contract::project_status(&value).ok()
-                    })
+                companion_manager.status_json(package).ok()
             } else {
                 None
             };
@@ -530,7 +524,12 @@ mod tests {
         assert!(!package.descriptor_published);
         assert!(!package.runtime_published);
         assert!(!package.invokable);
-        assert!(package.companion.is_some());
+        let companion = package.companion.as_ref().expect("companion DTO");
+        assert_eq!(companion["profile"], "desktop_companion");
+        assert_eq!(companion["kind"], "desktop_companion_status");
+        assert_eq!(companion["package_id"], "easynet.desktop.menubar");
+        assert_eq!(companion["package_version"], "0.1.0");
+        assert_eq!(companion["projected_state"], "ready_stopped");
     }
 
     #[test]
@@ -618,7 +617,7 @@ schema_version = "1"
 id = "easynet.desktop.menubar"
 version = "0.1.0"
 kind = "desktop_companion"
-entrypoint = "platforms/macos/EasyNetMenuBar"
+entrypoint = "dist/macos/EasyNetMenuBar.app"
 abilities = []
 permissions = ["clipboard_read"]
 resources = ["desktop_session"]

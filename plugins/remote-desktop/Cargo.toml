@@ -1,0 +1,13 @@
+[package]
+name = "easynet-plugin-remote-desktop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Package-owned native-static provider for EasyNet remote desktop abilities."
+
+[lib]
+name = "easynet_plugin_remote_desktop"
+path = "src/lib.rs"
+
+[dependencies]
+easynet_cli = { package = "easynet", path = "../.." }

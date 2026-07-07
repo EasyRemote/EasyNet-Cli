@@ -1489,7 +1489,7 @@ mod tests {
             PluginRequirementSet::default(),
             Vec::new(),
         );
-        crate::daemon::resources::remote_desktop::contribute(&mut builder, limits)
+        crate::daemon::plugins::remote_desktop::contribute(&mut builder, limits)
             .expect("remote desktop plugin contribution");
         let contribution = builder
             .finish()
