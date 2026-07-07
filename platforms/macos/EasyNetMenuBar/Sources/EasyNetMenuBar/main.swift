@@ -26,6 +26,7 @@
 import AppKit
 import Carbon.HIToolbox
 import CryptoKit
+import Darwin
 
 private let appName = "EasyNet"
 private let companionPackageId = "easynet.desktop.menubar"
@@ -140,20 +141,68 @@ final class ClipboardHistoryStore {
     }
 }
 
+struct DaemonRuntimeStatus {
+    let running: Bool
+    let runtimeStatus: String
+    let controlAccepting: Bool
+    let invocationAccepting: Bool
+
+    static let stopped = DaemonRuntimeStatus(
+        running: false,
+        runtimeStatus: "stopped",
+        controlAccepting: false,
+        invocationAccepting: false
+    )
+
+    static func fromDiscovery(controlAdvertised: Bool, invocationAdvertised: Bool) -> DaemonRuntimeStatus {
+        DaemonRuntimeStatus(
+            running: true,
+            runtimeStatus: "running",
+            controlAccepting: controlAdvertised,
+            invocationAccepting: invocationAdvertised
+        )
+    }
+}
+
 final class DaemonStatusProbe {
-    func isRunning() -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-x", "easynet-daemon"]
-        task.standardOutput = Pipe()
-        task.standardError = Pipe()
-        do {
-            try task.run()
-            task.waitUntilExit()
-            return task.terminationStatus == 0
-        } catch {
+    private let controlURL: URL
+
+    init(homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        controlURL = homeURL
+            .appendingPathComponent(".easynet", isDirectory: true)
+            .appendingPathComponent("control.json", isDirectory: false)
+    }
+
+    func read() -> DaemonRuntimeStatus {
+        guard let data = try? Data(contentsOf: controlURL),
+              let raw = try? JSONSerialization.jsonObject(with: data),
+              let object = raw as? [String: Any],
+              let pid = object["pid"] as? Int,
+              processIsAlive(pid)
+        else {
+            return .stopped
+        }
+
+        let controlAdvertised = nonEmptyString(object["socket_path"]) || nonEmptyString(object["pipe_name"])
+        let invocationAdvertised = nonEmptyString(object["invocation_endpoint"])
+        return .fromDiscovery(
+            controlAdvertised: controlAdvertised,
+            invocationAdvertised: invocationAdvertised
+        )
+    }
+
+    private func nonEmptyString(_ value: Any?) -> Bool {
+        guard let text = value as? String else {
             return false
         }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func processIsAlive(_ pid: Int) -> Bool {
+        if kill(pid_t(pid), 0) == 0 {
+            return true
+        }
+        return errno == EPERM
     }
 }
 
@@ -167,7 +216,7 @@ final class CompanionHeartbeatWriter {
             .appendingPathComponent("status.json", isDirectory: false)
     }
 
-    func write(daemonRunning: Bool) {
+    func write(daemon: DaemonRuntimeStatus) {
         let now = UInt64(Date().timeIntervalSince1970 * 1000)
         let payload: [String: Any] = [
             "schema_version": "1",
@@ -178,9 +227,9 @@ final class CompanionHeartbeatWriter {
             "started_at_unix_ms": CompanionProcessStart.startedAtUnixMs,
             "last_seen_unix_ms": now,
             "daemon": [
-                "runtime_status": daemonRunning ? "running" : "stopped",
-                "control_accepting": daemonRunning,
-                "invocation_accepting": daemonRunning,
+                "runtime_status": daemon.runtimeStatus,
+                "control_accepting": daemon.controlAccepting,
+                "invocation_accepting": daemon.invocationAccepting,
             ],
         ]
         do {
@@ -556,8 +605,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateDaemonStatus() {
-        let running = statusProbe.isRunning()
-        heartbeat.write(daemonRunning: running)
+        let status = statusProbe.read()
+        let running = status.running
+        heartbeat.write(daemon: status)
         daemonStatusItem?.title = running ? "Daemon: running" : "Daemon: stopped"
         statusItem?.button?.toolTip = running
             ? "EasyNet is running in the background"

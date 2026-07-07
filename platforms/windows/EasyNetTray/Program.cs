@@ -24,6 +24,7 @@
 // - Local UI facade. It does not own daemon lifecycle, capture, or
 //   EasyNet persistence.
 
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -127,19 +128,14 @@ internal sealed class TrayController : IDisposable
         return File.Exists(iconPath) ? new DrawingIcon(iconPath) : DrawingSystemIcons.Application;
     }
 
-    private static bool DaemonRunning()
-    {
-        return Process.GetProcessesByName("easynet-daemon").Length > 0;
-    }
-
     private void UpdateDaemonStatus()
     {
-        var running = DaemonRunning();
-        _daemonStatusItem.Text = running ? "Daemon: running" : "Daemon: stopped";
-        _notifyIcon.Text = running
+        var status = DaemonStatusProbe.Read();
+        _daemonStatusItem.Text = status.Running ? "Daemon: running" : "Daemon: stopped";
+        _notifyIcon.Text = status.Running
             ? "EasyNet is running in the background"
             : "EasyNet daemon is not running";
-        _heartbeat.Write(running);
+        _heartbeat.Write(status);
     }
 
     private void ToggleHistory()
@@ -202,7 +198,7 @@ internal sealed class CompanionHeartbeatWriter
         _statusPath = Path.Combine(home, ".easynet", "companions", PackageId, "status.json");
     }
 
-    public void Write(bool daemonRunning)
+    public void Write(DaemonRuntimeStatus daemon)
     {
         var payload = new
         {
@@ -215,9 +211,9 @@ internal sealed class CompanionHeartbeatWriter
             last_seen_unix_ms = UnixNowMs(),
             daemon = new
             {
-                runtime_status = daemonRunning ? "running" : "stopped",
-                control_accepting = daemonRunning,
-                invocation_accepting = daemonRunning,
+                runtime_status = daemon.RuntimeStatus,
+                control_accepting = daemon.ControlAccepting,
+                invocation_accepting = daemon.InvocationAccepting,
             },
         };
 
@@ -267,6 +263,92 @@ internal sealed class CompanionHeartbeatWriter
     private static long UnixNowMs()
     {
         return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+}
+
+internal readonly record struct DaemonRuntimeStatus(
+    bool Running,
+    string RuntimeStatus,
+    bool ControlAccepting,
+    bool InvocationAccepting
+)
+{
+    public static DaemonRuntimeStatus Stopped { get; } = new(false, "stopped", false, false);
+
+    public static DaemonRuntimeStatus FromDiscovery(bool controlAdvertised, bool invocationAdvertised)
+    {
+        return new(true, "running", controlAdvertised, invocationAdvertised);
+    }
+}
+
+internal static class DaemonStatusProbe
+{
+    public static DaemonRuntimeStatus Read()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var path = Path.Combine(home, ".easynet", "control.json");
+        if (!File.Exists(path))
+        {
+            return DaemonRuntimeStatus.Stopped;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path, Encoding.UTF8));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("pid", out var pidElement) ||
+                !pidElement.TryGetInt32(out var pid) ||
+                !ProcessIsAlive(pid))
+            {
+                return DaemonRuntimeStatus.Stopped;
+            }
+
+            var controlAdvertised =
+                HasNonEmptyString(root, "pipe_name") ||
+                HasNonEmptyString(root, "socket_path");
+            var invocationAdvertised = HasNonEmptyString(root, "invocation_endpoint");
+            return DaemonRuntimeStatus.FromDiscovery(controlAdvertised, invocationAdvertised);
+        }
+        catch (IOException)
+        {
+            return DaemonRuntimeStatus.Stopped;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return DaemonRuntimeStatus.Stopped;
+        }
+        catch (JsonException)
+        {
+            return DaemonRuntimeStatus.Stopped;
+        }
+    }
+
+    private static bool HasNonEmptyString(JsonElement root, string property)
+    {
+        return root.TryGetProperty(property, out var value) &&
+            value.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(value.GetString());
+    }
+
+    private static bool ProcessIsAlive(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (Win32Exception)
+        {
+            return false;
+        }
     }
 }
 
