@@ -316,6 +316,18 @@
       "message": "Swift profile-specific operations outside directly declared seam clients remain unsupported."
     },
     {
+      "case_id": "memc/semantic_alignment",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        }
+      ],
+      "message": "Swift seam semantic terms map to the same MEMC owners and descriptor-ref delegation contract as the shared daemon SDK ledger."
+    },
+    {
       "case_id": "mission/carrier_status",
       "profile": "mission",
       "status": "passed",

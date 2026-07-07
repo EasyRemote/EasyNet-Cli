@@ -861,6 +861,7 @@ case_files=(
   directory-subscription-stream.yaml
   memc-profile-exclusivity.yaml
   memc-consumer-coverage.yaml
+  memc-semantic-alignment.yaml
   memc-no-core-bloat.yaml
 )
 
@@ -919,6 +920,8 @@ require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedProfileExclu
 require_literal sdk/go/conformance_test.go "memc/profile_exclusivity"
 require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedConsumerCoverageConformanceCase"
 require_literal sdk/go/conformance_test.go "memc/consumer_coverage"
+require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedSemanticAlignmentConformanceCase"
+require_literal sdk/go/conformance_test.go "memc/semantic_alignment"
 require_literal sdk/go/conformance_test.go "TestGoMEMCExecutesSharedNoCoreBloatConformanceCase"
 require_literal sdk/go/conformance_test.go "memc/no_core_bloat"
 require_literal sdk/go/conformance_test.go "TestGoBackendCutoverExecutesSharedRouteFamilyCoverageConformanceCase"
@@ -940,6 +943,8 @@ require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_
 require_literal sdk/python/tests/test_conformance.py "memc/profile_exclusivity"
 require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_consumer_coverage_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "memc/consumer_coverage"
+require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_semantic_alignment_conformance_case"
+require_literal sdk/python/tests/test_conformance.py "memc/semantic_alignment"
 require_literal sdk/python/tests/test_conformance.py "test_python_memc_executes_shared_no_core_bloat_conformance_case"
 require_literal sdk/python/tests/test_conformance.py "memc/no_core_bloat"
 require_literal sdk/python/tests/test_conformance.py "test_python_sdk_executes_shared_parity_matrix_conformance_case"

@@ -153,6 +153,26 @@
     {
       "spec_case_id": "python/easyremote_product_facade_only",
       "covered_by": ["python/easyremote_profile_extraction"]
+    },
+    {
+      "spec_case_id": "memc/profile_exclusivity",
+      "covered_by": ["memc/profile_exclusivity"]
+    },
+    {
+      "spec_case_id": "memc/consumer_coverage",
+      "covered_by": ["memc/consumer_coverage"]
+    },
+    {
+      "spec_case_id": "memc/semantic_alignment",
+      "covered_by": ["memc/semantic_alignment", "invocation/descriptor_ref_helper_delegation"]
+    },
+    {
+      "spec_case_id": "memc/no_core_bloat",
+      "covered_by": ["memc/no_core_bloat"]
+    },
+    {
+      "spec_case_id": "invocation/descriptor_ref_helper_delegation",
+      "covered_by": ["invocation/descriptor_ref_helper_delegation"]
     }
   ]
 }

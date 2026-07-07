@@ -294,7 +294,7 @@
     {
       "capability_id": "conformance_runner",
       "profile": "conformance",
-      "shared_cases": ["sdk/conformance/cases/memc-profile-exclusivity.yaml", "sdk/conformance/cases/memc-consumer-coverage.yaml", "sdk/conformance/cases/memc-no-core-bloat.yaml"],
+      "shared_cases": ["sdk/conformance/cases/memc-profile-exclusivity.yaml", "sdk/conformance/cases/memc-consumer-coverage.yaml", "sdk/conformance/cases/memc-semantic-alignment.yaml", "sdk/conformance/cases/memc-no-core-bloat.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/conformance_test.go"}, {"kind": "manifest", "ref": "sdk/conformance/runner/go-action-adapter-report.json"}, {"kind": "static_gate", "ref": "tools/scripts/check-sdk-scaffold.sh"}, {"kind": "static_gate", "ref": "src/bin/sdk-conformance-runner.rs"}]

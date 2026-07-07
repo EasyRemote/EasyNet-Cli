@@ -3142,6 +3142,33 @@ func auditSharedProfileOwnership(audits []sharedProfileOwnershipAudit) ([]string
 	return unmapped, duplicateOwners
 }
 
+func TestGoMEMCExecutesSharedSemanticAlignmentConformanceCase(t *testing.T) {
+	root := repositoryRoot(t)
+	alignmentCase := sharedCase(t, root, "memc-semantic-alignment.yaml")
+	requireCaseID(t, alignmentCase, "memc/semantic_alignment")
+	requireCaseAction(t, alignmentCase, "inspect_semantic_ledger")
+	requireCaseAction(t, alignmentCase, "verify_term_ownership")
+	requireCaseAction(t, alignmentCase, "reject_product_specific_sdk_terms")
+	for _, expected := range []string{
+		"result: ok",
+		"sdk_term_alignment: true",
+		"product_specific_sdk_terms: false",
+		"raw_descriptor_ref_assembly: false",
+		"descriptor_ref_case: invocation/descriptor_ref_helper_delegation",
+	} {
+		requireCaseExpectation(t, alignmentCase, expected)
+	}
+	for _, term := range []string{
+		"capability: AbilityDescriptor plus AbilityImpl binding",
+		"invocation: seven_tuple_runtime_core",
+		"receipt: receipt_profile_projection",
+		"pipeline: mission_profile_eal_source",
+		"context_call: child_invocation_with_parent_causal_ref",
+	} {
+		requireCaseLiteral(t, alignmentCase, term)
+	}
+}
+
 func TestGoMEMCExecutesSharedConsumerCoverageConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
 	coverageCase := sharedCase(t, root, "memc-consumer-coverage.yaml")

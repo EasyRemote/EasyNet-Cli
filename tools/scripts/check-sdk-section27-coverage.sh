@@ -58,6 +58,11 @@ REQUIRED_SPEC_CASES = (
     "python/easyremote_host_binding_profile",
     "python/easyremote_admin_gateway_profile",
     "python/easyremote_product_facade_only",
+    "memc/profile_exclusivity",
+    "memc/consumer_coverage",
+    "memc/semantic_alignment",
+    "memc/no_core_bloat",
+    "invocation/descriptor_ref_helper_delegation",
 )
 
 
@@ -157,7 +162,7 @@ without_required = json.loads(json.dumps(coverage))
 without_required["spec_cases"] = [
     row
     for row in without_required["spec_cases"]
-    if row["spec_case_id"] != "daemon/permission_denied"
+    if row["spec_case_id"] != "memc/semantic_alignment"
 ]
 missing.write_text(json.dumps(without_required), encoding="utf-8")
 
@@ -170,7 +175,7 @@ PY
     echo "self-test expected missing SPEC case fixture to fail" >&2
     exit 1
   fi
-  grep -Fq "missing_spec_case:daemon/permission_denied" "$tmp/missing.out"
+  grep -Fq "missing_spec_case:memc/semantic_alignment" "$tmp/missing.out"
 
   if run_validator "$tmp/bad-case.json" >"$tmp/bad-case.out" 2>&1; then
     echo "self-test expected missing covered case fixture to fail" >&2

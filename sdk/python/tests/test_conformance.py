@@ -4461,6 +4461,29 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual([], unmapped)
         self.assertEqual([], duplicate_owners)
 
+    def test_python_memc_executes_shared_semantic_alignment_conformance_case(self) -> None:
+        alignment_case = shared_case("memc-semantic-alignment.yaml")
+        self._require_case_id(alignment_case, "memc/semantic_alignment")
+        self._require_case_action(alignment_case, "inspect_semantic_ledger")
+        self._require_case_action(alignment_case, "verify_term_ownership")
+        self._require_case_action(alignment_case, "reject_product_specific_sdk_terms")
+        for expected in (
+            "result: ok",
+            "sdk_term_alignment: true",
+            "product_specific_sdk_terms: false",
+            "raw_descriptor_ref_assembly: false",
+            "descriptor_ref_case: invocation/descriptor_ref_helper_delegation",
+        ):
+            self._require_case_expectation(alignment_case, expected)
+        for term in (
+            "capability: AbilityDescriptor plus AbilityImpl binding",
+            "invocation: seven_tuple_runtime_core",
+            "receipt: receipt_profile_projection",
+            "pipeline: mission_profile_eal_source",
+            "context_call: child_invocation_with_parent_causal_ref",
+        ):
+            self._require_case_literal(alignment_case, term)
+
     def test_python_memc_executes_shared_consumer_coverage_conformance_case(self) -> None:
         coverage_case = shared_case("memc-consumer-coverage.yaml")
         self._require_case_id(coverage_case, "memc/consumer_coverage")

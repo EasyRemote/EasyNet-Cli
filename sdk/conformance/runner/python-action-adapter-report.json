@@ -388,6 +388,18 @@
       "message": null
     },
     {
+      "case_id": "memc/semantic_alignment",
+      "profile": "memc",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": "Python SDK semantic terms map to the same MEMC owners and descriptor-ref delegation contract as the shared daemon SDK ledger."
+    },
+    {
       "case_id": "mission/carrier_status",
       "profile": "mission",
       "status": "passed",

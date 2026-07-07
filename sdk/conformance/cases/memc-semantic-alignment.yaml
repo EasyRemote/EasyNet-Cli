@@ -1,0 +1,27 @@
+id: memc/semantic_alignment
+profile: memc
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Shared SDK terms map to the same daemon/Axon owners across documents and language facades.
+steps:
+  - action: inspect_semantic_ledger
+  - action: verify_term_ownership
+  - action: reject_product_specific_sdk_terms
+expect:
+  result: ok
+  sdk_term_alignment: true
+  product_specific_sdk_terms: false
+  raw_descriptor_ref_assembly: false
+  descriptor_ref_case: invocation/descriptor_ref_helper_delegation
+  terms:
+    capability: AbilityDescriptor plus AbilityImpl binding
+    invocation: seven_tuple_runtime_core
+    receipt: receipt_profile_projection
+    pipeline: mission_profile_eal_source
+    context_call: child_invocation_with_parent_causal_ref
