@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Convenience wrapper profile projects file, terminal, remote desktop, browser, and media session facts into SDK-owned DTO records and opens session streams/bidi through Runtime Core without owning product HTTP/WebSocket bridges.
 steps:
   - action: project_file_record

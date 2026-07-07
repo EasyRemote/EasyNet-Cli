@@ -405,6 +405,15 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/ValidatePackageOptions.java \
   sdk/java/src/main/java/run/easynet/daemon/ValidatePairingRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/VerifyDeviceCredentialRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperBrowserSession.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperFileRecord.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperMediaSession.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperRemoteDesktopSession.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperSessionRecord.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperTerminalSession.java \
+  sdk/java/src/main/java/run/easynet/daemon/WrapperTransport.java \
   sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
   sdk/swift/.gitignore \
   sdk/swift/Package.swift \
@@ -423,6 +432,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Stream.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Surface.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Wrappers.swift \
   sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \

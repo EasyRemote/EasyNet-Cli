@@ -186,6 +186,13 @@
       "message": "Swift Surface builds page list/create/delete/manifest/health carriers, projects page records/manifests/public refs/health, and keeps rendering outside the SDK."
     },
     {
+      "case_id": "wrappers/profile_records",
+      "profile": "wrappers",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift Wrappers project file, terminal, remote desktop, browser, and media session records over injected transports while leaving HTTP/WebSocket bridge policy outside the SDK."
+    },
+    {
       "case_id": "invocation/descriptor_ref_helper_delegation",
       "profile": "directory_identity",
       "status": "passed",
@@ -197,14 +204,14 @@
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
-      "message": "Swift declares Runtime Core, Health, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, and Surface P1 seams and keeps provider/product cutover outside the facade."
+      "message": "Swift declares Runtime Core, Health, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, and Wrappers P1 seams and keeps provider/product cutover outside the facade."
     },
     {
       "case_id": "memc/no_core_bloat",
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
-      "message": "Swift seam exposes lifecycle, invocation, runtime transport, AsyncSequence stream/bidi handles, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Admin + Gateway carrier/status/session state, Events carrier/frame/stream state, Surface page/manifest/health state, and typed errors only."
+      "message": "Swift seam exposes lifecycle, invocation, runtime transport, AsyncSequence stream/bidi handles, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Admin + Gateway carrier/status/session state, Events carrier/frame/stream state, Surface page/manifest/health state, Wrappers record projection state, and typed errors only."
     },
     {
       "case_id": "memc/profile_exclusivity",

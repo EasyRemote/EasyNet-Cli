@@ -1058,6 +1058,45 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testWrapperProfileProjectsRuntimeRecords() async throws {
+        let wrappers = WrapperClient(transport: FixtureWrapperTransport())
+
+        let file = try await wrappers.projectFileRecord(fixture("wrapper-file-record.v4.json"))
+        XCTAssertEqual(file.fileRef, "easynet:///r/example/resource/alice.files/report.txt")
+        XCTAssertEqual(file.sizeBytes, 42)
+
+        let terminal = try await wrappers.projectTerminalSession(fixture("wrapper-terminal-session.v4.json"))
+        let desktop = try await wrappers.projectRemoteDesktopSession(fixture("wrapper-remote-desktop-session.v4.json"))
+        let browser = try await wrappers.projectBrowserSession(fixture("wrapper-browser-session.v4.json"))
+        let media = try await wrappers.projectMediaSession(fixture("wrapper-media-session.v4.json"))
+        XCTAssertEqual(terminal.terminalRef, "terminal-main")
+        XCTAssertEqual(desktop.displayRef, "display-main")
+        XCTAssertEqual(browser.browserRef, "browser-main")
+        XCTAssertEqual(media.mediaKind, "voice")
+        XCTAssertEqual(media.streamRef, "stream-voice-1")
+
+        let projectedFile = try await wrappers.projectFileRecord(file)
+        let projectedTerminal = try await wrappers.projectTerminalSession(terminal)
+        XCTAssertEqual(projectedFile.ownerURA, file.ownerURA)
+        XCTAssertEqual(projectedTerminal.state, "active")
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try WrapperFileRecord.fromJSON(Data("""
+            {"profile":"wrappers","kind":"file_record","file_ref":"not-a-ura","owner_ura":"easynet:///r/example/agent/alice.sdk","content_type":"text/plain","metadata":{}}
+            """.utf8))
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try WrapperTerminalSession.fromJSON(Data("""
+            {"profile":"wrappers","kind":"terminal_session","session_id":"term-1","owner_ura":"easynet:///r/example/agent/alice.sdk","terminal_ref":"terminal-main","metadata":{}}
+            """.utf8))
+        }
+
+        try await wrappers.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await wrappers.projectFileRecord(fixture("wrapper-file-record.v4.json"))
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -1946,6 +1985,39 @@ final class FixtureSurfaceTransport: SurfaceTransport, @unchecked Sendable {
     func surfaceHealth(_ requestJSON: Data) async throws -> Data {
         try expectJSON(requestJSON, equalsFixture: "surface-health-request.v4.json")
         return fixture("surface-health.v4.json")
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+}
+
+final class FixtureWrapperTransport: WrapperTransport, @unchecked Sendable {
+    func projectFileRecord(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "wrapper-file-record.v4.json")
+        return fixture("wrapper-file-record.v4.json")
+    }
+
+    func projectTerminalSession(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "wrapper-terminal-session.v4.json")
+        return fixture("wrapper-terminal-session.v4.json")
+    }
+
+    func projectRemoteDesktopSession(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "wrapper-remote-desktop-session.v4.json")
+        return fixture("wrapper-remote-desktop-session.v4.json")
+    }
+
+    func projectBrowserSession(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "wrapper-browser-session.v4.json")
+        return fixture("wrapper-browser-session.v4.json")
+    }
+
+    func projectMediaSession(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "wrapper-media-session.v4.json")
+        return fixture("wrapper-media-session.v4.json")
     }
 
     private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {

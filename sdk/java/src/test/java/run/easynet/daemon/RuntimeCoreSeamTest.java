@@ -40,6 +40,7 @@ public final class RuntimeCoreSeamTest {
     hostBindingProfileDelegatesCodecHashAndLifecycle();
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
     surfaceProfileDelegatesCarriersAndProjections();
+    wrapperProfileProjectsRuntimeRecords();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -1309,6 +1310,46 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_HANDLE, () -> surface.listPages(list));
   }
 
+  private static void wrapperProfileProjectsRuntimeRecords() throws Exception {
+    var wrappers = new WrapperClient(new FixtureWrapperTransport());
+
+    var file = wrappers.projectFileRecord(fixture("wrapper-file-record.v4.json"));
+    check(file.fileRef().equals("easynet:///r/example/resource/alice.files/report.txt"), "wrapper file ref");
+    check(file.sizeBytes() == 42L, "wrapper file size");
+
+    var terminal = wrappers.projectTerminalSession(fixture("wrapper-terminal-session.v4.json"));
+    var desktop = wrappers.projectRemoteDesktopSession(fixture("wrapper-remote-desktop-session.v4.json"));
+    var browser = wrappers.projectBrowserSession(fixture("wrapper-browser-session.v4.json"));
+    var media = wrappers.projectMediaSession(fixture("wrapper-media-session.v4.json"));
+    check(terminal.terminalRef().equals("terminal-main"), "wrapper terminal ref");
+    check(desktop.displayRef().equals("display-main"), "wrapper remote desktop ref");
+    check(browser.browserRef().equals("browser-main"), "wrapper browser ref");
+    check(media.mediaKind().equals("voice") && media.streamRef().equals("stream-voice-1"), "wrapper media record");
+
+    check(wrappers.projectFileRecord(file).ownerURA().equals(file.ownerURA()), "wrapper file object projection");
+    check(wrappers.projectTerminalSession(terminal).state().equals("active"), "wrapper terminal object projection");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            WrapperFileRecord.fromJSON(
+                bytes(
+                    """
+                    {"profile":"wrappers","kind":"file_record","file_ref":"not-a-ura","owner_ura":"easynet:///r/example/agent/alice.sdk","content_type":"text/plain","metadata":{}}
+                    """)));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            WrapperTerminalSession.fromJSON(
+                bytes(
+                    """
+                    {"profile":"wrappers","kind":"terminal_session","session_id":"term-1","owner_ura":"easynet:///r/example/agent/alice.sdk","terminal_ref":"terminal-main","metadata":{}}
+                    """)));
+
+    wrappers.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> wrappers.projectFileRecord(fixture("wrapper-file-record.v4.json")));
+  }
+
   private static SurfaceCarrierBase surfaceCarrierBase(Map<String, Object> metadata) {
     return new SurfaceCarrierBase(
         "easynet:///r/example/agent/alice.sdk",
@@ -2127,6 +2168,44 @@ public final class RuntimeCoreSeamTest {
     public byte[] surfaceHealth(byte[] requestJSON) {
       expectRequest(requestJSON, "surface-health-request.v4.json", "surface health request");
       return fixture("surface-health.v4.json");
+    }
+  }
+
+  private static final class FixtureWrapperTransport implements WrapperTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    @Override
+    public byte[] projectFileRecord(byte[] requestJSON) {
+      expectRequest(requestJSON, "wrapper-file-record.v4.json", "wrapper file record");
+      return fixture("wrapper-file-record.v4.json");
+    }
+
+    @Override
+    public byte[] projectTerminalSession(byte[] requestJSON) {
+      expectRequest(requestJSON, "wrapper-terminal-session.v4.json", "wrapper terminal session");
+      return fixture("wrapper-terminal-session.v4.json");
+    }
+
+    @Override
+    public byte[] projectRemoteDesktopSession(byte[] requestJSON) {
+      expectRequest(requestJSON, "wrapper-remote-desktop-session.v4.json", "wrapper remote desktop session");
+      return fixture("wrapper-remote-desktop-session.v4.json");
+    }
+
+    @Override
+    public byte[] projectBrowserSession(byte[] requestJSON) {
+      expectRequest(requestJSON, "wrapper-browser-session.v4.json", "wrapper browser session");
+      return fixture("wrapper-browser-session.v4.json");
+    }
+
+    @Override
+    public byte[] projectMediaSession(byte[] requestJSON) {
+      expectRequest(requestJSON, "wrapper-media-session.v4.json", "wrapper media session");
+      return fixture("wrapper-media-session.v4.json");
     }
   }
 
