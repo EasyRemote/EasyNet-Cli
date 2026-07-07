@@ -5,12 +5,15 @@ from easynet_sdk import (
     AttachOptions,
     AbilityInvocationClient,
     AdminClient,
+    CompanionProjectedState,
     CompatibilityClient,
     ConnectOptions,
     DaemonControl,
     DaemonLifecycleState,
     DaemonMode,
     DaemonStartProjection,
+    DesktopCompanionActionResult,
+    DesktopCompanionStatus,
     DiscoverOptions,
     DirectoryClient,
     ErrorCode,
@@ -71,6 +74,7 @@ class MemoryDaemonTransport:
         self.open_error: Exception | None = None
         self.seen_start: dict[str, object] | None = None
         self.seen_options: dict[str, object] | None = None
+        self.companion_calls: list[tuple[str, str, str]] = []
 
     def discover(self, options_json: bytes) -> bytes:
         self.seen_options = json.loads(options_json.decode("utf-8"))
@@ -138,6 +142,59 @@ class MemoryDaemonTransport:
     def open_wrapper_transport(self, handle_id: str, options_json: bytes):
         return self._open_profile_transport("wrapper", options_json)
 
+    def companion_list(self, handle_id: str) -> bytes:
+        return json.dumps(
+            {
+                "kind": "desktop_companion_list",
+                "companions": [companion_status_dict()],
+            }
+        ).encode("utf-8")
+
+    def companion_status(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        self.companion_calls.append(("status", package_id, package_version))
+        return json.dumps(companion_status_dict(package_id, package_version)).encode("utf-8")
+
+    def companion_enable(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_action("enable", package_id, package_version)
+
+    def companion_disable(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_action("disable", package_id, package_version)
+
+    def companion_start(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_action("start", package_id, package_version)
+
+    def companion_stop(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_action("stop", package_id, package_version)
+
+    def _companion_action(
+        self, action: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        self.companion_calls.append((action, package_id, package_version))
+        status = companion_status_dict(package_id, package_version)
+        return json.dumps(
+            {
+                "profile": "desktop_companion",
+                "kind": "desktop_companion_action_result",
+                "package_id": package_id,
+                "action": action,
+                "changed": True,
+                "status_before": None,
+                "status_after": status,
+                "error": None,
+                "metadata": {},
+            }
+        ).encode("utf-8")
+
     def _open_profile_transport(self, profile: str, options_json: bytes):
         self.profile_opens.append((profile, json.loads(options_json.decode("utf-8"))))
         if profile == "runtime":
@@ -188,6 +245,33 @@ def ready_status() -> bytes:
         b'"invocation_endpoint":"unix:///tmp/daemon.sock",'
         b'"public_endpoint":"https://hub.example"}}'
     )
+
+
+def companion_status_dict(
+    package_id: str = "easynet.desktop.menubar",
+    package_version: str = "0.1.0",
+) -> dict[str, object]:
+    return {
+        "profile": "desktop_companion",
+        "kind": "desktop_companion_status",
+        "package_id": package_id,
+        "package_version": package_version or "0.1.0",
+        "display_name": "EasyNet Menu Bar",
+        "platform": "macos",
+        "desired_state": "enabled",
+        "supervisor_state": "installed_enabled",
+        "observed_state": "running",
+        "projected_state": "running",
+        "boot_policy": "ensure_running_after_daemon_ready",
+        "stop_policy": "keep_running",
+        "health": "status_file",
+        "pid": 123,
+        "version": "0.1.0",
+        "last_seen_unix_ms": 1783411200000,
+        "launch_method": "launch_agent",
+        "error": None,
+        "metadata": {},
+    }
 
 
 class DaemonTests(unittest.TestCase):
@@ -437,6 +521,37 @@ class DaemonTests(unittest.TestCase):
         self.assertTrue(
             all(options["max_message_bytes"] == 4096 for _, options in transport.profile_opens)
         )
+
+    def test_daemon_handle_exposes_desktop_companion_lifecycle(self) -> None:
+        transport = MemoryDaemonTransport()
+        handle = start_daemon(transport, StartConfig(mode=DaemonMode.HUB))
+
+        listed = handle.companion_list()
+        status = handle.companion_status(" easynet.desktop.menubar ", " 0.1.0 ")
+        result = handle.companion_enable("easynet.desktop.menubar", "0.1.0")
+
+        self.assertEqual(len(listed.companions), 1)
+        self.assertIsInstance(status, DesktopCompanionStatus)
+        self.assertEqual(status.projected_state, CompanionProjectedState.RUNNING)
+        self.assertIsInstance(result, DesktopCompanionActionResult)
+        self.assertEqual(result.action, "enable")
+        self.assertEqual(result.status_after, status)
+        self.assertEqual(
+            transport.companion_calls,
+            [
+                ("status", "easynet.desktop.menubar", "0.1.0"),
+                ("enable", "easynet.desktop.menubar", "0.1.0"),
+            ],
+        )
+
+    def test_daemon_handle_rejects_empty_companion_package_id(self) -> None:
+        transport = MemoryDaemonTransport()
+        handle = start_daemon(transport, StartConfig(mode=DaemonMode.HUB))
+
+        with self.assertRaises(SDKError) as caught:
+            handle.companion_status(" ")
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
         handle.detach()
         with self.assertRaises(SDKError) as caught:

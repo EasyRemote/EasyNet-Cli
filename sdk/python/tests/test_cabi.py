@@ -13,6 +13,8 @@ from easynet_sdk import (
     ConnectOptions,
     DaemonControl,
     DaemonMode,
+    DesktopCompanionActionResult,
+    DesktopCompanionStatus,
     CompatibilityCarrierBase,
     CompatibilityChatCompletionRequest,
     CompatibilityClient,
@@ -153,6 +155,33 @@ def _authority_metadata_value(payload: dict[str, object], signature_base64: str)
     return base64.b64encode(wire).decode("ascii")
 
 
+def companion_status_dict(
+    package_id: str = "easynet.desktop.menubar",
+    package_version: str = "0.1.0",
+) -> dict[str, object]:
+    return {
+        "profile": "desktop_companion",
+        "kind": "desktop_companion_status",
+        "package_id": package_id,
+        "package_version": package_version,
+        "display_name": "EasyNet Menu Bar",
+        "platform": "macos",
+        "desired_state": "enabled",
+        "supervisor_state": "installed_enabled",
+        "observed_state": "running",
+        "projected_state": "running",
+        "boot_policy": "ensure_running_after_daemon_ready",
+        "stop_policy": "keep_running",
+        "health": "status_file",
+        "pid": 123,
+        "version": "0.1.0",
+        "last_seen_unix_ms": 1783411200000,
+        "launch_method": "launch_agent",
+        "error": None,
+        "metadata": {},
+    }
+
+
 class FakeRawCABI:
     def __init__(self) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
@@ -179,6 +208,7 @@ class FakeRawCABI:
         self.daemon_detaches: list[int] = []
         self.daemon_open_clients: list[int] = []
         self.daemon_invocation_endpoint_calls: list[int] = []
+        self.companion_calls: list[tuple[str, int, str, str]] = []
         self.stream_events = [
             b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
             b'"payload_json":{"step":1}}',
@@ -206,6 +236,12 @@ class FakeRawCABI:
             self._daemon_invocation_endpoint
         )
         self.easynet_daemon_open_client = FakeSymbol(self._daemon_open_client)
+        self.easynet_companion_list = FakeSymbol(self._companion_list)
+        self.easynet_companion_status = FakeSymbol(self._companion_status)
+        self.easynet_companion_enable = FakeSymbol(self._companion_enable)
+        self.easynet_companion_disable = FakeSymbol(self._companion_disable)
+        self.easynet_companion_start = FakeSymbol(self._companion_start)
+        self.easynet_companion_stop = FakeSymbol(self._companion_stop)
         self.easynet_authority_prepare_delegation = FakeSymbol(
             self._authority_prepare_delegation
         )
@@ -381,6 +417,59 @@ class FakeRawCABI:
         self.daemon_open_clients.append(int(daemon_handle.value))
         out_handle._obj.value = 808
         return 0
+
+    def _companion_list(self, daemon_handle, out_ptr) -> int:
+        self.companion_calls.append(("list", int(daemon_handle.value), "", ""))
+        return self._write(
+            out_ptr,
+            json.dumps(
+                {
+                    "kind": "desktop_companion_list",
+                    "companions": [companion_status_dict()],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
+        )
+
+    def _companion_status(self, daemon_handle, package_id, version, out_ptr) -> int:
+        return self._companion_action("status", daemon_handle, package_id, version, out_ptr)
+
+    def _companion_enable(self, daemon_handle, package_id, version, out_ptr) -> int:
+        return self._companion_action("enable", daemon_handle, package_id, version, out_ptr)
+
+    def _companion_disable(self, daemon_handle, package_id, version, out_ptr) -> int:
+        return self._companion_action("disable", daemon_handle, package_id, version, out_ptr)
+
+    def _companion_start(self, daemon_handle, package_id, version, out_ptr) -> int:
+        return self._companion_action("start", daemon_handle, package_id, version, out_ptr)
+
+    def _companion_stop(self, daemon_handle, package_id, version, out_ptr) -> int:
+        return self._companion_action("stop", daemon_handle, package_id, version, out_ptr)
+
+    def _companion_action(self, action, daemon_handle, package_id, version, out_ptr) -> int:
+        package = package_id.value.decode("utf-8")
+        package_version = version.value.decode("utf-8") if version.value else ""
+        self.companion_calls.append(
+            (action, int(daemon_handle.value), package, package_version)
+        )
+        status = companion_status_dict(package, package_version or "0.1.0")
+        if action == "status":
+            payload = status
+        else:
+            payload = {
+                "profile": "desktop_companion",
+                "kind": "desktop_companion_action_result",
+                "package_id": package,
+                "action": action,
+                "changed": True,
+                "status_before": None,
+                "status_after": status,
+                "error": None,
+                "metadata": {},
+            }
+        return self._write(
+            out_ptr, json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        )
 
     def _authority_prepare_delegation(self, raw, out_ptr) -> int:
         json.loads(raw.value.decode("utf-8"))
@@ -3163,6 +3252,28 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertEqual(handle.invocation_endpoint(), "unix:///tmp/daemon.sock")
         self.assertEqual(raw.daemon_invocation_endpoint_calls, [707])
+
+    def test_daemon_transport_exposes_desktop_companion_lifecycle(self) -> None:
+        raw = FakeRawCABI()
+        lib = CLILibrary(raw)
+        handle = DaemonControl(CABIDaemonTransport(lib)).attach()
+
+        listed = handle.companion_list()
+        status = handle.companion_status("easynet.desktop.menubar", "0.1.0")
+        result = handle.companion_start("easynet.desktop.menubar", "0.1.0")
+
+        self.assertEqual(len(listed.companions), 1)
+        self.assertIsInstance(status, DesktopCompanionStatus)
+        self.assertIsInstance(result, DesktopCompanionActionResult)
+        self.assertEqual(result.status_after, status)
+        self.assertEqual(
+            raw.companion_calls,
+            [
+                ("list", 707, "", ""),
+                ("status", 707, "easynet.desktop.menubar", "0.1.0"),
+                ("start", 707, "easynet.desktop.menubar", "0.1.0"),
+            ],
+        )
 
     def test_runtime_connector_resolves_handshakes_detaches_and_closes(
         self,

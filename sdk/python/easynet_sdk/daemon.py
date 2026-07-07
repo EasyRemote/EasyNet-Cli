@@ -8,6 +8,11 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
 from .connection import ConnectOptions
+from .companion import (
+    DesktopCompanionActionResult,
+    DesktopCompanionList,
+    DesktopCompanionStatus,
+)
 from .daemon_profiles import DaemonHandleProfiles
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
@@ -367,6 +372,39 @@ class DaemonTransport(Protocol):
         ...
 
 
+@runtime_checkable
+class CompanionTransport(Protocol):
+    """Optional daemon transport capability for desktop companion lifecycle."""
+
+    def companion_list(self, handle_id: str) -> bytes:
+        ...
+
+    def companion_status(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        ...
+
+    def companion_enable(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        ...
+
+    def companion_disable(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        ...
+
+    def companion_start(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        ...
+
+    def companion_stop(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        ...
+
+
 @dataclass(frozen=True)
 class DaemonControl:
     """Daemon lifecycle facade root over an integration transport."""
@@ -570,6 +608,51 @@ class DaemonHandle(DaemonHandleProfiles):
 
         return self.open_runtime(options)
 
+    def companion_list(self) -> DesktopCompanionList:
+        self._require_attached()
+        try:
+            raw = self.transport.companion_list(self.handle_id)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("desktop companion list failed", exc) from exc
+        return DesktopCompanionList.from_json(raw)
+
+    def companion_status(
+        self, package_id: str, package_version: str = ""
+    ) -> DesktopCompanionStatus:
+        return DesktopCompanionStatus.from_json(
+            self._companion_action("status", package_id, package_version)
+        )
+
+    def companion_enable(
+        self, package_id: str, package_version: str = ""
+    ) -> DesktopCompanionActionResult:
+        return DesktopCompanionActionResult.from_json(
+            self._companion_action("enable", package_id, package_version)
+        )
+
+    def companion_disable(
+        self, package_id: str, package_version: str = ""
+    ) -> DesktopCompanionActionResult:
+        return DesktopCompanionActionResult.from_json(
+            self._companion_action("disable", package_id, package_version)
+        )
+
+    def companion_start(
+        self, package_id: str, package_version: str = ""
+    ) -> DesktopCompanionActionResult:
+        return DesktopCompanionActionResult.from_json(
+            self._companion_action("start", package_id, package_version)
+        )
+
+    def companion_stop(
+        self, package_id: str, package_version: str = ""
+    ) -> DesktopCompanionActionResult:
+        return DesktopCompanionActionResult.from_json(
+            self._companion_action("stop", package_id, package_version)
+        )
+
     def stop(self, options: StopOptions = StopOptions()) -> None:
         self._require_attached()
         if self.state == DaemonLifecycleState.STOPPED:
@@ -633,6 +716,29 @@ class DaemonHandle(DaemonHandleProfiles):
         if transport is None:
             raise _invalid_daemon(f"{profile} profile transport is required")
         return transport
+
+    def _companion_action(
+        self, action: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        self._require_attached()
+        if not package_id.strip():
+            raise _invalid_daemon("package_id is required")
+        method_name = f"companion_{action}"
+        method = getattr(self.transport, method_name, None)
+        if method is None:
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=f"daemon transport does not support desktop companion {action}",
+            )
+        try:
+            return method(self.handle_id, package_id.strip(), package_version.strip())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error(f"desktop companion {action} failed", exc) from exc
 
 
 def start_daemon(transport: DaemonTransport, config: StartConfig) -> DaemonHandle:

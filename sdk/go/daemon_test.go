@@ -8,18 +8,19 @@ import (
 )
 
 type memoryDaemonTransport struct {
-	discoverJSON string
-	startJSON    string
-	attachJSON   string
-	statusJSON   string
-	stopJSON     string
-	startCalls   int
-	stopCalls    int
-	detachCalls  int
-	openCalls    int
-	openErr      error
-	seenStart    map[string]any
-	seenOptions  map[string]any
+	discoverJSON   string
+	startJSON      string
+	attachJSON     string
+	statusJSON     string
+	stopJSON       string
+	startCalls     int
+	stopCalls      int
+	detachCalls    int
+	openCalls      int
+	openErr        error
+	companionCalls []string
+	seenStart      map[string]any
+	seenOptions    map[string]any
 }
 
 func (m *memoryDaemonTransport) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {
@@ -63,6 +64,36 @@ func (m *memoryDaemonTransport) OpenRuntime(ctx context.Context, handleID string
 	}, []byte(`{"ready":true}`), nil
 }
 
+func (m *memoryDaemonTransport) CompanionList(ctx context.Context, handleID string) ([]byte, error) {
+	return []byte(`{"kind":"desktop_companion_list","companions":[` + companionStatusJSON("easynet.desktop.menubar", "0.1.0") + `]}`), nil
+}
+
+func (m *memoryDaemonTransport) CompanionStatus(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
+	m.companionCalls = append(m.companionCalls, "status:"+packageID+"@"+packageVersion)
+	return []byte(companionStatusJSON(packageID, packageVersion)), nil
+}
+
+func (m *memoryDaemonTransport) CompanionEnable(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
+	return m.companionAction("enable", packageID, packageVersion), nil
+}
+
+func (m *memoryDaemonTransport) CompanionDisable(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
+	return m.companionAction("disable", packageID, packageVersion), nil
+}
+
+func (m *memoryDaemonTransport) CompanionStart(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
+	return m.companionAction("start", packageID, packageVersion), nil
+}
+
+func (m *memoryDaemonTransport) CompanionStop(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
+	return m.companionAction("stop", packageID, packageVersion), nil
+}
+
+func (m *memoryDaemonTransport) companionAction(action string, packageID string, packageVersion string) []byte {
+	m.companionCalls = append(m.companionCalls, action+":"+packageID+"@"+packageVersion)
+	return []byte(`{"profile":"desktop_companion","kind":"desktop_companion_action_result","package_id":"` + packageID + `","action":"` + action + `","changed":true,"status_before":null,"status_after":` + companionStatusJSON(packageID, packageVersion) + `,"error":null,"metadata":{}}`)
+}
+
 func (m *memoryDaemonTransport) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
 	m.stopCalls++
 	return []byte(m.stopJSON), nil
@@ -75,6 +106,13 @@ func (m *memoryDaemonTransport) Detach(ctx context.Context, handleID string) err
 
 func readyDaemonStatus() string {
 	return `{"handle_id":"daemon-1","state":"Running","mode":"hub","pid":42,"endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock","public_endpoint":"https://hub.example"}}`
+}
+
+func companionStatusJSON(packageID string, packageVersion string) string {
+	if packageVersion == "" {
+		packageVersion = "0.1.0"
+	}
+	return `{"profile":"desktop_companion","kind":"desktop_companion_status","package_id":"` + packageID + `","package_version":"` + packageVersion + `","display_name":"EasyNet Menu Bar","platform":"macos","desired_state":"enabled","supervisor_state":"installed_enabled","observed_state":"running","projected_state":"running","boot_policy":"ensure_running_after_daemon_ready","stop_policy":"keep_running","health":"status_file","pid":123,"version":"0.1.0","last_seen_unix_ms":1783411200000,"launch_method":"launch_agent","error":null,"metadata":{}}`
 }
 
 func TestDaemonStartReturnsRuntimeReadyHandle(t *testing.T) {
@@ -167,6 +205,65 @@ func TestDaemonHandleOpenRuntimeRequiresReadyState(t *testing.T) {
 	handle.status.State = DaemonControlReady
 	if _, err := handle.OpenRuntime(context.Background(), ConnectOptions{}); err == nil {
 		t.Fatalf("OpenRuntime succeeded from ControlReady")
+	}
+}
+
+func TestDaemonHandleCompanionLifecycle(t *testing.T) {
+	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
+	handle, err := Start(context.Background(), transport, StartConfig{Mode: ModeHub})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	list, err := handle.CompanionList(context.Background())
+	if err != nil {
+		t.Fatalf("CompanionList: %v", err)
+	}
+	status, err := handle.CompanionStatus(context.Background(), " easynet.desktop.menubar ", " 0.1.0 ")
+	if err != nil {
+		t.Fatalf("CompanionStatus: %v", err)
+	}
+	result, err := handle.CompanionEnable(context.Background(), "easynet.desktop.menubar", "0.1.0")
+	if err != nil {
+		t.Fatalf("CompanionEnable: %v", err)
+	}
+
+	if len(list.Companions) != 1 {
+		t.Fatalf("companions = %d, want 1", len(list.Companions))
+	}
+	if status.ProjectedState != CompanionProjectedRunning {
+		t.Fatalf("projected state = %s", status.ProjectedState)
+	}
+	if result.Action != "enable" || result.StatusAfter == nil || result.StatusAfter.PackageID != status.PackageID {
+		t.Fatalf("unexpected action result: %#v", result)
+	}
+	want := []string{
+		"status:easynet.desktop.menubar@0.1.0",
+		"enable:easynet.desktop.menubar@0.1.0",
+	}
+	if len(transport.companionCalls) != len(want) {
+		t.Fatalf("companion calls = %#v", transport.companionCalls)
+	}
+	for i := range want {
+		if transport.companionCalls[i] != want[i] {
+			t.Fatalf("companion calls = %#v, want %#v", transport.companionCalls, want)
+		}
+	}
+}
+
+func TestDaemonHandleCompanionRequiresPackageID(t *testing.T) {
+	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
+	handle, err := Start(context.Background(), transport, StartConfig{Mode: ModeHub})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	_, err = handle.CompanionStatus(context.Background(), " ", "")
+	if err == nil {
+		t.Fatal("CompanionStatus succeeded with empty package id")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

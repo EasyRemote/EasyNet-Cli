@@ -291,6 +291,62 @@ class CLILibrary:
         self._raise_for_code(code)
         return int(out_handle.value)
 
+    def companion_list(self, daemon_handle: int) -> bytes:
+        return self._call_output(
+            self._raw.easynet_companion_list,
+            ctypes.c_uint64(daemon_handle),
+        )
+
+    def companion_status(
+        self, daemon_handle: int, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_package_action(
+            self._raw.easynet_companion_status,
+            daemon_handle,
+            package_id,
+            package_version,
+        )
+
+    def companion_enable(
+        self, daemon_handle: int, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_package_action(
+            self._raw.easynet_companion_enable,
+            daemon_handle,
+            package_id,
+            package_version,
+        )
+
+    def companion_disable(
+        self, daemon_handle: int, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_package_action(
+            self._raw.easynet_companion_disable,
+            daemon_handle,
+            package_id,
+            package_version,
+        )
+
+    def companion_start(
+        self, daemon_handle: int, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_package_action(
+            self._raw.easynet_companion_start,
+            daemon_handle,
+            package_id,
+            package_version,
+        )
+
+    def companion_stop(
+        self, daemon_handle: int, package_id: str, package_version: str = ""
+    ) -> bytes:
+        return self._companion_package_action(
+            self._raw.easynet_companion_stop,
+            daemon_handle,
+            package_id,
+            package_version,
+        )
+
     def identity_project_ura(self, handle: int, ura: bytes) -> bytes:
         return self._call_output(
             self._raw.easynet_identity_project_ura,
@@ -591,6 +647,26 @@ class CLILibrary:
             ctypes.POINTER(ctypes.c_uint64),
         ]
         self._raw.easynet_daemon_open_client.restype = ctypes.c_int32
+        self._raw.easynet_companion_list.argtypes = [
+            ctypes.c_uint64,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_companion_list.restype = ctypes.c_int32
+        for symbol_name in (
+            "easynet_companion_status",
+            "easynet_companion_enable",
+            "easynet_companion_disable",
+            "easynet_companion_start",
+            "easynet_companion_stop",
+        ):
+            symbol = getattr(self._raw, symbol_name)
+            symbol.argtypes = [
+                ctypes.c_uint64,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            symbol.restype = ctypes.c_int32
         self._raw.easynet_authority_prepare_delegation.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_void_p),
@@ -787,6 +863,32 @@ class CLILibrary:
             return int(out_id.value), ctypes.string_at(out.value)
         finally:
             self._raw.easynet_string_free(out)
+
+    def _companion_package_action(
+        self,
+        function: Any,
+        daemon_handle: int,
+        package_id: str,
+        package_version: str = "",
+    ) -> bytes:
+        if not package_id.strip():
+            raise SDKError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="desktop companion package_id is required",
+            )
+        raw_version = package_version.strip().encode("utf-8")
+        version_arg = (
+            ctypes.c_char_p(raw_version) if raw_version else ctypes.c_char_p(None)
+        )
+        return self._call_output(
+            function,
+            ctypes.c_uint64(daemon_handle),
+            ctypes.c_char_p(package_id.strip().encode("utf-8")),
+            version_arg,
+        )
 
     def _raise_for_code(self, code: int) -> None:
         if code == EASYNET_OK:
@@ -2292,6 +2394,40 @@ class CABIDaemonTransport:
         status["endpoints"] = endpoints
         self._status_cache[handle_id] = status
         return endpoint
+
+    def companion_list(self, handle_id: str) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return self.lib.companion_list(daemon_handle)
+
+    def companion_status(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return self.lib.companion_status(daemon_handle, package_id, package_version)
+
+    def companion_enable(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return self.lib.companion_enable(daemon_handle, package_id, package_version)
+
+    def companion_disable(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return self.lib.companion_disable(daemon_handle, package_id, package_version)
+
+    def companion_start(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return self.lib.companion_start(daemon_handle, package_id, package_version)
+
+    def companion_stop(
+        self, handle_id: str, package_id: str, package_version: str = ""
+    ) -> bytes:
+        daemon_handle = self._require_daemon_handle(handle_id)
+        return self.lib.companion_stop(daemon_handle, package_id, package_version)
 
     def open_runtime(
         self, handle_id: str, options_json: bytes
