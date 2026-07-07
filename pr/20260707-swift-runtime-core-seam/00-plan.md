@@ -9,7 +9,7 @@ Move `sdk/swift` from placeholder to a P1 Runtime Core seam without changing the
 - Add dependency-free Swift value types and clients for typed SDK errors, feature discovery, Invocation draft construction, injected runtime transport dispatch, and bounded stream/bidi state.
 - Add a Swift seam guard to the shared scaffold check.
 - Update SDK status documentation to report Swift as `seam`, not provider-backed.
-- Leave Swift Package Manager metadata, C ABI/daemon transports, profile clients, and action-adapter reports unsupported.
+- Leave C ABI/daemon transports, profile clients, provider-backed transport evidence, and product cutover evidence unsupported.
 
 ## Verification
 

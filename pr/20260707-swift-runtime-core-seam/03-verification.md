@@ -18,6 +18,5 @@ git diff --check
 
 ## Non-Claims
 
-- No Swift action-adapter report exists.
 - No daemon or C ABI transport exists.
 - No provider-backed or cutover-ready Swift capability is claimed.
