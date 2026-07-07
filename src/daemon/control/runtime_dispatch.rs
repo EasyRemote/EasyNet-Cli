@@ -19,12 +19,10 @@
 //   OR:
 //     {"mode":"stream", "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>","subject_ura":"<optional>"}
 //
-// `mode` defaults to "rpc" so a stale axon-runtime that does not
-// know about streaming gets the original single-line response shape.
-// `subject_ura` is optional envelope context. This UDS is still only
-// a daemon-internal local-tool bridge: it does not mint canonical
-// Invocation receipts and does not replace the public daemon.sock
-// Invocation transport.
+// `mode` is required. `subject_ura` is optional envelope context.
+// This UDS is still only a daemon-internal local-tool bridge: it
+// does not mint canonical Invocation receipts and does not replace
+// the public daemon.sock Invocation transport.
 //
 //   RPC response (single line, terminated by \n):
 //     {"ok":true,  "result_b64":"<base64>", "content_type":"application/json"}
@@ -90,19 +88,13 @@ use crate::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
 /// One incoming request on the runtime-dispatch UDS. Mirrors the
 /// shape `axon-runtime/.../execution.rs::try_dispatch_runtime_local_tool`
 /// emits — adding fields here without coordinating axon-runtime
-/// would silently break dispatch. `#[serde(default)]` on every
-/// field keeps an older daemon tolerant of a future axon adding
-/// trailing arguments.
+/// would silently break dispatch.
 #[derive(Debug, Deserialize)]
 struct DispatchRequest {
-    /// Dispatch mode. Defaults to `"rpc"` (backwards compat with a
-    /// stale runtime that omits the field) which keeps the legacy
-    /// single-line response shape. `"stream"` switches to multi-line
-    /// frame output documented in the module header. Anything else
-    /// is rejected with `BAD_REQUEST` rather than silently coerced —
-    /// a typo'd mode should fail loud rather than produce surprising
-    /// output.
-    #[serde(default = "default_mode")]
+    /// Dispatch mode. `"rpc"` uses the single-line response shape.
+    /// `"stream"` switches to multi-line frame output documented in
+    /// the module header. Missing or unknown modes are rejected with
+    /// `BAD_REQUEST` rather than silently coerced.
     mode: String,
     #[serde(default)]
     tool_name: String,
@@ -122,10 +114,6 @@ struct DispatchRequest {
     /// handlers must still reject missing subjects themselves.
     #[serde(default)]
     subject_ura: String,
-}
-
-fn default_mode() -> String {
-    "rpc".to_string()
 }
 
 /// Success response shape.
@@ -313,7 +301,7 @@ async fn accept_loop(
 /// Drive a single accepted connection. RPC mode reads one line,
 /// dispatches, writes one line, closes. Stream mode reads one line,
 /// dispatches, writes a multi-line stream of frame lines, then closes.
-/// `mode` is parsed from the request (default "rpc").
+/// `mode` is parsed from the request and must be explicit.
 async fn serve_one<S>(stream: S, adapter: RuntimeDispatchAdapter) -> anyhow::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -722,7 +710,10 @@ mod tests {
     #[test]
     fn empty_tool_name_returns_bad_request() {
         let adapter = fresh_adapter();
-        let resp = build_response_line_from_str(r#"{"tool_name":"","arguments_b64":""}"#, &adapter);
+        let resp = build_response_line_from_str(
+            r#"{"mode":"rpc","tool_name":"","arguments_b64":""}"#,
+            &adapter,
+        );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["code"], "BAD_REQUEST");
         assert!(v["message"].as_str().unwrap().contains("tool_name"));
@@ -735,7 +726,7 @@ mod tests {
         // it as no-op padding) so we use a guaranteed-invalid char.
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"observe.health","arguments_b64":"!!!"}"#,
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":"!!!"}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -759,7 +750,7 @@ mod tests {
         // treated as {} not as a bad-request.
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -772,7 +763,7 @@ mod tests {
     fn unknown_ability_returns_not_found() {
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"nope.does_not_exist","arguments_b64":""}"#,
+            r#"{"mode":"rpc","tool_name":"nope.does_not_exist","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -787,7 +778,7 @@ mod tests {
         // verify the result_b64 decodes to JSON and isn't empty.
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
-            r#"{"tool_name":"observe.health","arguments_b64":""}"#,
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
@@ -806,7 +797,9 @@ mod tests {
         let adapter = fresh_adapter();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
-        let req = format!(r#"{{"tool_name":"observe.health","arguments_b64":"{args_b64}"}}"#);
+        let req = format!(
+            r#"{{"mode":"rpc","tool_name":"observe.health","arguments_b64":"{args_b64}"}}"#
+        );
         let resp = build_response_line_from_str(&req, &adapter);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], true);
@@ -842,7 +835,8 @@ mod tests {
 
         // Client side: open, send request, read response, close.
         let mut client = UnixStream::connect(&socket_path).await.unwrap();
-        let req = "{\"tool_name\":\"observe.health\",\"arguments_b64\":\"\"}\n".as_bytes();
+        let req = "{\"mode\":\"rpc\",\"tool_name\":\"observe.health\",\"arguments_b64\":\"\"}\n"
+            .as_bytes();
         client.write_all(req).await.unwrap();
         client.flush().await.unwrap();
         let (read_half, _) = client.into_split();
@@ -961,18 +955,18 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
-    /// Mode default: a request without the `mode` field must be
-    /// treated as RPC. This is the backwards-compat hinge — a stale
-    /// axon-runtime that does not yet know about streaming sends a
-    /// no-mode request and expects the legacy single-line response
-    /// shape.
+    /// Mode is part of the current runtime-dispatch request shape.
+    /// Missing mode is rejected instead of being treated as an RPC
+    /// alias.
     #[test]
-    fn mode_omitted_defaults_to_rpc() {
-        let req: DispatchRequest =
-            serde_json::from_str(r#"{"tool_name":"observe.health","arguments_b64":""}"#).unwrap();
-        assert_eq!(req.mode, "rpc");
+    fn mode_omitted_is_bad_request() {
+        let parsed = parse_request(r#"{"tool_name":"observe.health","arguments_b64":""}"#);
+        match parsed {
+            ParsedRequest::Bad(msg) => assert!(msg.contains("missing field `mode`")),
+            other => panic!("expected ParsedRequest::Bad for omitted mode, got {other:?}"),
+        }
 
-        // Sanity: explicit "rpc" parses too.
+        // Sanity: explicit "rpc" parses.
         let req2: DispatchRequest = serde_json::from_str(
             r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
         )
@@ -1004,12 +998,14 @@ mod tests {
 
     #[test]
     fn subject_ura_is_optional_and_trimmed() {
-        let req: DispatchRequest =
-            serde_json::from_str(r#"{"tool_name":"observe.health","arguments_b64":""}"#).unwrap();
+        let req: DispatchRequest = serde_json::from_str(
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
+        )
+        .unwrap();
         assert_eq!(subject_from_request(&req), None);
 
         let req: DispatchRequest = serde_json::from_str(
-            r#"{"tool_name":"observe.health","arguments_b64":"","subject_ura":"  easynet:///r/test/resource/device  "}"#,
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":"","subject_ura":"  easynet:///r/test/resource/device  "}"#,
         )
         .unwrap();
         assert_eq!(
@@ -1018,7 +1014,7 @@ mod tests {
         );
 
         let req: DispatchRequest = serde_json::from_str(
-            r#"{"tool_name":"observe.health","arguments_b64":"","subject_ura":"   "}"#,
+            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":"","subject_ura":"   "}"#,
         )
         .unwrap();
         assert_eq!(subject_from_request(&req), None);

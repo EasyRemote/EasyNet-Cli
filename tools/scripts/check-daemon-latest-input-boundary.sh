@@ -24,4 +24,14 @@ if [[ -n "$bad" ]]; then
 $bad"
 fi
 
+runtime_dispatch_fallback="$(
+    rg -n 'default_mode|mode_omitted_defaults_to_rpc|backwards compat|backwards-compat|stale runtime|stale axon-runtime|legacy single-line|no-mode request' \
+        src/daemon/control/runtime_dispatch.rs 2>/dev/null || true
+)"
+
+if [[ -n "$runtime_dispatch_fallback" ]]; then
+    fail "runtime-dispatch must require the latest explicit mode field:
+$runtime_dispatch_fallback"
+fi
+
 echo "check-daemon-latest-input-boundary: ok"
