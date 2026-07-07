@@ -531,6 +531,106 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testPublicationProfileDelegatesResourceValidationAndCarriers() async throws {
+        let publication = PublicationClient(transport: FixturePublicationTransport())
+        let resource = try await publication.buildLocalResourceRef(
+            LocalResourceRefRequest(path: "/tmp/easynet-weather-package", capability: "read")
+        )
+        XCTAssertEqual(resource.namespace, "fs")
+        XCTAssertEqual(resource.capability, "read")
+
+        let validation = try await publication.validatePackage(
+            "",
+            options: ValidatePackageOptions(
+                manifest: try AbilityPackageManifest(
+                    name: "weather",
+                    namespace: "er",
+                    description: "Weather stream",
+                    inputSchema: ["type": .string("object"), "properties": .object([:])],
+                    exec: [
+                        "kind": .string("host_stream"),
+                        "host_socket": .string("/tmp/easynet-weather.sock"),
+                        "function": .string("weather.stream"),
+                    ]
+                )
+            )
+        )
+        XCTAssertTrue(validation.valid)
+        XCTAssertEqual(validation.manifest.wireKey, "er.weather")
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(validation.metadata["frame_contract_owner"], "frame_contract_owner"),
+            "daemon_sdk"
+        )
+
+        let deploy = try await publication.buildDeployInvocation(try publicationDeployRequest(resource))
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(deploy["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(try requiredDirectoryObject(deploy, "metadata")["system_ability"], "system_ability"),
+            "ability.deploy"
+        )
+
+        let unpublish = try await publication.buildUnpublishInvocation(UnpublishAbilityRequest(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            abilityURA: "easynet:///r/example/ability/device.dev-a.er.weather"
+        ))
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(unpublish["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0"
+        )
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try LocalResourceRefRequest(path: "tmp/easynet-weather-package", capability: "read")
+        }
+        await expectSDKError(.invalidArgument) {
+            _ = try await publication.buildDeployInvocation(AbilityDeployRequest(
+                callerURA: "easynet:///r/example/agent/alice.sdk",
+                calleeURA: "easynet:///r/example/device/dev-a",
+                subjectURA: "easynet:///r/example/device/dev-a",
+                descriptorVersion: "1.0.0",
+                nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+                causalContext: ["form": .string("none")],
+                resourceRef: ResourceRef(
+                    resourceURA: "easynet:///r/example/resource/device.dev-a/system/tmp/easynet-weather-package",
+                    ownerURA: "easynet:///r/example/device/dev-a",
+                    namespace: "system",
+                    displayPath: "tmp/easynet-weather-package",
+                    capability: "read",
+                    expiresUnixMS: 4_102_444_800_000,
+                    revision: "fs-local-mapping-v1"
+                ),
+                nodeID: "local",
+                metadata: ["request_id": .string("publication-deploy-1")]
+            ))
+        }
+        await expectSDKError(.invalidArgument) {
+            _ = try await publication.buildDeployInvocation(AbilityDeployRequest(
+                callerURA: "",
+                calleeURA: "easynet:///r/example/device/dev-a",
+                subjectURA: "easynet:///r/example/device/dev-a",
+                descriptorVersion: "1.0.0",
+                nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+                causalContext: ["form": .string("none")],
+                resourceRef: resource,
+                nodeID: "local",
+                metadata: ["request_id": .string("publication-deploy-1")]
+            ))
+        }
+        try await publication.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await publication.buildLocalResourceRef(
+                LocalResourceRefRequest(path: "/tmp/easynet-weather-package", capability: "read")
+            )
+        }
+    }
+
     func testEventsProfileDelegatesCarriersProjectionsHistoryAndStreams() async throws {
         let events = EventClient(transport: FixtureEventTransport())
         let base = try eventsCarrierBase(metadata: ["request_id": .string("events-directory-subscribe-1")])
@@ -766,6 +866,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
             nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
             causalContext: ["form": .string("none")],
             metadata: metadata
+        )
+    }
+
+    private func publicationDeployRequest(_ ref: ResourceRef) throws -> AbilityDeployRequest {
+        try AbilityDeployRequest(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            resourceRef: ref,
+            nodeID: "local",
+            metadata: ["request_id": .string("publication-deploy-1")]
         )
     }
 
@@ -1033,6 +1147,37 @@ final class FixtureReceiptTransport: ReceiptTransport, @unchecked Sendable {
 }
 
 final class EmptyReceiptTransport: ReceiptTransport, @unchecked Sendable {}
+
+final class FixturePublicationTransport: PublicationTransport, @unchecked Sendable {
+    func buildResourceRef(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "local-resource-ref-request.v4.json")
+        return fixture("resource-ref.local-fs.v4.json")
+    }
+
+    func validatePackage(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        let manifest = try decodedObject(fixture("ability-package-manifest.v4.json"))
+        XCTAssertEqual(request as NSDictionary, ["manifest": manifest] as NSDictionary)
+        return fixture("package-validation.v4.json")
+    }
+
+    func buildDeployInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "ability-deploy-request.v4.json")
+        return fixture("publication-deploy-invocation.v4.json")
+    }
+
+    func buildUnpublishInvocation(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        XCTAssertEqual(request["ability_ura"] as? String, "easynet:///r/example/ability/device.dev-a.er.weather")
+        return fixture("publication-unpublish-invocation.v4.json")
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+}
 
 final class FixtureEventTransport: EventTransport, @unchecked Sendable {
     func buildDirectorySubscriptionInvocation(_ requestJSON: Data) async throws -> Data {

@@ -264,6 +264,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorClass.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorCode.java \
+  sdk/java/src/main/java/run/easynet/daemon/AbilityDeployRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AbilityPackageManifest.java \
   sdk/java/src/main/java/run/easynet/daemon/DeviceEventPage.java \
   sdk/java/src/main/java/run/easynet/daemon/EventClient.java \
   sdk/java/src/main/java/run/easynet/daemon/EventCursor.java \
@@ -296,8 +298,13 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTuple.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueReader.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueWriter.java \
+  sdk/java/src/main/java/run/easynet/daemon/LocalResourceRefRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/OwnerAbilityRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/PackageValidation.java \
   sdk/java/src/main/java/run/easynet/daemon/PreparedInvocation.java \
+  sdk/java/src/main/java/run/easynet/daemon/PublicationClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/PublicationSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/PublicationTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptClient.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptFetchRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptRef.java \
@@ -307,6 +314,7 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptVerification.java \
   sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
   sdk/java/src/main/java/run/easynet/daemon/ResolveQuery.java \
+  sdk/java/src/main/java/run/easynet/daemon/ResourceRef.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeHealth.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
@@ -333,6 +341,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/SurfacePublicPageRef.java \
   sdk/java/src/main/java/run/easynet/daemon/SurfaceSupport.java \
   sdk/java/src/main/java/run/easynet/daemon/SurfaceTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/UnpublishAbilityRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/ValidatePackageOptions.java \
   sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
   sdk/swift/.gitignore \
   sdk/swift/Package.swift \
@@ -342,6 +352,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Publication.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Receipt.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \

@@ -32,6 +32,7 @@ public final class RuntimeCoreSeamTest {
     receiptBuildsFetchCarrierAndProjectsSummary();
     receiptRejectsInvalidSelectorAndSummaryVerification();
     receiptOpaqueRefRequiresExplicitAnchorFacts();
+    publicationProfileDelegatesResourceValidationAndCarriers();
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
     surfaceProfileDelegatesCarriersAndProjections();
   }
@@ -642,6 +643,100 @@ public final class RuntimeCoreSeamTest {
         Map.of("request_id", "receipt-fetch-1"));
   }
 
+  private static void publicationProfileDelegatesResourceValidationAndCarriers() throws Exception {
+    var publication = new PublicationClient(new FixturePublicationTransport());
+    var resource = publication.buildLocalResourceRef(new LocalResourceRefRequest("/tmp/easynet-weather-package", "read"));
+    check(resource.namespace().equals("fs"), "publication resource namespace");
+    check(resource.capability().equals("read"), "publication resource capability");
+
+    var manifest =
+        new AbilityPackageManifest(
+            "weather",
+            "er",
+            "Weather stream",
+            Map.of("type", "object", "properties", Map.of()),
+            Map.of("kind", "host_stream", "host_socket", "/tmp/easynet-weather.sock", "function", "weather.stream"));
+    var validation = publication.validatePackage("", new ValidatePackageOptions(manifest));
+    check(validation.valid(), "publication validation valid");
+    check(validation.manifest().wireKey().equals("er.weather"), "publication validation wire key");
+    check(validation.metadata().get("frame_contract_owner").equals("daemon_sdk"), "publication metadata owner");
+
+    var deployRequest =
+        new AbilityDeployRequest(
+            "easynet:///r/example/agent/alice.sdk",
+            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/device/dev-a",
+            "1.0.0",
+            "AQIDBAUGBwgJCgsMDQ4PEA==",
+            Map.of("form", "none"),
+            resource,
+            "local",
+            Map.of("request_id", "publication-deploy-1"));
+    var deploy = publication.buildDeployInvocation(deployRequest);
+    check(
+        deploy.get("descriptor_ref").equals("easynet:///r/example/ability/device.dev-a.ability.deploy@1.0.0"),
+        "publication deploy descriptor");
+    @SuppressWarnings("unchecked")
+    var deployMetadata = (Map<String, Object>) deploy.get("metadata");
+    check(deployMetadata.get("system_ability").equals("ability.deploy"), "publication deploy system ability");
+
+    var unpublish =
+        publication.buildUnpublishInvocation(
+            new UnpublishAbilityRequest(
+                "easynet:///r/example/agent/alice.sdk",
+                "easynet:///r/example/device/dev-a",
+                "easynet:///r/example/device/dev-a",
+                "1.0.0",
+                "AQIDBAUGBwgJCgsMDQ4PEA==",
+                Map.of("form", "none"),
+                "easynet:///r/example/ability/device.dev-a.er.weather",
+                Map.of()));
+    check(
+        unpublish.get("descriptor_ref").equals("easynet:///r/example/ability/device.dev-a.ability.unpublish@1.0.0"),
+        "publication unpublish descriptor");
+
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new LocalResourceRefRequest("tmp/easynet-weather-package", "read"));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            publication.buildDeployInvocation(
+                new AbilityDeployRequest(
+                    "easynet:///r/example/agent/alice.sdk",
+                    "easynet:///r/example/device/dev-a",
+                    "easynet:///r/example/device/dev-a",
+                    "1.0.0",
+                    "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    Map.of("form", "none"),
+                    new ResourceRef(
+                        "easynet:///r/example/resource/device.dev-a/system/tmp/easynet-weather-package",
+                        "easynet:///r/example/device/dev-a",
+                        "system",
+                        "tmp/easynet-weather-package",
+                        "read",
+                        4102444800000L,
+                        "fs-local-mapping-v1"),
+                    "local",
+                    Map.of("request_id", "publication-deploy-1"))));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            publication.buildDeployInvocation(
+                new AbilityDeployRequest(
+                    "",
+                    "easynet:///r/example/device/dev-a",
+                    "easynet:///r/example/device/dev-a",
+                    "1.0.0",
+                    "AQIDBAUGBwgJCgsMDQ4PEA==",
+                    Map.of("form", "none"),
+                    resource,
+                    "local",
+                    Map.of("request_id", "publication-deploy-1"))));
+    publication.close();
+    expectSDKError(
+        ErrorCode.INVALID_HANDLE,
+        () -> publication.buildLocalResourceRef(new LocalResourceRefRequest("/tmp/easynet-weather-package", "read")));
+  }
+
   private static void eventsProfileDelegatesCarriersProjectionsHistoryAndStreams() throws Exception {
     var events = new EventClient(new FixtureEventTransport());
     var base = eventsCarrierBase(Map.of("request_id", "events-directory-subscribe-1"));
@@ -1199,6 +1294,41 @@ public final class RuntimeCoreSeamTest {
       var request = JsonValueReader.object(requestJSON, "receipt fetch request");
       check(request.equals(JsonValueReader.object(fixture("receipt-fetch-request.v4.json"), "receipt fetch fixture")), "receipt fetch request");
       return fixture("receipt.summary.v4.json");
+    }
+  }
+
+  private static final class FixturePublicationTransport implements PublicationTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    @Override
+    public byte[] buildResourceRef(byte[] requestJSON) {
+      expectRequest(requestJSON, "local-resource-ref-request.v4.json", "publication resource-ref request");
+      return fixture("resource-ref.local-fs.v4.json");
+    }
+
+    @Override
+    public byte[] validatePackage(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "publication validate request");
+      var expectedManifest = JsonValueReader.object(fixture("ability-package-manifest.v4.json"), "publication manifest");
+      check(request.equals(Map.of("manifest", expectedManifest)), "publication validate request");
+      return fixture("package-validation.v4.json");
+    }
+
+    @Override
+    public byte[] buildDeployInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "ability-deploy-request.v4.json", "publication deploy request");
+      return fixture("publication-deploy-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildUnpublishInvocation(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "publication unpublish request");
+      check(request.get("ability_ura").equals("easynet:///r/example/ability/device.dev-a.er.weather"), "publication unpublish ability");
+      return fixture("publication-unpublish-invocation.v4.json");
     }
   }
 
