@@ -4,6 +4,7 @@
 // File: src/daemon/plugins/companion/mod.rs
 // Description: Daemon/plugin lifecycle model for user-session UI companions.
 
+mod artifact;
 mod heartbeat;
 pub mod linux;
 pub mod macos;
