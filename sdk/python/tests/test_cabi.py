@@ -1706,7 +1706,7 @@ RECEIPT_SUMMARY_PROJECTION = (
 )
 
 RECEIPT_VERIFICATION_PROJECTION = (
-    b'{"verified":true,"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'{"verified":true,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
     b'"invocation_id":"inv-example-1","method":"axon-full-receipt",'
     b'"metadata":{"source":"axon"}}'
 )
@@ -1715,21 +1715,21 @@ RECEIPT_CHAIN_VERIFICATION_PROJECTION = (
     b'{"verified":false,"continuous":true,'
     b'"method":"daemon_receipt_chain_continuity","reason":"continuity only",'
     b'"requires_full_receipt":true,'
-    b'"root_receipt_ura":"easynet:///r/example/receipt/receipt-1",'
-    b'"terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2",'
+    b'"root_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
+    b'"terminal_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",'
     b'"receipt_count":1,"items":[{"index":0,'
-    b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
     b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
     b'"prev_receipt_hash_hex":null,"continuous":true,"metadata":{}}],'
     b'"metadata":{"chain_projection":"hash_continuity"}}'
 )
 
 CAUSAL_REF_PROJECTION = (
-    b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
     b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
     b'"verified":false,'
     b'"causal_context":{"form":"scalar",'
-    b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+    b'"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
     b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},'
     b'"invocation_id":"inv-example-1","metadata":{}}'
 )

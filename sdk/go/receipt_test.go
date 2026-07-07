@@ -176,9 +176,9 @@ func TestReceiptClientBuildFetchInvocationHonorsLifecycle(t *testing.T) {
 
 func TestReceiptHistoryReadPreservesCarrierAndDecodesReadModel(t *testing.T) {
 	transport := &memoryReceiptTransport{
-		listHistoryJSON: `{"ledger_ura":"easynet:///r/example/resource/invocations","ledger_path":"/tmp/ledger.redb","records":[{"request_id":"req-1"}]}`,
-		getHistoryJSON:  `{"ledger_ura":"easynet:///r/example/resource/invocations","ledger_path":"/tmp/ledger.redb","record":{"request_id":"req-1"}}`,
-		traceJSON:       `{"ledger_ura":"easynet:///r/example/resource/invocations","ledger_path":"/tmp/ledger.redb","trace_id":"trace-1","nodes":[],"edges":[],"edge_semantics":"Axon causal links"}`,
+		listHistoryJSON: `{"ledger_ura":"easynet:///r/example/resource/daemon.invocation_history","ledger_path":"/tmp/ledger.redb","records":[{"request_id":"req-1"}]}`,
+		getHistoryJSON:  `{"ledger_ura":"easynet:///r/example/resource/daemon.invocation_history","ledger_path":"/tmp/ledger.redb","record":{"request_id":"req-1"}}`,
+		traceJSON:       `{"ledger_ura":"easynet:///r/example/resource/daemon.invocation_history","ledger_path":"/tmp/ledger.redb","trace_id":"trace-1","nodes":[],"edges":[],"edge_semantics":"Axon causal links"}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -264,10 +264,10 @@ func TestReceiptProjectDoesNotUpgradeVerification(t *testing.T) {
 }
 
 func TestReceiptVerifyAndCausalRefDecodeDaemonProjections(t *testing.T) {
-	receiptURA := "easynet:///r/example/receipt/receipt-1"
+	receiptURA := "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt"
 	transport := &memoryReceiptTransport{
-		verifyJSON:    `{"verified":true,"receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","method":"axon-full-receipt","metadata":{"source":"axon"}}`,
-		causalRefJSON: `{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
+		verifyJSON:    `{"verified":true,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","invocation_id":"inv-example-1","method":"axon-full-receipt","metadata":{"source":"axon"}}`,
+		causalRefJSON: `{"causal_ref":"receipt:easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -304,7 +304,7 @@ func TestReceiptVerifyAndCausalRefDecodeDaemonProjections(t *testing.T) {
 
 func TestReceiptVerifyChainPreservesReceiptBodiesAndDecodesContinuity(t *testing.T) {
 	transport := &memoryReceiptTransport{
-		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
+		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","terminal_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -313,8 +313,8 @@ func TestReceiptVerifyChainPreservesReceiptBodiesAndDecodesContinuity(t *testing
 
 	result, err := client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
 		Receipts: []json.RawMessage{
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-2","self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
 		},
 		Metadata: map[string]any{"request_id": "chain-1"},
 	})
@@ -333,7 +333,7 @@ func TestReceiptVerifyChainPreservesReceiptBodiesAndDecodesContinuity(t *testing
 		t.Fatalf("receipt bodies not forwarded: %#v", transport.seenChainRequest)
 	}
 	first, ok := receipts[0].(map[string]any)
-	if !ok || first["receipt_ura"] != "easynet:///r/example/receipt/receipt-1" {
+	if !ok || first["receipt_ura"] != "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt" {
 		t.Fatalf("first receipt not preserved: %#v", receipts[0])
 	}
 }
@@ -347,8 +347,8 @@ func TestReceiptVerifyChainRejectsDuplicateReceiptHash(t *testing.T) {
 
 	_, err = client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
 		Receipts: []json.RawMessage{
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
 		},
 	})
 	if err == nil {
@@ -361,7 +361,7 @@ func TestReceiptVerifyChainRejectsDuplicateReceiptHash(t *testing.T) {
 
 func TestReceiptChainReturnsCopySafeReceipts(t *testing.T) {
 	chain, err := NewReceiptChain([]ReceiptRef{{
-		ReceiptURA:     "easynet:///r/example/receipt/receipt-1",
+		ReceiptURA:     "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
 		ReceiptHashHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Metadata:       map[string]any{"source": "daemon"},
 	}})
@@ -373,7 +373,7 @@ func TestReceiptChainReturnsCopySafeReceipts(t *testing.T) {
 	receipts[0].ReceiptURA = "mutated"
 
 	again := chain.Receipts()
-	if again[0].ReceiptURA != "easynet:///r/example/receipt/receipt-1" {
+	if again[0].ReceiptURA != "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt" {
 		t.Fatalf("Receipts leaked mutable slice: %#v", again)
 	}
 }
@@ -383,7 +383,7 @@ func TestReceiptRefRejectsInvalidAnchors(t *testing.T) {
 		t.Fatalf("NewReceiptRefFromJSON accepted empty input")
 	}
 	if _, err := NewReceiptRefFromMap(map[string]any{
-		"receipt_ura":      "easynet:///r/example/receipt/receipt-1",
+		"receipt_ura":      "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
 		"receipt_hash_hex": "aa",
 	}); err == nil {
 		t.Fatalf("NewReceiptRefFromMap accepted short hash")
@@ -444,14 +444,14 @@ func TestReceiptCausalRefRejectsEmptyProjection(t *testing.T) {
 }
 
 func TestReceiptCausalRefRejectsProjectionWithoutReceiptHash(t *testing.T) {
-	_, err := NewCausalRefFromJSON([]byte(`{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","receipt_ura":"easynet:///r/example/receipt/receipt-1","form":"scalar","metadata":{}}`))
+	_, err := NewCausalRefFromJSON([]byte(`{"causal_ref":"receipt:easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","form":"scalar","metadata":{}}`))
 	if err == nil {
 		t.Fatalf("CausalRef accepted projection without receipt hash")
 	}
 }
 
 func TestReceiptCausalRefRejectsContextWithoutReceiptHash(t *testing.T) {
-	_, err := NewCausalRefFromJSON([]byte(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/receipt/receipt-1"},"metadata":{}}`))
+	_, err := NewCausalRefFromJSON([]byte(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt"},"metadata":{}}`))
 	if err == nil {
 		t.Fatalf("CausalRef accepted causal_context without receipt hash")
 	}
@@ -459,7 +459,7 @@ func TestReceiptCausalRefRejectsContextWithoutReceiptHash(t *testing.T) {
 
 func TestReceiptRefDelegatesCausalContextProjection(t *testing.T) {
 	transport := &memoryReceiptTransport{
-		causalRefJSON: `{"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","verified":false,"causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
+		causalRefJSON: `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","verified":false,"causal_context":{"form":"scalar","receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"causal_ref":"receipt:easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -467,7 +467,7 @@ func TestReceiptRefDelegatesCausalContextProjection(t *testing.T) {
 	}
 	invocationID := "inv-example-1"
 	ref := ReceiptRef{
-		ReceiptURA:     " easynet:///r/example/receipt/receipt-1 ",
+		ReceiptURA:     "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
 		ReceiptHashHex: "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		InvocationID:   &invocationID,
 		Metadata:       map[string]any{"source": "runtime"},
@@ -482,7 +482,7 @@ func TestReceiptRefDelegatesCausalContextProjection(t *testing.T) {
 	if err := json.Unmarshal([]byte(transport.seenReceiptRaw), &forwarded); err != nil {
 		t.Fatalf("forwarded receipt ref: %v", err)
 	}
-	if forwarded["receipt_ura"] != "easynet:///r/example/receipt/receipt-1" || forwarded["receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+	if forwarded["receipt_ura"] != "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt" || forwarded["receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("receipt ref not normalized: %#v", forwarded)
 	}
 	if causalContext["form"] != "scalar" || causalContext["receipt_hash_hex"] != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
@@ -499,7 +499,7 @@ func TestReceiptRefFromInvocationResultRequiresAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal draft: %v", err)
 	}
-	result, err := NewInvocationResultFromJSON([]byte(`{"ok":true,"tuple":` + string(tupleJSON) + `,"terminal_state":"Completed","output_json":{},"receipt":{"receipt_ura":"easynet:///r/example/receipt/receipt-1","invocation_id":"inv-example-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"error":null}`))
+	result, err := NewInvocationResultFromJSON([]byte(`{"ok":true,"tuple":` + string(tupleJSON) + `,"terminal_state":"Completed","output_json":{},"receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","invocation_id":"inv-example-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"error":null}`))
 	if err != nil {
 		t.Fatalf("NewInvocationResultFromJSON: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestReceiptRefFromInvocationResultRequiresAnchor(t *testing.T) {
 		t.Fatalf("unanchored invocation result accepted")
 	}
 	if _, err := NewReceiptRefFromMap(map[string]any{
-		"receipt_ura":      "easynet:///r/example/receipt/receipt-1",
+		"receipt_ura":      "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
 		"receipt_hash_hex": "aa",
 	}); err == nil {
 		t.Fatalf("short receipt hash accepted")
@@ -529,7 +529,7 @@ func TestReceiptRefFromInvocationResultRequiresAnchor(t *testing.T) {
 
 func TestReceiptChainDelegatesContinuityProjection(t *testing.T) {
 	transport := &memoryReceiptTransport{
-		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
+		verifyChainJSON: `{"verified":true,"continuous":true,"method":"axon_receipt_chain_signature","reason":"","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","terminal_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{"parent_receipt_count":0}},{"index":1,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{"parent_receipt_count":1}}],"metadata":{"chain_projection":"cross_invocation_signature_dag_with_parent_closure","parent_dag_closed":true,"assurance":"cryptographic"}}`,
 	}
 	client, err := NewReceiptClient(transport)
 	if err != nil {
@@ -540,12 +540,12 @@ func TestReceiptChainDelegatesContinuityProjection(t *testing.T) {
 	prevHash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	chain, err := NewReceiptChain([]ReceiptRef{
 		{
-			ReceiptURA:     "easynet:///r/example/receipt/receipt-1",
+			ReceiptURA:     "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
 			ReceiptHashHex: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Index:          &firstIndex,
 		},
 		{
-			ReceiptURA:         "easynet:///r/example/receipt/receipt-2",
+			ReceiptURA:         "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",
 			ReceiptHashHex:     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			PrevReceiptHashHex: &prevHash,
 			Index:              &secondIndex,

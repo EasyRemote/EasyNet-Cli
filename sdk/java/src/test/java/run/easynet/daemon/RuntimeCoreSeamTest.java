@@ -720,13 +720,13 @@ public final class RuntimeCoreSeamTest {
 
   private static void receiptOpaqueRefRequiresExplicitAnchorFacts() throws Exception {
     var ref = ReceiptRef.fromJSON(fixture("receipt-ref.v4.json"));
-    check(ref.receiptURA().equals("easynet:///r/example/receipt/receipt-1"), "receipt ref URA");
+    check(ref.receiptURA().equals("easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt"), "receipt ref URA");
     check(ref.receiptHashHex().length() == 64, "receipt ref hash");
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () ->
             new ReceiptRef(
-                "easynet:///r/example/receipt/receipt-1",
+                "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 "inv-example-1",
                 "",
@@ -739,7 +739,7 @@ public final class RuntimeCoreSeamTest {
     var verification = fixtureClient.verifyChain(chain);
     check(verification.verified(), "receipt chain verification");
     check(
-        verification.rootReceiptURA().equals("easynet:///r/example/receipt/receipt-1"),
+        verification.rootReceiptURA().equals("easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt"),
         "receipt chain root");
   }
 
@@ -882,9 +882,9 @@ public final class RuntimeCoreSeamTest {
 
     var status = mission.track(missionTrackRequest());
     check(status.terminal() && status.state().equals("partial"), "mission status terminal state");
-    check(status.parentReceiptURA().equals("easynet:///r/example/receipt/parent"), "mission parent receipt");
+    check(status.parentReceiptURA().equals("easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt"), "mission parent receipt");
     check(status.childInvocations().size() == 1, "mission child invocation facts");
-    check(status.childReceipts().get(0).receiptURA().equals("easynet:///r/example/receipt/child"), "mission child receipt");
+    check(status.childReceipts().get(0).receiptURA().equals("easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt"), "mission child receipt");
     check(status.outputRefs().size() == 4, "mission output refs");
 
     var page = mission.events(missionEventsRequest());
@@ -1884,7 +1884,7 @@ public final class RuntimeCoreSeamTest {
           {
             "verified": true,
             "method": "axon-signature-chain",
-            "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
             "invocation_id": "inv-example-1",
             "reason": "",
             "metadata": {"assurance": "axon-cryptographic"}
@@ -1904,11 +1904,11 @@ public final class RuntimeCoreSeamTest {
           {
             "verified": true,
             "method": "axon-cross-invocation-dag",
-            "root_receipt_ura": "easynet:///r/example/receipt/receipt-1",
-            "terminal_receipt_ura": "easynet:///r/example/receipt/receipt-1",
+            "root_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
+            "terminal_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
             "items": [
               {
-                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                 "verified": true
               }
             ],

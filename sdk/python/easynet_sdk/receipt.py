@@ -257,6 +257,7 @@ class ReceiptRef:
         receipt_ura = self.receipt_ura.strip()
         if not receipt_ura:
             raise _invalid_receipt("receipt_ura is required")
+        _validate_receipt_ura(receipt_ura)
         receipt_hash_hex = _normalize_receipt_hash(self.receipt_hash_hex)
         _validate_receipt_hash_hex(receipt_hash_hex)
         prev_hash = None
@@ -1235,6 +1236,30 @@ def _clean_receipt_invocation_id(invocation_id: str) -> str:
     return invocation_id
 
 
+def _validate_receipt_ura(receipt_ura: str) -> None:
+    if not isinstance(receipt_ura, str):
+        raise _invalid_receipt("receipt_ura must be a string")
+    if receipt_ura.strip() != receipt_ura or not receipt_ura:
+        raise _invalid_receipt("receipt_ura is required")
+    prefix = "easynet:///r/"
+    if not receipt_ura.startswith(prefix):
+        raise _invalid_receipt("receipt_ura must be an EasyNet URA")
+    rest = receipt_ura[len(prefix):]
+    parts = rest.split("/")
+    if (
+        len(parts) != 6
+        or not parts[0]
+        or parts[1] != "resource"
+        or not parts[2]
+        or parts[3] != "invocation"
+        or parts[5] != "receipt"
+    ):
+        raise _invalid_receipt(
+            "receipt_ura must use RFC-007 invocation/<id>/receipt resource path"
+        )
+    _clean_receipt_invocation_id(parts[4])
+
+
 def _causal_context_from_projection(
     decoded: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -1242,10 +1267,11 @@ def _causal_context_from_projection(
     if context is not None:
         if not _optional_string(context.get("form"), "form"):
             raise _invalid_receipt("causal_context.form is required")
-        _required_string(context, "receipt_ura")
+        _validate_receipt_ura(_required_string(context, "receipt_ura"))
         _required_receipt_hash(context)
         return dict(context)
     receipt_ura = _required_string(decoded, "receipt_ura")
+    _validate_receipt_ura(receipt_ura)
     receipt_hash_hex = _required_receipt_hash(decoded)
     form = _optional_string(decoded.get("form"), "form") or "scalar"
     return {

@@ -720,7 +720,7 @@ const missionStatusFixtureJSON = `{
   "partial_failures": 1,
   "cancelled": false,
   "parent_invocation_id": null,
-  "parent_receipt_ura": "easynet:///r/example/receipt/parent",
+  "parent_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
   "parent_invocation": {"caller": "easynet:///r/example/agent/alice.sdk"},
   "child_invocations": [
     {
@@ -734,10 +734,10 @@ const missionStatusFixtureJSON = `{
       "subject_ura": "easynet:///r/example/device/dev-a",
       "metadata_state": "receipt_backed",
       "ledger_state": "completed",
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb", "head_receipt_hash": "bbbb"}
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt", "receipt_hash": "bbbb", "head_receipt_hash": "bbbb"}
     }
   ],
-  "child_receipts": [{"step_id": "s1", "invocation_ura": "easynet:///r/example/invocation/req-1", "receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb"}],
+  "child_receipts": [{"step_id": "s1", "invocation_ura": "easynet:///r/example/invocation/req-1", "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt", "receipt_hash": "bbbb"}],
   "output_refs": [{"kind": "run_dir", "path": "/tmp/easynet/missions/runs/2026-07-04_010203_weather"}],
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }`
@@ -772,7 +772,7 @@ const missionEventPageFixtureJSON = `{
       "occurred_unix_ms": 1006,
       "terminal": true,
       "payload": {"reply": "done"},
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"},
       "metadata": {}
     }
   ],
@@ -822,7 +822,7 @@ const missionEventTailPage2JSON = `{
       "occurred_unix_ms": 1001,
       "terminal": true,
       "payload": {"reply": "done"},
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"},
       "metadata": {}
     }
   ],
@@ -847,7 +847,7 @@ const missionEventTailTerminalThenStrayPageJSON = `{
       "occurred_unix_ms": 1000,
       "terminal": true,
       "payload": {"reply": "done"},
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"},
       "metadata": {}
     },
     {

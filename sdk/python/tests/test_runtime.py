@@ -194,7 +194,7 @@ class RuntimeTests(unittest.TestCase):
                     "output_json": {},
                     "elapsed_ms": 8,
                     "receipt": {
-                        "receipt_ura": "easynet:///r/example/receipt/opaque",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
                         "invocation_id": "inv-1",
                         "receipt_type": "terminal",
                         "state": "completed",

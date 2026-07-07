@@ -97,14 +97,14 @@ func TestCABIReceiptTransportProjectsAndFailsClosed(t *testing.T) {
 		t.Fatalf("NewCABIReceiptClient: %v", err)
 	}
 
-	verification, err := client.Verify(context.Background(), []byte(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","state":"completed"}`))
+	verification, err := client.Verify(context.Background(), []byte(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","state":"completed"}`))
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if verification.Method != "summary_projection" || verification.Verified {
 		t.Fatalf("verification = %#v", verification)
 	}
-	causal, err := client.CausalRef(context.Background(), []byte(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
+	causal, err := client.CausalRef(context.Background(), []byte(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`))
 	if err != nil {
 		t.Fatalf("CausalRef: %v", err)
 	}
@@ -227,7 +227,7 @@ int32_t easynet_receipt_project(uint64_t handle, const char *receipt_json, char 
 }
 int32_t easynet_receipt_verify(uint64_t handle, const char *receipt_json, char **out_verification_json) {
 	(void)handle; (void)receipt_json;
-	*out_verification_json = dup_json("{\"verified\":false,\"receipt_ura\":\"easynet:///r/example/receipt/receipt-1\",\"invocation_id\":null,\"method\":\"summary_projection\",\"reason\":\"cryptographic verification not available at this projection layer\",\"metadata\":{}}");
+	*out_verification_json = dup_json("{\"verified\":false,\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt\",\"invocation_id\":null,\"method\":\"summary_projection\",\"reason\":\"cryptographic verification not available at this projection layer\",\"metadata\":{}}");
 	return 0;
 }
 int32_t easynet_receipt_verify_chain(uint64_t handle, const char *request_json, char **out_verification_json) {
@@ -237,7 +237,7 @@ int32_t easynet_receipt_verify_chain(uint64_t handle, const char *request_json, 
 }
 int32_t easynet_receipt_causal_ref(uint64_t handle, const char *receipt_json, char **out_causal_ref_json) {
 	(void)handle; (void)receipt_json;
-	*out_causal_ref_json = dup_json("{\"causal_ref\":\"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"receipt_ura\":\"easynet:///r/example/receipt/receipt-1\",\"receipt_hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"causal_context\":{\"form\":\"receipt_ref\",\"receipt_ura\":\"easynet:///r/example/receipt/receipt-1\",\"receipt_hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"invocation_id\":null,\"form\":\"receipt_ref\",\"metadata\":{}}");
+	*out_causal_ref_json = dup_json("{\"causal_ref\":\"receipt:easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt\",\"receipt_hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"causal_context\":{\"form\":\"receipt_ref\",\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt\",\"receipt_hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"invocation_id\":null,\"form\":\"receipt_ref\",\"metadata\":{}}");
 	return 0;
 }
 `

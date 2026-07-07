@@ -82,7 +82,7 @@ class StreamTests(unittest.TestCase):
             [
                 b'{"sequence":1,"event":"terminal","state":"Completed",'
                 b'"terminal":true,"payload_json":{"receipt":{"receipt_ura":'
-                b'"easynet:///r/example/receipt/r1"}}}'
+                b'"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}'
             ]
         )
         stream = StreamHandle.from_json(
@@ -94,7 +94,7 @@ class StreamTests(unittest.TestCase):
         terminal = stream.terminal_event()
 
         self.assertEqual(
-            terminal.receipt, {"receipt_ura": "easynet:///r/example/receipt/r1"}
+            terminal.receipt, {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}
         )
         self.assertIn(b'"event_type":"terminal"', terminal.to_json())
 

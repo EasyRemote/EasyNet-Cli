@@ -78,7 +78,7 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 
 func TestStreamTerminalEventProjectsReceiptPayload(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"event":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`,
+		`{"sequence":1,"event":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
 	if err != nil {
@@ -91,7 +91,7 @@ func TestStreamTerminalEventProjectsReceiptPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TerminalEvent: %v", err)
 	}
-	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}` {
 		t.Fatalf("receipt = %s", terminal.ReceiptJSON())
 	}
 	raw, err := json.Marshal(terminal)

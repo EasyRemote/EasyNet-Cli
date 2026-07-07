@@ -420,7 +420,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             request.causal_context,
             {
                 "form": "scalar",
-                "receipt_ura": "easynet:///r/example/receipt/parent-1",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
                 "receipt_hash_hex": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 ),
@@ -481,7 +481,7 @@ class ChildReceiptTransport:
         self.seen_receipt = json.loads(receipt_json.decode("utf-8"))
         return (
             b'{"form":"scalar",'
-            b'"receipt_ura":"easynet:///r/example/receipt/parent-1",'
+            b'"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",'
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
             b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
         )
@@ -583,7 +583,7 @@ def _parent_result_with_receipt() -> InvocationResult:
                 "output_json": {},
                 "elapsed_ms": 8,
                 "receipt": {
-                    "receipt_ura": "easynet:///r/example/receipt/parent-1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
                     "invocation_id": "inv-parent-1",
                     "self_hash_hex": (
                         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -870,15 +870,18 @@ struct ReceiptProjection {
 
 impl ReceiptProjection {
     fn from_value(input: &Value) -> Result<Self, ReceiptError> {
-        Ok(Self::from_object_lossy(object(input, "Receipt")?.clone()))
+        Self::from_object_lossy(object(input, "Receipt")?.clone())
     }
 
     fn from_value_lossy(input: &Value) -> Result<Self, ReceiptError> {
-        Ok(Self::from_object_lossy(object(input, "Receipt")?.clone()))
+        Self::from_object_lossy(object(input, "Receipt")?.clone())
     }
 
-    fn from_object_lossy(obj: Map<String, Value>) -> Self {
+    fn from_object_lossy(obj: Map<String, Value>) -> Result<Self, ReceiptError> {
         let receipt_ura = optional_string(&obj, "receipt_ura");
+        if let Some(receipt_ura) = receipt_ura.as_deref() {
+            validate_receipt_ura_shape(receipt_ura)?;
+        }
         let invocation_id = optional_string(&obj, "invocation_id");
         let state =
             optional_string(&obj, "state").or_else(|| optional_string(&obj, "terminal_state"));
@@ -899,7 +902,7 @@ impl ReceiptProjection {
         let prev_receipt_hash_hex =
             receipt_hash_value_hex(&obj, &["prev_receipt_hash_hex", "parent_receipt_hash_hex"]);
         let metadata = receipt_metadata(&obj, verified_input, receipt_hash_hex.as_deref());
-        Self {
+        Ok(Self {
             receipt_ura,
             invocation_id,
             state,
@@ -910,7 +913,7 @@ impl ReceiptProjection {
             receipt_hash_hex,
             prev_receipt_hash_hex,
             metadata,
-        }
+        })
     }
 
     fn summary_json(&self) -> Value {
@@ -1089,6 +1092,35 @@ fn receipt_hash_hex(obj: &Map<String, Value>) -> Option<String> {
     receipt_hash_value_hex(obj, &["self_hash_hex", "receipt_hash_hex", "receipt_hash"])
 }
 
+fn validate_receipt_ura_shape(receipt_ura: &str) -> Result<(), ReceiptError> {
+    if receipt_ura.trim() != receipt_ura || receipt_ura.is_empty() {
+        return Err(ReceiptError::MissingField("receipt_ura"));
+    }
+    let parsed = crate::core::ura::parse_ura(receipt_ura)
+        .map_err(|err| ReceiptError::InvalidField("receipt_ura", err.to_string()))?;
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        return Err(ReceiptError::InvalidField(
+            "receipt_ura",
+            "must be a Resource URA".to_string(),
+        ));
+    }
+    let path = parsed.resource_path().unwrap_or_default();
+    let segments = path.split('/').collect::<Vec<_>>();
+    if segments.len() != 3
+        || segments[0] != "invocation"
+        || segments[1].is_empty()
+        || segments[2] != "receipt"
+        || segments[1].contains('\\')
+        || segments[1].chars().any(|char| char.is_control())
+    {
+        return Err(ReceiptError::InvalidField(
+            "receipt_ura",
+            "must use RFC-007 invocation/<id>/receipt resource path".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn receipt_hash_value_hex(obj: &Map<String, Value>, keys: &[&str]) -> Option<String> {
     for key in keys {
         let Some(raw) = optional_string(obj, key) else {
@@ -1228,7 +1260,7 @@ mod tests {
     #[test]
     fn project_summary_downgrades_verification_claim() {
         let summary = project_receipt_summary(&json!({
-            "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+            "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
             "invocation_id": "inv-1",
             "state": "completed",
             "verified": true,
@@ -1255,7 +1287,7 @@ mod tests {
     #[test]
     fn project_verification_is_conservative_for_summary_input() {
         let verification = project_receipt_verification(&json!({
-            "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+            "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
             "invocation_id": "inv-1",
             "state": "completed",
             "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1272,7 +1304,7 @@ mod tests {
         let (receipt, public_key_hex) = signed_axon_receipt_fixture();
 
         let verification = project_receipt_verification(&json!({
-            "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+            "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt",
             "receipt": receipt,
             "public_keys": {
                 "easynet:///r/example/agent/alice.worker": public_key_hex
@@ -1322,11 +1354,11 @@ mod tests {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt",
                     "receipt": receipts[0].clone()
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-1/receipt",
                     "receipt": receipts[1].clone()
                 }
             ],
@@ -1375,18 +1407,18 @@ mod tests {
             "completed",
             vec![easynet_axon::invocation::ReceiptRef {
                 receipt_hash: parent_hash,
-                receipt_ura: "easynet:///r/example/receipt/inv-parent/0".to_string(),
+                receipt_ura: "easynet:///r/example/resource/agent.alice.worker/invocation/inv-parent-0/receipt".to_string(),
             }],
         );
 
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-parent/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-parent-0/receipt",
                     "receipt": parent
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-child/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-child-0/receipt",
                     "receipt": child
                 }
             ],
@@ -1423,11 +1455,11 @@ mod tests {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt",
                     "receipt": first
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/2",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-2/receipt",
                     "receipt": skipped
                 }
             ],
@@ -1456,11 +1488,11 @@ mod tests {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt",
                     "receipt": first
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-1/receipt",
                     "receipt": broken
                 }
             ],
@@ -1489,11 +1521,11 @@ mod tests {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt",
                     "receipt": receipts[0].clone()
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-1/receipt",
                     "receipt": receipts[1].clone()
                 }
             ],
@@ -1525,18 +1557,18 @@ mod tests {
             "completed",
             vec![easynet_axon::invocation::ReceiptRef {
                 receipt_hash: [9u8; 32],
-                receipt_ura: "easynet:///r/example/receipt/missing-parent".to_string(),
+                receipt_ura: "easynet:///r/example/resource/agent.alice.worker/invocation/missing-parent/receipt".to_string(),
             }],
         );
 
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/0",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt",
                     "receipt": first
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/inv-axon/1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-1/receipt",
                     "receipt": second
                 }
             ],
@@ -1561,13 +1593,13 @@ mod tests {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                     "invocation_id": "inv-1",
                     "state": "completed",
                     "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
                 {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-2/receipt",
                     "invocation_id": "inv-2",
                     "state": "completed",
                     "self_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1589,11 +1621,11 @@ mod tests {
         let verification = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                     "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
                 {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-2/receipt",
                     "self_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                     "prev_receipt_hash_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                 }
@@ -1610,11 +1642,11 @@ mod tests {
         let err = project_receipt_chain_verification(&json!({
             "receipts": [
                 {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                     "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
                 {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-2/receipt",
                     "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 }
             ]
@@ -1627,7 +1659,7 @@ mod tests {
     #[test]
     fn causal_ref_requires_explicit_hash_pair() {
         let err = project_causal_ref(&json!({
-            "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+            "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
             "state": "completed"
         }))
         .unwrap_err();
@@ -1638,7 +1670,7 @@ mod tests {
     #[test]
     fn causal_ref_builds_scalar_context_from_hash_pair() {
         let causal = project_causal_ref(&json!({
-            "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+            "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
             "state": "completed",
             "receipt_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }))
@@ -1671,7 +1703,9 @@ mod tests {
             "completed",
             vec![easynet_axon::invocation::ReceiptRef {
                 receipt_hash: first_hash,
-                receipt_ura: "easynet:///r/example/receipt/inv-axon/0".to_string(),
+                receipt_ura:
+                    "easynet:///r/example/resource/agent.alice.worker/invocation/inv-axon-0/receipt"
+                        .to_string(),
             }],
         );
         (

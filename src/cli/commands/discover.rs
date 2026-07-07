@@ -1400,7 +1400,7 @@ mod tests {
             "receipt_chain": {
                 "head_receipt_hash": receipt_hash,
                 "anchors": [{
-                    "receipt_ura": "easynet:///r/acme/receipt/01RECEIPT",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/01RECEIPT/receipt",
                     "receipt_hash": receipt_hash,
                 }],
             },
@@ -1432,7 +1432,7 @@ mod tests {
         assert_eq!(
             anchor.parents,
             vec![json!({
-                "receipt_ura": "easynet:///r/acme/receipt/01RECEIPT",
+                "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/01RECEIPT/receipt",
                 "receipt_hash": "11".repeat(32),
             })]
         );
@@ -1605,7 +1605,7 @@ mod tests {
         let backed = json!({
             "receipt": {
                 "anchor": {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/req-1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/req-1/receipt",
                     "receipt_hash": "abc123",
                 }
             },
@@ -1614,7 +1614,7 @@ mod tests {
         assert_eq!(
             receipt_parent_from_invocation_meta(&backed).expect("receipt parent"),
             json!({
-                "receipt_ura": "easynet:///r/acme/resource/invocations/req-1",
+                "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/req-1/receipt",
                 "receipt_hash": "abc123",
             })
         );

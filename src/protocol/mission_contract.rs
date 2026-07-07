@@ -814,7 +814,7 @@ mod tests {
                     "caller": "easynet:///r/example/agent/alice.sdk",
                     "causal_context": {
                         "form": "scalar",
-                        "receipt_ura": "easynet:///r/example/receipt/parent",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
                         "receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }
                 },
@@ -827,7 +827,7 @@ mod tests {
                     "receipt": {
                         "head_receipt_hash": "bbbb",
                         "anchor": {
-                            "receipt_ura": "easynet:///r/example/receipt/child",
+                            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt",
                             "receipt_hash": "bbbb"
                         }
                     },
@@ -842,12 +842,12 @@ mod tests {
         assert_eq!(status["partial_failures"], 1);
         assert_eq!(
             status["parent_receipt_ura"],
-            "easynet:///r/example/receipt/parent"
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt"
         );
         assert_eq!(status["child_invocations"].as_array().unwrap().len(), 1);
         assert_eq!(
             status["child_receipts"][0]["receipt_ura"],
-            "easynet:///r/example/receipt/child"
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt"
         );
         assert_eq!(status["output_refs"].as_array().unwrap().len(), 4);
     }
@@ -865,7 +865,7 @@ mod tests {
                     "type": "completed",
                     "payload": {"reply": "done"},
                     "receipt": {
-                        "receipt_ura": "easynet:///r/example/receipt/terminal",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt",
                         "receipt_hash": "bbbb"
                     }
                 },
@@ -894,7 +894,7 @@ mod tests {
         assert_eq!(page["events"][1]["terminal"], true);
         assert_eq!(
             page["events"][1]["receipt"]["receipt_ura"],
-            "easynet:///r/example/receipt/terminal"
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"
         );
     }
 

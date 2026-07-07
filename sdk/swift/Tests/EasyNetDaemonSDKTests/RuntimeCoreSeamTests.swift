@@ -606,11 +606,11 @@ final class RuntimeCoreSeamTests: XCTestCase {
 
     func testReceiptOpaqueRefRequiresExplicitAnchorFacts() async throws {
         let ref = try ReceiptRef.fromJSON(fixture("receipt-ref.v4.json"))
-        XCTAssertEqual(ref.receiptURA, "easynet:///r/example/receipt/receipt-1")
+        XCTAssertEqual(ref.receiptURA, "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt")
         XCTAssertEqual(ref.receiptHashHex.count, 64)
         expectSyncSDKError(.invalidArgument) {
             _ = try ReceiptRef(
-                receiptURA: "easynet:///r/example/receipt/receipt-1",
+                receiptURA: "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                 receiptHashHex: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 invocationID: "inv-example-1",
                 index: 0
@@ -624,7 +624,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let chain = try ReceiptChain(receipts: [ref])
         let verification = try await fixtureReceipt.verifyChain(chain)
         XCTAssertTrue(verification.verified)
-        XCTAssertEqual(verification.rootReceiptURA, "easynet:///r/example/receipt/receipt-1")
+        XCTAssertEqual(verification.rootReceiptURA, "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt")
     }
 
     func testPublicationProfileDelegatesResourceValidationAndCarriers() async throws {
@@ -759,7 +759,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let status = try await mission.track(missionTrackRequest())
         XCTAssertTrue(status.terminal)
         XCTAssertEqual(status.state, "partial")
-        XCTAssertEqual(status.parentReceiptURA, "easynet:///r/example/receipt/parent")
+        XCTAssertEqual(status.parentReceiptURA, "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt")
         XCTAssertEqual(status.childInvocations.count, 1)
         XCTAssertEqual(status.childReceipts.count, 1)
         XCTAssertEqual(status.outputRefs.count, 4)
@@ -1836,7 +1836,7 @@ final class FixtureReceiptTransport: ReceiptTransport, @unchecked Sendable {
         {
           "verified": true,
           "method": "axon-signature-chain",
-          "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+          "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
           "invocation_id": "inv-example-1",
           "reason": "",
           "metadata": {"assurance": "axon-cryptographic"}
@@ -1856,11 +1856,11 @@ final class FixtureReceiptTransport: ReceiptTransport, @unchecked Sendable {
         {
           "verified": true,
           "method": "axon-cross-invocation-dag",
-          "root_receipt_ura": "easynet:///r/example/receipt/receipt-1",
-          "terminal_receipt_ura": "easynet:///r/example/receipt/receipt-1",
+          "root_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
+          "terminal_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
           "items": [
             {
-              "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+              "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
               "verified": true
             }
           ],

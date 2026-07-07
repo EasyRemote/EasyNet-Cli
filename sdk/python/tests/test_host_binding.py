@@ -212,7 +212,7 @@ class HostBindingTests(unittest.TestCase):
     def test_decode_request_preserves_parent_receipt_anchor(self) -> None:
         client = HostBindingClient(LocalHostBindingTransport())
         parent_receipt = {
-            "receipt_ura": "easynet:///r/example/receipt/parent-1",
+            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
             "invocation_id": "inv-parent-1",
             "self_hash_hex": "aa" * 32,
         }

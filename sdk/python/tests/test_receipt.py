@@ -52,7 +52,7 @@ class MemoryReceiptTransport:
         )
         self.project_json = self.fetch_json
         self.verify_json = (
-            b'{"verified":true,"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'{"verified":true,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"invocation_id":"inv-example-1","method":"axon-full-receipt",'
             b'"metadata":{"source":"axon"}}'
         )
@@ -60,15 +60,15 @@ class MemoryReceiptTransport:
             b'{"verified":true,"continuous":true,'
             b'"method":"axon_receipt_chain_signature","reason":"",'
             b'"requires_full_receipt":true,'
-            b'"root_receipt_ura":"easynet:///r/example/receipt/receipt-1",'
-            b'"terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2",'
+            b'"root_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
+            b'"terminal_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",'
             b'"receipt_count":2,'
             b'"items":[{"index":0,'
-            b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
             b'"prev_receipt_hash_hex":null,"continuous":true,'
             b'"metadata":{"parent_receipt_count":0}},'
-            b'{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2",'
+            b'{"index":1,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",'
             b'"receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
             b'"prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
             b'"continuous":true,"metadata":{"parent_receipt_count":1}}],'
@@ -76,13 +76,13 @@ class MemoryReceiptTransport:
             b'"parent_dag_closed":true,"assurance":"cryptographic"}}'
         )
         self.causal_ref_json = (
-            b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
             b'"verified":false,'
             b'"causal_context":{"form":"scalar",'
-            b'"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},'
-            b'"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1",'
+            b'"causal_ref":"receipt:easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"invocation_id":"inv-example-1","form":"scalar","metadata":{}}'
         )
         self.fetch_invocation_json = shared_fixture("receipt-fetch-invocation.v4.json")
@@ -469,9 +469,9 @@ class ReceiptTests(unittest.TestCase):
         transport = MemoryReceiptTransport()
         client = ReceiptClient(transport)
 
-        verification = client.verify(b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1"}')
+        verification = client.verify(b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt"}')
         causal = client.causal_ref(
-            b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
         )
 
@@ -484,7 +484,7 @@ class ReceiptTests(unittest.TestCase):
             causal.to_causal_context(),
             {
                 "form": "scalar",
-                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                 "receipt_hash_hex": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 ),
@@ -492,7 +492,7 @@ class ReceiptTests(unittest.TestCase):
         )
         self.assertEqual(
             client.causal_context(
-                b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+                b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
                 b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
             ),
             causal.to_causal_context(),
@@ -524,7 +524,7 @@ class ReceiptTests(unittest.TestCase):
                     "output_json": {},
                     "elapsed_ms": 8,
                     "receipt": {
-                        "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                         "invocation_id": "inv-example-1",
                         "self_hash_hex": (
                             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -546,7 +546,7 @@ class ReceiptTests(unittest.TestCase):
             causal_context,
             {
                 "form": "scalar",
-                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                 "receipt_hash_hex": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 ),
@@ -596,9 +596,9 @@ class ReceiptTests(unittest.TestCase):
         result = client.verify_chain(
             ReceiptChainVerificationRequest(
                 receipts=(
-                    b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+                    b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
                     b'"self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
-                    b'{"receipt_ura":"easynet:///r/example/receipt/receipt-2",'
+                    b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",'
                     b'"self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
                     b'"prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
                 ),
@@ -620,7 +620,7 @@ class ReceiptTests(unittest.TestCase):
         self.assertIsInstance(receipts, list)
         self.assertEqual(
             receipts[0]["receipt_ura"],
-            "easynet:///r/example/receipt/receipt-1",
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
         )
 
     def test_verify_chain_rejects_duplicate_receipt_hash(self) -> None:
@@ -631,9 +631,9 @@ class ReceiptTests(unittest.TestCase):
             client.verify_chain(
                 ReceiptChainVerificationRequest(
                     receipts=(
-                        b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+                        b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
                         b'"self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
-                        b'{"receipt_ura":"easynet:///r/example/receipt/receipt-2",'
+                        b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",'
                         b'"receipt_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
                     )
                 )
@@ -645,7 +645,7 @@ class ReceiptTests(unittest.TestCase):
         transport = MemoryReceiptTransport()
         client = ReceiptClient(transport)
         ref = ReceiptRef(
-            receipt_ura=" easynet:///r/example/receipt/receipt-1 ",
+            receipt_ura=" easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt ",
             receipt_hash_hex=(
                 "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             ),
@@ -655,7 +655,7 @@ class ReceiptTests(unittest.TestCase):
 
         causal_context = ref.causal_context(client)
 
-        self.assertEqual(ref.receipt_ura, "easynet:///r/example/receipt/receipt-1")
+        self.assertEqual(ref.receipt_ura, "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt")
         self.assertEqual(
             ref.receipt_hash_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -668,7 +668,7 @@ class ReceiptTests(unittest.TestCase):
                 "receipt_hash_hex": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 ),
-                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
             },
         )
         self.assertEqual(causal_context["form"], "scalar")
@@ -684,7 +684,7 @@ class ReceiptTests(unittest.TestCase):
                         ).to_json_dict(),
                         "terminal_state": "Completed",
                         "receipt": {
-                            "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                             "invocation_id": "inv-example-1",
                             "self_hash_hex": (
                                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -720,7 +720,7 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             ReceiptRef.from_mapping(
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                     "receipt_hash_hex": "aa",
                 }
             )
@@ -731,7 +731,7 @@ class ReceiptTests(unittest.TestCase):
         chain = ReceiptChain.from_mappings(
             (
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                     "receipt_hash": (
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -739,7 +739,7 @@ class ReceiptTests(unittest.TestCase):
                     "index": 0,
                 },
                 {
-                    "receipt_ura": "easynet:///r/example/receipt/receipt-2",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt",
                     "self_hash_hex": (
                         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -901,7 +901,7 @@ class ReceiptTests(unittest.TestCase):
             )
 
         causal = client.causal_ref(
-            b'{"receipt_ura":"easynet:///r/example/receipt/receipt-1",'
+            b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",'
             b'"invocation_id":"inv-1","self_hash_hex":"'
             + b"a" * 64
             + b'"}'

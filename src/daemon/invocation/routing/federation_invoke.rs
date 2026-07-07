@@ -1642,8 +1642,8 @@ mod tests {
 
         // Forwarding hop: parents are preserved and round-trip back.
         let parents = vec![
-            json!({"receipt_ura": "easynet:///r/acme/receipt/r1", "receipt_hash": "sha256:aa"}),
-            json!({"receipt_ura": "easynet:///r/acme/receipt/r2", "receipt_hash": "sha256:bb"}),
+            json!({"receipt_ura": "easynet:///r/acme/resource/agent.federation.forwarder/invocation/r1/receipt", "receipt_hash": "sha256:aa"}),
+            json!({"receipt_ura": "easynet:///r/acme/resource/agent.federation.forwarder/invocation/r2/receipt", "receipt_hash": "sha256:bb"}),
         ];
         let bytes = encode_causal_parents_for_forward(&parents).expect("parents encode");
         assert!(

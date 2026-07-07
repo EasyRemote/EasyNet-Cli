@@ -134,7 +134,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             def invoke(self, draft_json: bytes) -> bytes:
                 result = json.loads(super().invoke(draft_json).decode("utf-8"))
                 result["receipt"] = {
-                    "receipt_ura": "easynet:///r/example/receipt/opaque",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
                     "invocation_id": "inv-1",
                     "state": "completed",
                     "self_hash_hex": "00" * 32,

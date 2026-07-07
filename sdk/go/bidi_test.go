@@ -142,7 +142,7 @@ func TestBidiRemoteCloseThenLocalCloseSendReachesTerminal(t *testing.T) {
 
 func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
 	transport := &memoryBidiTransport{recvFrames: []string{
-		`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`,
+		`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}`,
 	}}
 	session := newTestBidiSession(t, transport)
 
@@ -156,7 +156,7 @@ func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
 	if terminal.SessionID() != "bidi-1" || terminal.FrameType() != "terminal" || terminal.Seq() != 1 {
 		t.Fatalf("unexpected terminal frame projection: %#v", terminal)
 	}
-	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}` {
 		t.Fatalf("receipt = %s", terminal.ReceiptJSON())
 	}
 	raw, err := json.Marshal(terminal)

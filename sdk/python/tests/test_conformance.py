@@ -1818,7 +1818,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                         "elapsed_ms": 1,
                         "receipt": {
                             "receipt_id": "receipt-1",
-                            "receipt_ura": "easynet:///r/example/receipt/opaque",
+                            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
                             "invocation_id": "inv-example-1",
                             "receipt_type": "terminal",
                             "state": "completed",
@@ -2041,7 +2041,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
                 self.events = [
                     b'{"sequence":1,"kind":"terminal","state":"Completed",'
                     b'"terminal":true,"payload_json":{"receipt":'
-                    b'{"receipt_ura":"easynet:///r/example/receipt/r1"}}}'
+                    b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}'
                 ]
 
             def recv(self, timeout: float | None = None) -> bytes:
@@ -2070,7 +2070,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(stream_terminal.seq, 1)
         self.assertEqual(
             stream_terminal.receipt,
-            {"receipt_ura": "easynet:///r/example/receipt/r1"},
+            {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"},
         )
 
         terminal_bidi = BidiSession.from_json(
@@ -2080,7 +2080,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         terminal_bidi.transport.recv_frames = [
             b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
             b'"payload_json":{"receipt":'
-            b'{"receipt_ura":"easynet:///r/example/receipt/r1"}}}'
+            b'{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}'
         ]
         terminal_bidi.receive()
         bidi_terminal = terminal_bidi.terminal_frame()
@@ -2090,7 +2090,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(bidi_terminal.seq, 1)
         self.assertEqual(
             bidi_terminal.receipt,
-            {"receipt_ura": "easynet:///r/example/receipt/r1"},
+            {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"},
         )
 
         class StreamCloseTransport:
@@ -3096,7 +3096,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertTrue(status.terminal)
         self.assertEqual(status.state, "partial")
         self.assertEqual(
-            status.parent_receipt_ura, "easynet:///r/example/receipt/parent"
+            status.parent_receipt_ura, "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt"
         )
         self.assertEqual(len(status.child_receipts), 1)
         self.assertEqual(len(status.output_refs), 4)
@@ -3115,7 +3115,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertTrue(event_page.events[1].terminal)
         self.assertEqual(
             event_page.events[1].receipt["receipt_ura"],
-            "easynet:///r/example/receipt/parent",
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
         )
 
         event_stream = mission.open_event_stream(shared_mission_events_request())

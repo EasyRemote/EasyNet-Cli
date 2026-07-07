@@ -494,7 +494,7 @@ mod tests {
                 form: Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(
                     easynet_axon::pb::axon::v1::ReceiptRef {
                         receipt_hash: vec![7u8; 32],
-                        receipt_ura: "easynet:///r/local/resource/invocations/parent/receipt"
+                        receipt_ura: "easynet:///r/local/resource/agent.peer.signer/invocation/parent/receipt"
                             .to_string(),
                     },
                 )),

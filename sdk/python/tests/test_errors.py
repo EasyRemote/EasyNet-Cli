@@ -39,7 +39,7 @@ class ErrorTests(unittest.TestCase):
                 "retry": "safe",
                 "source": "c_abi",
                 "invocation_id": "inv-1",
-                "receipt_ura": "easynet:///r/example/receipt/opaque",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
                 "details": {"abi_symbol": "ERR_TIMEOUT"}
             }"""
         )
@@ -49,7 +49,7 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.code, ErrorCode.TIMEOUT)
         self.assertTrue(error.retryable)
         self.assertEqual(error.invocation_id, "inv-1")
-        self.assertEqual(error.receipt_ura, "easynet:///r/example/receipt/opaque")
+        self.assertEqual(error.receipt_ura, "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt")
         self.assertEqual(error.details["abi_symbol"], "ERR_TIMEOUT")
         self.assertEqual(error.error_class, ErrorClass.TIMEOUT)
 

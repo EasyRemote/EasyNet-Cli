@@ -851,7 +851,7 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 
 	terminalStream, err := NewStreamHandleFromJSON(StreamTransportFunc{
 		RecvFunc: func(context.Context) ([]byte, error) {
-			return []byte(`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`), nil
+			return []byte(`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}`), nil
 		},
 	}, []byte(`{"stream_id":"stream-terminal-1","state":"Open","max_buffered_events":4}`))
 	if err != nil {
@@ -867,13 +867,13 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 	if streamTerminal.StreamID() != "stream-terminal-1" || streamTerminal.EventType() != "terminal" || streamTerminal.Seq() != 1 {
 		t.Fatalf("unexpected shared stream terminal projection: %#v", streamTerminal)
 	}
-	if string(streamTerminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+	if string(streamTerminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}` {
 		t.Fatalf("unexpected shared stream terminal receipt: %s", streamTerminal.ReceiptJSON())
 	}
 
 	terminalBidiTransport := &sharedBidiLifecycleTransport{
 		recvFrames: [][]byte{
-			[]byte(`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/receipt/r1"}}}`),
+			[]byte(`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}`),
 		},
 	}
 	terminalBidi, err := NewBidiSessionFromJSON(terminalBidiTransport, []byte(`{"session_id":"bidi-terminal-1","state":"Open","max_buffered_frames":4}`))
@@ -890,7 +890,7 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 	if bidiTerminal.SessionID() != "bidi-terminal-1" || bidiTerminal.FrameType() != "terminal" || bidiTerminal.Seq() != 1 {
 		t.Fatalf("unexpected shared bidi terminal projection: %#v", bidiTerminal)
 	}
-	if string(bidiTerminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/receipt/r1"}` {
+	if string(bidiTerminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}` {
 		t.Fatalf("unexpected shared bidi terminal receipt: %s", bidiTerminal.ReceiptJSON())
 	}
 
@@ -1773,7 +1773,7 @@ func TestGoMissionFacadeExecutesSharedCarrierStatusConformanceCase(t *testing.T)
 	if eventPage.Kind != "mission_event_page" || eventPage.CursorSequence != 4 ||
 		eventPage.NextCursorSequence != 7 || eventPage.HasMore ||
 		eventPage.DroppedCount != 0 || len(eventPage.Events) != 2 ||
-		!eventPage.Events[1].Terminal || eventPage.Events[1].Receipt["receipt_ura"] != "easynet:///r/example/receipt/parent" {
+		!eventPage.Events[1].Terminal || eventPage.Events[1].Receipt["receipt_ura"] != "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt" {
 		t.Fatalf("unexpected shared mission event page: %#v", eventPage)
 	}
 

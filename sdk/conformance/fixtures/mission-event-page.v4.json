@@ -41,7 +41,7 @@
         "steps_failed": 1
       },
       "receipt": {
-        "receipt_ura": "easynet:///r/example/receipt/parent",
+        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
         "receipt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "head_receipt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       },

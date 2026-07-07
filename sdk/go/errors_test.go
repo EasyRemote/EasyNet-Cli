@@ -38,7 +38,7 @@ func TestDecodeDaemonErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.T) 
 		"retry": "safe",
 		"source": "c_abi",
 		"invocation_id": "inv-1",
-		"receipt_ura": "easynet:///r/example/receipt/opaque",
+		"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
 		"details": {"abi_symbol": "ERR_TIMEOUT"}
 	}`))
 	if decodeErr != nil {
@@ -53,7 +53,7 @@ func TestDecodeDaemonErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.T) 
 	if err.InvocationID != "inv-1" {
 		t.Fatalf("invocation id = %q, want inv-1", err.InvocationID)
 	}
-	if err.ReceiptURA != "easynet:///r/example/receipt/opaque" {
+	if err.ReceiptURA != "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt" {
 		t.Fatalf("receipt URA = %q", err.ReceiptURA)
 	}
 	if err.Details["abi_symbol"] != "ERR_TIMEOUT" {

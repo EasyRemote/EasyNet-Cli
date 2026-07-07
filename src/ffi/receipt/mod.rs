@@ -407,7 +407,7 @@ mod tests {
         let handle = handle();
         let raw = CString::new(
             serde_json::json!({
-                "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                 "invocation_id": "inv-1",
                 "state": "completed",
                 "verified": true,
@@ -450,7 +450,7 @@ mod tests {
         let handle = handle();
         let raw = CString::new(
             serde_json::json!({
-                "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                 "invocation_id": "inv-1",
                 "state": "completed",
                 "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -477,11 +477,11 @@ mod tests {
             serde_json::json!({
                 "receipts": [
                     {
-                        "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                        "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                         "self_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     },
                     {
-                        "receipt_ura": "easynet:///r/acme/resource/invocations/inv-2/receipt/1",
+                        "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-2/receipt",
                         "self_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "prev_receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }
@@ -507,7 +507,7 @@ mod tests {
         let handle = handle();
         let raw = CString::new(
             serde_json::json!({
-                "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                 "state": "completed"
             })
             .to_string(),
@@ -527,7 +527,7 @@ mod tests {
         let handle = handle();
         let raw = CString::new(
             serde_json::json!({
-                "receipt_ura": "easynet:///r/acme/resource/invocations/inv-1/receipt/1",
+                "receipt_ura": "easynet:///r/acme/resource/agent.alice.sdk/invocation/inv-1/receipt",
                 "state": "completed",
                 "receipt_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             })

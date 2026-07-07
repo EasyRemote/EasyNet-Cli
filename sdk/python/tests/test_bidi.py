@@ -112,7 +112,7 @@ class BidiTests(unittest.TestCase):
             [
                 b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
                 b'"payload_json":{"receipt":{"receipt_ura":'
-                b'"easynet:///r/example/receipt/r1"}}}'
+                b'"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}'
             ]
         )
         session = new_session(transport)
@@ -125,7 +125,7 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(terminal.frame_type, "terminal")
         self.assertEqual(terminal.seq, 1)
         self.assertEqual(
-            terminal.receipt, {"receipt_ura": "easynet:///r/example/receipt/r1"}
+            terminal.receipt, {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}
         )
         self.assertIn(b'"frame_type":"terminal"', terminal.to_json())
 

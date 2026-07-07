@@ -86,7 +86,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
                 nonce=bytes(range(1, 17)),
                 causal=[
                     EasyRemoteCausalRef(
-                        receipt_ura="easynet:///r/example/receipt/parent-1",
+                        receipt_ura="easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
                         receipt_hash=bytes.fromhex("aa" * 32),
                     )
                 ],
@@ -113,7 +113,7 @@ class EasyRemoteCutoverTests(unittest.TestCase):
                 "form": "list",
                 "prior": [
                     {
-                        "receipt_ura": "easynet:///r/example/receipt/parent-1",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
                         "receipt_hash_hex": "aa" * 32,
                     }
                 ],
@@ -444,7 +444,7 @@ def verify_continuity(previous, current):
             runtime_transport.seen_draft["causal_context"],
             {
                 "form": "scalar",
-                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                 "receipt_hash_hex": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -476,7 +476,7 @@ def _parent_result_with_receipt() -> InvocationResult:
                 "output_base64": "e30=",
                 "output_json": {},
                 "receipt": {
-                    "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
                     "invocation_id": "inv-parent-1",
                     "self_hash_hex": (
                         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

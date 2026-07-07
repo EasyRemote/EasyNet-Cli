@@ -940,6 +940,9 @@ func causalContextFromReceiptProjection(obj map[string]any) (map[string]any, err
 	if !ok {
 		return nil, invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
 	}
+	if err := validateReceiptURA(receiptURA); err != nil {
+		return nil, err
+	}
 	receiptHash, ok := receiptHashField(context)
 	if !ok && !hasContext {
 		receiptHash, ok = receiptHashField(obj)
@@ -985,6 +988,9 @@ func (r ReceiptRef) validate() error {
 	if strings.TrimSpace(r.ReceiptURA) == "" {
 		return invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
 	}
+	if err := validateReceiptURA(r.ReceiptURA); err != nil {
+		return err
+	}
 	if err := validateReceiptHashHex(r.ReceiptHashHex); err != nil {
 		return err
 	}
@@ -995,6 +1001,27 @@ func (r ReceiptRef) validate() error {
 	}
 	if r.Index != nil && *r.Index < 0 {
 		return invalidProfilePayload(receiptProfile, "receipt index must be non-negative", nil)
+	}
+	return nil
+}
+
+func validateReceiptURA(receiptURA string) error {
+	if strings.TrimSpace(receiptURA) != receiptURA || receiptURA == "" {
+		return invalidProfilePayload(receiptProfile, "receipt_ura is required", nil)
+	}
+	parts, err := ParseURAParts(receiptURA)
+	if err != nil {
+		return invalidProfilePayload(receiptProfile, fmt.Sprintf("invalid receipt_ura: %v", err), err)
+	}
+	if parts.Kind != URAKindResource || parts.OwnerID == "" {
+		return invalidProfilePayload(receiptProfile, "receipt_ura must be a resource URA", nil)
+	}
+	segments := strings.Split(parts.Path, "/")
+	if len(segments) != 3 || segments[0] != "invocation" || segments[2] != "receipt" {
+		return invalidProfilePayload(receiptProfile, "receipt_ura must use RFC-007 invocation/<id>/receipt resource path", nil)
+	}
+	if _, err := cleanReceiptInvocationID(segments[1]); err != nil {
+		return err
 	}
 	return nil
 }

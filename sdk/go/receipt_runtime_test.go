@@ -138,11 +138,11 @@ func TestReceiptRuntimeTransportDelegatesReceiptProjectionsToProvider(t *testing
 		},
 		VerifyChainFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
 			seen["chain"] = string(requestJSON)
-			return []byte(`{"verified":false,"continuous":true,"method":"daemon_receipt_chain_continuity","reason":"continuity only","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/receipt/receipt-1","terminal_receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{}},{"index":1,"receipt_ura":"easynet:///r/example/receipt/receipt-2","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{}}],"metadata":{}}`), nil
+			return []byte(`{"verified":false,"continuous":true,"method":"daemon_receipt_chain_continuity","reason":"continuity only","requires_full_receipt":true,"root_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","terminal_receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_count":2,"items":[{"index":0,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prev_receipt_hash_hex":null,"continuous":true,"metadata":{}},{"index":1,"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","continuous":true,"metadata":{}}],"metadata":{}}`), nil
 		},
 		CausalRefFunc: func(ctx context.Context, receiptJSON []byte) ([]byte, error) {
 			seen["causal"] = string(receiptJSON)
-			return []byte(`{"causal_ref":"receipt:easynet:///r/example/receipt/receipt-1#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","receipt_ura":"easynet:///r/example/receipt/receipt-1","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`), nil
+			return []byte(`{"causal_ref":"receipt:easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","invocation_id":"inv-example-1","form":"scalar","metadata":{}}`), nil
 		},
 	}
 	client, err := NewRuntimeReceiptClientWithProjectionProvider(runtime, identity, provider)
@@ -160,8 +160,8 @@ func TestReceiptRuntimeTransportDelegatesReceiptProjectionsToProvider(t *testing
 	}
 	chain, err := client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
 		Receipts: []json.RawMessage{
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-2","self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-2/receipt","self_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prev_receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
 		},
 	})
 	if err != nil {
@@ -206,7 +206,7 @@ func TestReceiptRuntimeTransportProjectionMethodsFailClosedWithoutProvider(t *te
 	}
 	if _, err := client.VerifyChain(context.Background(), ReceiptChainVerificationRequest{
 		Receipts: []json.RawMessage{
-			json.RawMessage(`{"receipt_ura":"easynet:///r/example/receipt/receipt-1","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+			json.RawMessage(`{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
 		},
 	}); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("VerifyChain error = %v, want %s", err, ErrInvalidArgument)
@@ -233,13 +233,13 @@ func newReceiptRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport
 }
 
 const receiptHistoryListRawJSON = `{
-	"ledger_ura":"easynet:///r/example/resource/invocations",
+	"ledger_ura":"easynet:///r/example/resource/daemon.invocation_history",
 	"ledger_path":"/tmp/ledger.redb",
 	"records":[{"request_id":"req-1","trace_id":"trace-1"}]
 }`
 
 const receiptTraceRawJSON = `{
-	"ledger_ura":"easynet:///r/example/resource/invocations",
+	"ledger_ura":"easynet:///r/example/resource/daemon.invocation_history",
 	"ledger_path":"/tmp/ledger.redb",
 	"trace_id":"trace-1",
 	"nodes":[],

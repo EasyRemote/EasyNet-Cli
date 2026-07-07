@@ -87,7 +87,7 @@ MISSION_STATUS_JSON = b"""{
   "partial_failures": 1,
   "cancelled": false,
   "parent_invocation_id": null,
-  "parent_receipt_ura": "easynet:///r/example/receipt/parent",
+  "parent_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
   "parent_invocation": {"caller": "easynet:///r/example/agent/alice.sdk"},
   "child_invocations": [
     {
@@ -101,10 +101,10 @@ MISSION_STATUS_JSON = b"""{
       "subject_ura": "easynet:///r/example/device/dev-a",
       "metadata_state": "receipt_backed",
       "ledger_state": "completed",
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb", "head_receipt_hash": "bbbb"}
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt", "receipt_hash": "bbbb", "head_receipt_hash": "bbbb"}
     }
   ],
-  "child_receipts": [{"step_id": "s1", "invocation_ura": "easynet:///r/example/invocation/req-1", "receipt_ura": "easynet:///r/example/receipt/child", "receipt_hash": "bbbb"}],
+  "child_receipts": [{"step_id": "s1", "invocation_ura": "easynet:///r/example/invocation/req-1", "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt", "receipt_hash": "bbbb"}],
   "output_refs": [{"kind": "run_dir", "path": "/tmp/easynet/missions/runs/2026-07-04_010203_weather"}],
   "metadata": {"profile": "mission", "carrier_owner": "daemon_sdk"}
 }"""
@@ -190,7 +190,7 @@ MISSION_EVENT_PAGE_JSON = b"""{
       "occurred_unix_ms": 1006,
       "terminal": true,
       "payload": {"reply": "done"},
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"},
       "metadata": {}
     }
   ],
@@ -240,7 +240,7 @@ MISSION_EVENT_TAIL_PAGE_2_JSON = b"""{
       "occurred_unix_ms": 1001,
       "terminal": true,
       "payload": {"reply": "done"},
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"},
       "metadata": {}
     }
   ],
@@ -265,7 +265,7 @@ MISSION_EVENT_TAIL_TERMINAL_THEN_STRAY_PAGE_JSON = b"""{
       "occurred_unix_ms": 1000,
       "terminal": true,
       "payload": {"reply": "done"},
-      "receipt": {"receipt_ura": "easynet:///r/example/receipt/terminal"},
+      "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/terminal/receipt"},
       "metadata": {}
     },
     {
@@ -673,7 +673,7 @@ class MissionTests(unittest.TestCase):
         )
         self.assertTrue(status.terminal)
         self.assertEqual(status.state, "partial")
-        self.assertEqual(status.child_receipts[0].receipt_ura, "easynet:///r/example/receipt/child")
+        self.assertEqual(status.child_receipts[0].receipt_ura, "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt")
         self.assertEqual(status.output_refs[0].kind, "run_dir")
 
     def test_events_projection(self) -> None:

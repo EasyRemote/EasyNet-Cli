@@ -304,24 +304,30 @@ mod tests {
         // Scalar: one receipt anchor.
         let scalar_env = none_env.clone().with_causal_context(json!({
             "kind": "scalar",
-            "receipt_ura": "easynet:///r/acme/receipt/r1",
+            "receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt",
             "receipt_hash": "aa",
         }));
         let scalar = causal_parents_from_env(&scalar_env);
         assert_eq!(scalar.len(), 1);
-        assert_eq!(scalar[0]["receipt_ura"], "easynet:///r/acme/receipt/r1");
+        assert_eq!(
+            scalar[0]["receipt_ura"],
+            "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt"
+        );
 
         // List: fan-in parents pass through verbatim.
         let list_env = none_env.with_causal_context(json!({
             "kind": "list",
             "receipts": [
-                {"receipt_ura": "easynet:///r/acme/receipt/r1", "receipt_hash": "aa"},
-                {"receipt_ura": "easynet:///r/acme/receipt/r2", "receipt_hash": "bb"},
+                {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt", "receipt_hash": "aa"},
+                {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt", "receipt_hash": "bb"},
             ],
         }));
         let list = causal_parents_from_env(&list_env);
         assert_eq!(list.len(), 2);
-        assert_eq!(list[1]["receipt_ura"], "easynet:///r/acme/receipt/r2");
+        assert_eq!(
+            list[1]["receipt_ura"],
+            "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt"
+        );
     }
 
     #[test]

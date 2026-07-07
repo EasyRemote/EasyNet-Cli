@@ -317,7 +317,7 @@ mod tests {
                         "invocation_ura": "easynet:///r/example/invocation/req-1",
                         "receipt": {
                             "anchor": {
-                                "receipt_ura": "easynet:///r/example/receipt/child",
+                                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt",
                                 "receipt_hash": "ab"
                             }
                         }
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(value["terminal"], true);
         assert_eq!(
             value["child_receipts"][0]["receipt_ura"],
-            "easynet:///r/example/receipt/child"
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt"
         );
         release(handle);
     }

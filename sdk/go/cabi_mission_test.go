@@ -136,7 +136,7 @@ const fakeCABIMissionStatusJSON = `{
     "trace_id": "2026-07-04_010203_weather",
     "status": "completed",
     "steps_failed": 0,
-    "invocation_context": {"receipt_ura": "easynet:///r/example/receipt/parent"},
+    "invocation_context": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt"},
     "child_invocations": []
   },
   "output_refs": [{"kind": "run_dir", "path": "/tmp/easynet/missions/runs/2026-07-04_010203_weather"}]
@@ -148,7 +148,7 @@ const fakeCABIMissionEventsJSON = `{
   "has_more": false,
   "dropped_count": 0,
   "events": [
-    {"sequence": 6, "event_type": "completed", "occurred_unix_ms": 1783219200006, "terminal": true, "payload": {"ok": true}, "receipt": {"receipt_ura": "easynet:///r/example/receipt/child"}},
+    {"sequence": 6, "event_type": "completed", "occurred_unix_ms": 1783219200006, "terminal": true, "payload": {"ok": true}, "receipt": {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt"}},
     {"sequence": 4, "event_type": "progress", "occurred_unix_ms": 1783219200004, "terminal": false, "payload": {"step": "s1"}, "receipt": {}}
   ]
 }`
@@ -181,11 +181,11 @@ int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle;
 	if (strstr(invocation_json, "mission.events") != 0) {
-		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"has_more\":false,\"dropped_count\":0,\"events\":[{\"sequence\":4,\"event_type\":\"progress\",\"occurred_unix_ms\":1783219200004,\"terminal\":false,\"payload\":{\"step\":\"s1\"},\"receipt\":{}},{\"sequence\":6,\"event_type\":\"completed\",\"occurred_unix_ms\":1783219200006,\"terminal\":true,\"payload\":{\"ok\":true},\"receipt\":{\"receipt_ura\":\"easynet:///r/example/receipt/child\"}}]},\"error\":null}");
+		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"has_more\":false,\"dropped_count\":0,\"events\":[{\"sequence\":4,\"event_type\":\"progress\",\"occurred_unix_ms\":1783219200004,\"terminal\":false,\"payload\":{\"step\":\"s1\"},\"receipt\":{}},{\"sequence\":6,\"event_type\":\"completed\",\"occurred_unix_ms\":1783219200006,\"terminal\":true,\"payload\":{\"ok\":true},\"receipt\":{\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt\"}}]},\"error\":null}");
 		return 0;
 	}
 	if (strstr(invocation_json, "mission.run") == 0 && strstr(invocation_json, "mission.track") == 0 && strstr(invocation_json, "mission.cancel") == 0) return 10;
-	*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"mission_id\":\"2026-07-04_010203_weather\",\"meta\":{\"trace_id\":\"2026-07-04_010203_weather\",\"status\":\"completed\",\"steps_failed\":0,\"invocation_context\":{\"receipt_ura\":\"easynet:///r/example/receipt/parent\"},\"child_invocations\":[]},\"output_refs\":[{\"kind\":\"run_dir\",\"path\":\"/tmp/easynet/missions/runs/2026-07-04_010203_weather\"}]},\"error\":null}");
+	*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"mission_id\":\"2026-07-04_010203_weather\",\"meta\":{\"trace_id\":\"2026-07-04_010203_weather\",\"status\":\"completed\",\"steps_failed\":0,\"invocation_context\":{\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt\"},\"child_invocations\":[]},\"output_refs\":[{\"kind\":\"run_dir\",\"path\":\"/tmp/easynet/missions/runs/2026-07-04_010203_weather\"}]},\"error\":null}");
 	return 0;
 }
 int32_t easynet_mission_build_run_eal_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
@@ -219,12 +219,12 @@ int32_t easynet_mission_build_events_invocation(uint64_t handle, const char *req
 }
 int32_t easynet_mission_project_status(uint64_t handle, const char *status_json, char **out_status_json) {
 	(void)handle; (void)status_json;
-	*out_status_json = dup_json("{\"profile\":\"mission\",\"kind\":\"mission_status\",\"mission_id\":\"2026-07-04_010203_weather\",\"state\":\"completed\",\"terminal\":true,\"partial_failures\":0,\"cancelled\":false,\"parent_invocation_id\":null,\"parent_receipt_ura\":\"easynet:///r/example/receipt/parent\",\"parent_invocation\":{\"receipt_ura\":\"easynet:///r/example/receipt/parent\"},\"child_invocations\":[],\"child_receipts\":[],\"output_refs\":[{\"kind\":\"run_dir\",\"path\":\"/tmp/easynet/missions/runs/2026-07-04_010203_weather\"}],\"error\":null,\"metadata\":{\"profile\":\"mission\",\"carrier_owner\":\"daemon_sdk\",\"status_source\":\"mission_result\"}}");
+	*out_status_json = dup_json("{\"profile\":\"mission\",\"kind\":\"mission_status\",\"mission_id\":\"2026-07-04_010203_weather\",\"state\":\"completed\",\"terminal\":true,\"partial_failures\":0,\"cancelled\":false,\"parent_invocation_id\":null,\"parent_receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt\",\"parent_invocation\":{\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt\"},\"child_invocations\":[],\"child_receipts\":[],\"output_refs\":[{\"kind\":\"run_dir\",\"path\":\"/tmp/easynet/missions/runs/2026-07-04_010203_weather\"}],\"error\":null,\"metadata\":{\"profile\":\"mission\",\"carrier_owner\":\"daemon_sdk\",\"status_source\":\"mission_result\"}}");
 	return 0;
 }
 int32_t easynet_mission_project_events(uint64_t handle, const char *events_json, char **out_page_json) {
 	(void)handle; (void)events_json;
-	*out_page_json = dup_json("{\"profile\":\"mission\",\"kind\":\"mission_event_page\",\"mission_id\":\"2026-07-04_010203_weather\",\"cursor_sequence\":4,\"next_cursor_sequence\":7,\"has_more\":false,\"dropped_count\":0,\"events\":[{\"profile\":\"mission\",\"kind\":\"mission_event\",\"mission_id\":\"2026-07-04_010203_weather\",\"sequence\":4,\"event_type\":\"progress\",\"occurred_unix_ms\":1783219200004,\"terminal\":false,\"payload\":{\"step\":\"s1\"},\"receipt\":{},\"metadata\":{}},{\"profile\":\"mission\",\"kind\":\"mission_event\",\"mission_id\":\"2026-07-04_010203_weather\",\"sequence\":6,\"event_type\":\"completed\",\"occurred_unix_ms\":1783219200006,\"terminal\":true,\"payload\":{\"ok\":true},\"receipt\":{\"receipt_ura\":\"easynet:///r/example/receipt/child\"},\"metadata\":{}}],\"metadata\":{\"profile\":\"mission\",\"carrier_owner\":\"daemon_sdk\"}}");
+	*out_page_json = dup_json("{\"profile\":\"mission\",\"kind\":\"mission_event_page\",\"mission_id\":\"2026-07-04_010203_weather\",\"cursor_sequence\":4,\"next_cursor_sequence\":7,\"has_more\":false,\"dropped_count\":0,\"events\":[{\"profile\":\"mission\",\"kind\":\"mission_event\",\"mission_id\":\"2026-07-04_010203_weather\",\"sequence\":4,\"event_type\":\"progress\",\"occurred_unix_ms\":1783219200004,\"terminal\":false,\"payload\":{\"step\":\"s1\"},\"receipt\":{},\"metadata\":{}},{\"profile\":\"mission\",\"kind\":\"mission_event\",\"mission_id\":\"2026-07-04_010203_weather\",\"sequence\":6,\"event_type\":\"completed\",\"occurred_unix_ms\":1783219200006,\"terminal\":true,\"payload\":{\"ok\":true},\"receipt\":{\"receipt_ura\":\"easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt\"},\"metadata\":{}}],\"metadata\":{\"profile\":\"mission\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
 `

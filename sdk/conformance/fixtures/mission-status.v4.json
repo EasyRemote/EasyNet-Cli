@@ -7,7 +7,7 @@
   "partial_failures": 1,
   "cancelled": false,
   "parent_invocation_id": null,
-  "parent_receipt_ura": "easynet:///r/example/receipt/parent",
+  "parent_receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
   "parent_invocation": {
     "caller": "easynet:///r/example/agent/alice.sdk",
     "callee": "easynet:///r/example/device/dev-a",
@@ -15,7 +15,7 @@
     "subject": "easynet:///r/example/device/dev-a",
     "causal_context": {
       "form": "scalar",
-      "receipt_ura": "easynet:///r/example/receipt/parent",
+      "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
       "receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   },
@@ -32,7 +32,7 @@
       "metadata_state": "receipt_backed",
       "ledger_state": "completed",
       "receipt": {
-        "receipt_ura": "easynet:///r/example/receipt/child",
+        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt",
         "receipt_hash": "bbbb",
         "head_receipt_hash": "bbbb"
       }
@@ -42,7 +42,7 @@
     {
       "step_id": "s1",
       "invocation_ura": "easynet:///r/example/invocation/req-1",
-      "receipt_ura": "easynet:///r/example/receipt/child",
+      "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt",
       "receipt_hash": "bbbb"
     }
   ],

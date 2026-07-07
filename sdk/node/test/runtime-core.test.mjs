@@ -153,7 +153,7 @@ const missionStatus = () => ({
   partial_failures: 1,
   cancelled: false,
   parent_invocation_id: null,
-  parent_receipt_ura: "easynet:///r/example/receipt/parent",
+  parent_receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
   parent_invocation: {
     caller: "easynet:///r/example/agent/alice.sdk",
     callee: "easynet:///r/example/device/dev-a",
@@ -161,7 +161,7 @@ const missionStatus = () => ({
     subject: "easynet:///r/example/device/dev-a",
     causal_context: {
       form: "scalar",
-      receipt_ura: "easynet:///r/example/receipt/parent",
+      receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
       receipt_hash_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     },
   },
@@ -178,7 +178,7 @@ const missionStatus = () => ({
       metadata_state: "receipt_backed",
       ledger_state: "completed",
       receipt: {
-        receipt_ura: "easynet:///r/example/receipt/child",
+        receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt",
         receipt_hash: "bbbb",
         head_receipt_hash: "bbbb",
       },
@@ -188,7 +188,7 @@ const missionStatus = () => ({
     {
       step_id: "s1",
       invocation_ura: "easynet:///r/example/invocation/req-1",
-      receipt_ura: "easynet:///r/example/receipt/child",
+      receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt",
       receipt_hash: "bbbb",
     },
   ],
@@ -250,7 +250,7 @@ const missionEventPage = () => ({
         steps_failed: 1,
       },
       receipt: {
-        receipt_ura: "easynet:///r/example/receipt/parent",
+        receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/parent/receipt",
         receipt_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         head_receipt_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       },
@@ -2110,7 +2110,7 @@ test("MissionClient delegates carriers, status projections, and event streams wi
   assert.equal(eventsDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0");
   assert.equal(run.status.missionID, missionID);
   assert.equal(runFile.status.outputRefs[0].kind, "run_dir");
-  assert.equal(tracked.childReceipts[0].receipt_ura, "easynet:///r/example/receipt/child");
+  assert.equal(tracked.childReceipts[0].receipt_ura, "easynet:///r/example/resource/agent.alice.sdk/invocation/child/receipt");
   assert.equal(cancelled.cancelled, true);
   assert.equal(page.events.length, 2);
   assert.equal(page.events[1].terminal, true);
@@ -2472,7 +2472,7 @@ test("ReceiptClient delegates fetch, projection, and causal refs without verific
   );
 
   const ref = new ReceiptRef({
-    receipt_ura: "easynet:///r/example/resource/receipt.inv-1",
+    receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-1/receipt",
     receipt_hash_hex: receiptHash,
     invocation_id: "inv-1",
   });
@@ -2530,7 +2530,7 @@ test("ReceiptClient delegates carriers, history, and chain verification", async 
   const listed = await receipt.listHistory({ ...directoryBase(), arguments: { limit: 1 } });
   const trace = await receipt.getTrace({ ...directoryBase(), arguments: { invocation_id: "inv-1" } });
   const chain = new ReceiptChain([
-    { receipt_ura: "easynet:///r/example/resource/receipt.inv-1", receipt_hash_hex: receiptHash },
+    { receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-1/receipt", receipt_hash_hex: receiptHash },
   ]);
   const verification = await chain.verifyContinuity(receipt, { source: "test" });
 
@@ -2551,7 +2551,7 @@ test("ReceiptRef rejects fabricated or malformed receipt anchors", () => {
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
   assert.throws(
-    () => new ReceiptRef({ receipt_ura: "easynet:///r/example/resource/receipt.inv-1", receipt_hash_hex: "abc" }),
+    () => new ReceiptRef({ receipt_ura: "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-1/receipt", receipt_hash_hex: "abc" }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });
