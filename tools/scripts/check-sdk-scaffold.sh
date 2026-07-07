@@ -314,6 +314,23 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueReader.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueWriter.java \
   sdk/java/src/main/java/run/easynet/daemon/LocalResourceRefRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionCancelRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionCarrierBase.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionChildInvocation.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionChildReceipt.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionEvent.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionEventPage.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionEventStream.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionEventsRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionOutputRef.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionRun.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionRunFileRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionRunRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionStatus.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionTrackRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/MissionTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/OwnerAbilityRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/PackageValidation.java \
   sdk/java/src/main/java/run/easynet/daemon/PreparedInvocation.java \
@@ -368,6 +385,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/HostBinding.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Mission.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Publication.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Receipt.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \

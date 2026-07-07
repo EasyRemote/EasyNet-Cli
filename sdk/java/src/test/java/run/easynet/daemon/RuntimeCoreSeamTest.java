@@ -34,6 +34,7 @@ public final class RuntimeCoreSeamTest {
     receiptRejectsInvalidSelectorAndSummaryVerification();
     receiptOpaqueRefRequiresExplicitAnchorFacts();
     publicationProfileDelegatesResourceValidationAndCarriers();
+    missionProfileDelegatesCarriersStatusAndStreams();
     hostBindingProfileDelegatesCodecHashAndLifecycle();
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
     surfaceProfileDelegatesCarriersAndProjections();
@@ -739,6 +740,100 @@ public final class RuntimeCoreSeamTest {
         () -> publication.buildLocalResourceRef(new LocalResourceRefRequest("/tmp/easynet-weather-package", "read")));
   }
 
+  private static void missionProfileDelegatesCarriersStatusAndStreams() throws Exception {
+    var mission = new MissionClient(new FixtureMissionTransport());
+
+    var run = mission.buildRunEALInvocation(missionRunRequest());
+    check(
+        run.inspectTuple().descriptor().equals("easynet:///r/example/ability/device.dev-a.mission.run@1.0.0"),
+        "mission run descriptor");
+
+    var runFile = mission.buildRunFileInvocation(missionRunFileRequest());
+    check(
+        runFile.inspectTuple().descriptor().equals("easynet:///r/example/ability/device.dev-a.mission.run@1.0.0"),
+        "mission run-file descriptor");
+
+    var track = mission.buildTrackInvocation(missionTrackRequest());
+    check(
+        track.inspectTuple().descriptor().equals("easynet:///r/example/ability/device.dev-a.mission.track@1.0.0"),
+        "mission track descriptor");
+
+    var cancel = mission.buildCancelInvocation(missionCancelRequest());
+    check(
+        cancel.inspectTuple().descriptor().equals("easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0"),
+        "mission cancel descriptor");
+
+    var events = mission.buildEventsInvocation(missionEventsRequest());
+    check(
+        events.inspectTuple().descriptor().equals("easynet:///r/example/ability/device.dev-a.mission.events@1.0.0"),
+        "mission events descriptor");
+
+    var status = mission.track(missionTrackRequest());
+    check(status.terminal() && status.state().equals("partial"), "mission status terminal state");
+    check(status.parentReceiptURA().equals("easynet:///r/example/receipt/parent"), "mission parent receipt");
+    check(status.childInvocations().size() == 1, "mission child invocation facts");
+    check(status.childReceipts().get(0).receiptURA().equals("easynet:///r/example/receipt/child"), "mission child receipt");
+    check(status.outputRefs().size() == 4, "mission output refs");
+
+    var page = mission.events(missionEventsRequest());
+    check(page.events().size() == 2 && page.nextCursorSequence() == 7, "mission event page");
+    check(page.events().get(1).terminal(), "mission terminal event");
+
+    var stream = mission.openEventStream(missionEventsRequest());
+    var event = stream.next();
+    check(event.eventType().equals("progress") && event.sequence() == 7, "mission event stream payload");
+    check(stream.cancel("done").terminal(), "mission event stream cancel terminal");
+    stream.close();
+
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new MissionTrackRequest(missionCarrier(), "../weather"));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            MissionStatus.fromJSON(
+                bytes(
+                    new String(fixture("mission-status.v4.json"), StandardCharsets.UTF_8)
+                        .replace("\"request_id\": \"req-1\"", "\"request_id\": null"))));
+
+    mission.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> mission.track(missionTrackRequest()));
+  }
+
+  private static MissionCarrierBase missionCarrier() {
+    return missionCarrier("mission-run-1");
+  }
+
+  private static MissionCarrierBase missionCarrier(String requestID) {
+    return new MissionCarrierBase(
+        "easynet:///r/example/agent/alice.sdk",
+        "easynet:///r/example/device/dev-a",
+        "easynet:///r/example/device/dev-a",
+        "1.0.0",
+        "AQIDBAUGBwgJCgsMDQ4PEA==",
+        Map.of("form", "none"),
+        Map.of("request_id", requestID));
+  }
+
+  private static MissionRunRequest missionRunRequest() {
+    return new MissionRunRequest(
+        missionCarrier(), "mission weather\nlet r = local.observe_health()", "weather");
+  }
+
+  private static MissionRunFileRequest missionRunFileRequest() {
+    return new MissionRunFileRequest(missionCarrier("mission-run-file-1"), "/tmp/easynet-sdk-demo.eal", "file-weather");
+  }
+
+  private static MissionTrackRequest missionTrackRequest() {
+    return new MissionTrackRequest(missionCarrier("mission-track-1"), "2026-07-04_010203_weather");
+  }
+
+  private static MissionCancelRequest missionCancelRequest() {
+    return new MissionCancelRequest(missionCarrier("mission-cancel-1"), "2026-07-04_010203_weather");
+  }
+
+  private static MissionEventsRequest missionEventsRequest() {
+    return new MissionEventsRequest(missionCarrier("mission-events-1"), "2026-07-04_010203_weather", 4, 100);
+  }
+
   private static void hostBindingProfileDelegatesCodecHashAndLifecycle() throws Exception {
     var provider = new FixtureHostLifecycleProvider();
     var hostBinding = new HostBindingClient(new FixtureHostBindingTransport(), provider);
@@ -1244,6 +1339,29 @@ public final class RuntimeCoreSeamTest {
     }
   }
 
+  private static final class MissionEventStreamSource implements StreamSource {
+    private final ArrayDeque<StreamEvent> events = new ArrayDeque<>();
+
+    MissionEventStreamSource() {
+      events.add(
+          StreamEvent.data(
+              7,
+              """
+              {"profile":"mission","kind":"mission_event","mission_id":"2026-07-04_010203_weather","sequence":7,"event_type":"progress","occurred_unix_ms":1783126928000,"terminal":false,"payload":{"delta":"stream"},"receipt":{},"metadata":{"profile":"mission","carrier_owner":"daemon_sdk"}}
+              """));
+    }
+
+    @Override
+    public StreamEvent next() {
+      return events.isEmpty() ? StreamEvent.terminal(8, "Completed") : events.removeFirst();
+    }
+
+    @Override
+    public StreamEvent cancel(String reason) {
+      return StreamEvent.terminal(8, "Cancelled");
+    }
+  }
+
   private static final class QueueBidiSource implements BidiSource {
     private final ArrayDeque<BidiFrame> frames = new ArrayDeque<>();
 
@@ -1439,6 +1557,101 @@ public final class RuntimeCoreSeamTest {
       var request = JsonValueReader.object(requestJSON, "publication unpublish request");
       check(request.get("ability_ura").equals("easynet:///r/example/ability/device.dev-a.er.weather"), "publication unpublish ability");
       return fixture("publication-unpublish-invocation.v4.json");
+    }
+  }
+
+  private static final class FixtureMissionTransport implements MissionTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    @Override
+    public byte[] buildRunEALInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-run-request.v4.json", "mission run request");
+      return fixture("mission-run-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildRunFileInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-run-file-request.v4.json", "mission run-file request");
+      return fixture("mission-run-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildTrackInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-track-request.v4.json", "mission track request");
+      return fixture("mission-track-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildCancelInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-cancel-request.v4.json", "mission cancel request");
+      return fixture("mission-cancel-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildEventsInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-events-request.v4.json", "mission events request");
+      return missionEventsInvocation();
+    }
+
+    @Override
+    public byte[] runEAL(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-run-request.v4.json", "mission run request");
+      return fixture("mission-status.v4.json");
+    }
+
+    @Override
+    public byte[] runFile(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-run-file-request.v4.json", "mission run-file request");
+      return fixture("mission-status.v4.json");
+    }
+
+    @Override
+    public byte[] track(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-track-request.v4.json", "mission track request");
+      return fixture("mission-status.v4.json");
+    }
+
+    @Override
+    public byte[] cancel(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-cancel-request.v4.json", "mission cancel request");
+      return fixture("mission-status.v4.json");
+    }
+
+    @Override
+    public byte[] events(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-events-request.v4.json", "mission events request");
+      return fixture("mission-event-page.v4.json");
+    }
+
+    @Override
+    public StreamHandle openEventStream(byte[] requestJSON) {
+      expectRequest(requestJSON, "mission-events-request.v4.json", "mission event stream request");
+      return new StreamHandle(new MissionEventStreamSource());
+    }
+
+    private byte[] missionEventsInvocation() {
+      return bytes(
+          """
+          {
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_ref": "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0",
+            "subject_ura": "easynet:///r/example/device/dev-a",
+            "descriptor_version": "1.0.0",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "args": {
+              "run_id": "2026-07-04_010203_weather",
+              "cursor_sequence": 4,
+              "limit": 100
+            },
+            "metadata": {"request_id": "mission-events-1", "profile": "mission", "system_ability": "mission.events", "carrier_owner": "daemon_sdk"}
+          }
+          """);
     }
   }
 

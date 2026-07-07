@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: MissionClient builds complete Invocation carriers for daemon Mission/EAL system abilities and projects daemon mission results into typed MissionStatus without fabricating receipt refs.
 steps:
   - action: build_run_eal_invocation

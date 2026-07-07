@@ -631,6 +631,70 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testMissionProfileDelegatesCarriersStatusAndStreams() async throws {
+        let mission = MissionClient(transport: FixtureMissionTransport())
+
+        let run = try await mission.buildRunEALInvocation(missionRunRequest())
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(run["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0"
+        )
+        let runFile = try await mission.buildRunFileInvocation(missionRunFileRequest())
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(runFile["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0"
+        )
+        let track = try await mission.buildTrackInvocation(missionTrackRequest())
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(track["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0"
+        )
+        let cancel = try await mission.buildCancelInvocation(missionCancelRequest())
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(cancel["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0"
+        )
+        let eventsCarrier = try await mission.buildEventsInvocation(missionEventsRequest())
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(eventsCarrier["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0"
+        )
+
+        let status = try await mission.track(missionTrackRequest())
+        XCTAssertTrue(status.terminal)
+        XCTAssertEqual(status.state, "partial")
+        XCTAssertEqual(status.parentReceiptURA, "easynet:///r/example/receipt/parent")
+        XCTAssertEqual(status.childInvocations.count, 1)
+        XCTAssertEqual(status.childReceipts.count, 1)
+        XCTAssertEqual(status.outputRefs.count, 4)
+
+        let page = try await mission.events(missionEventsRequest())
+        XCTAssertEqual(page.events.count, 2)
+        XCTAssertEqual(page.nextCursorSequence, 7)
+        XCTAssertTrue(page.events[1].terminal)
+
+        let stream = try await mission.openEventStream(missionEventsRequest())
+        let streamed = try await stream.receive()
+        XCTAssertEqual(streamed.eventType, "progress")
+        XCTAssertEqual(streamed.sequence, 7)
+        try await stream.cancel(reason: "done")
+        try await stream.close()
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try MissionTrackRequest(base: missionCarrier(), missionID: "../weather")
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try MissionStatus.fromJSON(
+                replacingFixture("mission-status.v4.json", "\"request_id\": \"req-1\"", "\"request_id\": null")
+            )
+        }
+
+        try await mission.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await mission.track(missionTrackRequest())
+        }
+    }
+
     func testHostBindingProfileDelegatesCodecHashAndLifecycle() async throws {
         let lifecycleProvider = FixtureHostLifecycleProvider()
         let hostBinding = HostBindingClient(
@@ -992,6 +1056,57 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
     }
 
+    private func missionCarrier(requestID: String = "mission-run-1") throws -> MissionCarrierBase {
+        try MissionCarrierBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            metadata: ["request_id": .string(requestID)]
+        )
+    }
+
+    private func missionRunRequest() throws -> MissionRunRequest {
+        try MissionRunRequest(
+            base: missionCarrier(),
+            source: "mission weather\nlet r = local.observe_health()",
+            label: "weather"
+        )
+    }
+
+    private func missionRunFileRequest() throws -> MissionRunFileRequest {
+        try MissionRunFileRequest(
+            base: missionCarrier(requestID: "mission-run-file-1"),
+            path: "/tmp/easynet-sdk-demo.eal",
+            label: "file-weather"
+        )
+    }
+
+    private func missionTrackRequest() throws -> MissionTrackRequest {
+        try MissionTrackRequest(
+            base: missionCarrier(requestID: "mission-track-1"),
+            missionID: "2026-07-04_010203_weather"
+        )
+    }
+
+    private func missionCancelRequest() throws -> MissionCancelRequest {
+        try MissionCancelRequest(
+            base: missionCarrier(requestID: "mission-cancel-1"),
+            missionID: "2026-07-04_010203_weather"
+        )
+    }
+
+    private func missionEventsRequest() throws -> MissionEventsRequest {
+        try MissionEventsRequest(
+            base: missionCarrier(requestID: "mission-events-1"),
+            missionID: "2026-07-04_010203_weather",
+            cursorSequence: 4,
+            limit: 100
+        )
+    }
+
     private func surfaceCarrierBase(metadata: [String: JSONValue]) throws -> SurfaceCarrierBase {
         try SurfaceCarrierBase(
             callerURA: "easynet:///r/example/agent/alice.sdk",
@@ -1096,6 +1211,28 @@ final class EventsDirectoryStreamSource: StreamSource, @unchecked Sendable {
 
     func next() async throws -> StreamEvent {
         events.removeFirst()
+    }
+}
+
+final class MissionEventStreamSource: StreamSource, @unchecked Sendable {
+    private var events: [StreamEvent] = [
+        try! .data(
+            7,
+            payloadJSON: """
+            {"profile":"mission","kind":"mission_event","mission_id":"2026-07-04_010203_weather","sequence":7,"event_type":"progress","occurred_unix_ms":1783126928000,"terminal":false,"payload":{"delta":"stream"},"receipt":{},"metadata":{"profile":"mission","carrier_owner":"daemon_sdk"}}
+            """
+        ),
+    ]
+
+    func next() async throws -> StreamEvent {
+        if events.isEmpty {
+            return try .terminal(8, state: "Completed")
+        }
+        return events.removeFirst()
+    }
+
+    func cancel(reason: String) async throws -> StreamEvent {
+        try .terminal(8, state: "Cancelled")
     }
 }
 
@@ -1243,6 +1380,87 @@ final class FixtureIdentityTransport: IdentityTransport, @unchecked Sendable {
           "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"
         }
         """.utf8)
+    }
+}
+
+final class FixtureMissionTransport: MissionTransport, @unchecked Sendable {
+    func buildRunEALInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-run-request.v4.json")
+        return fixture("mission-run-invocation.v4.json")
+    }
+
+    func buildRunFileInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-run-file-request.v4.json")
+        return fixture("mission-run-invocation.v4.json")
+    }
+
+    func buildTrackInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-track-request.v4.json")
+        return fixture("mission-track-invocation.v4.json")
+    }
+
+    func buildCancelInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-cancel-request.v4.json")
+        return fixture("mission-cancel-invocation.v4.json")
+    }
+
+    func buildEventsInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-events-request.v4.json")
+        return Data(
+            """
+            {
+              "caller_ura": "easynet:///r/example/agent/alice.sdk",
+              "callee_ura": "easynet:///r/example/device/dev-a",
+              "descriptor_ref": "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0",
+              "subject_ura": "easynet:///r/example/device/dev-a",
+              "descriptor_version": "1.0.0",
+              "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+              "causal_context": {"form": "none"},
+              "args": {
+                "run_id": "2026-07-04_010203_weather",
+                "cursor_sequence": 4,
+                "limit": 100
+              },
+              "metadata": {"request_id": "mission-events-1", "profile": "mission", "system_ability": "mission.events", "carrier_owner": "daemon_sdk"}
+            }
+            """.utf8
+        )
+    }
+
+    func runEAL(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-run-request.v4.json")
+        return fixture("mission-status.v4.json")
+    }
+
+    func runFile(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-run-file-request.v4.json")
+        return fixture("mission-status.v4.json")
+    }
+
+    func track(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-track-request.v4.json")
+        return fixture("mission-status.v4.json")
+    }
+
+    func cancel(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-cancel-request.v4.json")
+        return fixture("mission-status.v4.json")
+    }
+
+    func events(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "mission-events-request.v4.json")
+        return fixture("mission-event-page.v4.json")
+    }
+
+    func openEventStream(_ requestJSON: Data) async throws -> StreamSource {
+        try expectJSON(requestJSON, equalsFixture: "mission-events-request.v4.json")
+        return MissionEventStreamSource()
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
     }
 }
 

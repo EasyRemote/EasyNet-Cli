@@ -12,8 +12,8 @@ method spelling.
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
-| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
-| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
+| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
 
 ## Capability Matrix
 
@@ -114,8 +114,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   `mission.run/track/cancel/events`; Go has Runtime Core-backed
   run/run-file/track/cancel/events execution and event streams, Python has
   `RuntimeMissionTransport` carrier/projection composition over Runtime Core,
-  and Go/Python expose bounded page-based Mission event tail state machines
-  plus complete child Invocation fact conformance. Daemon-side child Invocation
+  Go/Python expose bounded page-based Mission event tail state machines
+  plus complete child Invocation fact conformance, and Node/Java/Swift expose
+  injected-transport Mission carrier/status/event seams with Runtime Core stream
+  adapters for live events. Daemon-side child Invocation
   execution, scheduler/retry policy, and backend automation cutover remain
   incomplete.
 - Events Directory/device/invocation stream carrier guardrails, session stream
@@ -504,7 +506,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   methods, opaque ReceiptRef/ReceiptChain helpers, PublicationClient resource,
   package, deploy/unpublish, read-model, lifecycle carrier seams,
   HostBindingClient host-stream codec/hash/lifecycle seams, MissionClient
-  run/track/cancel/event carrier and projection seams, AdminClient gateway,
+  run/run-file/track/cancel/event carrier, status projection, and stream seams, AdminClient gateway,
   agent lifecycle, pairing, and device-session carrier/projection seams, EventClient
   event carrier/projection/history seams, SurfaceClient page
   carrier/projection/health seams, CompatibilityClient OpenAI-compatible
