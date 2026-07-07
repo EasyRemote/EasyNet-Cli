@@ -1,5 +1,8 @@
 package run.easynet.daemon;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 public final class InvocationBuilder {
   private String caller;
   private String callee;
@@ -8,6 +11,8 @@ public final class InvocationBuilder {
   private String nonce;
   private String causalContext;
   private String argsJson;
+  private Map<String, Object> metadata = Map.of();
+  private SDKError authorityError;
 
   public InvocationBuilder caller(String value) {
     caller = value;
@@ -44,8 +49,40 @@ public final class InvocationBuilder {
     return this;
   }
 
+  public InvocationBuilder metadata(Map<String, Object> value) {
+    metadata = copyMetadata(value);
+    return this;
+  }
+
+  public InvocationBuilder authorityMetadata(AuthorityMetadata value) {
+    try {
+      metadata = value.mergeInto(metadata);
+    } catch (SDKError error) {
+      authorityError = error;
+    }
+    return this;
+  }
+
   public InvocationDraft inspect() {
+    if (authorityError != null) {
+      throw authorityError;
+    }
+    AuthoritySupport.validateAuthorityMetadata(metadata);
     return new InvocationDraft(
-        new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson));
+        new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata));
+  }
+
+  private static Map<String, Object> copyMetadata(Map<String, Object> value) {
+    if (value == null || value.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, Object> out = new LinkedHashMap<>();
+    for (Map.Entry<String, Object> entry : value.entrySet()) {
+      if (entry.getKey() == null || entry.getKey().isBlank()) {
+        throw SDKError.validation("invocation", "metadata keys must be non-empty strings");
+      }
+      out.put(entry.getKey(), entry.getValue());
+    }
+    return Map.copyOf(out);
   }
 }

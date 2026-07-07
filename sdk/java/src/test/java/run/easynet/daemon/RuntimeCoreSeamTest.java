@@ -17,6 +17,7 @@ public final class RuntimeCoreSeamTest {
   public static void main(String[] args) throws Exception {
     featureDiscoveryAndTypedErrors();
     completeInvocationDraftAndRuntimeDispatch();
+    authorityMetadataProjectsAndRejectsAmbiguousDrafts();
     preparedInvocationSeparatesCanonicalMaterialFromSignedSubmit();
     asyncRuntimeUsesCompletableFutureAndCancellation();
     streamHistoryIsBounded();
@@ -236,6 +237,104 @@ public final class RuntimeCoreSeamTest {
       release.countDown();
       executor2.shutdownNow();
     }
+  }
+
+  private static void authorityMetadataProjectsAndRejectsAmbiguousDrafts() throws Exception {
+    var fixture = JsonValueReader.object(fixture("authority-metadata.v4.json"), "authority fixture");
+    String delegationValue = (String) fixture.get("delegation_metadata_value");
+    String sessionValue = (String) fixture.get("session_authority_metadata_value");
+
+    var delegation = DelegationProof.fromMetadata(delegationValue);
+    var session = SessionAuthority.fromMetadata(sessionValue);
+    check(delegation.issuerURA().equals("easynet:///r/example/user/alice"), "delegation issuer");
+    check(delegation.signatureBase64().equals("ZGVsZWdhdGlvbi1zaWduYXR1cmU="), "delegation signature");
+    check(session.audience().equals("easynet:///r/example/device/dev-a"), "session audience");
+
+    var draft =
+        new InvocationBuilder()
+            .caller("easynet:///r/example/agent/backend")
+            .callee("easynet:///r/example/device/dev-a")
+            .descriptor("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+            .subject("easynet:///r/example/user/alice")
+            .nonce("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .causalContext("{\"form\":\"none\"}")
+            .argsJson("{}")
+            .metadata(Map.of("trace", "authority-shared"))
+            .authorityMetadata(delegation.metadata())
+            .inspect();
+    check(draft.inspectTuple().metadata().get("trace").equals("authority-shared"), "authority trace");
+    check(draft.inspectTuple().metadata().get(AuthoritySupport.DELEGATION_METADATA_KEY).equals(delegationValue), "authority metadata merge");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new InvocationBuilder()
+                .caller("easynet:///r/example/agent/backend")
+                .callee("easynet:///r/example/device/dev-a")
+                .descriptor("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+                .subject("easynet:///r/example/user/alice")
+                .nonce("AQIDBAUGBwgJCgsMDQ4PEA==")
+                .causalContext("{\"form\":\"none\"}")
+                .argsJson("{}")
+                .metadata(
+                    Map.of(
+                        AuthoritySupport.DELEGATION_METADATA_KEY,
+                        delegationValue,
+                        AuthoritySupport.SESSION_AUTHORITY_METADATA_KEY,
+                        sessionValue))
+                .inspect());
+
+    var authority = new AuthorityClient(new FixtureAuthorityTransport(delegationValue, sessionValue));
+    var mintedDelegation =
+        authority.mintDelegationProof(
+            new DelegationRequest(
+                delegation.issuerURA(),
+                delegation.subjectURA(),
+                delegation.callerURA(),
+                delegation.audience(),
+                delegation.scopes(),
+                delegation.issuedAtMS(),
+                delegation.expiresAtMS(),
+                Map.of("trace", "delegation")));
+    var mintedSession =
+        authority.mintSessionAuthority(
+            new SessionAuthorityRequest(
+                session.issuerURA(),
+                session.subjectURA(),
+                session.audience(),
+                session.scopes(),
+                session.issuedAtMS(),
+                session.expiresAtMS(),
+                Map.of("trace", "session")));
+    check(mintedDelegation.metadataValue().equals(delegationValue), "mint delegation projection");
+    check(mintedSession.metadataValue().equals(sessionValue), "mint session projection");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            authority.mintDelegationProof(
+                new DelegationRequest(
+                    delegation.issuerURA(),
+                    delegation.subjectURA(),
+                    delegation.callerURA(),
+                    delegation.audience(),
+                    List.of(),
+                    delegation.issuedAtMS(),
+                    delegation.expiresAtMS(),
+                    Map.of())));
+    authority.close();
+    authority.close();
+    expectSDKError(
+        ErrorCode.INVALID_HANDLE,
+        () ->
+            authority.mintSessionAuthority(
+                new SessionAuthorityRequest(
+                    session.issuerURA(),
+                    session.subjectURA(),
+                    session.audience(),
+                    session.scopes(),
+                    session.issuedAtMS(),
+                    session.expiresAtMS(),
+                    Map.of())));
   }
 
   private static void streamHistoryIsBounded() throws Exception {
@@ -576,6 +675,8 @@ public final class RuntimeCoreSeamTest {
 
     var projected = client.project(fixture("receipt.summary.v4.json"));
     check(projected.invocationID().equals("inv-example-1"), "receipt projection invocation id");
+    var providerVerification = client.verify(fixture("receipt-ref.v4.json"));
+    check(providerVerification.verified(), "receipt provider verification");
     check(!client.verifySummary(projected).verified(), "receipt summary verification claim");
   }
 
@@ -633,6 +734,13 @@ public final class RuntimeCoreSeamTest {
                 Map.of()));
     var client = new ReceiptClient(new ReceiptTransport() {});
     expectSDKError(ErrorCode.NOT_IMPLEMENTED, () -> client.causalRef(ref));
+    var fixtureClient = new ReceiptClient(new FixtureReceiptTransport());
+    var chain = ReceiptChain.of(List.of(ref));
+    var verification = fixtureClient.verifyChain(chain);
+    check(verification.verified(), "receipt chain verification");
+    check(
+        verification.rootReceiptURA().equals("easynet:///r/example/receipt/receipt-1"),
+        "receipt chain root");
   }
 
   private static ReceiptFetchRequest receiptFetchRequest() {
@@ -1757,6 +1865,57 @@ public final class RuntimeCoreSeamTest {
       check(request.equals(JsonValueReader.object(fixture("receipt-fetch-request.v4.json"), "receipt fetch fixture")), "receipt fetch request");
       return fixture("receipt.summary.v4.json");
     }
+
+    @Override
+    public byte[] project(byte[] receiptJSON) {
+      var request = JsonValueReader.object(receiptJSON, "receipt projection request");
+      var expected = JsonValueReader.object(fixture("receipt.summary.v4.json"), "receipt summary fixture");
+      check(request.equals(expected), "receipt projection request");
+      return fixture("receipt.summary.v4.json");
+    }
+
+    @Override
+    public byte[] verify(byte[] receiptJSON) {
+      var request = JsonValueReader.object(receiptJSON, "receipt verification request");
+      var expected = JsonValueReader.object(fixture("receipt-ref.v4.json"), "receipt ref fixture");
+      check(request.equals(expected), "receipt verification request");
+      return bytes(
+          """
+          {
+            "verified": true,
+            "method": "axon-signature-chain",
+            "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+            "invocation_id": "inv-example-1",
+            "reason": "",
+            "metadata": {"assurance": "axon-cryptographic"}
+          }
+          """);
+    }
+
+    @Override
+    public byte[] verifyChain(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "receipt chain request");
+      @SuppressWarnings("unchecked")
+      var receipts = (List<Object>) request.get("receipts");
+      check(receipts.size() == 1, "receipt chain request count");
+      check(request.get("metadata").equals(Map.of()), "receipt chain metadata");
+      return bytes(
+          """
+          {
+            "verified": true,
+            "method": "axon-cross-invocation-dag",
+            "root_receipt_ura": "easynet:///r/example/receipt/receipt-1",
+            "terminal_receipt_ura": "easynet:///r/example/receipt/receipt-1",
+            "items": [
+              {
+                "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+                "verified": true
+              }
+            ],
+            "metadata": {"parent_dag_closed": true}
+          }
+          """);
+    }
   }
 
   private static final class FixturePublicationTransport implements PublicationTransport {
@@ -2375,6 +2534,33 @@ public final class RuntimeCoreSeamTest {
     public byte[] projectFileDeleteResult(byte[] valueJSON) {
       expectRequest(valueJSON, "compatibility-file-delete-request.v4.json", "compatibility project delete");
       return fixture("compatibility-file-delete-result.v4.json");
+    }
+  }
+
+  private static final class FixtureAuthorityTransport implements AuthorityTransport {
+    private final String delegationValue;
+    private final String sessionValue;
+
+    FixtureAuthorityTransport(String delegationValue, String sessionValue) {
+      this.delegationValue = delegationValue;
+      this.sessionValue = sessionValue;
+    }
+
+    @Override
+    public byte[] mintDelegationProof(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "delegation request");
+      check(request.get("issuer_ura").equals("easynet:///r/example/user/alice"), "delegation issuer request");
+      check(request.get("caller_ura").equals("easynet:///r/example/agent/backend"), "delegation caller request");
+      check(((List<?>) request.get("scopes")).size() == 1, "delegation scopes request");
+      return JsonValueWriter.object(Map.of("metadata_value", delegationValue));
+    }
+
+    @Override
+    public byte[] mintSessionAuthority(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "session authority request");
+      check(request.get("issuer_ura").equals("easynet:///r/example/agent/backend"), "session issuer request");
+      check(request.get("audience").equals("easynet:///r/example/device/dev-a"), "session audience request");
+      return JsonValueWriter.object(Map.of("metadata", Map.of(AuthoritySupport.SESSION_AUTHORITY_METADATA_KEY, sessionValue)));
     }
   }
 

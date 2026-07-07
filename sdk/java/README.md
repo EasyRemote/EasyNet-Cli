@@ -2,7 +2,7 @@
 
 Java/JVM is a P1 facade for enterprise and Android-adjacent integrations.
 
-Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Compatibility plus Wrappers seam. The package exposes dependency-free Java
+Current status: Runtime Core plus Health plus Authority plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Compatibility plus Wrappers seam. The package exposes dependency-free Java
 objects for typed SDK errors, feature discovery, complete Invocation draft
 construction, `PreparedInvocation`/`SigningMaterial`/`SignedInvocation`
 prepare-sign-submit seams over an injected transport, `RuntimeClient` dispatch,
@@ -10,7 +10,10 @@ and bounded stream/bidi retained-history state. `AsyncRuntimeClient` exposes
 `CompletableFuture`-based invocation/open/cancel methods, and stream/bidi
 handles implement `Iterator` over the same bounded lifecycle state. Health DTOs
 and `HealthClient` decode shared health and diagnostics payloads over injected
-transports. Directory + Identity DTOs and clients build read-model and
+transports. Authority DTOs and `AuthorityClient` project delegated/session
+authority metadata, preserve mutually-exclusive Invocation metadata, and
+delegate minting to injected transports without owning canonical signing,
+verification, or product policy. Directory + Identity DTOs and clients build read-model and
 directory subscription carrier requests, project pages/resolved refs and
 subscription state, open subscription stream handles over injected transports,
 and delegate descriptor projection without SDK-owned route selection or fan-out.

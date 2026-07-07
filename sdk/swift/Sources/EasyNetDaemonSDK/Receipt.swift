@@ -158,6 +158,18 @@ public struct ReceiptVerification: Sendable, Equatable {
         }
         return self
     }
+
+    public static func fromJSON(_ raw: Data) throws -> ReceiptVerification {
+        let object = try decodeReceiptObject(raw, label: "receipt verification JSON")
+        return try ReceiptVerification(
+            verified: requiredReceiptBool(object, "verified"),
+            method: requiredReceiptString(object, "method"),
+            receiptURA: optionalReceiptJSONString(object["receipt_ura"], "receipt_ura") ?? "",
+            invocationID: optionalReceiptJSONString(object["invocation_id"], "invocation_id") ?? "",
+            reason: optionalReceiptJSONString(object["reason"], "reason") ?? "",
+            metadata: optionalReceiptObject(object["metadata"], "metadata") ?? [:]
+        )
+    }
 }
 
 public struct ReceiptRef: Sendable, Equatable {
@@ -219,16 +231,82 @@ public struct ReceiptRef: Sendable, Equatable {
         if !metadata.isEmpty { object["metadata"] = .object(metadata) }
         return try encodeJSONObject(object)
     }
+
+    func jsonObject() -> [String: JSONValue] {
+        var object: [String: JSONValue] = [
+            "receipt_ura": .string(receiptURA),
+            "receipt_hash_hex": .string(receiptHashHex),
+        ]
+        if !invocationID.isEmpty { object["invocation_id"] = .string(invocationID) }
+        if !prevReceiptHashHex.isEmpty { object["prev_receipt_hash_hex"] = .string(prevReceiptHashHex) }
+        if index >= 0 { object["index"] = .number(Double(index)) }
+        if !metadata.isEmpty { object["metadata"] = .object(metadata) }
+        return object
+    }
+}
+
+public struct ReceiptChain: Sendable, Equatable {
+    public let receipts: [ReceiptRef]
+    public let metadata: [String: JSONValue]
+
+    public init(receipts: [ReceiptRef], metadata: [String: JSONValue] = [:]) throws {
+        guard !receipts.isEmpty else {
+            throw invalidReceipt("receipt chain requires at least one receipt")
+        }
+        self.receipts = receipts
+        self.metadata = metadata
+    }
+
+    func jsonData() throws -> Data {
+        try encodeJSONObject([
+            "receipts": .array(receipts.map { .object($0.jsonObject()) }),
+            "metadata": .object(metadata),
+        ])
+    }
+}
+
+public struct ReceiptChainVerification: Sendable, Equatable {
+    public let verified: Bool
+    public let method: String
+    public let rootReceiptURA: String
+    public let terminalReceiptURA: String
+    public let items: [JSONValue]
+    public let metadata: [String: JSONValue]
+
+    public static func fromJSON(_ raw: Data) throws -> ReceiptChainVerification {
+        let object = try decodeReceiptObject(raw, label: "receipt chain verification JSON")
+        guard case let .array(items) = object["items"] else {
+            throw invalidReceipt("items must be an array")
+        }
+        return try ReceiptChainVerification(
+            verified: requiredReceiptBool(object, "verified"),
+            method: requiredReceiptString(object, "method"),
+            rootReceiptURA: optionalReceiptJSONString(object["root_receipt_ura"], "root_receipt_ura") ?? "",
+            terminalReceiptURA: optionalReceiptJSONString(
+                object["terminal_receipt_ura"], "terminal_receipt_ura"
+            ) ?? "",
+            items: items,
+            metadata: optionalReceiptObject(object["metadata"], "metadata") ?? [:]
+        )
+    }
 }
 
 public protocol ReceiptTransport: AnyObject, Sendable {
     func fetch(_ requestJSON: Data) async throws -> Data
+    func project(_ receiptJSON: Data) async throws -> Data
+    func verify(_ receiptJSON: Data) async throws -> Data
+    func verifyChain(_ requestJSON: Data) async throws -> Data
     func causalRef(_ receiptJSON: Data) async throws -> Data
     func close() async throws
 }
 
 public extension ReceiptTransport {
     func fetch(_ requestJSON: Data) async throws -> Data { throw receiptUnsupported("receipt fetch transport is not available") }
+    func project(_ receiptJSON: Data) async throws -> Data { throw receiptUnsupported("receipt projection transport is not available") }
+    func verify(_ receiptJSON: Data) async throws -> Data { throw receiptUnsupported("receipt verification transport is not available") }
+    func verifyChain(_ requestJSON: Data) async throws -> Data {
+        throw receiptUnsupported("receipt chain verification transport is not available")
+    }
     func causalRef(_ receiptJSON: Data) async throws -> Data { throw receiptUnsupported("receipt causal-ref transport is not available") }
     func close() async throws {}
 }
@@ -264,13 +342,23 @@ public final class ReceiptClient: @unchecked Sendable {
         ]
     }
 
-    public func project(_ receiptJSON: Data) throws -> ReceiptSummary {
-        try requireOpen()
-        return try ReceiptSummary.fromJSON(receiptJSON)
+    public func project(_ receiptJSON: Data) async throws -> ReceiptSummary {
+        let data = try await raw { try await transport.project(receiptJSON) }
+        return try ReceiptSummary.fromJSON(data)
+    }
+
+    public func verify(_ receiptJSON: Data) async throws -> ReceiptVerification {
+        let data = try await raw { try await transport.verify(receiptJSON) }
+        return try ReceiptVerification.fromJSON(data)
     }
 
     public func verifySummary(_ summary: ReceiptSummary) throws -> ReceiptVerification {
         try summary.summaryVerification()
+    }
+
+    public func verifyChain(_ chain: ReceiptChain) async throws -> ReceiptChainVerification {
+        let data = try await raw { try await transport.verifyChain(chain.jsonData()) }
+        return try ReceiptChainVerification.fromJSON(data)
     }
 
     public func causalRef(_ ref: ReceiptRef) async throws -> [String: JSONValue] {

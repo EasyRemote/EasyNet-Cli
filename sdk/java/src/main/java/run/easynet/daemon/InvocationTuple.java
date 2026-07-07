@@ -11,7 +11,19 @@ public record InvocationTuple(
     String subject,
     String nonce,
     String causalContext,
-    String argsJson) {
+    String argsJson,
+    Map<String, Object> metadata) {
+  public InvocationTuple(
+      String caller,
+      String callee,
+      String descriptor,
+      String subject,
+      String nonce,
+      String causalContext,
+      String argsJson) {
+    this(caller, callee, descriptor, subject, nonce, causalContext, argsJson, Map.of());
+  }
+
   public InvocationTuple {
     caller = required(caller, "caller");
     callee = required(callee, "callee");
@@ -20,6 +32,7 @@ public record InvocationTuple(
     nonce = required(nonce, "nonce");
     causalContext = required(causalContext, "causalContext");
     argsJson = required(argsJson, "argsJson");
+    metadata = copyObject(metadata);
   }
 
   Map<String, Object> toWireObject() {
@@ -32,7 +45,7 @@ public record InvocationTuple(
     out.put("causal_context", decodeJSONValue(causalContext, "causal_context"));
     out.put("args", decodeJSONValue(argsJson, "args"));
     out.put("content_type", "application/json");
-    out.put("metadata", Map.of());
+    out.put("metadata", metadata);
     return out;
   }
 
@@ -44,7 +57,8 @@ public record InvocationTuple(
         string(fields, "subject_ura"),
         string(fields, "nonce_base64"),
         JsonValueWriter.write(requiredValue(fields, "causal_context")),
-        JsonValueWriter.write(requiredValue(fields, "args")));
+        JsonValueWriter.write(requiredValue(fields, "args")),
+        optionalObject(fields.get("metadata"), "metadata"));
   }
 
   private static Object decodeJSONValue(String raw, String field) {
@@ -64,6 +78,30 @@ public record InvocationTuple(
       throw SDKError.validation("invocation", field + " is required");
     }
     return fields.get(field);
+  }
+
+  private static Map<String, Object> optionalObject(Object value, String field) {
+    if (value == null) {
+      return Map.of();
+    }
+    if (!(value instanceof Map<?, ?> raw)) {
+      throw SDKError.validation("invocation", field + " must be an object");
+    }
+    Map<String, Object> out = new LinkedHashMap<>();
+    for (Map.Entry<?, ?> entry : raw.entrySet()) {
+      if (!(entry.getKey() instanceof String key)) {
+        throw SDKError.validation("invocation", field + " keys must be strings");
+      }
+      out.put(key, entry.getValue());
+    }
+    return Map.copyOf(out);
+  }
+
+  private static Map<String, Object> copyObject(Map<String, Object> value) {
+    if (value == null || value.isEmpty()) {
+      return Map.of();
+    }
+    return Map.copyOf(new LinkedHashMap<>(value));
   }
 
   private static String required(String value, String field) {

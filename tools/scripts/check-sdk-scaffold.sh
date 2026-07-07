@@ -264,9 +264,15 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/AdminSessionListRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/AdminSupport.java \
   sdk/java/src/main/java/run/easynet/daemon/AdminTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/AuthorityClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/AuthorityMetadata.java \
+  sdk/java/src/main/java/run/easynet/daemon/AuthoritySupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/AuthorityTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/CreateDeviceSessionRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/CreatePairingRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DeleteDeviceSessionRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DelegationProof.java \
+  sdk/java/src/main/java/run/easynet/daemon/DelegationRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DescriptorRefBuildRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DescriptorRefRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DeviceCredential.java \
@@ -364,6 +370,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/PublicationClient.java \
   sdk/java/src/main/java/run/easynet/daemon/PublicationSupport.java \
   sdk/java/src/main/java/run/easynet/daemon/PublicationTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptChain.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptChainVerification.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptClient.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptFetchRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptRef.java \
@@ -380,6 +388,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/SDKError.java \
+  sdk/java/src/main/java/run/easynet/daemon/SessionAuthority.java \
+  sdk/java/src/main/java/run/easynet/daemon/SessionAuthorityRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/SignedInvocation.java \
   sdk/java/src/main/java/run/easynet/daemon/SigningMaterial.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamEvent.java \
@@ -436,7 +446,9 @@ for path in \
   sdk/swift/Package.swift \
   sdk/swift/README.md \
   sdk/swift/Sources/EasyNetDaemonSDK/Admin.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Authority.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Compatibility.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \

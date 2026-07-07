@@ -3,6 +3,8 @@ profile: runtime_core
 required_for:
   - go
   - python
+  - java
+  - swift
 description: Invocation builders expose typed authority metadata and reject ambiguous delegated/session authority.
 steps:
   - action: load_authority_fixture
@@ -25,6 +27,8 @@ expect:
   authority_minting_concrete_transport: true
   go_authority_minting_cabi_transport: true
   python_authority_minting_cabi_transport: true
+  java_authority_minting_injected_transport: true
+  swift_authority_minting_injected_transport: true
   authority_minting_canonical_payload_owned_by_sdk: false
   unrelated_metadata_preserved: true
   ambiguous_authority_rejected: true

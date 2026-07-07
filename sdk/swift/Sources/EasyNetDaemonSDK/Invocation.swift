@@ -8,6 +8,7 @@ public struct InvocationTuple: Sendable, Equatable {
     public let nonce: String
     public let causalContext: String
     public let argsJSON: String
+    public let metadata: [String: JSONValue]
 
     public init(
         caller: String?,
@@ -16,7 +17,8 @@ public struct InvocationTuple: Sendable, Equatable {
         subject: String?,
         nonce: String?,
         causalContext: String?,
-        argsJSON: String?
+        argsJSON: String?,
+        metadata: [String: JSONValue] = [:]
     ) throws {
         self.caller = try InvocationTuple.required(caller, "caller")
         self.callee = try InvocationTuple.required(callee, "callee")
@@ -25,6 +27,7 @@ public struct InvocationTuple: Sendable, Equatable {
         self.nonce = try InvocationTuple.required(nonce, "nonce")
         self.causalContext = try InvocationTuple.required(causalContext, "causalContext")
         self.argsJSON = try InvocationTuple.required(argsJSON, "argsJSON")
+        self.metadata = metadata
     }
 
     private static func required(_ value: String?, _ field: String) throws -> String {
@@ -44,7 +47,7 @@ public struct InvocationTuple: Sendable, Equatable {
             "causal_context": try decodeJSONValue(causalContext, "causal_context"),
             "args": try decodeJSONValue(argsJSON, "args"),
             "content_type": "application/json",
-            "metadata": [String: Any]()
+            "metadata": try metadata.mapValues(jsonPlainValue)
         ]
     }
 
@@ -56,7 +59,8 @@ public struct InvocationTuple: Sendable, Equatable {
             subject: requiredString(object, "subject_ura", "invocation"),
             nonce: requiredString(object, "nonce_base64", "invocation"),
             causalContext: encodeJSONString(requiredValue(object, "causal_context", "invocation")),
-            argsJSON: encodeJSONString(requiredValue(object, "args", "invocation"))
+            argsJSON: encodeJSONString(requiredValue(object, "args", "invocation")),
+            metadata: try invocationMetadataObject(object["metadata"])
         )
     }
 }
@@ -396,6 +400,7 @@ public final class InvocationBuilder {
     private var nonce: String?
     private var causalContext: String?
     private var argsJSON: String?
+    private var metadata: [String: JSONValue] = [:]
 
     public init() {}
 
@@ -441,8 +446,21 @@ public final class InvocationBuilder {
         return self
     }
 
+    @discardableResult
+    public func withMetadata(_ value: [String: JSONValue]) -> InvocationBuilder {
+        metadata = value
+        return self
+    }
+
+    @discardableResult
+    public func withAuthorityMetadata(_ value: AuthorityMetadata) throws -> InvocationBuilder {
+        metadata = try value.mergeInto(metadata)
+        return self
+    }
+
     public func inspect() throws -> InvocationDraft {
-        InvocationDraft(
+        try validateAuthorityMetadata(metadata)
+        return InvocationDraft(
             tuple: try InvocationTuple(
                 caller: caller,
                 callee: callee,
@@ -450,7 +468,8 @@ public final class InvocationBuilder {
                 subject: subject,
                 nonce: nonce,
                 causalContext: causalContext,
-                argsJSON: argsJSON
+                argsJSON: argsJSON,
+                metadata: metadata
             )
         )
     }

@@ -1,6 +1,7 @@
 package run.easynet.daemon;
 
 import java.util.Map;
+import java.util.Objects;
 
 public record ReceiptVerification(
     boolean verified,
@@ -39,5 +40,17 @@ public record ReceiptVerification(
       throw ReceiptSupport.invalid("receipt verification is not Axon-backed cryptographic evidence");
     }
     return this;
+  }
+
+  public static ReceiptVerification fromJSON(byte[] raw) {
+    Objects.requireNonNull(raw, "raw");
+    Map<String, Object> fields = JsonValueReader.object(raw, "receipt verification JSON");
+    return new ReceiptVerification(
+        ReceiptSupport.requiredBoolean(fields, "verified"),
+        ReceiptSupport.requiredJSON(fields, "method"),
+        ReceiptSupport.optionalJSON(fields, "receipt_ura"),
+        ReceiptSupport.optionalJSON(fields, "invocation_id"),
+        ReceiptSupport.optionalJSON(fields, "reason"),
+        ReceiptSupport.optionalObject(fields, "metadata"));
   }
 }

@@ -41,6 +41,95 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testAuthorityMetadataProjectsAndRejectsAmbiguousDrafts() async throws {
+        let fixture = try decodedObject(fixture("authority-metadata.v4.json"))
+        let delegationValue = try XCTUnwrap(fixture["delegation_metadata_value"] as? String)
+        let sessionValue = try XCTUnwrap(fixture["session_authority_metadata_value"] as? String)
+
+        let delegation = try DelegationProof.fromMetadata(delegationValue)
+        let session = try SessionAuthority.fromMetadata(sessionValue)
+        XCTAssertEqual(delegation.issuerURA, "easynet:///r/example/user/alice")
+        XCTAssertEqual(delegation.signatureBase64, "ZGVsZWdhdGlvbi1zaWduYXR1cmU=")
+        XCTAssertEqual(session.audience, "easynet:///r/example/device/dev-a")
+
+        let builder = InvocationBuilder()
+            .withCallerURA("easynet:///r/example/agent/backend")
+            .withCalleeURA("easynet:///r/example/device/dev-a")
+            .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+            .withSubjectURA("easynet:///r/example/user/alice")
+            .withNonce("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .withCausalContext("{\"form\":\"none\"}")
+            .withArgsJSON("{}")
+            .withMetadata(["trace": .string("authority-shared")])
+        try builder.withAuthorityMetadata(delegation.metadata())
+        let draft = try builder.build()
+        XCTAssertEqual(draft.inspectTuple().metadata["trace"], .string("authority-shared"))
+        XCTAssertEqual(draft.inspectTuple().metadata[delegationMetadataKey], .string(delegationValue))
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try InvocationBuilder()
+                .withCallerURA("easynet:///r/example/agent/backend")
+                .withCalleeURA("easynet:///r/example/device/dev-a")
+                .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+                .withSubjectURA("easynet:///r/example/user/alice")
+                .withNonce("AQIDBAUGBwgJCgsMDQ4PEA==")
+                .withCausalContext("{\"form\":\"none\"}")
+                .withArgsJSON("{}")
+                .withMetadata([
+                    delegationMetadataKey: .string(delegationValue),
+                    sessionAuthorityMetadataKey: .string(sessionValue),
+                ])
+                .build()
+        }
+
+        let authority = AuthorityClient(transport: FixtureAuthorityTransport(delegationValue: delegationValue, sessionValue: sessionValue))
+        let mintedDelegation = try await authority.mintDelegationProof(try DelegationRequest(
+            issuerURA: delegation.issuerURA,
+            subjectURA: delegation.subjectURA,
+            callerURA: delegation.callerURA,
+            audience: delegation.audience,
+            scopes: delegation.scopes,
+            issuedAtMS: delegation.issuedAtMS,
+            expiresAtMS: delegation.expiresAtMS,
+            metadata: ["trace": .string("delegation")]
+        ))
+        let mintedSession = try await authority.mintSessionAuthority(try SessionAuthorityRequest(
+            issuerURA: session.issuerURA,
+            subjectURA: session.subjectURA,
+            audience: session.audience,
+            scopes: session.scopes,
+            issuedAtMS: session.issuedAtMS,
+            expiresAtMS: session.expiresAtMS,
+            metadata: ["trace": .string("session")]
+        ))
+        XCTAssertEqual(mintedDelegation.metadataValue, delegationValue)
+        XCTAssertEqual(mintedSession.metadataValue, sessionValue)
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try DelegationRequest(
+                issuerURA: delegation.issuerURA,
+                subjectURA: delegation.subjectURA,
+                callerURA: delegation.callerURA,
+                audience: delegation.audience,
+                scopes: [],
+                issuedAtMS: delegation.issuedAtMS,
+                expiresAtMS: delegation.expiresAtMS
+            )
+        }
+        try await authority.close()
+        try await authority.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await authority.mintSessionAuthority(try SessionAuthorityRequest(
+                issuerURA: session.issuerURA,
+                subjectURA: session.subjectURA,
+                audience: session.audience,
+                scopes: session.scopes,
+                issuedAtMS: session.issuedAtMS,
+                expiresAtMS: session.expiresAtMS
+            ))
+        }
+    }
+
     func testPreparedInvocationSeparatesCanonicalMaterialFromSignedSubmit() async throws {
         final class SigningTransport: MemoryRuntimeTransport, @unchecked Sendable {
             var seenDraft: [String: Any] = [:]
@@ -470,8 +559,10 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(fetched.state, "completed")
         XCTAssertFalse(fetched.verified)
 
-        let projected = try receipt.project(fixture("receipt.summary.v4.json"))
+        let projected = try await receipt.project(fixture("receipt.summary.v4.json"))
         XCTAssertEqual(projected.invocationID, "inv-example-1")
+        let providerVerification = try await receipt.verify(fixture("receipt-ref.v4.json"))
+        XCTAssertTrue(providerVerification.verified)
         let verification = try receipt.verifySummary(projected)
         XCTAssertFalse(verification.verified)
     }
@@ -503,7 +594,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
 
         let receipt = ReceiptClient(transport: FixtureReceiptTransport())
-        let summary = try receipt.project(fixture("receipt.summary.v4.json"))
+        let summary = try await receipt.project(fixture("receipt.summary.v4.json"))
         let verification = try receipt.verifySummary(summary)
         expectSyncSDKError(.invalidArgument) {
             _ = try verification.requireCryptographic()
@@ -529,6 +620,11 @@ final class RuntimeCoreSeamTests: XCTestCase {
         await expectSDKError(.notImplemented) {
             _ = try await receipt.causalRef(ref)
         }
+        let fixtureReceipt = ReceiptClient(transport: FixtureReceiptTransport())
+        let chain = try ReceiptChain(receipts: [ref])
+        let verification = try await fixtureReceipt.verifyChain(chain)
+        XCTAssertTrue(verification.verified)
+        XCTAssertEqual(verification.rootReceiptURA, "easynet:///r/example/receipt/receipt-1")
     }
 
     func testPublicationProfileDelegatesResourceValidationAndCarriers() async throws {
@@ -1724,6 +1820,54 @@ final class FixtureReceiptTransport: ReceiptTransport, @unchecked Sendable {
         XCTAssertEqual(request, expected)
         return fixture("receipt.summary.v4.json")
     }
+
+    func project(_ receiptJSON: Data) async throws -> Data {
+        let request = try decodeObject(receiptJSON, label: "receipt projection request")
+        let expected = try decodeObject(fixture("receipt.summary.v4.json"), label: "receipt summary fixture")
+        XCTAssertEqual(request, expected)
+        return fixture("receipt.summary.v4.json")
+    }
+
+    func verify(_ receiptJSON: Data) async throws -> Data {
+        let request = try decodeObject(receiptJSON, label: "receipt verification request")
+        let expected = try decodeObject(fixture("receipt-ref.v4.json"), label: "receipt ref fixture")
+        XCTAssertEqual(request, expected)
+        return Data("""
+        {
+          "verified": true,
+          "method": "axon-signature-chain",
+          "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+          "invocation_id": "inv-example-1",
+          "reason": "",
+          "metadata": {"assurance": "axon-cryptographic"}
+        }
+        """.utf8)
+    }
+
+    func verifyChain(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "receipt chain request")
+        guard case let .array(receipts) = request["receipts"] else {
+            XCTFail("receipt chain request missing receipts")
+            return Data()
+        }
+        XCTAssertEqual(receipts.count, 1)
+        XCTAssertEqual(request["metadata"], .object([:]))
+        return Data("""
+        {
+          "verified": true,
+          "method": "axon-cross-invocation-dag",
+          "root_receipt_ura": "easynet:///r/example/receipt/receipt-1",
+          "terminal_receipt_ura": "easynet:///r/example/receipt/receipt-1",
+          "items": [
+            {
+              "receipt_ura": "easynet:///r/example/receipt/receipt-1",
+              "verified": true
+            }
+          ],
+          "metadata": {"parent_dag_closed": true}
+        }
+        """.utf8)
+    }
 }
 
 final class EmptyReceiptTransport: ReceiptTransport, @unchecked Sendable {}
@@ -2087,6 +2231,34 @@ final class FixtureWrapperTransport: WrapperTransport, @unchecked Sendable {
         let request = try decodedObject(data)
         let expected = try decodedObject(fixture(fixtureName))
         XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+}
+
+final class FixtureAuthorityTransport: AuthorityTransport, @unchecked Sendable {
+    private let delegationValue: String
+    private let sessionValue: String
+
+    init(delegationValue: String, sessionValue: String) {
+        self.delegationValue = delegationValue
+        self.sessionValue = sessionValue
+    }
+
+    func mintDelegationProof(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        XCTAssertEqual(request["issuer_ura"] as? String, "easynet:///r/example/user/alice")
+        XCTAssertEqual(request["caller_ura"] as? String, "easynet:///r/example/agent/backend")
+        XCTAssertEqual((request["scopes"] as? [Any])?.count, 1)
+        return try JSONSerialization.data(withJSONObject: ["metadata_value": delegationValue], options: [.sortedKeys])
+    }
+
+    func mintSessionAuthority(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        XCTAssertEqual(request["issuer_ura"] as? String, "easynet:///r/example/agent/backend")
+        XCTAssertEqual(request["audience"] as? String, "easynet:///r/example/device/dev-a")
+        return try JSONSerialization.data(
+            withJSONObject: ["metadata": [sessionAuthorityMetadataKey: sessionValue]],
+            options: [.sortedKeys]
+        )
     }
 }
 

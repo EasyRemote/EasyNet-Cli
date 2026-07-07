@@ -38,11 +38,25 @@ public final class ReceiptClient implements AutoCloseable {
 
   public ReceiptSummary project(byte[] receiptJSON) {
     requireOpen();
-    return ReceiptSummary.fromJSON(receiptJSON);
+    return ReceiptSummary.fromJSON(
+        callRaw(() -> transport.project(receiptJSON), "receipt projection transport failed"));
+  }
+
+  public ReceiptVerification verify(byte[] receiptJSON) {
+    requireOpen();
+    return ReceiptVerification.fromJSON(
+        callRaw(() -> transport.verify(receiptJSON), "receipt verification transport failed"));
   }
 
   public ReceiptVerification verifySummary(ReceiptSummary summary) {
     return Objects.requireNonNull(summary, "summary").summaryVerification();
+  }
+
+  public ReceiptChainVerification verifyChain(ReceiptChain chain) {
+    requireOpen();
+    Objects.requireNonNull(chain, "chain");
+    return ReceiptChainVerification.fromJSON(
+        callRaw(() -> transport.verifyChain(chain.toJSON()), "receipt chain verification transport failed"));
   }
 
   public Map<String, Object> causalRef(ReceiptRef ref) {

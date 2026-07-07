@@ -2,14 +2,17 @@
 
 Swift is a P1 facade for macOS/iOS-adjacent clients.
 
-Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Compatibility plus Wrappers seam. The package exposes dependency-free Swift
+Current status: Runtime Core plus Health plus Authority plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Compatibility plus Wrappers seam. The package exposes dependency-free Swift
 types for typed SDK errors, feature discovery, complete Invocation draft
 construction, `PreparedInvocation`/`SigningMaterial`/`SignedInvocation`
 prepare-sign-submit seams over injected transports, `RuntimeClient` dispatch,
 and bounded stream/bidi retained-history state. Stream and bidi handles conform to
 `AsyncSequence` while preserving the same bounded lifecycle state. Health DTOs
 and `HealthClient` decode shared health and diagnostics payloads over injected
-transports. Directory + Identity DTOs and clients build read-model and
+transports. Authority DTOs and `AuthorityClient` project delegated/session
+authority metadata, preserve mutually-exclusive Invocation metadata, and
+delegate minting to injected transports without owning canonical signing,
+verification, or product policy. Directory + Identity DTOs and clients build read-model and
 directory subscription carrier requests, project pages/resolved refs and
 subscription state, open subscription stream handles over injected transports,
 and delegate descriptor projection without SDK-owned route selection or fan-out.
