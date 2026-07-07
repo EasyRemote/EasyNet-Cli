@@ -22,6 +22,8 @@ from easynet_sdk import (
     SDKError,
     build_receipt_fetch_invocation,
     is_code,
+    receipt_body_resource_path,
+    receipt_body_ura,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -195,6 +197,21 @@ class MemoryReceiptTransport:
         self.close_calls += 1
 
 
+class MemoryAddressing:
+    def __init__(self) -> None:
+        self.seen: tuple[str, str] | None = None
+
+    def resource_ura(self, owner_ura: str, path: str) -> str:
+        self.seen = (owner_ura, path)
+        if owner_ura != "easynet:///r/example/agent/alice.sdk":
+            raise SDKError(
+                ErrorCode.INVALID_ARGUMENT,
+                "owner_ura must be a canonical owner URA",
+                details={},
+            )
+        return f"easynet:///r/example/resource/agent.alice.sdk/{path}"
+
+
 def fetch_request() -> ReceiptFetchRequest:
     return ReceiptFetchRequest(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -341,6 +358,42 @@ class ReceiptTests(unittest.TestCase):
             client.list_history(history_request())
 
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_receipt_body_ura_builds_rfc007_resource_shape(self) -> None:
+        addressing = MemoryAddressing()
+
+        value = receipt_body_ura(
+            "easynet:///r/example/agent/alice.sdk",
+            "inv-example-1",
+            addressing=addressing,
+        )
+
+        self.assertEqual(
+            value,
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-example-1/receipt",
+        )
+        self.assertEqual(
+            addressing.seen,
+            (
+                "easynet:///r/example/agent/alice.sdk",
+                "invocation/inv-example-1/receipt",
+            ),
+        )
+        self.assertEqual(
+            receipt_body_resource_path("inv-example-1"),
+            "invocation/inv-example-1/receipt",
+        )
+
+    def test_receipt_body_ura_rejects_invalid_invocation_id(self) -> None:
+        for invocation_id in ("", " inv-1", "inv/1", "inv\\1", "inv\n1"):
+            with self.subTest(invocation_id=invocation_id):
+                with self.assertRaises(SDKError) as raised:
+                    receipt_body_ura(
+                        "easynet:///r/example/agent/alice.sdk",
+                        invocation_id,
+                        addressing=MemoryAddressing(),
+                    )
+                self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_client_build_fetch_invocation_delegates_to_transport(self) -> None:
         transport = MemoryReceiptTransport()

@@ -367,6 +367,40 @@ class ReceiptChain(Sequence[ReceiptRef]):
         )
 
 
+def receipt_body_resource_path(invocation_id: str) -> str:
+    """Return the RFC-007 resource path for one canonical receipt body."""
+
+    invocation_id = _clean_receipt_invocation_id(invocation_id)
+    return f"invocation/{invocation_id}/receipt"
+
+
+def receipt_body_ura(
+    owner_ura: str,
+    invocation_id: str,
+    *,
+    addressing: Any | None = None,
+    library_path: str | None = None,
+    control_path: str = "",
+) -> str:
+    """Return the RFC-007 canonical receipt body locator.
+
+    The helper delegates resource URA construction to the SDK addressing
+    boundary and does not treat the resulting locator as verification evidence.
+    """
+
+    path = receipt_body_resource_path(invocation_id)
+    if addressing is not None:
+        return addressing.resource_ura(owner_ura, path)
+    from .identity import resource_ura
+
+    return resource_ura(
+        owner_ura,
+        path,
+        library_path=library_path,
+        control_path=control_path,
+    )
+
+
 @dataclass(frozen=True)
 class ReceiptChainVerification:
     """Daemon/Axon receipt-chain continuity projection."""
@@ -1187,6 +1221,18 @@ def _validate_receipt_hash_hex(value: str) -> None:
         ) from exc
     if len(digest) != 32:
         raise _invalid_receipt("receipt hash must decode to exactly 32 bytes")
+
+
+def _clean_receipt_invocation_id(invocation_id: str) -> str:
+    if not isinstance(invocation_id, str):
+        raise _invalid_receipt("invocation_id must be a string")
+    if invocation_id.strip() != invocation_id or not invocation_id:
+        raise _invalid_receipt("invocation_id is required")
+    if "/" in invocation_id or "\\" in invocation_id:
+        raise _invalid_receipt("invocation_id must be one path segment")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in invocation_id):
+        raise _invalid_receipt("invocation_id contains a control character")
+    return invocation_id
 
 
 def _causal_context_from_projection(

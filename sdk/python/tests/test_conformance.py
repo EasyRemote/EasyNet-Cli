@@ -108,6 +108,7 @@ from easynet_sdk import (
     ReceiptRef,
     ReceiptSummary,
     ReceiptVerification,
+    receipt_body_ura,
     ResourceRef,
     ResolveQuery,
     RuntimeClient,
@@ -2480,6 +2481,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "project_receipt_summary",
             "verify_receipt_summary",
             "require_cryptographic_verification",
+            "build_receipt_body_ura",
             "project_opaque_receipt_ref",
             "build_causal_ref",
         ):
@@ -2494,6 +2496,13 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             receipt_case, "require_cryptographic_summary_result: err_invalid_arg"
         )
         self._require_case_expectation(
+            receipt_case, "receipt_body_ura_builder: provider_backed"
+        )
+        self._require_case_expectation(
+            receipt_case,
+            "receipt_body_ura_shape: easynet:///r/example/resource/agent.alice.sdk/invocation/inv-example-1/receipt",
+        )
+        self._require_case_expectation(
             receipt_case, "receipt_ref_constructs_receipt_ura: false"
         )
         self._require_case_expectation(
@@ -2501,6 +2510,28 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self._require_case_expectation(
             receipt_case, "causal_ref_fixture_result: err_invalid_arg"
+        )
+
+        class ReceiptAddressing:
+            def resource_ura(self, owner_ura: str, path: str) -> str:
+                self.seen = (owner_ura, path)
+                return f"easynet:///r/example/resource/agent.alice.sdk/{path}"
+
+        addressing = ReceiptAddressing()
+        self.assertEqual(
+            receipt_body_ura(
+                "easynet:///r/example/agent/alice.sdk",
+                "inv-example-1",
+                addressing=addressing,
+            ),
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-example-1/receipt",
+        )
+        self.assertEqual(
+            addressing.seen,
+            (
+                "easynet:///r/example/agent/alice.sdk",
+                "invocation/inv-example-1/receipt",
+            ),
         )
 
         summary = ReceiptSummary.from_json(shared_fixture("receipt.summary.v4.json"))

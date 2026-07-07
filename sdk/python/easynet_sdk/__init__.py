@@ -345,6 +345,8 @@ from .receipt import (
     ReceiptSummary,
     ReceiptTransport,
     ReceiptVerification,
+    receipt_body_resource_path,
+    receipt_body_ura,
 )
 from .publication import (
     AbilityDeployRequest,
@@ -736,6 +738,8 @@ __all__ = [
     "ReceiptSummary",
     "ReceiptTransport",
     "ReceiptVerification",
+    "receipt_body_resource_path",
+    "receipt_body_ura",
     "RetryHint",
     "RevokeDeviceRequest",
     "RemoteDesktopSessionRecord",

@@ -393,6 +393,44 @@ func TestReceiptRefRejectsInvalidAnchors(t *testing.T) {
 	}
 }
 
+func TestReceiptBodyURABuildsRFC007ResourceShape(t *testing.T) {
+	receiptURA, err := ReceiptBodyURA("easynet:///r/example/agent/alice.sdk", "inv-example-1")
+	if err != nil {
+		t.Fatalf("ReceiptBodyURA: %v", err)
+	}
+	if receiptURA != "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-example-1/receipt" {
+		t.Fatalf("receipt body URA = %q", receiptURA)
+	}
+
+	path, err := ReceiptBodyResourcePath("inv-example-1")
+	if err != nil {
+		t.Fatalf("ReceiptBodyResourcePath: %v", err)
+	}
+	if path != "invocation/inv-example-1/receipt" {
+		t.Fatalf("receipt body resource path = %q", path)
+	}
+}
+
+func TestReceiptBodyURARejectsInvalidFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		ownerURA     string
+		invocationID string
+	}{
+		{name: "empty_owner", ownerURA: "", invocationID: "inv-1"},
+		{name: "non_owner_resource", ownerURA: "easynet:///r/example/resource/alice.docs", invocationID: "inv-1"},
+		{name: "empty_invocation", ownerURA: "easynet:///r/example/agent/alice.sdk", invocationID: ""},
+		{name: "slash_invocation", ownerURA: "easynet:///r/example/agent/alice.sdk", invocationID: "inv/1"},
+		{name: "space_invocation", ownerURA: "easynet:///r/example/agent/alice.sdk", invocationID: " inv-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ReceiptBodyURA(tc.ownerURA, tc.invocationID); !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("ReceiptBodyURA error = %v, want %s", err, ErrInvalidArgument)
+			}
+		})
+	}
+}
+
 func TestReceiptCausalRefRejectsEmptyProjection(t *testing.T) {
 	transport := &memoryReceiptTransport{causalRefJSON: `{"metadata":{}}`}
 	client, err := NewReceiptClient(transport)

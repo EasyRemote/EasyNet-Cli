@@ -1250,6 +1250,7 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	for _, action := range []string{
 		"project_receipt_summary",
 		"verify_receipt_summary",
+		"build_receipt_body_ura",
 		"project_opaque_receipt_ref",
 		"build_causal_ref",
 	} {
@@ -1259,9 +1260,19 @@ func TestGoReceiptFacadeExecutesSharedProjectionConformanceCase(t *testing.T) {
 	requireCaseFixture(t, receiptCase, "receipt-ref.v4.json")
 	requireCaseExpectation(t, receiptCase, "summary_verified: false")
 	requireCaseExpectation(t, receiptCase, "verify_summary_claims_cryptographic_validity: false")
+	requireCaseExpectation(t, receiptCase, "receipt_body_ura_builder: provider_backed")
+	requireCaseExpectation(t, receiptCase, "receipt_body_ura_shape: easynet:///r/example/resource/agent.alice.sdk/invocation/inv-example-1/receipt")
 	requireCaseExpectation(t, receiptCase, "receipt_ref_constructs_receipt_ura: false")
 	requireCaseExpectation(t, receiptCase, "receipt_ref_requires_receipt_ura_and_hash: true")
 	requireCaseExpectation(t, receiptCase, "causal_ref_fixture_result: err_invalid_arg")
+
+	receiptBodyURA, err := ReceiptBodyURA("easynet:///r/example/agent/alice.sdk", "inv-example-1")
+	if err != nil {
+		t.Fatalf("ReceiptBodyURA conformance vector: %v", err)
+	}
+	if receiptBodyURA != "easynet:///r/example/resource/agent.alice.sdk/invocation/inv-example-1/receipt" {
+		t.Fatalf("ReceiptBodyURA conformance vector = %q", receiptBodyURA)
+	}
 
 	summary, err := NewReceiptSummaryFromJSON(sharedFixture(t, root, "receipt.summary.v4.json"))
 	if err != nil {

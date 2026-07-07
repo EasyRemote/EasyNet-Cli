@@ -122,7 +122,8 @@ type CausalRef struct {
 // ReceiptRef is an opaque daemon/Axon-returned receipt anchor.
 //
 // The SDK validates the anchor facts needed for child causal context, but it
-// never constructs receipt URAs or treats a hash pair as verification evidence.
+// never treats a locally constructed receipt body URA or hash pair as
+// verification evidence.
 type ReceiptRef struct {
 	ReceiptURA         string         `json:"receipt_ura"`
 	ReceiptHashHex     string         `json:"receipt_hash_hex"`
@@ -136,6 +137,31 @@ type ReceiptRef struct {
 // projected by the Receipt profile transport.
 type ReceiptChain struct {
 	receipts []ReceiptRef
+}
+
+// ReceiptBodyResourcePath returns the RFC-007 resource path for one canonical
+// receipt body. The path is identity-only: it names the receipt fact and does
+// not imply any product storage directory.
+func ReceiptBodyResourcePath(invocationID string) (string, error) {
+	invocationID, err := cleanReceiptInvocationID(invocationID)
+	if err != nil {
+		return "", err
+	}
+	return "invocation/" + invocationID + "/receipt", nil
+}
+
+// ReceiptBodyURA returns the RFC-007 canonical receipt body locator:
+// resource/<owner>/invocation/<invocation-id>/receipt.
+func ReceiptBodyURA(ownerURA string, invocationID string) (string, error) {
+	ownerID, realm, err := receiptResourceOwnerID(ownerURA)
+	if err != nil {
+		return "", err
+	}
+	path, err := ReceiptBodyResourcePath(invocationID)
+	if err != nil {
+		return "", err
+	}
+	return ResourceDotURA(realm, ownerID, path), nil
 }
 
 // ToCausalContext returns the child-Invocation causal_context projection.
@@ -971,6 +997,51 @@ func (r ReceiptRef) validate() error {
 		return invalidProfilePayload(receiptProfile, "receipt index must be non-negative", nil)
 	}
 	return nil
+}
+
+func receiptResourceOwnerID(ownerURA string) (string, string, error) {
+	if strings.TrimSpace(ownerURA) != ownerURA || ownerURA == "" {
+		return "", "", invalidProfilePayload(receiptProfile, "owner_ura is required", nil)
+	}
+	parts, err := ParseURAParts(ownerURA)
+	if err != nil {
+		return "", "", invalidProfilePayload(receiptProfile, fmt.Sprintf("invalid owner_ura: %v", err), err)
+	}
+	switch parts.Kind {
+	case URAKindUser:
+		if parts.UserID != "" {
+			return "user." + parts.UserID, parts.Realm, nil
+		}
+	case URAKindDevice:
+		if parts.DeviceID != "" {
+			return "device." + parts.DeviceID, parts.Realm, nil
+		}
+	case URAKindAgent:
+		switch {
+		case parts.DeviceID != "" && parts.AgentID != "":
+			return "agent.device." + parts.DeviceID + "." + parts.AgentID, parts.Realm, nil
+		case parts.UserID != "" && parts.AgentID != "":
+			return "agent." + parts.UserID + "." + parts.AgentID, parts.Realm, nil
+		}
+	case URAKindHub:
+		return "hub", parts.Realm, nil
+	}
+	return "", "", invalidProfilePayload(receiptProfile, "owner_ura must be a user, device, agent, or hub URA", nil)
+}
+
+func cleanReceiptInvocationID(invocationID string) (string, error) {
+	if strings.TrimSpace(invocationID) != invocationID || invocationID == "" {
+		return "", invalidProfilePayload(receiptProfile, "invocation_id is required", nil)
+	}
+	if strings.ContainsAny(invocationID, `/\`) {
+		return "", invalidProfilePayload(receiptProfile, "invocation_id must be one path segment", nil)
+	}
+	for _, char := range invocationID {
+		if char < 0x20 || char == 0x7f {
+			return "", invalidProfilePayload(receiptProfile, "invocation_id contains a control character", nil)
+		}
+	}
+	return invocationID, nil
 }
 
 func validateReceiptHashHex(value string) error {
