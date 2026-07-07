@@ -418,8 +418,6 @@ from .surface import (
     SurfacePagePage,
     SurfacePageRecord,
     SurfacePublicPageRef,
-    SurfaceStatus,
-    SurfaceStatusRequest,
     SurfaceTransport,
 )
 from .transport import (
@@ -812,8 +810,6 @@ __all__ = [
     "SurfacePagePage",
     "SurfacePageRecord",
     "SurfacePublicPageRef",
-    "SurfaceStatus",
-    "SurfaceStatusRequest",
     "SurfaceTransport",
     "UnpublishAbilityRequest",
     "ValidatePairingRequest",

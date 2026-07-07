@@ -63,8 +63,8 @@ projection provider seams for Runtime-backed directory/drop/terminal frames,
 and EventFrame cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
 exposes page list/create/delete/manifest Invocation carriers plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
-SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
-seams and close state seams. CompatibilityClient exposes
+SurfaceMutationResult projection seams plus SurfaceHealth readiness and surface
+status operation seams plus close state seams. CompatibilityClient exposes
 OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
 Invocation carriers plus model, chat, stream, file, and file-delete projection
 seams and close state seams. WrapperClient exposes

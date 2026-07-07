@@ -12,7 +12,6 @@ from easynet_sdk.surface import (
     SurfaceHealthRequest,
     SurfaceListPagesRequest,
     SurfaceManifestRequest,
-    SurfaceStatusRequest,
 )
 
 
@@ -379,7 +378,7 @@ class SurfaceClientTests(unittest.TestCase):
         self.assertEqual(health.checks[0].name, "manifest")
 
         status = client.surface_status(
-            SurfaceStatusRequest(surface_base(), project_id="docs")
+            SurfaceHealthRequest(surface_base(), project_id="docs")
         )
         self.assertEqual(status.surface_ref, health.surface_ref)
 

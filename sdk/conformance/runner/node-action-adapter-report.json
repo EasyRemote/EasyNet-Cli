@@ -424,6 +424,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
+    },
+    {
       "case_id": "receipt/fetch_carrier",
       "profile": "receipt",
       "status": "passed",

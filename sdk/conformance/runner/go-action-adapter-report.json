@@ -536,6 +536,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "wrappers/profile_records",
       "profile": "wrappers",
       "status": "passed",

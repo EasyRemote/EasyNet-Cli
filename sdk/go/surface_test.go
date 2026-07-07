@@ -233,7 +233,7 @@ func TestSurfaceProjectsPagesManifestRefAndMutation(t *testing.T) {
 		t.Fatalf("descriptor/check not preserved: %#v", health)
 	}
 
-	status, err := client.SurfaceStatus(context.Background(), SurfaceStatusRequest{SurfaceCarrierBase: surfaceBaseForTest(), ProjectID: "docs"})
+	status, err := client.SurfaceStatus(context.Background(), SurfaceHealthRequest{SurfaceCarrierBase: surfaceBaseForTest(), ProjectID: "docs"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@ import {
   SESSION_AUTHORITY_METADATA_KEY,
   SessionAuthority,
   SurfaceClient,
-  SurfaceStatus,
+  SurfaceHealth,
   WrapperClient,
   profileErrorDetails,
   profileSourceRef,
@@ -2725,7 +2725,7 @@ test("SurfaceClient delegates page carriers and daemon projections without rende
   assert.equal(manifest.page.pageId, "docs");
   assert.equal(ref.routeKind, "hub_web");
   assert.equal(health.ready, true);
-  assert.equal(status instanceof SurfaceStatus, true);
+  assert.equal(status instanceof SurfaceHealth, true);
   assert.equal(projectedPage.source, "pages_read_model");
   assert.equal(projectedManifest.kind, "surface_manifest");
   assert.equal(projectedHealth.descriptorVersion, "1.0.0");

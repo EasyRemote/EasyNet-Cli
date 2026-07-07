@@ -560,6 +560,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance.py"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "wrappers/profile_records",
       "profile": "wrappers",
       "status": "passed",

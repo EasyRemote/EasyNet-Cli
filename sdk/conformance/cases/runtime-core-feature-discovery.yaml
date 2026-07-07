@@ -1,0 +1,30 @@
+id: runtime_core/feature_discovery
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: SdkEnvironment and Runtime Core clients decode one canonical SDK feature-discovery catalog before opening runtime traffic.
+steps:
+  - action: load_fixture
+    fixture: feature-discovery.v4.json
+  - action: decode_feature_discovery
+  - action: inspect_profiles
+  - action: inspect_symbols
+expect:
+  result: ok
+  schema: feature-discovery.schema.json
+  abi_version: 4
+  sdk_version_required: true
+  runtime_core_profile: partial
+  authority_profile: cabi_core
+  receipt_profile: fetch_projection_partial
+  daemon_lifecycle_symbol: true
+  typed_error_json_symbol: true
+  runtime_health_symbol: false
+  prepare_sign_submit_symbol: false
+  product_feature_catalog: false

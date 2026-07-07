@@ -28,6 +28,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        }
+      ],
+      "message": "Swift decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
+    },
+    {
       "case_id": "error/typed_json",
       "profile": "runtime_core",
       "status": "passed",

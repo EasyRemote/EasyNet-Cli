@@ -782,6 +782,7 @@ done
 validate_declared_file_list fixture_files sdk/conformance/fixtures .v4.json
 
 case_files=(
+  runtime-core-feature-discovery.yaml
   version-abi-compatible.yaml
   version-abi-incompatible.yaml
   environment-process-root.yaml

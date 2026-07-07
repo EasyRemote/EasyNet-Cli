@@ -64,7 +64,6 @@ type PageQuery = SurfaceListPagesRequest
 type CreatePageRequest = SurfaceCreatePageRequest
 type DeletePageRequest = SurfaceDeletePageRequest
 type PublicPageRefRequest = SurfacePublicPageRefRequest
-type SurfaceStatusRequest = SurfaceHealthRequest
 
 type SurfacePageRecord struct {
 	Profile    string         `json:"profile"`
@@ -144,8 +143,6 @@ type SurfaceHealth struct {
 	Checks            []SurfaceHealthCheck `json:"checks"`
 	Metadata          map[string]any       `json:"metadata"`
 }
-
-type SurfaceStatus = SurfaceHealth
 
 // SurfaceTransport supplies daemon Surface operations behind the facade.
 type SurfaceTransport interface {
@@ -369,8 +366,8 @@ func (c *SurfaceClient) SurfaceHealth(ctx context.Context, req SurfaceHealthRequ
 	return NewSurfaceHealthFromJSON(raw)
 }
 
-func (c *SurfaceClient) SurfaceStatus(ctx context.Context, req SurfaceStatusRequest) (SurfaceStatus, error) {
-	return c.SurfaceHealth(ctx, SurfaceHealthRequest(req))
+func (c *SurfaceClient) SurfaceStatus(ctx context.Context, req SurfaceHealthRequest) (SurfaceHealth, error) {
+	return c.SurfaceHealth(ctx, req)
 }
 
 func (c *SurfaceClient) buildInvocation(ctx context.Context, req any, validate func(any) error, fn func(context.Context, []byte) ([]byte, error), label string) (InvocationDraft, error) {

@@ -136,8 +136,8 @@ cursor/resume/drop-report/terminal projection seams plus close state seams. Surf
 exposes page list/create/delete/manifest Invocation carriers, C ABI-backed
 page list/create/delete/manifest/health execution through Runtime Core invoke, plus
 SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
-SurfaceMutationResult projection seams plus SurfaceHealth/SurfaceStatus readiness
-seams and close state seams. CompatibilityClient exposes
+SurfaceMutationResult projection seams plus SurfaceHealth readiness and surface
+status operation seams plus close state seams. CompatibilityClient exposes
 OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
 Invocation carriers, including C ABI-backed unary list-models, non-stream chat,
 and file upload/get/delete execution through Runtime Core invoke, plus model,

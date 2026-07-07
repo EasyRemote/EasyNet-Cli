@@ -50,7 +50,7 @@ expect:
     - pages.health
   health_invocation_fixture: surface-health-invocation.v4.json
   health_fixture: surface-health.v4.json
-  surface_status_aliases_health: true
+  surface_status_uses_pages_health: true
   health_descriptor_ref_source: identity_built_invocation
   facade_descriptor_concat: false
   health_rendering_owner: backend

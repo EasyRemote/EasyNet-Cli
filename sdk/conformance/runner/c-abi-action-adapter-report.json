@@ -448,6 +448,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "c_abi_test",
+          "ref_path": "src/ffi/mod.rs"
+        }
+      ],
+      "message": "C ABI exports easynet_feature_discovery as the binding-facing SDK-root feature catalog."
+    },
+    {
       "case_id": "wrappers/profile_records",
       "profile": "wrappers",
       "status": "passed",

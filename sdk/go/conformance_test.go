@@ -265,6 +265,58 @@ func TestGoEnvironmentExecutesSharedProcessRootConformanceCase(t *testing.T) {
 func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *testing.T) {
 	root := repositoryRoot(t)
 
+	featureCase := sharedCase(t, root, "runtime-core-feature-discovery.yaml")
+	requireCaseID(t, featureCase, "runtime_core/feature_discovery")
+	requireCaseAction(t, featureCase, "decode_feature_discovery")
+	requireCaseAction(t, featureCase, "inspect_profiles")
+	requireCaseAction(t, featureCase, "inspect_symbols")
+	requireCaseFixture(t, featureCase, "feature-discovery.v4.json")
+	for _, expected := range []string{
+		"schema: feature-discovery.schema.json",
+		"abi_version: 4",
+		"sdk_version_required: true",
+		"runtime_core_profile: partial",
+		"authority_profile: cabi_core",
+		"receipt_profile: fetch_projection_partial",
+		"daemon_lifecycle_symbol: true",
+		"typed_error_json_symbol: true",
+		"runtime_health_symbol: false",
+		"prepare_sign_submit_symbol: false",
+		"product_feature_catalog: false",
+	} {
+		requireCaseExpectation(t, featureCase, expected)
+	}
+	featureClient, err := NewClient(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
+		return sharedFixture(t, root, "feature-discovery.v4.json"), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClient(feature discovery): %v", err)
+	}
+	featureSet, err := featureClient.FeatureDiscovery(context.Background())
+	if err != nil {
+		t.Fatalf("FeatureDiscovery(shared case): %v", err)
+	}
+	if featureSet.ABIVersion != 4 || featureSet.SDKVersion == "" {
+		t.Fatalf("unexpected shared feature version facts: %#v", featureSet.Version())
+	}
+	if featureSet.Profiles["runtime_core"] != "partial" ||
+		featureSet.Profiles["authority"] != "cabi_core" ||
+		featureSet.Profiles["receipt"] != "fetch_projection_partial" {
+		t.Fatalf("unexpected shared feature profiles: %#v", featureSet.Profiles)
+	}
+	if !featureSet.Symbols["daemon_lifecycle"] ||
+		!featureSet.Symbols["typed_error_json"] ||
+		featureSet.Symbols["runtime_health"] ||
+		featureSet.Symbols["prepare_sign_submit"] {
+		t.Fatalf("unexpected shared feature symbols: %#v", featureSet.Symbols)
+	}
+	if _, ok := featureSet.Profiles["easyremote"]; ok {
+		t.Fatalf("feature discovery leaked EasyRemote product profile: %#v", featureSet.Profiles)
+	}
+	if _, ok := featureSet.Symbols["easynet_backend"]; ok {
+		t.Fatalf("feature discovery leaked backend product symbol: %#v", featureSet.Symbols)
+	}
+
 	compatibleCase := sharedCase(t, root, "version-abi-compatible.yaml")
 	requireCaseID(t, compatibleCase, "version/abi_compatible")
 	requireCaseAction(t, compatibleCase, "feature_discovery")
@@ -2338,7 +2390,7 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 	}
 	requireCaseExpectation(t, surfaceCase, "health_invocation_fixture: surface-health-invocation.v4.json")
 	requireCaseExpectation(t, surfaceCase, "health_fixture: surface-health.v4.json")
-	requireCaseExpectation(t, surfaceCase, "surface_status_aliases_health: true")
+	requireCaseExpectation(t, surfaceCase, "surface_status_uses_pages_health: true")
 	requireCaseExpectation(t, surfaceCase, "health_descriptor_ref_source: identity_built_invocation")
 	requireCaseExpectation(t, surfaceCase, "facade_descriptor_concat: false")
 	requireCaseExpectation(t, surfaceCase, "health_rendering_owner: backend")
@@ -2437,12 +2489,12 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 		t.Fatalf("unexpected shared surface health: %#v", health)
 	}
 
-	status, err := surface.SurfaceStatus(context.Background(), SurfaceStatusRequest(sharedSurfaceHealthRequest(t, root)))
+	status, err := surface.SurfaceStatus(context.Background(), sharedSurfaceHealthRequest(t, root))
 	if err != nil {
 		t.Fatalf("SurfaceStatus(shared fixture): %v", err)
 	}
 	if status.SurfaceRef != health.SurfaceRef || status.State != health.State {
-		t.Fatalf("surface status did not preserve health projection: status=%#v health=%#v", status, health)
+		t.Fatalf("surface status did not preserve pages.health readiness projection: status=%#v health=%#v", status, health)
 	}
 
 	incomplete := sharedSurfaceCreatePageRequest(t, root)

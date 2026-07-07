@@ -2286,8 +2286,6 @@ export class SurfaceHealth {
   }
 }
 
-export const SurfaceStatus = SurfaceHealth;
-
 export class SurfaceClient {
   constructor(transport) {
     if (!transport || typeof transport.buildListPagesInvocation !== "function") {

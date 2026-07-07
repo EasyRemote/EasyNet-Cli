@@ -1515,6 +1515,43 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
     def test_python_runtime_core_executes_shared_lifecycle_version_error_conformance_cases(self) -> None:
+        feature_case = shared_case("runtime-core-feature-discovery.yaml")
+        self._require_case_id(feature_case, "runtime_core/feature_discovery")
+        self._require_case_action(feature_case, "decode_feature_discovery")
+        self._require_case_action(feature_case, "inspect_profiles")
+        self._require_case_action(feature_case, "inspect_symbols")
+        self._require_case_fixture(feature_case, "feature-discovery.v4.json")
+        for expected in (
+            "schema: feature-discovery.schema.json",
+            "abi_version: 4",
+            "sdk_version_required: true",
+            "runtime_core_profile: partial",
+            "authority_profile: cabi_core",
+            "receipt_profile: fetch_projection_partial",
+            "daemon_lifecycle_symbol: true",
+            "typed_error_json_symbol: true",
+            "runtime_health_symbol: false",
+            "prepare_sign_submit_symbol: false",
+            "product_feature_catalog: false",
+        ):
+            self._require_case_expectation(feature_case, expected)
+
+        feature_client = Client(SharedDiscoveryTransport(4))
+        feature_set = feature_client.feature_discovery()
+        self.assertEqual(feature_set.abi_version, 4)
+        self.assertTrue(feature_set.sdk_version)
+        self.assertEqual(feature_set.profiles["runtime_core"], "partial")
+        self.assertEqual(feature_set.profiles["authority"], "cabi_core")
+        self.assertEqual(
+            feature_set.profiles["receipt"], "fetch_projection_partial"
+        )
+        self.assertTrue(feature_set.symbols["daemon_lifecycle"])
+        self.assertTrue(feature_set.symbols["typed_error_json"])
+        self.assertFalse(feature_set.symbols["runtime_health"])
+        self.assertFalse(feature_set.symbols["prepare_sign_submit"])
+        self.assertNotIn("easyremote", feature_set.profiles)
+        self.assertNotIn("easynet_backend", feature_set.symbols)
+
         compatible_case = shared_case("version-abi-compatible.yaml")
         self._require_case_id(compatible_case, "version/abi_compatible")
         self._require_case_action(compatible_case, "feature_discovery")
@@ -3677,7 +3714,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             surface_case, "health_fixture: surface-health.v4.json"
         )
         self._require_case_expectation(
-            surface_case, "surface_status_aliases_health: true"
+            surface_case, "surface_status_uses_pages_health: true"
         )
         self._require_case_expectation(
             surface_case, "health_descriptor_ref_source: identity_built_invocation"

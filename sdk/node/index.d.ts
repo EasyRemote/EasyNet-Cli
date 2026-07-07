@@ -1400,7 +1400,6 @@ export interface SurfaceHealthRequest extends SurfaceCarrierBase {
 export type PageQuery = SurfaceListPagesRequest;
 export type CreatePageRequest = SurfaceCreatePageRequest;
 export type DeletePageRequest = SurfaceDeletePageRequest;
-export type SurfaceStatusRequest = SurfaceHealthRequest;
 
 export interface SurfacePageRecordFields {
   profile: "surface";
@@ -1578,8 +1577,6 @@ export class SurfaceHealth {
   toJSON(): SurfaceHealthFields;
 }
 
-export declare const SurfaceStatus: typeof SurfaceHealth;
-
 export type SurfaceProjectionInput =
   | Uint8Array
   | string
@@ -1625,7 +1622,7 @@ export class SurfaceClient {
   surfaceManifest(request: SurfaceManifestRequest): Promise<SurfaceManifest>;
   publicPageRef(request: { page: SurfacePageRecord | SurfacePageRecordFields }): Promise<SurfacePublicPageRef>;
   surfaceHealth(request: SurfaceHealthRequest): Promise<SurfaceHealth>;
-  surfaceStatus(request: SurfaceStatusRequest): Promise<SurfaceHealth>;
+  surfaceStatus(request: SurfaceHealthRequest): Promise<SurfaceHealth>;
   projectPageRecord(value: SurfaceProjectionInput): Promise<SurfacePageRecord>;
   projectPagePage(value: SurfaceProjectionInput): Promise<SurfacePagePage>;
   projectManifest(value: SurfaceProjectionInput): Promise<SurfaceManifest>;

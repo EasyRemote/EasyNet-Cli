@@ -28,6 +28,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
+    },
+    {
       "case_id": "error/typed_json",
       "profile": "runtime_core",
       "status": "passed",

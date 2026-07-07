@@ -1402,7 +1402,7 @@ public final class RuntimeCoreSeamTest {
         "surface manifest entrypoint");
     check(surface.publicPageRef(record).routeKind().equals("hub_web"), "surface public ref");
     check(surface.surfaceHealth(health).ready(), "surface health");
-    check(surface.surfaceStatus(health).descriptorRef().contains("pages.health"), "surface status alias");
+    check(surface.surfaceStatus(health).descriptorRef().contains("pages.health"), "surface status readiness projection");
     check(surface.projectManifest(fixture("surface-manifest.v4.json")).pageID().equals("docs"), "surface project manifest");
     check(surface.projectHealth(fixture("surface-health.v4.json")).pageCount() == 1, "surface project health");
 

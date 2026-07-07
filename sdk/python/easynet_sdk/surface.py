@@ -136,7 +136,6 @@ class SurfaceHealthRequest:
 PageQuery = SurfaceListPagesRequest
 CreatePageRequest = SurfaceCreatePageRequest
 DeletePageRequest = SurfaceDeletePageRequest
-SurfaceStatusRequest = SurfaceHealthRequest
 
 
 @dataclass(frozen=True)
@@ -353,9 +352,6 @@ class SurfaceHealth:
             checks=tuple(_health_check(item) for item in checks),
             metadata=_required_mapping(decoded, "metadata"),
         )
-
-
-SurfaceStatus = SurfaceHealth
 
 
 @runtime_checkable
@@ -682,7 +678,7 @@ class SurfaceClient:
             raise _transport_error("surface health failed", exc) from exc
         return SurfaceHealth.from_json(raw)
 
-    def surface_status(self, request: SurfaceStatusRequest) -> SurfaceStatus:
+    def surface_status(self, request: SurfaceHealthRequest) -> SurfaceHealth:
         return self.surface_health(request)
 
     def _invocation(

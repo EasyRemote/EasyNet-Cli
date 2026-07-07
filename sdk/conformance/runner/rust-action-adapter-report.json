@@ -436,6 +436,18 @@
       "message": null
     },
     {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/features.rs"
+        }
+      ],
+      "message": "Rust owns the canonical feature discovery catalog and checks it against the shared fixture."
+    },
+    {
       "case_id": "wrappers/profile_records",
       "profile": "wrappers",
       "status": "passed",
