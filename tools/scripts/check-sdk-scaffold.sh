@@ -239,6 +239,8 @@ for path in \
   tools/scripts/go-sdk-live-smoke.sh \
   tools/scripts/python-sdk-live-smoke.sh \
   sdk/java/README.md \
+  sdk/java/.gitignore \
+  sdk/java/pom.xml \
   sdk/java/src/main/java/run/easynet/daemon/BidiFrame.java \
   sdk/java/src/main/java/run/easynet/daemon/BidiSession.java \
   sdk/java/src/main/java/run/easynet/daemon/BidiSource.java \
