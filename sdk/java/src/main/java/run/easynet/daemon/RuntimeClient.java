@@ -1,5 +1,6 @@
 package run.easynet.daemon;
 
+import java.util.Map;
 import java.util.Objects;
 
 public final class RuntimeClient implements AutoCloseable {
@@ -18,6 +19,31 @@ public final class RuntimeClient implements AutoCloseable {
   public InvocationResult invoke(InvocationDraft draft) {
     requireOpen();
     return transport.invoke(Objects.requireNonNull(draft, "draft"));
+  }
+
+  public PreparedInvocation prepare(InvocationDraft draft) {
+    return prepare(draft, Map.of());
+  }
+
+  public PreparedInvocation prepare(InvocationDraft draft, Map<String, Object> options) {
+    requireOpen();
+    byte[] raw =
+        transport.prepare(
+            Objects.requireNonNull(draft, "draft").toJSON(),
+            JsonValueWriter.object(Objects.requireNonNullElse(options, Map.of())));
+    return PreparedInvocation.fromJSON(raw).bindRuntime(this);
+  }
+
+  public InvocationHandle submitSigned(SignedInvocation signed) {
+    requireOpen();
+    byte[] raw = transport.submitSigned(Objects.requireNonNull(signed, "signed").toJSON());
+    return InvocationHandle.fromJSON(raw).bindRuntime(this);
+  }
+
+  public InvocationHandle submitSigned(PreparedInvocation prepared) {
+    requireOpen();
+    Objects.requireNonNull(prepared, "prepared");
+    throw SDKError.validation("runtime", "signed invocation is required");
   }
 
   public StreamHandle openStream(InvocationDraft draft) {

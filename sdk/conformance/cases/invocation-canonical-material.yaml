@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: All languages obtain signing material from the Axon delegated helper path.
 steps:
   - action: prepare

@@ -39,6 +39,27 @@
       "message": null
     },
     {
+      "case_id": "invocation/canonical_material",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift RuntimeClient.prepare delegates complete Invocation draft JSON to the injected transport and projects daemon-provided PreparedInvocation signing material without deriving canonical bytes."
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift rejects PreparedInvocation submission before transport; only SignedInvocation is accepted by submitSigned."
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift SignedInvocation preserves caller signature material and daemon-provided canonical bytes when submitSigned serializes the envelope."
+    },
+    {
       "case_id": "stream/backpressure_bound",
       "profile": "runtime_core",
       "status": "passed",

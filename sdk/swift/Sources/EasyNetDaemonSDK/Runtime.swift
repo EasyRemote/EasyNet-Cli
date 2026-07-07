@@ -1,3 +1,5 @@
+import Foundation
+
 public enum InvocationTerminalState: String, Sendable {
     case completed = "Completed"
     case failed = "Failed"
@@ -36,12 +38,34 @@ public struct InvocationResult: Sendable {
 
 public protocol RuntimeTransport: AnyObject, Sendable {
     func invoke(_ draft: InvocationDraft) async throws -> InvocationResult
+    func prepare(_ draftJSON: Data, optionsJSON: Data) async throws -> Data
+    func submitSigned(_ signedJSON: Data) async throws -> Data
     func openStream(_ draft: InvocationDraft) async throws -> StreamSource
     func openBidi(_ draft: InvocationDraft, frame0: BidiFrame) async throws -> BidiSource
     func close() async throws
 }
 
 public extension RuntimeTransport {
+    func prepare(_ draftJSON: Data, optionsJSON: Data) async throws -> Data {
+        throw SDKError(
+            code: .notImplemented,
+            stage: "runtime",
+            retryHint: .never,
+            retryable: false,
+            message: "runtime prepare transport is not implemented"
+        )
+    }
+
+    func submitSigned(_ signedJSON: Data) async throws -> Data {
+        throw SDKError(
+            code: .notImplemented,
+            stage: "runtime",
+            retryHint: .never,
+            retryable: false,
+            message: "runtime submit-signed transport is not implemented"
+        )
+    }
+
     func close() async throws {}
 }
 
@@ -61,6 +85,25 @@ public final class RuntimeClient: @unchecked Sendable {
     public func invoke(_ draft: InvocationDraft) async throws -> InvocationResult {
         try requireOpen()
         return try await transport.invoke(draft)
+    }
+
+    public func prepare(_ draft: InvocationDraft, options: [String: Any] = [:]) async throws -> PreparedInvocation {
+        try requireOpen()
+        let optionsJSON = try JSONSerialization.data(withJSONObject: options, options: [.sortedKeys])
+        let raw = try await transport.prepare(try draft.jsonData(), optionsJSON: optionsJSON)
+        return try PreparedInvocation.fromJSON(raw).bindRuntime(self)
+    }
+
+    public func submitSigned(_ signed: SignedInvocation) async throws -> InvocationHandle {
+        try requireOpen()
+        let raw = try await transport.submitSigned(try signed.jsonData())
+        return try InvocationHandle.fromJSON(raw).bindRuntime(self)
+    }
+
+    public func submitSigned(_ prepared: PreparedInvocation) async throws -> InvocationHandle {
+        try requireOpen()
+        _ = prepared
+        throw SDKError.validation("runtime", "signed invocation is required")
     }
 
     public func openStream(_ draft: InvocationDraft) async throws -> StreamHandle {

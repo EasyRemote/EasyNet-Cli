@@ -275,12 +275,15 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/IdentityTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationBuilder.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationDraft.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationHandle.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationSignature.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTerminalState.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTuple.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueReader.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueWriter.java \
   sdk/java/src/main/java/run/easynet/daemon/OwnerAbilityRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/PreparedInvocation.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptClient.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptFetchRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/ReceiptRef.java \
@@ -295,6 +298,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/SDKError.java \
+  sdk/java/src/main/java/run/easynet/daemon/SignedInvocation.java \
+  sdk/java/src/main/java/run/easynet/daemon/SigningMaterial.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamEvent.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamHandle.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamSource.java \

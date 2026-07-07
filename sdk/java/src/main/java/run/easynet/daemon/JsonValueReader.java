@@ -16,7 +16,7 @@ final class JsonValueReader {
   }
 
   static Map<String, Object> object(byte[] raw, String label) {
-    Object value = new JsonValueReader(raw).readComplete();
+    Object value = value(raw, label);
     if (!(value instanceof Map<?, ?> decoded)) {
       throw invalid(label, "must be an object");
     }
@@ -28,6 +28,16 @@ final class JsonValueReader {
       object.put(key, entry.getValue());
     }
     return Collections.unmodifiableMap(object);
+  }
+
+  static Object value(byte[] raw, String label) {
+    try {
+      return new JsonValueReader(raw).readComplete();
+    } catch (SDKError error) {
+      throw error;
+    } catch (RuntimeException error) {
+      throw invalid(label, "is invalid", error);
+    }
   }
 
   private Object readComplete() {
@@ -170,7 +180,10 @@ final class JsonValueReader {
     }
     String number = input.substring(start, index);
     try {
-      return fractional ? Double.valueOf(number) : Long.valueOf(number);
+      if (fractional) {
+        return Double.valueOf(number);
+      }
+      return Long.valueOf(number);
     } catch (NumberFormatException error) {
       throw invalid("json", "contains invalid number", error);
     }
@@ -240,4 +253,3 @@ final class JsonValueReader {
         cause);
   }
 }
-

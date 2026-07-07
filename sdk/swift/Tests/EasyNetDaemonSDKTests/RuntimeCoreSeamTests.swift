@@ -41,6 +41,76 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testPreparedInvocationSeparatesCanonicalMaterialFromSignedSubmit() async throws {
+        final class SigningTransport: MemoryRuntimeTransport, @unchecked Sendable {
+            var seenDraft: [String: Any] = [:]
+            var seenOptions: [String: Any] = [:]
+            var seenSigned: [String: Any] = [:]
+            var submitTouched = false
+
+            override func prepare(_ draftJSON: Data, optionsJSON: Data) async throws -> Data {
+                seenDraft = try decodedObject(draftJSON)
+                seenOptions = try decodedObject(optionsJSON)
+                return fixture("prepared.signing-material.v4.json")
+            }
+
+            override func submitSigned(_ signedJSON: Data) async throws -> Data {
+                submitTouched = true
+                seenSigned = try decodedObject(signedJSON)
+                return Data("{\"handle_id\":7,\"state\":\"Submitted\",\"terminal\":false}".utf8)
+            }
+        }
+
+        let transport = SigningTransport()
+        let runtime = RuntimeClient(transport: transport)
+        let draft = try runtime.newInvocation()
+            .withCallerURA("easynet:///r/example/agent/alice.sdk")
+            .withCalleeURA("easynet:///r/example/device/dev-a")
+            .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+            .withSubjectURA("easynet:///r/example/device/dev-a")
+            .withNonce("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .withCausalContext("{\"form\":\"none\"}")
+            .withArgsJSON("{}")
+            .build()
+
+        let prepared = try await runtime.prepare(draft, options: ["deadline_unix_ms": 1_783_000_000_000])
+        XCTAssertFalse(prepared.submitReady())
+        XCTAssertEqual(prepared.preparedId, "prepared-example-1")
+        XCTAssertEqual(prepared.signingMaterial.canonicalBytesBase64, "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=")
+        XCTAssertEqual(transport.seenDraft["descriptor_ref"] as? String, prepared.signingMaterial.descriptorRef)
+        XCTAssertEqual((transport.seenOptions["deadline_unix_ms"] as? NSNumber)?.int64Value, 1_783_000_000_000)
+
+        await expectSDKError(.invalidArgument) {
+            _ = try PreparedInvocation.fromJSON(
+                replacingFixture("prepared.signing-material.v4.json", "\"submit_ready\": false", "\"submit_ready\": true")
+            )
+        }
+        await expectSDKError(.invalidArgument) {
+            _ = try PreparedInvocation.fromJSON(preparedFixtureWithMismatchedSigningDescriptor())
+        }
+
+        await expectSDKError(.invalidArgument) {
+            _ = try await runtime.submitSigned(prepared)
+        }
+        XCTAssertFalse(transport.submitTouched)
+
+        let signed = try prepared.signWithCallerSignature(
+            InvocationSignature(algorithm: "ed25519", signatureBase64: "c2lnbmF0dXJl", keyIdHint: "signer-alice-key-1")
+        )
+        XCTAssertTrue(signed.submitReady())
+        let handle = try await runtime.submitSigned(signed)
+        XCTAssertEqual(handle.handleId, 7)
+        XCTAssertTrue(transport.submitTouched)
+        let signedPrepared = try XCTUnwrap(transport.seenSigned["prepared"] as? [String: Any])
+        let signature = try XCTUnwrap(transport.seenSigned["signature"] as? [String: Any])
+        XCTAssertEqual(transport.seenSigned["signer_id"] as? String, "signer-alice-key-1")
+        XCTAssertEqual(signature["signature_base64"] as? String, "c2lnbmF0dXJl")
+        XCTAssertEqual(
+            signedPrepared["canonical_bytes_base64"] as? String,
+            prepared.signingMaterial.canonicalBytesBase64
+        )
+    }
+
     func testStreamHistoryIsBounded() async throws {
         let handle = StreamHandle(source: QueueStreamSource(count: StreamHandle.maxRetainedEvents + 2))
         for _ in 0..<(StreamHandle.maxRetainedEvents + 2) {
@@ -518,9 +588,29 @@ final class MemoryDiscoveryTransport: DiscoveryTransport, @unchecked Sendable {
     }
 }
 
-final class MemoryRuntimeTransport: RuntimeTransport, @unchecked Sendable {
+class MemoryRuntimeTransport: RuntimeTransport, @unchecked Sendable {
     func invoke(_ draft: InvocationDraft) async throws -> InvocationResult {
         try InvocationResult(ok: true, terminalState: .completed, outputJSON: "{\"ok\":true}")
+    }
+
+    func prepare(_ draftJSON: Data, optionsJSON: Data) async throws -> Data {
+        throw SDKError(
+            code: .notImplemented,
+            stage: "runtime",
+            retryHint: .never,
+            retryable: false,
+            message: "runtime prepare transport is not implemented"
+        )
+    }
+
+    func submitSigned(_ signedJSON: Data) async throws -> Data {
+        throw SDKError(
+            code: .notImplemented,
+            stage: "runtime",
+            retryHint: .never,
+            retryable: false,
+            message: "runtime submit-signed transport is not implemented"
+        )
     }
 
     func openStream(_ draft: InvocationDraft) async throws -> StreamSource {
@@ -733,4 +823,24 @@ func fixture(_ name: String) -> Data {
         return try! Data(contentsOf: url)
     }
     fatalError("fixture not found: \(name)")
+}
+
+func decodedObject(_ data: Data) throws -> [String: Any] {
+    guard let object = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+        throw SDKError.validation("test", "fixture must be an object")
+    }
+    return object
+}
+
+func replacingFixture(_ name: String, _ old: String, _ new: String) -> Data {
+    let text = String(decoding: fixture(name), as: UTF8.self).replacingOccurrences(of: old, with: new)
+    return Data(text.utf8)
+}
+
+func preparedFixtureWithMismatchedSigningDescriptor() throws -> Data {
+    var object = try decodedObject(fixture("prepared.signing-material.v4.json"))
+    var material = object["signing_material"] as? [String: Any] ?? [:]
+    material["descriptor_ref"] = "easynet:///r/example/ability/other@1.0.0"
+    object["signing_material"] = material
+    return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }

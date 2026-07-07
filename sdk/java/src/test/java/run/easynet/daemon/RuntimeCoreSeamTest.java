@@ -15,6 +15,7 @@ public final class RuntimeCoreSeamTest {
   public static void main(String[] args) throws Exception {
     featureDiscoveryAndTypedErrors();
     completeInvocationDraftAndRuntimeDispatch();
+    preparedInvocationSeparatesCanonicalMaterialFromSignedSubmit();
     asyncRuntimeUsesCompletableFutureAndCancellation();
     streamHistoryIsBounded();
     bidiHistoryIsBounded();
@@ -77,6 +78,95 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new InvocationBuilder().caller("x").inspect());
     runtime.close();
     expectSDKError(ErrorCode.INVALID_HANDLE, runtime::newInvocation);
+  }
+
+  private static void preparedInvocationSeparatesCanonicalMaterialFromSignedSubmit() throws Exception {
+    final class SigningTransport extends MemoryRuntimeTransport {
+      Map<String, Object> seenDraft = Map.of();
+      Map<String, Object> seenOptions = Map.of();
+      Map<String, Object> seenSigned = Map.of();
+      boolean submitTouched;
+
+      @Override
+      public byte[] prepare(byte[] draftJson, byte[] optionsJson) {
+        seenDraft = JsonValueReader.object(draftJson, "draft");
+        seenOptions = JsonValueReader.object(optionsJson, "options");
+        return fixture("prepared.signing-material.v4.json");
+      }
+
+      @Override
+      public byte[] submitSigned(byte[] signedJson) {
+        submitTouched = true;
+        seenSigned = JsonValueReader.object(signedJson, "signed");
+        return bytes("{\"handle_id\":7,\"state\":\"Submitted\",\"terminal\":false}");
+      }
+    }
+
+    var transport = new SigningTransport();
+    var runtime = new RuntimeClient(transport);
+    var draft =
+        runtime
+            .newInvocation()
+            .caller("easynet:///r/example/agent/alice.sdk")
+            .callee("easynet:///r/example/device/dev-a")
+            .descriptor("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+            .subject("easynet:///r/example/device/dev-a")
+            .nonce("AQIDBAUGBwgJCgsMDQ4PEA==")
+            .causalContext("{\"form\":\"none\"}")
+            .argsJson("{}")
+            .inspect();
+
+    var prepared = runtime.prepare(draft, Map.of("deadline_unix_ms", 1783000000000L));
+    check(!prepared.submitReady(), "prepared is not submit-ready");
+    check(prepared.preparedId().equals("prepared-example-1"), "prepared id");
+    check(
+        prepared.signingMaterial().canonicalBytesBase64().equals("ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM="),
+        "canonical bytes");
+    check(transport.seenDraft.get("descriptor_ref").equals(prepared.signingMaterial().descriptorRef()), "prepare descriptor");
+    check(transport.seenOptions.get("deadline_unix_ms").equals(1783000000000L), "prepare options");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            PreparedInvocation.fromJSON(
+                bytes(
+                    new String(fixture("prepared.signing-material.v4.json"), StandardCharsets.UTF_8)
+                        .replace("\"submit_ready\": false", "\"submit_ready\": true"))));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            PreparedInvocation.fromJSON(
+                bytes(
+                    new String(fixture("prepared.signing-material.v4.json"), StandardCharsets.UTF_8)
+                        .replace(
+                            """
+                                "args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+                                "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                            """,
+                            """
+                                "args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+                                "descriptor_ref": "easynet:///r/example/ability/other@1.0.0",
+                            """))));
+
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> runtime.submitSigned(prepared));
+    check(!transport.submitTouched, "prepared submit rejected before transport");
+
+    var signed =
+        prepared.signWithCallerSignature(
+            new InvocationSignature("ed25519", "c2lnbmF0dXJl", "signer-alice-key-1", ""));
+    check(signed.submitReady(), "signed submit-ready");
+    var handle = runtime.submitSigned(signed);
+    check(handle.handleId() == 7, "handle id");
+    check(transport.submitTouched, "signed submit reached transport");
+    @SuppressWarnings("unchecked")
+    var signedPrepared = (Map<String, Object>) transport.seenSigned.get("prepared");
+    @SuppressWarnings("unchecked")
+    var signature = (Map<String, Object>) transport.seenSigned.get("signature");
+    check(transport.seenSigned.get("signer_id").equals("signer-alice-key-1"), "signer id preserved");
+    check(signature.get("signature_base64").equals("c2lnbmF0dXJl"), "signature preserved");
+    check(
+        signedPrepared.get("canonical_bytes_base64").equals(prepared.signingMaterial().canonicalBytesBase64()),
+        "canonical material preserved");
   }
 
   private static void asyncRuntimeUsesCompletableFutureAndCancellation() throws Exception {
@@ -573,7 +663,7 @@ public final class RuntimeCoreSeamTest {
     void run() throws Exception;
   }
 
-  private static final class MemoryRuntimeTransport implements RuntimeTransport {
+  private static class MemoryRuntimeTransport implements RuntimeTransport {
     @Override
     public InvocationResult invoke(InvocationDraft draft) {
       return new InvocationResult(

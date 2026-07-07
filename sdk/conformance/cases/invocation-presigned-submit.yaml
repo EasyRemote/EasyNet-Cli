@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: submit_signed preserves caller signature material without facade re-signing.
 steps:
   - action: prepare
