@@ -966,6 +966,10 @@ require_literal sdk/go/directory.go "MaxDirectoryPageSize"
 require_literal sdk/go/directory.go "ResolvedRef"
 require_literal sdk/go/directory.go "DirectorySubscriptionRequest"
 require_literal sdk/go/directory.go "MaxDirectorySubscriptionBufferedEvents"
+reject_literal sdk/go/directory_runtime.go '"nodeId"'
+reject_literal sdk/go/directory_runtime.go '"hubEndpoint"'
+reject_literal sdk/go/directory_runtime.go '"probeStatus"'
+reject_literal sdk/go/directory_runtime.go '"lastSeenUnixMs"'
 require_literal sdk/go/identity.go "IdentityClient"
 require_literal sdk/go/identity.go "IdentityTransport"
 require_literal sdk/go/identity.go "IdentityProjection"
@@ -984,6 +988,12 @@ require_literal sdk/go/publication.go "PublicationTransport"
 require_literal sdk/go/publication.go "AbilityDeployRequest"
 require_literal sdk/go/publication.go "PackageValidation"
 require_literal sdk/go/publication.go "PublishedAbility"
+reject_literal sdk/go/publication_runtime.go '"ownerUra"'
+reject_literal sdk/go/publication_runtime.go '"abilityUra"'
+reject_literal sdk/go/publication_runtime.go '"descriptorRef"'
+reject_literal sdk/go/publication_runtime.go '"descriptorVersion"'
+reject_literal sdk/go/publication_runtime.go '"implId"'
+reject_literal sdk/go/publication_runtime.go '"resourceRef"'
 require_literal sdk/go/host_binding.go "HostBindingClient"
 require_literal sdk/go/host_binding.go "HostBindingTransport"
 require_literal sdk/go/host_binding.go "HostStreamBinding"

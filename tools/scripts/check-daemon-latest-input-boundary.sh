@@ -34,4 +34,14 @@ if [[ -n "$runtime_dispatch_fallback" ]]; then
 $runtime_dispatch_fallback"
 fi
 
+resolver_fallback="$(
+    rg -n 'json_string\(query,\s*"queryName",\s*"query_name"|json_string\(query,\s*"abilityName",\s*"ability_name"|json_string\(query,\s*"realmHint",\s*"realm_hint"|value\.get\("qtype"\)\.or_else\(\|\| value\.get\("qType"\)\)' \
+        src/daemon/invocation/routing/route_resolver.rs 2>/dev/null || true
+)"
+
+if [[ -n "$resolver_fallback" ]]; then
+    fail "daemon namespace resolver still accepts retired input aliases:
+$resolver_fallback"
+fi
+
 echo "check-daemon-latest-input-boundary: ok"

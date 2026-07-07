@@ -661,8 +661,8 @@ impl<'a> DaemonRouteResolver<'a> {
     }
 
     pub(crate) fn resolve_query_json(&self, query: &Value) -> Value {
-        let query_name = json_string(query, "queryName", "query_name");
-        let ability_name = json_string(query, "abilityName", "ability_name");
+        let query_name = json_string(query, "queryName");
+        let ability_name = json_string(query, "abilityName");
         let qtype = json_resolve_type(query).unwrap_or_else(|| {
             if !ability_name.is_empty()
                 || is_descriptor_ref(&query_name)
@@ -1099,7 +1099,7 @@ impl<'a> DaemonRouteResolver<'a> {
 
     fn directory_answer_json(&self, query: &Value, query_name: &str) -> Value {
         let prefix = if query_name.is_empty() {
-            let realm_hint = json_string(query, "realmHint", "realm_hint");
+            let realm_hint = json_string(query, "realmHint");
             (!realm_hint.is_empty()).then_some(realm_hint)
         } else {
             Some(query_name.to_string())
@@ -1369,10 +1369,9 @@ fn is_descriptor_ref(value: &str) -> bool {
     easynet_axon::invocation::canonical_ability_descriptor_ref(value).is_ok()
 }
 
-fn json_string(value: &Value, camel: &str, snake: &str) -> String {
+fn json_string(value: &Value, key: &str) -> String {
     value
-        .get(camel)
-        .or_else(|| value.get(snake))
+        .get(key)
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim()
@@ -1380,7 +1379,7 @@ fn json_string(value: &Value, camel: &str, snake: &str) -> String {
 }
 
 fn json_resolve_type(value: &Value) -> Option<axon_pb::ResolveType> {
-    let raw = value.get("qtype").or_else(|| value.get("qType"))?;
+    let raw = value.get("qtype")?;
     if let Some(num) = raw.as_i64() {
         return axon_pb::ResolveType::try_from(num as i32).ok();
     }
@@ -2346,6 +2345,31 @@ mod tests {
         assert_eq!(failure.reason, axon_pb::NegativeReason::Noroute);
         assert_eq!(failure.query_name, format!("{agent_ura}#chat.complete"));
         assert!(failure.detail.contains("host device"));
+    }
+
+    #[test]
+    fn resolve_query_json_ignores_retired_snake_case_input_aliases() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+
+        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": axon_pb::ResolveType::Route.as_str_name(),
+                "query_name": owner_ura,
+                "ability_name": "agent.list",
+                "realm_hint": "example",
+            }));
+
+        assert_eq!(
+            answer["answerKind"],
+            axon_pb::ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(answer["negative"]["queryName"], "");
+        assert!(answer.get("abilityUra").is_none());
     }
 
     #[test]

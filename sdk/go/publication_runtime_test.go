@@ -147,6 +147,56 @@ func TestPublicationRuntimeTransportEnablesAndDisablesAbilityImpl(t *testing.T) 
 	}
 }
 
+func TestPublicationRuntimeTransportRejectsLegacyUnpublishAliases(t *testing.T) {
+	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: `{
+		"ok": true,
+		"abilityUra": "easynet:///r/example/ability/device.dev-a.er.weather",
+		"ownerUra": "easynet:///r/example/device/dev-a"
+	}`})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimePublicationClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimePublicationClient: %v", err)
+	}
+
+	_, err = client.UnpublishAbilityWithRequest(context.Background(), baseUnpublishRequest())
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("UnpublishAbilityWithRequest error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestPublicationRuntimeTransportRejectsLegacyImplLifecycleAliases(t *testing.T) {
+	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: `{
+		"ok": true,
+		"abilityUra": "easynet:///r/example/ability/device.dev-a.er.weather",
+		"implId": "impl-1",
+		"ownerUra": "easynet:///r/example/device/dev-a",
+		"resourceRef": "easynet:///r/example/resource/device.dev-a/fs/tmp/weather"
+	}`})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimePublicationClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimePublicationClient: %v", err)
+	}
+
+	_, err = client.EnableAbilityImplWithRequest(context.Background(), baseAbilityImplLifecycleRequest())
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("EnableAbilityImplWithRequest error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestPublicationRuntimeTransportBuildsUnpublishInvocation(t *testing.T) {
 	identity, err := NewIdentityClient(newPublicationRuntimeIdentityTransport())
 	if err != nil {

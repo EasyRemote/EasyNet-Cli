@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,39 @@ func TestDirectoryRuntimeTransportResolvesThroughRuntime(t *testing.T) {
 	if len(identityTransport.seenBuildURA) != 1 ||
 		identityTransport.seenBuildURA[0]["ability_name"] != directoryAbilityNamespaceResolve {
 		t.Fatalf("identity lookup not delegated: %#v", identityTransport.seenBuildURA)
+	}
+}
+
+func TestDirectoryRuntimeTransportRejectsLegacyResolveAliases(t *testing.T) {
+	identity, err := NewIdentityClient(newDirectoryRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: `{
+		"answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+		"canonicalName": "easynet:///r/example/device/dev-a",
+		"ownerUra": "easynet:///r/example/device/dev-a",
+		"abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+		"records": []
+	}`})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeDirectoryClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeDirectoryClient: %v", err)
+	}
+
+	_, err = client.Resolve(context.Background(), ResolveQuery{
+		DirectoryQueryBase: directoryBaseForTest(),
+		QueryName:          "easynet:///r/example/device/dev-a",
+		QType:              "directory_listing",
+	})
+	if err == nil {
+		t.Fatalf("Resolve succeeded for alias-only provider output")
+	}
+	if sdkErr, ok := err.(*SDKError); !ok || sdkErr.Code != ErrInvalidArgument || !strings.Contains(sdkErr.Message, "answer_kind is required") {
+		t.Fatalf("Resolve error = %#v, want invalid argument mentioning answer_kind is required", err)
 	}
 }
 
@@ -117,6 +151,37 @@ func TestDirectoryRuntimeTransportBuildsDevicePageInvocation(t *testing.T) {
 	}
 	if page.Metadata["source_ability"] != directoryAbilityNodeList {
 		t.Fatalf("metadata = %#v", page.Metadata)
+	}
+}
+
+func TestDirectoryRuntimeTransportRejectsLegacyDeviceAliases(t *testing.T) {
+	identity, err := NewIdentityClient(newDirectoryRuntimeIdentityTransport())
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
+	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: `{
+		"nodes": [{
+			"nodeId": "dev-a",
+			"deviceUra": "easynet:///r/example/device/dev-a",
+			"status": "online",
+			"hubEndpoint": "https://hub.example",
+			"probeStatus": "ok"
+		}]
+	}`})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeDirectoryClient(runtime, identity)
+	if err != nil {
+		t.Fatalf("NewRuntimeDirectoryClient: %v", err)
+	}
+
+	_, err = client.ListDevices(context.Background(), DeviceQuery{DirectoryQueryBase: directoryBaseForTest()})
+	if err == nil {
+		t.Fatalf("ListDevices succeeded for alias-only provider output")
+	}
+	if sdkErr, ok := err.(*SDKError); !ok || sdkErr.Code != ErrInvalidArgument || !strings.Contains(sdkErr.Message, "device_ura") {
+		t.Fatalf("ListDevices error = %#v, want invalid argument mentioning device_ura", err)
 	}
 }
 
@@ -364,16 +429,16 @@ func directoryBaseForTest() DirectoryQueryBase {
 }
 
 const directoryRuntimeResolveRawJSON = `{
-	"answerKind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
-	"canonicalName": "easynet:///r/example/device/dev-a",
+	"answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+	"canonical_name": "easynet:///r/example/device/dev-a",
 	"records": [{
 		"name": "easynet:///r/example/device/dev-a",
 		"recordType": "RECORD_TYPE_ID",
 		"value": {"id": {"ura": "easynet:///r/example/device/dev-a", "kind": "URA_KIND_DEVICE"}},
 		"metadata": {"status": "active"}
 	}],
-	"releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
-	"cachePolicy": {"ttlMs": 0}
+	"release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+	"cache_policy": {"ttl_ms": 0}
 }`
 
 const directoryRuntimeDeviceListRawJSON = `{

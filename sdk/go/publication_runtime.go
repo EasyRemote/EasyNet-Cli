@@ -448,7 +448,7 @@ func publishedAbilityDescriptorRef(ability PublishedAbility) string {
 	if ability.Descriptor == nil {
 		return ""
 	}
-	return firstStringFromMap(ability.Descriptor, "descriptor_ref", "descriptorRef")
+	return firstStringFromMap(ability.Descriptor, "descriptor_ref")
 }
 
 func (t *PublicationRuntimeTransport) projectUnpublishResultForRuntime(ctx context.Context, req UnpublishAbilityRequest, output []byte) (PublicationRecord, error) {
@@ -462,11 +462,11 @@ func (t *PublicationRuntimeTransport) projectUnpublishResultForRuntime(ctx conte
 	if ok, hasOK := payload["ok"].(bool); hasOK && !ok {
 		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication unpublish output ok=false", nil)
 	}
-	abilityURA := firstNonEmpty(firstStringFromMap(payload, "ability_ura", "abilityUra"), req.AbilityURA)
+	abilityURA := firstStringFromMap(payload, "ability_ura")
 	if abilityURA == "" {
 		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication unpublish output missing ability_ura", nil)
 	}
-	descriptorVersion := firstNonEmpty(firstStringFromMap(payload, "descriptor_version", "descriptorVersion"), req.DescriptorVersion)
+	descriptorVersion := firstNonEmpty(firstStringFromMap(payload, "descriptor_version"), req.DescriptorVersion)
 	descriptorRef, err := t.identity.CanonicalAbilityDescriptorRef(ctx, abilityURA, descriptorVersion)
 	if err != nil {
 		return PublicationRecord{}, err
@@ -476,7 +476,7 @@ func (t *PublicationRuntimeTransport) projectUnpublishResultForRuntime(ctx conte
 		Profile:       publicationProfile,
 		Kind:          "ability_unpublished",
 		DescriptorRef: descriptorRef,
-		OwnerURA:      firstStringFromMap(payload, "owner_ura", "ownerUra"),
+		OwnerURA:      firstStringFromMap(payload, "owner_ura"),
 		Status:        &status,
 		Metadata: map[string]any{
 			"profile":            publicationProfile,
@@ -506,16 +506,16 @@ func projectAbilityImplLifecycleForRuntime(req AbilityImplLifecycleRequest, outp
 	if ok, hasOK := payload["ok"].(bool); hasOK && !ok {
 		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication ability impl lifecycle output ok=false", nil)
 	}
-	abilityURA := firstNonEmpty(firstStringFromMap(payload, "ability_ura", "abilityUra"), req.AbilityURA)
-	implID := firstNonEmpty(firstStringFromMap(payload, "impl_id", "implId"), req.ImplID)
+	abilityURA := firstStringFromMap(payload, "ability_ura")
+	implID := firstStringFromMap(payload, "impl_id")
 	if abilityURA == "" || implID == "" {
 		return PublicationRecord{}, invalidProfilePayload(publicationProfile, "publication ability impl lifecycle output missing ability_ura or impl_id", nil)
 	}
 	record := PublicationRecord{
 		Profile:     publicationProfile,
 		Kind:        expectedKind,
-		OwnerURA:    firstStringFromMap(payload, "owner_ura", "ownerUra"),
-		ResourceRef: optionalStringPointer(firstStringFromMap(payload, "resource_ref", "resourceRef")),
+		OwnerURA:    firstStringFromMap(payload, "owner_ura"),
+		ResourceRef: optionalStringPointer(firstStringFromMap(payload, "resource_ref")),
 		Status:      optionalStringPointer(status),
 		Metadata: map[string]any{
 			"profile":        publicationProfile,

@@ -448,7 +448,7 @@ func projectDirectoryResolvedRef(raw []byte, sourceAbility string) ([]byte, erro
 	if nested, ok := payload["answer"].(map[string]any); ok {
 		answer = nested
 	}
-	answerKind := firstStringFromMap(answer, "answerKind", "answer_kind")
+	answerKind := firstStringFromMap(answer, "answer_kind")
 	if answerKind == "" && firstValue(answer, "negative") != nil {
 		answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"
 	}
@@ -463,19 +463,19 @@ func projectDirectoryResolvedRef(raw []byte, sourceAbility string) ([]byte, erro
 		"profile":          directoryIdentityProfile,
 		"kind":             "resolved_ref",
 		"answer_kind":      answerKind,
-		"query_name":       firstStringPtr(firstStringFromMap(answer, "queryName", "query_name")),
-		"canonical_name":   firstStringPtr(firstStringFromMap(answer, "canonicalName", "canonical_name")),
-		"owner_ura":        firstStringPtr(firstStringFromMap(answer, "ownerUra", "owner_ura")),
-		"ability_ura":      firstStringPtr(firstStringFromMap(answer, "abilityUra", "ability_ura")),
-		"route_ura":        firstStringPtr(firstStringFromMap(answer, "routeUra", "route_ura")),
-		"next_hop":         firstValue(answer, "nextHop", "next_hop"),
-		"selected_route":   firstValue(answer, "selectedRoute", "selected_route"),
-		"route_candidates": firstNonNilValue(answer, []any{}, "routeCandidates", "route_candidates"),
+		"query_name":       firstStringPtr(firstStringFromMap(answer, "query_name")),
+		"canonical_name":   firstStringPtr(firstStringFromMap(answer, "canonical_name")),
+		"owner_ura":        firstStringPtr(firstStringFromMap(answer, "owner_ura")),
+		"ability_ura":      firstStringPtr(firstStringFromMap(answer, "ability_ura")),
+		"route_ura":        firstStringPtr(firstStringFromMap(answer, "route_ura")),
+		"next_hop":         firstValue(answer, "next_hop"),
+		"selected_route":   firstValue(answer, "selected_route"),
+		"route_candidates": firstNonNilValue(answer, []any{}, "route_candidates"),
 		"records":          records,
 		"negative":         firstValue(answer, "negative"),
-		"release_profile":  firstStringPtr(firstStringFromMap(answer, "releaseProfile", "release_profile")),
+		"release_profile":  firstStringPtr(firstStringFromMap(answer, "release_profile")),
 		"authority":        firstValue(answer, "authority"),
-		"cache_policy":     firstValue(answer, "cachePolicy", "cache_policy"),
+		"cache_policy":     firstValue(answer, "cache_policy"),
 		"metadata": map[string]any{
 			"profile":    directoryIdentityProfile,
 			"source":     sourceAbility,
@@ -500,9 +500,12 @@ func projectDirectoryDevicePage(raw []byte, base DirectoryQueryBase) ([]byte, er
 		if !ok {
 			return nil, invalidProfilePayload(directoryIdentityProfile, "device row must be an object", nil)
 		}
-		nodeID := firstStringFromMap(obj, "node_id", "nodeId", "id")
-		deviceURA := firstNonEmpty(firstStringFromMap(obj, "device_ura", "deviceUra"), stringArg(obj, "ura"))
-		state := firstNonEmpty(firstStringFromMap(obj, "state", "status"), "unknown")
+		nodeID := firstStringFromMap(obj, "node_id")
+		deviceURA := firstStringFromMap(obj, "device_ura")
+		if deviceURA == "" {
+			return nil, invalidProfilePayload(directoryIdentityProfile, "device row missing device_ura", nil)
+		}
+		state := firstNonEmpty(firstStringFromMap(obj, "state"), "unknown")
 		items = append(items, map[string]any{
 			"profile":      directoryIdentityProfile,
 			"kind":         "device",
@@ -513,10 +516,10 @@ func projectDirectoryDevicePage(raw []byte, base DirectoryQueryBase) ([]byte, er
 			"is_self":      boolArg(obj, "is_self"),
 			"paired":       boolArg(obj, "paired"),
 			"tenant_id":    firstStringFromMap(obj, "tenant_id", "tenant", "realm"),
-			"hub_endpoint": firstStringFromMap(obj, "hub_endpoint", "hubEndpoint"),
-			"probe_status": firstStringFromMap(obj, "probe_status", "probeStatus"),
-			"probe_error":  firstValue(obj, "probe_error", "probeError"),
-			"latency_ms":   numberArg(obj, "latency_ms", "latencyMs"),
+			"hub_endpoint": firstStringFromMap(obj, "hub_endpoint"),
+			"probe_status": firstStringFromMap(obj, "probe_status"),
+			"probe_error":  firstValue(obj, "probe_error"),
+			"latency_ms":   numberArg(obj, "latency_ms"),
 			"abilities":    firstNonNilValue(obj, []any{}, "abilities"),
 			"metadata":     metadataWithSource(obj, directoryAbilityNodeList),
 		})
@@ -536,19 +539,22 @@ func projectDirectoryPeerUserDevicePage(raw []byte, base DirectoryQueryBase) ([]
 		if !ok {
 			return nil, invalidProfilePayload(directoryIdentityProfile, "peer user-device row must be an object", nil)
 		}
-		agentURA := firstStringFromMap(obj, "agent_ura", "agentUra")
-		nodeID := firstStringFromMap(obj, "node_id", "nodeId")
-		status := firstNonEmpty(firstStringFromMap(obj, "status", "state"), "unknown")
+		agentURA := firstStringFromMap(obj, "agent_ura")
+		if agentURA == "" {
+			return nil, invalidProfilePayload(directoryIdentityProfile, "peer user-device row missing agent_ura", nil)
+		}
+		nodeID := firstStringFromMap(obj, "node_id")
+		status := firstNonEmpty(firstStringFromMap(obj, "status"), "unknown")
 		items = append(items, map[string]any{
 			"profile":           directoryIdentityProfile,
 			"kind":              "peer_user_device",
 			"agent_ura":         agentURA,
 			"node_id":           nodeID,
-			"display_name":      firstStringFromMap(obj, "display_name", "displayName"),
+			"display_name":      firstStringFromMap(obj, "display_name"),
 			"status":            status,
-			"origin_realm":      firstStringFromMap(obj, "origin_realm", "originRealm"),
-			"hub_endpoint":      firstStringFromMap(obj, "hub_endpoint", "hubEndpoint"),
-			"last_seen_unix_ms": numberArgInt64(obj, "last_seen_unix_ms", "lastSeenUnixMs"),
+			"origin_realm":      firstStringFromMap(obj, "origin_realm"),
+			"hub_endpoint":      firstStringFromMap(obj, "hub_endpoint"),
+			"last_seen_unix_ms": numberArgInt64(obj, "last_seen_unix_ms"),
 			"metadata":          metadataWithSource(obj, directoryAbilityProxyListUserDevices),
 		})
 	}
@@ -567,12 +573,16 @@ func projectDirectoryAgentPage(raw []byte, base DirectoryQueryBase) ([]byte, err
 		if !ok {
 			return nil, invalidProfilePayload(directoryIdentityProfile, "agent row must be an object", nil)
 		}
+		agentURA := firstStringFromMap(obj, "agent_ura")
+		if agentURA == "" {
+			return nil, invalidProfilePayload(directoryIdentityProfile, "agent row missing agent_ura", nil)
+		}
 		items = append(items, map[string]any{
-			"name":       firstStringFromMap(obj, "name", "id"),
-			"agent_ura":  firstStringPtr(firstStringFromMap(obj, "agent_ura", "agentUra", "ura")),
-			"owner_ura":  firstStringPtr(firstStringFromMap(obj, "owner_ura", "ownerUra")),
-			"device_ura": firstStringPtr(firstStringFromMap(obj, "device_ura", "deviceUra")),
-			"state":      firstNonEmpty(firstStringFromMap(obj, "state", "status"), "unknown"),
+			"name":       firstStringFromMap(obj, "name"),
+			"agent_ura":  firstStringPtr(agentURA),
+			"owner_ura":  firstStringPtr(firstStringFromMap(obj, "owner_ura")),
+			"device_ura": firstStringPtr(firstStringFromMap(obj, "device_ura")),
+			"state":      firstNonEmpty(firstStringFromMap(obj, "state"), "unknown"),
 			"runtime":    firstNonEmpty(firstStringFromMap(obj, "runtime"), "daemon"),
 			"model":      firstStringPtr(firstStringFromMap(obj, "model")),
 			"label":      firstStringPtr(firstStringFromMap(obj, "label")),
@@ -598,16 +608,16 @@ func projectDirectoryAbilityPage(raw []byte, base DirectoryQueryBase) ([]byte, e
 		items = append(items, map[string]any{
 			"profile":            directoryIdentityProfile,
 			"kind":               "ability",
-			"name":               firstStringFromMap(obj, "name", "ability_name"),
-			"ability_ura":        firstStringFromMap(obj, "ability_ura", "abilityUra", "ura"),
-			"owner_ura":          firstStringFromMap(obj, "owner_ura", "ownerUra"),
-			"descriptor_ref":     firstStringPtr(firstStringFromMap(obj, "descriptor_ref", "descriptorRef")),
-			"descriptor_version": firstNonEmpty(firstStringFromMap(obj, "descriptor_version", "descriptorVersion"), "1.0.0"),
+			"name":               firstStringFromMap(obj, "name"),
+			"ability_ura":        firstStringFromMap(obj, "ability_ura"),
+			"owner_ura":          firstStringFromMap(obj, "owner_ura"),
+			"descriptor_ref":     firstStringPtr(firstStringFromMap(obj, "descriptor_ref")),
+			"descriptor_version": firstNonEmpty(firstStringFromMap(obj, "descriptor_version"), "1.0.0"),
 			"visibility":         firstStringFromMap(obj, "visibility"),
 			"class":              firstStringFromMap(obj, "class"),
 			"description":        firstStringFromMap(obj, "description"),
 			"source":             firstStringFromMap(obj, "source"),
-			"schema_summary":     firstNonNilValue(obj, map[string]any{}, "schema_summary", "schemaSummary"),
+			"schema_summary":     firstNonNilValue(obj, map[string]any{}, "schema_summary"),
 			"hints":              firstNonNilValue(obj, map[string]any{}, "hints"),
 			"metadata":           metadataWithSource(obj, directoryAbilityMetaListAbilities),
 		})
