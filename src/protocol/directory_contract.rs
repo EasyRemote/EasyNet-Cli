@@ -348,11 +348,11 @@ fn resolve_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError> {
 
     let mut args = Map::new();
     if let Some(query_name) = query_name {
-        args.insert("queryName".to_string(), Value::String(query_name));
+        args.insert("query_name".to_string(), Value::String(query_name));
     }
     if let Some(ability_name) = optional_string_field(obj, "ability_name")? {
         validate_ability_name(&ability_name)?;
-        args.insert("abilityName".to_string(), Value::String(ability_name));
+        args.insert("ability_name".to_string(), Value::String(ability_name));
     }
     if let Some(qtype) = optional_string_field(obj, "qtype")? {
         args.insert(
@@ -362,7 +362,7 @@ fn resolve_args(obj: &Map<String, Value>) -> Result<Value, DirectoryError> {
     }
     if let Some(realm_hint) = realm_hint {
         validate_realm_hint(&realm_hint)?;
-        args.insert("realmHint".to_string(), Value::String(realm_hint));
+        args.insert("realm_hint".to_string(), Value::String(realm_hint));
     }
     Ok(Value::Object(args))
 }
@@ -1107,10 +1107,10 @@ mod tests {
             ABILITY_NAMESPACE_RESOLVE
         );
         assert_eq!(
-            invocation["args"]["queryName"],
+            invocation["args"]["query_name"],
             "easynet:///r/example/device/dev-a"
         );
-        assert_eq!(invocation["args"]["abilityName"], "agent.list");
+        assert_eq!(invocation["args"]["ability_name"], "agent.list");
         assert_eq!(invocation["args"]["qtype"], "RESOLVE_TYPE_ROUTE");
         assert_eq!(
             invocation["descriptor_ref"],
@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn project_resolved_ref_rejects_legacy_provider_aliases() {
+    fn project_resolved_ref_rejects_legacy_camel_case_provider_aliases() {
         let answer = json!({
             "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
             "canonicalName": "easynet:///r/example/device/dev-a",

@@ -38,9 +38,9 @@ func TestDirectoryRuntimeTransportResolvesThroughRuntime(t *testing.T) {
 		t.Fatalf("records = %#v", ref.Records)
 	}
 	args := runtimeTransport.seenDraft["args"].(map[string]any)
-	if args["queryName"] != "easynet:///r/example/device/dev-a" ||
+	if args["query_name"] != "easynet:///r/example/device/dev-a" ||
 		args["qtype"] != directoryResolveTypeDirectoryListing ||
-		args["realmHint"] != "example" {
+		args["realm_hint"] != "example" {
 		t.Fatalf("resolve args not normalized: %#v", args)
 	}
 	if runtimeTransport.seenDraft["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.namespace.resolve@1.0.0" {
@@ -433,7 +433,7 @@ const directoryRuntimeResolveRawJSON = `{
 	"canonical_name": "easynet:///r/example/device/dev-a",
 	"records": [{
 		"name": "easynet:///r/example/device/dev-a",
-		"recordType": "RECORD_TYPE_ID",
+		"record_type": "RECORD_TYPE_ID",
 		"value": {"id": {"ura": "easynet:///r/example/device/dev-a", "kind": "URA_KIND_DEVICE"}},
 		"metadata": {"status": "active"}
 	}],

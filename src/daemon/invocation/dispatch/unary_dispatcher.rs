@@ -2106,13 +2106,13 @@ fn namespace_proxy_resolve_peer_arguments(
     request: &federation_wrappers::NamespaceProxyResolveRequest,
 ) -> Result<Vec<u8>, Status> {
     serde_json::to_vec(&serde_json::json!({
-        "queryName": non_empty_json_string(&request.query_name),
+        "query_name": non_empty_json_string(&request.query_name),
         "qtype": non_empty_json_string(&request.qtype)
             .unwrap_or_else(|| "RESOLVE_TYPE_DIRECTORY_LISTING".to_string()),
-        "callerUra": non_empty_json_string(&request.caller_ura),
-        "subjectUra": non_empty_json_string(&request.subject_ura),
-        "realmHint": non_empty_json_string(&request.realm_hint),
-        "abilityName": non_empty_json_string(&request.ability_name),
+        "caller_ura": non_empty_json_string(&request.caller_ura),
+        "subject_ura": non_empty_json_string(&request.subject_ura),
+        "realm_hint": non_empty_json_string(&request.realm_hint),
+        "ability_name": non_empty_json_string(&request.ability_name),
     }))
     .map_err(|err| {
         Status::internal(format!(
@@ -2143,14 +2143,14 @@ fn namespace_proxy_resolve_merge_answer(
     }
 
     serde_json::json!({
-        "answerKind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
-        "canonicalName": non_empty_json_string(&request.query_name),
+        "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+        "canonical_name": non_empty_json_string(&request.query_name),
         "records": records.into_values().collect::<Vec<_>>(),
-        "releaseProfile": "RESOLVER_RELEASE_PROFILE_PRODUCTION",
-        "cachePolicy": {
-            "ttlMs": 0,
-            "sharedCacheable": false,
-            "retryAfterUnixMs": 0,
+        "release_profile": "RESOLVER_RELEASE_PROFILE_PRODUCTION",
+        "cache_policy": {
+            "ttl_ms": 0,
+            "shared_cacheable": false,
+            "retry_after_unix_ms": 0,
         },
     })
 }

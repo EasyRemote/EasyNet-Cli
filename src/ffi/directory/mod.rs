@@ -384,10 +384,10 @@ mod tests {
         let value = read_json(out);
         assert_eq!(value["metadata"]["system_ability"], "namespace.resolve");
         assert_eq!(
-            value["args"]["queryName"],
+            value["args"]["query_name"],
             "easynet:///r/example/device/dev-a"
         );
-        assert_eq!(value["args"]["abilityName"], "agent.list");
+        assert_eq!(value["args"]["ability_name"], "agent.list");
         assert_eq!(value["args"]["qtype"], "RESOLVE_TYPE_ROUTE");
         assert_eq!(
             value["descriptor_ref"],
@@ -458,21 +458,21 @@ mod tests {
         let handle = handle();
         let raw = CString::new(
             serde_json::json!({
-                "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
-                "canonicalName": "easynet:///r/example/device/dev-a",
-                "ownerUra": "easynet:///r/example/device/dev-a",
-                "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
-                "routeUra": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
-                "nextHop": {
-                    "localDeviceAbility": {
-                        "deviceUra": "easynet:///r/example/device/dev-a",
-                        "dispatchName": "agent.list"
+                "answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+                "canonical_name": "easynet:///r/example/device/dev-a",
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "route_ura": "route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
+                "next_hop": {
+                    "local_device_ability": {
+                        "device_ura": "easynet:///r/example/device/dev-a",
+                        "dispatch_name": "agent.list"
                     }
                 },
-                "selectedRoute": {"reason": "ROUTE_REASON_LOCAL_DEVICE"},
-                "routeCandidates": [],
+                "selected_route": {"reason": "ROUTE_REASON_LOCAL_DEVICE"},
+                "route_candidates": [],
                 "records": [],
-                "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL"
+                "release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL"
             })
             .to_string(),
         )

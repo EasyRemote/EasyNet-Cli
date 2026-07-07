@@ -331,9 +331,9 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
         .invoke(invoke_request(
             ABILITY_NAMESPACE_RESOLVE,
             &serde_json::json!({
-                "queryName": owner_ura,
+                "query_name": owner_ura,
                 "qtype": "RESOLVE_TYPE_ROUTE",
-                "abilityName": "agent.list",
+                "ability_name": "agent.list",
             })
             .to_string(),
         ))
@@ -342,12 +342,12 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
     let body: serde_json::Value = parse_response_body(resp);
 
     assert_eq!(
-        body["answerKind"],
+        body["answer_kind"],
         easynet_axon::pb::axon::v1::ResolveAnswerKind::FinalRoute.as_str_name()
     );
-    assert_eq!(body["abilityUra"], ability_ura);
+    assert_eq!(body["ability_ura"], ability_ura);
     assert_eq!(
-        body["nextHop"]["localDeviceAbility"]["deviceUra"],
+        body["next_hop"]["local_device_ability"]["device_ura"],
         TEST_DAEMON_URA
     );
 }
@@ -368,7 +368,7 @@ async fn namespace_resolve_cross_realm_route_returns_peer_hub_delegation() {
         .invoke(invoke_request(
             ABILITY_NAMESPACE_RESOLVE,
             &serde_json::json!({
-                "queryName": ability_ura,
+                "query_name": ability_ura,
                 "qtype": "RESOLVE_TYPE_ROUTE",
             })
             .to_string(),
@@ -378,25 +378,25 @@ async fn namespace_resolve_cross_realm_route_returns_peer_hub_delegation() {
     let body: serde_json::Value = parse_response_body(resp);
 
     assert_eq!(
-        body["answerKind"],
+        body["answer_kind"],
         easynet_axon::pb::axon::v1::ResolveAnswerKind::Delegation.as_str_name()
     );
-    assert_eq!(body["ownerUra"], remote_owner);
-    assert_eq!(body["nextHop"]["peerHub"]["realm"], "remote-realm");
+    assert_eq!(body["owner_ura"], remote_owner);
+    assert_eq!(body["next_hop"]["peer_hub"]["realm"], "remote-realm");
     assert_eq!(
-        body["nextHop"]["peerHub"]["hubUra"],
+        body["next_hop"]["peer_hub"]["hub_ura"],
         crate::core::ura::hub_ura("remote-realm")
     );
     assert_eq!(
-        body["nextHop"]["peerHub"]["endpoints"][0]["endpoint"],
+        body["next_hop"]["peer_hub"]["endpoints"][0]["endpoint"],
         "https://remote-hub.example"
     );
     assert_eq!(
-        body["nextHop"]["peerHub"]["endpoints"][0]["metadata"]["source"],
+        body["next_hop"]["peer_hub"]["endpoints"][0]["metadata"]["source"],
         "federated_peers"
     );
     assert_eq!(
-        body["selectedRoute"]["reason"],
+        body["selected_route"]["reason"],
         easynet_axon::pb::axon::v1::RouteReason::PeerDelegation.as_str_name()
     );
 }
@@ -1810,11 +1810,11 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
         crate::core::ura::owner_ability_ura(owner_ura, "agent.list").expect("ability ura");
     let canned = InvokeResponse {
         result: serde_json::to_vec(&serde_json::json!({
-            "answerKind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+            "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
             "records": [
                 {
                     "name": owner_ura,
-                    "recordType": "RECORD_TYPE_ID",
+                    "record_type": "RECORD_TYPE_ID",
                     "value": {
                         "id": {
                             "ura": owner_ura,
@@ -1824,22 +1824,22 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
                 },
                 {
                     "name": ability_ura,
-                    "recordType": "RECORD_TYPE_ABILITY",
+                    "record_type": "RECORD_TYPE_ABILITY",
                     "value": {
                         "ability": {
-                            "abilityUra": ability_ura,
-                            "ownerUra": owner_ura,
+                            "ability_ura": ability_ura,
+                            "owner_ura": owner_ura,
                             "namespace": "agent",
-                            "localName": "list"
+                            "local_name": "list"
                         }
                     }
                 }
             ],
-            "releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
-            "cachePolicy": {
-                "ttlMs": 0,
-                "sharedCacheable": false,
-                "retryAfterUnixMs": 0
+            "release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+            "cache_policy": {
+                "ttl_ms": 0,
+                "shared_cacheable": false,
+                "retry_after_unix_ms": 0
             }
         }))
         .expect("typed resolve answer fixture"),
@@ -1858,18 +1858,18 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
             ABILITY_NAMESPACE_PROXY_RESOLVE,
             r#"{
                 "peer_hub_urls":["https://peer-hub.example:50443"],
-                "queryName":"easynet:///r/peer-realm/device/",
+                "query_name":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
-                "callerUra":"easynet:///r/local-realm/hub",
-                "subjectUra":"easynet:///r/local-realm/user/alice",
-                "realmHint":"peer-realm"
+                "caller_ura":"easynet:///r/local-realm/hub",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
             }"#,
         ))
         .await
         .expect("namespace proxy resolve succeeds");
     let body: serde_json::Value = parse_response_body(resp);
     assert_eq!(
-        body["answerKind"], "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+        body["answer_kind"], "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
         "proxy returns typed ResolveAnswer shape"
     );
     assert_eq!(
@@ -1884,12 +1884,12 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
     assert_eq!(calls[0].1.function_name, ABILITY_NAMESPACE_RESOLVE);
     let peer_args: serde_json::Value =
         serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
-    assert_eq!(peer_args["queryName"], "easynet:///r/peer-realm/device/");
+    assert_eq!(peer_args["query_name"], "easynet:///r/peer-realm/device/");
     assert_eq!(peer_args["qtype"], "RESOLVE_TYPE_DIRECTORY_LISTING");
 }
 
 #[tokio::test]
-async fn invoke_rejects_namespace_proxy_resolve_legacy_input_aliases() {
+async fn invoke_rejects_namespace_proxy_resolve_legacy_camel_case_input_aliases() {
     let svc = make_service();
 
     let err = svc
@@ -1897,19 +1897,19 @@ async fn invoke_rejects_namespace_proxy_resolve_legacy_input_aliases() {
             ABILITY_NAMESPACE_PROXY_RESOLVE,
             r#"{
                 "peer_hub_urls":[],
-                "query_name":"easynet:///r/peer-realm/device/",
+                "queryName":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
-                "caller_ura":"easynet:///r/local-realm/hub",
-                "subject_ura":"easynet:///r/local-realm/user/alice",
-                "realm_hint":"peer-realm"
+                "callerUra":"easynet:///r/local-realm/hub",
+                "subjectUra":"easynet:///r/local-realm/user/alice",
+                "realmHint":"peer-realm"
             }"#,
         ))
         .await
-        .expect_err("legacy snake-case namespace proxy input must be rejected");
+        .expect_err("legacy camel-case namespace proxy input must be rejected");
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        err.message().contains("unknown field `query_name`"),
+        err.message().contains("unknown field `queryName`"),
         "rejection must name the retired input alias; got: {}",
         err.message()
     );

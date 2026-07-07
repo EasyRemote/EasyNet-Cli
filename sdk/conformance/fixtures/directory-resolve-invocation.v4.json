@@ -8,8 +8,8 @@
     "form": "none"
   },
   "args": {
-    "queryName": "easynet:///r/example/device/dev-a",
-    "abilityName": "agent.list",
+    "query_name": "easynet:///r/example/device/dev-a",
+    "ability_name": "agent.list",
     "qtype": "RESOLVE_TYPE_ROUTE"
   },
   "content_type": "application/json",

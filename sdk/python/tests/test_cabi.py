@@ -919,10 +919,10 @@ class FakeRawCABI:
             }
         if system_ability == "namespace.resolve":
             return {
-                "answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
-                "canonicalName": "easynet:///r/example/device/dev-a",
-                "ownerUra": "easynet:///r/example/device/dev-a",
-                "abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+                "canonical_name": "easynet:///r/example/device/dev-a",
+                "owner_ura": "easynet:///r/example/device/dev-a",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
                 "records": [],
             }
         return {}
@@ -1862,7 +1862,7 @@ DIRECTORY_RESOLVE_INVOCATION = (
     b'"subject_ura":"easynet:///r/example/device/dev-a",'
     b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
     b'"causal_context":{"form":"none"},'
-    b'"args":{"queryName":"easynet:///r/example/device/dev-a",'
+    b'"args":{"query_name":"easynet:///r/example/device/dev-a",'
     b'"qtype":"RESOLVE_TYPE_ROUTE"},'
     b'"content_type":"application/json",'
     b'"metadata":{"profile":"directory_identity",'
@@ -3481,7 +3481,7 @@ class CABITransportTests(unittest.TestCase):
             "fs.read",
         )
         self.assertEqual(
-            raw.profile_requests[7][2]["output_json"]["answerKind"],
+            raw.profile_requests[7][2]["output_json"]["answer_kind"],
             "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
         )
         self.assertEqual(raw.buffers, {})

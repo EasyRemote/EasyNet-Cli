@@ -915,17 +915,17 @@ pub struct ProxyListUserDevicesResponse {
 pub struct NamespaceProxyResolveRequest {
     #[serde(default)]
     pub peer_hub_urls: Vec<String>,
-    #[serde(default, rename = "queryName")]
+    #[serde(default, rename = "query_name")]
     pub query_name: String,
     #[serde(default, rename = "qtype")]
     pub qtype: String,
-    #[serde(default, rename = "callerUra")]
+    #[serde(default, rename = "caller_ura")]
     pub caller_ura: String,
-    #[serde(default, rename = "subjectUra")]
+    #[serde(default, rename = "subject_ura")]
     pub subject_ura: String,
-    #[serde(default, rename = "realmHint")]
+    #[serde(default, rename = "realm_hint")]
     pub realm_hint: String,
-    #[serde(default, rename = "abilityName")]
+    #[serde(default, rename = "ability_name")]
     pub ability_name: String,
 }
 
@@ -1790,9 +1790,9 @@ mod tests {
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
-                "queryName": owner_ura,
+                "query_name": owner_ura,
                 "qtype": "RESOLVE_TYPE_ROUTE",
-                "abilityName": "agent.list",
+                "ability_name": "agent.list",
             }),
             &registry,
             None,
@@ -1801,21 +1801,21 @@ mod tests {
         );
 
         assert_eq!(
-            answer["answerKind"],
+            answer["answer_kind"],
             axon_pb::ResolveAnswerKind::FinalRoute.as_str_name()
         );
-        assert_eq!(answer["ownerUra"], owner_ura);
-        assert_eq!(answer["abilityUra"], ability_ura);
+        assert_eq!(answer["owner_ura"], owner_ura);
+        assert_eq!(answer["ability_ura"], ability_ura);
         assert_eq!(
-            answer["releaseProfile"],
+            answer["release_profile"],
             axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
         assert_eq!(
-            answer["nextHop"]["localDeviceAbility"]["dispatchName"],
+            answer["next_hop"]["local_device_ability"]["dispatch_name"],
             "agent.list"
         );
         assert_eq!(
-            answer["selectedRoute"]["gates"]["ability"],
+            answer["selected_route"]["gates"]["ability"],
             axon_pb::GateResult::Pass.as_str_name()
         );
         assert!(answer.get("negative").is_none());
@@ -1831,9 +1831,9 @@ mod tests {
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
-                "queryName": owner_ura,
+                "query_name": owner_ura,
                 "qtype": "ROUTE",
-                "abilityName": "agent.list",
+                "ability_name": "agent.list",
             }),
             &registry,
             None,
@@ -1842,14 +1842,14 @@ mod tests {
         );
 
         assert_eq!(
-            answer["answerKind"],
+            answer["answer_kind"],
             axon_pb::ResolveAnswerKind::Negative.as_str_name()
         );
         assert_eq!(
             answer["negative"]["reason"],
             axon_pb::NegativeReason::Nodata.as_str_name()
         );
-        assert_eq!(answer["nextHop"]["noRoute"], serde_json::json!({}));
+        assert_eq!(answer["next_hop"]["no_route"], serde_json::json!({}));
     }
 
     #[test]
@@ -1870,7 +1870,7 @@ mod tests {
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
-                "queryName": "easynet:///r/realm/agent/alice.",
+                "query_name": "easynet:///r/realm/agent/alice.",
                 "qtype": "RESOLVE_TYPE_DIRECTORY_LISTING",
             }),
             &registry,
@@ -1884,10 +1884,10 @@ mod tests {
             .expect("typed answer must carry records");
         assert!(
             records.iter().any(|record| {
-                record["recordType"] == axon_pb::RecordType::HostedBy.as_str_name()
-                    && record["value"]["hostedBy"]["hostedUra"] == agent_ura
-                    && record["value"]["hostedBy"]["hostUra"] == host_ura
-                    && record["value"]["hostedBy"]["hostNodeId"] == "dev-1"
+                record["record_type"] == axon_pb::RecordType::HostedBy.as_str_name()
+                    && record["value"]["hosted_by"]["hosted_ura"] == agent_ura
+                    && record["value"]["hosted_by"]["host_ura"] == host_ura
+                    && record["value"]["hosted_by"]["host_node_id"] == "dev-1"
             }),
             "hosted agent namespace directory must include hosted_by placement; got {records:#?}"
         );

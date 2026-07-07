@@ -44,4 +44,20 @@ if [[ -n "$resolver_fallback" ]]; then
 $resolver_fallback"
 fi
 
+namespace_proxy_fallback="$(
+    {
+        rg -n 'rename\s*=\s*"(queryName|abilityName|realmHint|callerUra|subjectUra)"' \
+            src/daemon/invocation/dispatch/federation_wrappers.rs 2>/dev/null || true
+        rg -n '"(queryName|abilityName|realmHint|callerUra|subjectUra)"\s*:' \
+            src/daemon/invocation/dispatch/unary_dispatcher.rs 2>/dev/null || true
+        rg -n '"(answerKind|canonicalName|releaseProfile|cachePolicy|ttlMs|sharedCacheable|retryAfterUnixMs)"\s*:' \
+            src/daemon/invocation/dispatch/unary_dispatcher.rs 2>/dev/null || true
+    }
+)"
+
+if [[ -n "$namespace_proxy_fallback" ]]; then
+    fail "daemon namespace proxy resolve still emits or accepts retired carrier fields:
+$namespace_proxy_fallback"
+fi
+
 echo "check-daemon-latest-input-boundary: ok"

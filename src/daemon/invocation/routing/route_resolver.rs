@@ -255,7 +255,7 @@ impl SelectedInvokeRoute {
         });
         let next_hop = self.next_hop_json();
         let selected_route = json!({
-            "nextHop": next_hop.clone(),
+            "next_hop": next_hop.clone(),
             "priority": 0,
             "weight": 1,
             "reason": self.route_reason().as_str_name(),
@@ -265,53 +265,53 @@ impl SelectedInvokeRoute {
         });
 
         json!({
-            "answerKind": axon_pb::ResolveAnswerKind::FinalRoute.as_str_name(),
-            "canonicalName": self.query_name,
-            "ownerUra": self.owner_ura,
-            "abilityUra": self.ability_ura,
-            "routeUra": self.route_ura,
-            "nextHop": next_hop,
-            "selectedRoute": selected_route.clone(),
-            "routeCandidates": [selected_route],
-            "routeEvidence": {
+            "answer_kind": axon_pb::ResolveAnswerKind::FinalRoute.as_str_name(),
+            "canonical_name": self.query_name,
+            "owner_ura": self.owner_ura,
+            "ability_ura": self.ability_ura,
+            "route_ura": self.route_ura,
+            "next_hop": next_hop,
+            "selected_route": selected_route.clone(),
+            "route_candidates": [selected_route],
+            "route_evidence": {
                 "identity": self.owner_record.clone(),
                 "owner": self.owner_record.clone(),
                 "ability": self.ability_record.clone(),
                 "route": self.route_record.clone(),
-                "selectionAlgorithm": "daemon-selected-route-v1",
+                "selection_algorithm": "daemon-selected-route-v1",
             },
             "records": [self.ability_record.clone(), self.route_record.clone()],
-            "releaseProfile": self.release_profile.as_str_name(),
+            "release_profile": self.release_profile.as_str_name(),
             "authority": authority,
-            "cachePolicy": cache_policy_json(),
+            "cache_policy": cache_policy_json(),
         })
     }
 
     fn next_hop_json(&self) -> Value {
         match self.kind {
             SelectedRouteKind::HubOwned => json!({
-                "localHubAbility": {
-                    "abilityUra": self.ability_ura,
-                    "routeUra": self.route_ura,
-                    "dispatchName": self.dispatch_name,
+                "local_hub_ability": {
+                    "ability_ura": self.ability_ura,
+                    "route_ura": self.route_ura,
+                    "dispatch_name": self.dispatch_name,
                 }
             }),
             SelectedRouteKind::HostedAgent => json!({
-                "hostedAgentViaDevice": {
-                    "agentUra": self.callee_ura,
-                    "hostDeviceUra": self.execution_host_ura,
-                    "hostNodeId": self.host_node_id.as_deref().unwrap_or_default(),
-                    "abilityUra": self.ability_ura,
-                    "routeUra": self.route_ura,
-                    "dispatchName": self.dispatch_name,
+                "hosted_agent_via_device": {
+                    "agent_ura": self.callee_ura,
+                    "host_device_ura": self.execution_host_ura,
+                    "host_node_id": self.host_node_id.as_deref().unwrap_or_default(),
+                    "ability_ura": self.ability_ura,
+                    "route_ura": self.route_ura,
+                    "dispatch_name": self.dispatch_name,
                 }
             }),
             SelectedRouteKind::LocalDevice | SelectedRouteKind::SameRealmDevice => json!({
-                "localDeviceAbility": {
-                    "deviceUra": self.execution_host_ura,
-                    "abilityUra": self.ability_ura,
-                    "routeUra": self.route_ura,
-                    "dispatchName": self.dispatch_name,
+                "local_device_ability": {
+                    "device_ura": self.execution_host_ura,
+                    "ability_ura": self.ability_ura,
+                    "route_ura": self.route_ura,
+                    "dispatch_name": self.dispatch_name,
                 }
             }),
         }
@@ -365,7 +365,7 @@ impl DelegatedInvokeRoute {
         let authority = authority_for_query(&self.owner_ura);
         let next_hop = self.next_hop_json();
         let selected_route = json!({
-            "nextHop": next_hop.clone(),
+            "next_hop": next_hop.clone(),
             "priority": 0,
             "weight": 1,
             "reason": axon_pb::RouteReason::PeerDelegation.as_str_name(),
@@ -381,35 +381,35 @@ impl DelegatedInvokeRoute {
         });
 
         json!({
-            "answerKind": axon_pb::ResolveAnswerKind::Delegation.as_str_name(),
-            "canonicalName": self.query_name,
-            "ownerUra": self.owner_ura,
-            "nextHop": next_hop,
-            "selectedRoute": selected_route.clone(),
-            "routeCandidates": [selected_route],
-            "routeEvidence": {
+            "answer_kind": axon_pb::ResolveAnswerKind::Delegation.as_str_name(),
+            "canonical_name": self.query_name,
+            "owner_ura": self.owner_ura,
+            "next_hop": next_hop,
+            "selected_route": selected_route.clone(),
+            "route_candidates": [selected_route],
+            "route_evidence": {
                 "owner": {
                     "ura": self.owner_ura,
                     "realm": self.realm,
                 },
                 "route": {
-                    "hubUra": self.hub_ura,
+                    "hub_ura": self.hub_ura,
                     "endpoints": self.endpoints.iter().map(DelegatedPeerEndpoint::json).collect::<Vec<_>>(),
                 },
-                "selectionAlgorithm": "daemon-peer-delegation-v1",
+                "selection_algorithm": "daemon-peer-delegation-v1",
             },
             "records": [],
-            "releaseProfile": self.release_profile.as_str_name(),
+            "release_profile": self.release_profile.as_str_name(),
             "authority": authority,
-            "cachePolicy": cache_policy_json(),
+            "cache_policy": cache_policy_json(),
         })
     }
 
     fn next_hop_json(&self) -> Value {
         json!({
-            "peerHub": {
+            "peer_hub": {
                 "realm": self.realm,
-                "hubUra": self.hub_ura,
+                "hub_ura": self.hub_ura,
                 "endpoints": self.endpoints.iter().map(DelegatedPeerEndpoint::json).collect::<Vec<_>>(),
             }
         })
@@ -431,7 +431,7 @@ impl DelegatedPeerEndpoint {
         metadata.insert("source".to_string(), Value::String(source.to_string()));
         if let Some(target_ura) = target_ura {
             metadata.insert(
-                "targetUra".to_string(),
+                "target_ura".to_string(),
                 Value::String(target_ura.to_string()),
             );
         }
@@ -661,8 +661,8 @@ impl<'a> DaemonRouteResolver<'a> {
     }
 
     pub(crate) fn resolve_query_json(&self, query: &Value) -> Value {
-        let query_name = json_string(query, "queryName");
-        let ability_name = json_string(query, "abilityName");
+        let query_name = json_string(query, "query_name");
+        let ability_name = json_string(query, "ability_name");
         let qtype = json_resolve_type(query).unwrap_or_else(|| {
             if !ability_name.is_empty()
                 || is_descriptor_ref(&query_name)
@@ -1099,7 +1099,7 @@ impl<'a> DaemonRouteResolver<'a> {
 
     fn directory_answer_json(&self, query: &Value, query_name: &str) -> Value {
         let prefix = if query_name.is_empty() {
-            let realm_hint = json_string(query, "realmHint");
+            let realm_hint = json_string(query, "realm_hint");
             (!realm_hint.is_empty()).then_some(realm_hint)
         } else {
             Some(query_name.to_string())
@@ -1151,12 +1151,12 @@ impl<'a> DaemonRouteResolver<'a> {
         }
 
         json!({
-            "answerKind": axon_pb::ResolveAnswerKind::NonDispatchable.as_str_name(),
-            "canonicalName": (!query_name.is_empty()).then_some(query_name),
+            "answer_kind": axon_pb::ResolveAnswerKind::NonDispatchable.as_str_name(),
+            "canonical_name": (!query_name.is_empty()).then_some(query_name),
             "records": records,
-            "releaseProfile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
+            "release_profile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
             "authority": authority_for_query(query_name),
-            "cachePolicy": cache_policy_json(),
+            "cache_policy": cache_policy_json(),
         })
     }
 }
@@ -1425,10 +1425,10 @@ fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
 fn id_record(name: &str, now_unix_ms: i64) -> Value {
     json!({
         "name": name,
-        "recordType": axon_pb::RecordType::Id.as_str_name(),
+        "record_type": axon_pb::RecordType::Id.as_str_name(),
         "authority": authority_for_query(name),
-        "ttlMs": 0,
-        "expiresUnixMs": 0,
+        "ttl_ms": 0,
+        "expires_unix_ms": 0,
         "revision": now_unix_ms.max(0) as u64,
         "value": {
             "id": {
@@ -1465,17 +1465,17 @@ fn hosted_by_record(
 ) -> Value {
     json!({
         "name": hosted_ura,
-        "recordType": axon_pb::RecordType::HostedBy.as_str_name(),
+        "record_type": axon_pb::RecordType::HostedBy.as_str_name(),
         "authority": authority_for_query(hosted_ura),
-        "ttlMs": 0,
-        "expiresUnixMs": 0,
+        "ttl_ms": 0,
+        "expires_unix_ms": 0,
         "revision": now_unix_ms.max(0) as u64,
         "value": {
-            "hostedBy": {
-                "hostedUra": hosted_ura,
-                "hostUra": host_ura,
-                "hostNodeId": host_node_id,
-                "leaseExpiresUnixMs": 0,
+            "hosted_by": {
+                "hosted_ura": hosted_ura,
+                "host_ura": host_ura,
+                "host_node_id": host_node_id,
+                "lease_expires_unix_ms": 0,
             }
         }
     })
@@ -1500,33 +1500,33 @@ fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Option<Valu
         .filter(|value| !value.is_empty())?;
     Some(json!({
         "name": ability_ura,
-        "recordType": axon_pb::RecordType::Ability.as_str_name(),
+        "record_type": axon_pb::RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
-        "ttlMs": 0,
-        "expiresUnixMs": 0,
+        "ttl_ms": 0,
+        "expires_unix_ms": 0,
         "revision": now_unix_ms.max(0) as u64,
         "value": {
             "ability": {
-                "abilityUra": ability_ura,
-                "ownerUra": owner_ura,
+                "ability_ura": ability_ura,
+                "owner_ura": owner_ura,
                 "namespace": namespace,
-                "localName": local_name,
+                "local_name": local_name,
                 "summary": {
-                    "abilityUra": ability_ura,
-                    "ownerUra": owner_ura,
+                    "ability_ura": ability_ura,
+                    "owner_ura": owner_ura,
                     "namespace": namespace,
-                    "localName": local_name,
-                    "descriptorRevision": summary
+                    "local_name": local_name,
+                    "descriptor_revision": summary
                         .get("descriptor_revision")
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
-                    "schemaRef": summary.get("schema_ref").cloned().unwrap_or(Value::Null),
-                    "schemaHash": summary.get("schema_hash").cloned().unwrap_or(Value::Null),
-                    "policyRef": summary
+                    "schema_ref": summary.get("schema_ref").cloned().unwrap_or(Value::Null),
+                    "schema_hash": summary.get("schema_hash").cloned().unwrap_or(Value::Null),
+                    "policy_ref": summary
                         .get("policy_ref")
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
-                    "routeSummaryRef": summary.get("route_summary_ref").cloned().unwrap_or(Value::Null),
+                    "route_summary_ref": summary.get("route_summary_ref").cloned().unwrap_or(Value::Null),
                     "tags": summary.get("tags").cloned().unwrap_or_else(|| json!([])),
                 }
             }
@@ -1550,23 +1550,23 @@ fn device_local_ability_record(
         .map_or(("", public_name), |(ns, local)| (ns, local));
     json!({
         "name": ability_ura,
-        "recordType": axon_pb::RecordType::Ability.as_str_name(),
+        "record_type": axon_pb::RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
-        "ttlMs": 0,
-        "expiresUnixMs": 0,
+        "ttl_ms": 0,
+        "expires_unix_ms": 0,
         "revision": now_unix_ms.max(0) as u64,
         "value": {
             "ability": {
-                "abilityUra": ability_ura,
-                "ownerUra": owner_ura,
+                "ability_ura": ability_ura,
+                "owner_ura": owner_ura,
                 "namespace": namespace,
-                "localName": local_name,
+                "local_name": local_name,
                 "summary": {
-                    "abilityUra": ability_ura,
-                    "ownerUra": owner_ura,
+                    "ability_ura": ability_ura,
+                    "owner_ura": owner_ura,
                     "namespace": namespace,
-                    "localName": local_name,
-                    "policyRef": "visibility:PUBLIC",
+                    "local_name": local_name,
+                    "policy_ref": "visibility:PUBLIC",
                 }
             }
         }
@@ -1583,20 +1583,20 @@ fn route_record(
 ) -> Value {
     json!({
         "name": route_ura,
-        "recordType": axon_pb::RecordType::Route.as_str_name(),
+        "record_type": axon_pb::RecordType::Route.as_str_name(),
         "authority": authority_for_query(route_ura),
-        "ttlMs": 0,
-        "expiresUnixMs": 0,
+        "ttl_ms": 0,
+        "expires_unix_ms": 0,
         "revision": now_unix_ms.max(0) as u64,
         "value": {
             "route": {
-                "routeUra": route_ura,
-                "abilityUra": ability_ura,
-                "dispatchName": dispatch_name,
-                "executeOn": {
+                "route_ura": route_ura,
+                "ability_ura": ability_ura,
+                "dispatch_name": dispatch_name,
+                "execute_on": {
                     "kind": ura_kind_name(owner_ura),
-                    "targetUra": owner_ura,
-                    "hostNodeId": host_node_id.unwrap_or_default(),
+                    "target_ura": owner_ura,
+                    "host_node_id": host_node_id.unwrap_or_default(),
                 }
             }
         }
@@ -1609,17 +1609,17 @@ fn negative_answer_json(
     detail: Option<&str>,
 ) -> Value {
     json!({
-        "answerKind": axon_pb::ResolveAnswerKind::Negative.as_str_name(),
-        "nextHop": {
-            "noRoute": {}
+        "answer_kind": axon_pb::ResolveAnswerKind::Negative.as_str_name(),
+        "next_hop": {
+            "no_route": {}
         },
         "records": [],
-        "releaseProfile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
+        "release_profile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
         "authority": authority_for_query(query_name),
-        "cachePolicy": cache_policy_json(),
+        "cache_policy": cache_policy_json(),
         "negative": {
             "reason": reason.as_str_name(),
-            "queryName": query_name,
+            "query_name": query_name,
             "detail": detail,
         }
     })
@@ -1632,19 +1632,19 @@ fn authority_for_query(query_name: &str) -> Value {
         .filter(|realm| !realm.is_empty())
         .unwrap_or_else(|| "localhost".to_string());
     json!({
-        "authorityUra": crate::core::ura::hub_ura(&realm),
-        "zoneRef": format!("realm:{realm}"),
+        "authority_ura": crate::core::ura::hub_ura(&realm),
+        "zone_ref": format!("realm:{realm}"),
         "algorithm": "daemon-local",
         "signature": "",
-        "issuedUnixMs": 0,
+        "issued_unix_ms": 0,
     })
 }
 
 fn cache_policy_json() -> Value {
     json!({
-        "ttlMs": 0,
-        "sharedCacheable": false,
-        "retryAfterUnixMs": 0,
+        "ttl_ms": 0,
+        "shared_cacheable": false,
+        "retry_after_unix_ms": 0,
     })
 }
 
@@ -1839,13 +1839,13 @@ mod tests {
         assert_eq!(route.dispatch_name, "agent.list");
         assert!(route.is_authoritative_local_or_better());
 
-        // next_hop must take the localDeviceAbility shape.
+        // next_hop must take the local_device_ability shape.
         let next_hop = route.next_hop_json();
-        let local = &next_hop["localDeviceAbility"];
-        assert_eq!(local["deviceUra"], owner_ura);
-        assert_eq!(local["abilityUra"], ability_ura);
-        assert_eq!(local["routeUra"], format!("route-ref::{ability_ura}"));
-        assert_eq!(local["dispatchName"], "agent.list");
+        let local = &next_hop["local_device_ability"];
+        assert_eq!(local["device_ura"], owner_ura);
+        assert_eq!(local["ability_ura"], ability_ura);
+        assert_eq!(local["route_ura"], format!("route-ref::{ability_ura}"));
+        assert_eq!(local["dispatch_name"], "agent.list");
     }
 
     #[test]
@@ -2243,12 +2243,12 @@ mod tests {
 
         let answer = route.final_route_answer_json();
         assert_eq!(
-            answer["selectedRoute"]["reason"],
+            answer["selected_route"]["reason"],
             axon_pb::RouteReason::LocalHub.as_str_name()
         );
-        assert!(answer["nextHop"]["localHubAbility"].is_object());
+        assert!(answer["next_hop"]["local_hub_ability"].is_object());
         assert_eq!(
-            answer["nextHop"]["localHubAbility"]["dispatchName"],
+            answer["next_hop"]["local_hub_ability"]["dispatch_name"],
             "federation.status"
         );
     }
@@ -2310,20 +2310,20 @@ mod tests {
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
-                "queryName": owner_ura,
+                "query_name": owner_ura,
             }));
         let records = answer["records"].as_array().expect("records array");
         assert!(
             records.iter().any(|record| {
-                record["recordType"] == axon_pb::RecordType::Ability.as_str_name()
-                    && record["value"]["ability"]["abilityUra"] == ability_ura.as_str()
+                record["record_type"] == axon_pb::RecordType::Ability.as_str_name()
+                    && record["value"]["ability"]["ability_ura"] == ability_ura.as_str()
             }),
             "directory listing should retain the non-dispatchable ability fact"
         );
         assert!(
             records.iter().all(|record| {
-                record["recordType"] != axon_pb::RecordType::Route.as_str_name()
-                    || record["value"]["route"]["abilityUra"] != ability_ura.as_str()
+                record["record_type"] != axon_pb::RecordType::Route.as_str_name()
+                    || record["value"]["route"]["ability_ura"] != ability_ura.as_str()
             }),
             "directory listing must not manufacture a ROUTE record without route_summary_ref"
         );
@@ -2348,7 +2348,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_query_json_ignores_retired_snake_case_input_aliases() {
+    fn resolve_query_json_ignores_retired_camel_case_input_aliases() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let owner_ura = device_owner_ura();
@@ -2359,17 +2359,17 @@ mod tests {
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": axon_pb::ResolveType::Route.as_str_name(),
-                "query_name": owner_ura,
-                "ability_name": "agent.list",
-                "realm_hint": "example",
+                "queryName": owner_ura,
+                "abilityName": "agent.list",
+                "realmHint": "example",
             }));
 
         assert_eq!(
-            answer["answerKind"],
+            answer["answer_kind"],
             axon_pb::ResolveAnswerKind::Negative.as_str_name()
         );
-        assert_eq!(answer["negative"]["queryName"], "");
-        assert!(answer.get("abilityUra").is_none());
+        assert_eq!(answer["negative"]["query_name"], "");
+        assert!(answer.get("ability_ura").is_none());
     }
 
     #[test]
@@ -2404,21 +2404,21 @@ mod tests {
             .final_route_answer_json();
 
         assert_eq!(
-            answer["answerKind"],
+            answer["answer_kind"],
             axon_pb::ResolveAnswerKind::FinalRoute.as_str_name()
         );
-        assert_eq!(answer["abilityUra"], ability_ura);
-        assert_eq!(answer["ownerUra"], owner_ura);
-        assert_eq!(answer["routeUra"], format!("route-ref::{ability_ura}"));
+        assert_eq!(answer["ability_ura"], ability_ura);
+        assert_eq!(answer["owner_ura"], owner_ura);
+        assert_eq!(answer["route_ura"], format!("route-ref::{ability_ura}"));
         assert_eq!(
-            answer["releaseProfile"],
+            answer["release_profile"],
             axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
         // Required nested objects are present.
-        assert!(answer.get("nextHop").is_some());
-        assert!(answer["nextHop"]["localDeviceAbility"].is_object());
-        assert!(answer.get("selectedRoute").is_some());
-        assert!(answer["selectedRoute"]["nextHop"].is_object());
+        assert!(answer.get("next_hop").is_some());
+        assert!(answer["next_hop"]["local_device_ability"].is_object());
+        assert!(answer.get("selected_route").is_some());
+        assert!(answer["selected_route"]["next_hop"].is_object());
     }
 
     #[test]
@@ -2453,28 +2453,28 @@ mod tests {
 
         let answer = delegation.delegation_answer_json();
         assert_eq!(
-            answer["answerKind"],
+            answer["answer_kind"],
             axon_pb::ResolveAnswerKind::Delegation.as_str_name()
         );
         assert_eq!(
-            answer["releaseProfile"],
+            answer["release_profile"],
             axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
-        assert_eq!(answer["nextHop"]["peerHub"]["realm"], "remote-realm");
+        assert_eq!(answer["next_hop"]["peer_hub"]["realm"], "remote-realm");
         assert_eq!(
-            answer["nextHop"]["peerHub"]["endpoints"][0]["endpoint"],
+            answer["next_hop"]["peer_hub"]["endpoints"][0]["endpoint"],
             "https://remote-hub.example"
         );
         assert_eq!(
-            answer["nextHop"]["peerHub"]["endpoints"][0]["metadata"]["source"],
+            answer["next_hop"]["peer_hub"]["endpoints"][0]["metadata"]["source"],
             "federated_peers"
         );
         assert_eq!(
-            answer["selectedRoute"]["reason"],
+            answer["selected_route"]["reason"],
             axon_pb::RouteReason::PeerDelegation.as_str_name()
         );
         assert_eq!(
-            answer["routeEvidence"]["selectionAlgorithm"],
+            answer["route_evidence"]["selection_algorithm"],
             "daemon-peer-delegation-v1"
         );
     }
@@ -2494,30 +2494,36 @@ mod tests {
         let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog)).at(TEST_NOW_MS);
         let answer = resolver.resolve_query_json(&json!({
             "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
-            "queryName": owner_ura,
+            "query_name": owner_ura,
         }));
 
         let records = answer["records"].as_array().expect("records array");
         let route = records
             .iter()
             .find(|record| {
-                record["recordType"] == axon_pb::RecordType::Route.as_str_name()
-                    && record["value"]["route"]["abilityUra"] == ability_ura.as_str()
+                record["record_type"] == axon_pb::RecordType::Route.as_str_name()
+                    && record["value"]["route"]["ability_ura"] == ability_ura.as_str()
             })
             .expect("directory listing must carry a ROUTE record for the published ability");
 
         let route_value = &route["value"]["route"];
-        assert_eq!(route_value["routeUra"], format!("route-ref::{ability_ura}"));
-        assert_eq!(route_value["dispatchName"], "agent.list");
-        assert_eq!(route_value["executeOn"]["targetUra"], owner_ura);
+        assert_eq!(
+            route_value["route_ura"],
+            format!("route-ref::{ability_ura}")
+        );
+        assert_eq!(route_value["dispatch_name"], "agent.list");
+        assert_eq!(route_value["execute_on"]["target_ura"], owner_ura);
 
         // The directory route must equal what the single-route resolve
         // selects — one selection path, no divergence.
         let selected = resolver
             .resolve_route(&owner_ura, "agent.list")
             .expect("single-route resolve must succeed");
-        assert_eq!(route_value["abilityUra"], selected.ability_ura.as_str());
-        assert_eq!(route_value["routeUra"], selected.route_ura.as_str());
-        assert_eq!(route_value["dispatchName"], selected.dispatch_name.as_str());
+        assert_eq!(route_value["ability_ura"], selected.ability_ura.as_str());
+        assert_eq!(route_value["route_ura"], selected.route_ura.as_str());
+        assert_eq!(
+            route_value["dispatch_name"],
+            selected.dispatch_name.as_str()
+        );
     }
 }

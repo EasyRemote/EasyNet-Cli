@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  mkdir -p "$tmp/backend/internal/service" "$tmp/backend/internal/pb/axon/v1" "$tmp/backend/internal/daemon_grpc"
+  mkdir -p "$tmp/backend/internal/service" "$tmp/backend/internal/axon" "$tmp/backend/internal/pb/axon/v1" "$tmp/backend/internal/daemon_grpc"
   cat >"$tmp/backend/go.mod" <<'EOF'
 module easynet-backend
 EOF
@@ -40,6 +40,15 @@ func boot() {
     _ = "unix:///tmp/easynet-control.sock"
 }
 EOF
+  cat >"$tmp/backend/internal/axon/resolve_legacy.go" <<'EOF'
+package axon
+
+type legacyResolveInput struct {
+    QueryName string `json:"queryName"`
+}
+
+var _ = `{"answerKind":"RESOLVE_ANSWER_KIND_FINAL_ROUTE"}`
+EOF
   cat >"$tmp/backend/internal/pb/axon/v1/generated.go" <<'EOF'
 package v1
 
@@ -66,6 +75,7 @@ EOF
   grep -Fq "direct_daemon_transport_package" "$self_test_out"
   grep -Fq "raw_daemon_socket_marker" "$self_test_out"
   grep -Fq "runtime_subprocess" "$self_test_out"
+  grep -Fq "retired_namespace_resolve_carrier_key" "$self_test_out"
   echo "check-backend-sdk-only-boundary self-test ok"
   exit 0
 fi
@@ -117,6 +127,52 @@ RAW_DAEMON_SOCKET_MARKERS = (
     "unix:///tmp/easynet",
 )
 RUNTIME_SUBPROCESS_TARGETS = {"easynet", "easynet-daemon"}
+RETIRED_NAMESPACE_RESOLVE_CARRIER_KEYS = (
+    "queryName",
+    "abilityName",
+    "realmHint",
+    "callerUra",
+    "subjectUra",
+    "answerKind",
+    "canonicalName",
+    "ownerUra",
+    "abilityUra",
+    "routeUra",
+    "nextHop",
+    "selectedRoute",
+    "routeCandidates",
+    "routeEvidence",
+    "releaseProfile",
+    "cachePolicy",
+    "recordType",
+    "ttlMs",
+    "expiresUnixMs",
+    "localDeviceAbility",
+    "hostedAgentViaDevice",
+    "localHubAbility",
+    "dispatchName",
+    "deviceUra",
+    "peerHub",
+    "hubUra",
+    "noRoute",
+    "hostedBy",
+    "hostedUra",
+    "hostUra",
+    "targetUra",
+    "executeOn",
+    "retryAfterUnixMs",
+    "sharedCacheable",
+)
+NAMESPACE_RESOLVE_CARRIER_PREFIXES = (
+    "internal/axon/",
+    "internal/axontest/",
+    "internal/federation/",
+    "internal/catalog/",
+    "internal/svc/",
+    "internal/logic/ability/",
+    "internal/logic/agent/",
+    "internal/logic/skill/",
+)
 
 
 def rel(path: Path) -> str:
@@ -131,6 +187,16 @@ def production_go_files(root: Path):
         if path.name.endswith("_test.go"):
             continue
         yield path
+
+
+def namespace_resolve_carrier_go_files(root: Path):
+    for path in root.rglob("*.go"):
+        parts = set(path.relative_to(root).parts)
+        if parts & ignored_dirs:
+            continue
+        relative = str(path.relative_to(root))
+        if relative.startswith(NAMESPACE_RESOLVE_CARRIER_PREFIXES):
+            yield path
 
 
 def go_imports(text: str) -> list[tuple[int, str]]:
@@ -279,6 +345,20 @@ def scan_go_mod(path: Path) -> None:
                     violations.append(("go.mod", index, "raw_axon_module_dependency", module))
 
 
+def retired_namespace_resolve_keys(literal: str) -> list[str]:
+    retired: list[str] = []
+    for key in RETIRED_NAMESPACE_RESOLVE_CARRIER_KEYS:
+        if literal == key:
+            retired.append(key)
+            continue
+        if re.search(r'\bjson:"' + re.escape(key) + r'(?:,|")', literal):
+            retired.append(key)
+            continue
+        if re.search(r'"' + re.escape(key) + r'"\s*:', literal):
+            retired.append(key)
+    return retired
+
+
 scan_go_mod(backend / "go.mod")
 
 for source in production_go_files(backend):
@@ -313,6 +393,13 @@ for source in production_go_files(backend):
         literal in RUNTIME_SUBPROCESS_TARGETS for _, literal in string_literals
     ):
         violations.append((relative, 1, "runtime_subprocess", "exec.Command easynet/easynet-daemon"))
+
+for source in namespace_resolve_carrier_go_files(backend):
+    text = source.read_text(encoding="utf-8", errors="replace")
+    relative = rel(source)
+    for line, literal in go_string_literals(text):
+        for key in retired_namespace_resolve_keys(literal):
+            violations.append((relative, line, "retired_namespace_resolve_carrier_key", key))
 
 if violations:
     print(f"backend SDK-only boundary violations in {backend}:")

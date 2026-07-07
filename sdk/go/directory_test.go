@@ -357,14 +357,14 @@ func TestDirectoryResolveDecodesResolvedRef(t *testing.T) {
 		"owner_ura":"easynet:///r/example/device/dev-a",
 		"ability_ura":"easynet:///r/example/ability/device.dev-a.agent.list",
 		"route_ura":"route-ref::easynet:///r/example/ability/device.dev-a.agent.list",
-		"next_hop":{"localDeviceAbility":{"deviceUra":"easynet:///r/example/device/dev-a","dispatchName":"agent.list"}},
+		"next_hop":{"local_device_ability":{"device_ura":"easynet:///r/example/device/dev-a","dispatch_name":"agent.list"}},
 		"selected_route":{"reason":"ROUTE_REASON_LOCAL_DEVICE"},
 		"route_candidates":[],
 		"records":[],
 		"negative":null,
 		"release_profile":"RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
-		"authority":{"authorityUra":"easynet:///r/example/hub"},
-		"cache_policy":{"ttlMs":0},
+		"authority":{"authority_ura":"easynet:///r/example/hub"},
+		"cache_policy":{"ttl_ms":0},
 		"metadata":{"source":"namespace.resolve"}
 	}`}
 	client, err := NewDirectoryClient(transport)

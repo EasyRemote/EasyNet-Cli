@@ -383,16 +383,16 @@ func directoryPayloadObject(requestJSON []byte) (map[string]any, error) {
 func directoryResolveArgs(payload map[string]any) map[string]any {
 	args := map[string]any{}
 	if value := stringArg(payload, "query_name"); value != "" {
-		args["queryName"] = value
+		args["query_name"] = value
 	}
 	if value := stringArg(payload, "ability_name"); value != "" {
-		args["abilityName"] = value
+		args["ability_name"] = value
 	}
 	if value := normalizeDirectoryResolveType(stringArg(payload, "qtype")); value != "" {
 		args["qtype"] = value
 	}
 	if value := stringArg(payload, "realm_hint"); value != "" {
-		args["realmHint"] = value
+		args["realm_hint"] = value
 	}
 	if value, ok := payload["peer_hub_urls"]; ok {
 		args["peer_hub_urls"] = value
