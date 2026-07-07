@@ -70,7 +70,7 @@
     {
       "capability_id": "typed_errors",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/error-typed-json.yaml", "sdk/conformance/cases/error-profile-source-refs.yaml"],
+      "shared_cases": ["sdk/conformance/cases/error-typed-json.yaml", "sdk/conformance/cases/error-profile-source-refs.yaml", "sdk/conformance/cases/daemon-permission-denied.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/errors_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -140,7 +140,7 @@
     {
       "capability_id": "bidi",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/bidi-close-send-not-cancel.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
+      "shared_cases": ["sdk/conformance/cases/bidi-close-send-not-cancel.yaml", "sdk/conformance/cases/bidi-frame0-required.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/bidi_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -154,7 +154,7 @@
     {
       "capability_id": "directory_identity",
       "profile": "directory_identity",
-      "shared_cases": ["sdk/conformance/cases/directory-list-pagination.yaml", "sdk/conformance/cases/directory-resolve.yaml", "sdk/conformance/cases/identity-ura-descriptor-projection.yaml"],
+      "shared_cases": ["sdk/conformance/cases/directory-list-pagination.yaml", "sdk/conformance/cases/directory-resolve.yaml", "sdk/conformance/cases/identity-ura-descriptor-projection.yaml", "sdk/conformance/cases/aggregate-partial-result.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/directory_test.go"}, {"kind": "go_test", "ref": "sdk/go/identity_test.go"}]

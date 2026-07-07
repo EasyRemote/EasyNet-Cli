@@ -838,6 +838,13 @@ func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testin
 		requireCaseExpectation(t, bidiCase, expected)
 	}
 
+	frame0Case := sharedCase(t, root, "bidi-frame0-required.yaml")
+	requireCaseID(t, frame0Case, "bidi/frame0_required")
+	requireCaseAction(t, frame0Case, "open_bidi_without_frame0")
+	requireCaseAction(t, frame0Case, "project_typed_rejection")
+	requireCaseExpectation(t, frame0Case, "result: rejected")
+	requireCaseExpectation(t, frame0Case, "missing_frame0_rejected: true")
+
 	if _, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json")); err != nil {
 		t.Fatalf("NewInvocationDraftFromJSON(stream/bidi fixture): %v", err)
 	}
@@ -1376,6 +1383,14 @@ func TestGoDirectoryIdentityFacadeExecutesSharedProjectionConformanceCases(t *te
 	requireCaseExpectation(t, fanoutCase, "daemon_ability: meta.list_abilities")
 	requireCaseExpectation(t, fanoutCase, "invocation_fixture: directory-list-abilities-invocation.v4.json")
 	requireCaseExpectation(t, fanoutCase, "fanout: none")
+
+	aggregateCase := sharedCase(t, root, "aggregate-partial-result.yaml")
+	requireCaseID(t, aggregateCase, "aggregate/partial_result")
+	requireCaseAction(t, aggregateCase, "build_named_aggregate_invocation")
+	requireCaseAction(t, aggregateCase, "project_partial_results")
+	requireCaseAction(t, aggregateCase, "require_child_receipt_refs")
+	requireCaseExpectation(t, aggregateCase, "result: aggregate_partial_result_observed")
+	requireCaseExpectation(t, aggregateCase, "sdk_side_fanout: false")
 
 	abilityPage, err := directory.ListAbilities(context.Background(), sharedAbilityQuery(t, root))
 	if err != nil {

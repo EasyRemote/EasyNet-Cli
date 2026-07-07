@@ -2026,6 +2026,13 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         ):
             self._require_case_expectation(bidi_case, expectation)
 
+        frame0_case = shared_case("bidi-frame0-required.yaml")
+        self._require_case_id(frame0_case, "bidi/frame0_required")
+        self._require_case_action(frame0_case, "open_bidi_without_frame0")
+        self._require_case_action(frame0_case, "project_typed_rejection")
+        self._require_case_expectation(frame0_case, "result: rejected")
+        self._require_case_expectation(frame0_case, "missing_frame0_rejected: true")
+
         InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
 
         class StreamTerminalTransport:
@@ -2644,6 +2651,16 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "invocation_fixture: directory-list-abilities-invocation.v4.json",
         )
         self._require_case_expectation(fanout_case, "fanout: none")
+
+        aggregate_case = shared_case("aggregate-partial-result.yaml")
+        self._require_case_id(aggregate_case, "aggregate/partial_result")
+        self._require_case_action(aggregate_case, "build_named_aggregate_invocation")
+        self._require_case_action(aggregate_case, "project_partial_results")
+        self._require_case_action(aggregate_case, "require_child_receipt_refs")
+        self._require_case_expectation(
+            aggregate_case, "result: aggregate_partial_result_observed"
+        )
+        self._require_case_expectation(aggregate_case, "sdk_side_fanout: false")
 
         ability_page = directory.list_abilities(shared_ability_query())
         self.assertEqual(ability_page.limit, 2)

@@ -28,6 +28,42 @@
       "message": "Node Authority projects delegated/session authority metadata, delegates minting through injected transports, preserves unrelated Invocation metadata, and rejects ambiguous authority metadata."
     },
     {
+      "case_id": "bidi/close_send_not_cancel",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node Runtime Core seam keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload."
+    },
+    {
+      "case_id": "compatibility/openai_carrier_projection",
+      "profile": "compatibility",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "directory/list_pagination",
       "profile": "directory_identity",
       "status": "passed",
@@ -76,8 +112,8 @@
       "message": null
     },
     {
-      "case_id": "error/typed_json",
-      "profile": "runtime_core",
+      "case_id": "error/profile_source_refs",
+      "profile": "errors",
       "status": "passed",
       "evidence": [
         {
@@ -100,20 +136,8 @@
       "message": "Node typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages."
     },
     {
-      "case_id": "error/profile_source_refs",
-      "profile": "errors",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "events/directory_stream",
-      "profile": "events",
+      "case_id": "error/typed_json",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -125,6 +149,18 @@
     },
     {
       "case_id": "events/device_invocation_history",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "events/directory_stream",
       "profile": "events",
       "status": "passed",
       "evidence": [
@@ -160,6 +196,18 @@
       "message": null
     },
     {
+      "case_id": "host_binding/codec_hash",
+      "profile": "host_binding",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "identity/ura_descriptor_projection",
       "profile": "directory_identity",
       "status": "passed",
@@ -173,6 +221,18 @@
     },
     {
       "case_id": "invocation/builder_handle_state",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/canonical_material",
       "profile": "runtime_core",
       "status": "passed",
       "evidence": [
@@ -198,18 +258,6 @@
     {
       "case_id": "invocation/descriptor_ref_helper_delegation",
       "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "invocation/canonical_material",
-      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -246,18 +294,6 @@
     {
       "case_id": "invocation/terminal_monotonicity",
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "host_binding/codec_hash",
-      "profile": "host_binding",
       "status": "passed",
       "evidence": [
         {
@@ -328,6 +364,42 @@
       "message": null
     },
     {
+      "case_id": "receipt/fetch_carrier",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "receipt/projection_causal_ref",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
+    },
+    {
       "case_id": "stream/backpressure_bound",
       "profile": "runtime_core",
       "status": "passed",
@@ -352,44 +424,8 @@
       "message": "Node Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
     },
     {
-      "case_id": "bidi/close_send_not_cancel",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": "Node Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
-    },
-    {
       "case_id": "surface/page_carriers",
       "profile": "surface",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "compatibility/openai_carrier_projection",
-      "profile": "compatibility",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "wrappers/profile_records",
-      "profile": "wrappers",
       "status": "passed",
       "evidence": [
         {
@@ -424,32 +460,8 @@
       "message": null
     },
     {
-      "case_id": "runtime_core/feature_discovery",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": "Node decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
-    },
-    {
-      "case_id": "receipt/fetch_carrier",
-      "profile": "receipt",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "receipt/projection_causal_ref",
-      "profile": "receipt",
+      "case_id": "wrappers/profile_records",
+      "profile": "wrappers",
       "status": "passed",
       "evidence": [
         {

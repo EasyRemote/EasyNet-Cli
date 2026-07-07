@@ -59,6 +59,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
+  run_gate "SDK section 27 coverage self-test" bash "$SELF_DIR/check-sdk-section27-coverage.sh" --self-test
   run_gate "FFI ABI v4 header self-test" bash "$SELF_DIR/check-ffi-abi-v4-header.sh" --self-test
   run_gate "SDK package metadata self-test" bash "$SELF_DIR/check-sdk-package-metadata.sh" --self-test
   run_gate "product smoke self-test" bash "$SELF_DIR/check-sdk-product-smokes.sh" --self-test
@@ -89,6 +90,7 @@ status=0
 run_gate "SDK scaffold" bash "$SELF_DIR/check-sdk-scaffold.sh" || status=1
 run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-test || status=1
 run_gate "SDK conformance reports" bash "$SELF_DIR/check-sdk-conformance-reports.sh" || status=1
+run_gate "SDK section 27 coverage" bash "$SELF_DIR/check-sdk-section27-coverage.sh" || status=1
 run_gate "FFI ABI v4 header" bash "$SELF_DIR/check-ffi-abi-v4-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1

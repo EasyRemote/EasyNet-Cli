@@ -1,0 +1,13 @@
+id: aggregate/partial_result
+profile: directory_identity
+required_for:
+  - go
+  - python
+description: Named aggregate read models return bounded partial results with child receipt references instead of SDK-side per-target fan-out.
+steps:
+  - action: build_named_aggregate_invocation
+  - action: project_partial_results
+  - action: require_child_receipt_refs
+expect:
+  result: aggregate_partial_result_observed
+  sdk_side_fanout: false

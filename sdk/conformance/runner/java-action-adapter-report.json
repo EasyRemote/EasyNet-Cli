@@ -4,8 +4,8 @@
   "adapter_kind": "java_runtime_core_seam_tests",
   "records": [
     {
-      "case_id": "version/abi_compatible",
-      "profile": "runtime_core",
+      "case_id": "admin_gateway/carrier_status",
+      "profile": "admin_gateway",
       "status": "passed",
       "evidence": [
         {
@@ -13,67 +13,7 @@
           "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
         }
       ],
-      "message": null
-    },
-    {
-      "case_id": "version/abi_incompatible",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "runtime_core/feature_discovery",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
-    },
-    {
-      "case_id": "error/typed_json",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "error/retry_hint",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages."
-    },
-    {
-      "case_id": "invocation/complete_tuple",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": null
+      "message": "Java Admin + Gateway builds agent/session lifecycle Invocation carriers, projects daemon GatewayStatus, agent records, lifecycle results, pairing facts, device credentials, and device sessions, rejects system-agent lifecycle leakage, and leaves product session policy outside the SDK."
     },
     {
       "case_id": "authority/mutual_exclusion",
@@ -88,78 +28,6 @@
       "message": "Java Runtime Core projects typed delegation/session authority metadata, preserves metadata on Invocation drafts, delegates authority minting through injected transports, and rejects ambiguous authority metadata without owning canonical authority signing or policy."
     },
     {
-      "case_id": "invocation/builder_handle_state",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "invocation/canonical_material",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java RuntimeClient.prepare delegates complete Invocation draft JSON to the injected transport and projects daemon-provided PreparedInvocation signing material without deriving canonical bytes."
-    },
-    {
-      "case_id": "invocation/prepared_not_submittable",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java rejects PreparedInvocation submission before transport; only SignedInvocation is accepted by submitSigned."
-    },
-    {
-      "case_id": "invocation/presigned_submit",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java SignedInvocation preserves caller signature material and daemon-provided canonical bytes when submitSigned serializes the envelope."
-    },
-    {
-      "case_id": "stream/backpressure_bound",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "stream/order_terminal",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
-    },
-    {
       "case_id": "bidi/close_send_not_cancel",
       "profile": "runtime_core",
       "status": "passed",
@@ -172,8 +40,8 @@
       "message": "Java Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
     },
     {
-      "case_id": "health/api_vs_runtime",
-      "profile": "health",
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -181,7 +49,19 @@
           "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
         }
       ],
-      "message": null
+      "message": "Java Runtime Core seam keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload."
+    },
+    {
+      "case_id": "compatibility/openai_carrier_projection",
+      "profile": "compatibility",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Compatibility builds OpenAI-compatible model/chat Invocation carriers, projects model/chat/stream/file DTOs over injected transports, and leaves HTTP auth, quota, billing, storage, and fanout outside the SDK."
     },
     {
       "case_id": "directory/list_pagination",
@@ -232,8 +112,20 @@
       "message": "Java builds directory.subscribe carriers, projects subscription state, and opens injected Runtime Core stream handles without facade fanout."
     },
     {
-      "case_id": "identity/ura_descriptor_projection",
-      "profile": "directory_identity",
+      "case_id": "error/retry_hint",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages."
+    },
+    {
+      "case_id": "error/typed_json",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -242,42 +134,6 @@
         }
       ],
       "message": null
-    },
-    {
-      "case_id": "receipt/fetch_carrier",
-      "profile": "receipt",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java ReceiptClient builds invocation.history.get carriers from complete request tuples and exactly one selector."
-    },
-    {
-      "case_id": "receipt/projection_causal_ref",
-      "profile": "receipt",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java receipt projection refuses summary-only cryptographic claims and requires explicit receipt_ura plus receipt_hash_hex for causal refs."
-    },
-    {
-      "case_id": "events/directory_stream",
-      "profile": "events",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java Events builds directory stream carriers, projects event/drop/terminal frames, and opens Runtime Core-backed event streams without SDK-local fanout."
     },
     {
       "case_id": "events/device_invocation_history",
@@ -292,6 +148,18 @@
       "message": "Java Events builds device and invocation subscription carriers and projects bounded device event history pages over injected transports."
     },
     {
+      "case_id": "events/directory_stream",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Events builds directory stream carriers, projects event/drop/terminal frames, and opens Runtime Core-backed event streams without SDK-local fanout."
+    },
+    {
       "case_id": "events/session_stream",
       "profile": "events",
       "status": "passed",
@@ -304,8 +172,8 @@
       "message": "Java Events requires explicit daemon session_id and rejects product session_ura parsing for session streams."
     },
     {
-      "case_id": "publication/resource_carriers",
-      "profile": "publication",
+      "case_id": "health/api_vs_runtime",
+      "profile": "health",
       "status": "passed",
       "evidence": [
         {
@@ -313,31 +181,7 @@
           "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
         }
       ],
-      "message": "Java Publication builds daemon-authored resource refs, validates package manifests, builds deploy/unpublish Invocation carriers, and rejects relative paths, reserved namespaces, and incomplete carriers over injected transports."
-    },
-    {
-      "case_id": "mission/carrier_status",
-      "profile": "mission",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java Mission builds complete run/run-file/track/cancel/events carriers, projects daemon MissionStatus and MissionEventPage facts, validates opaque mission ids and receipt-backed child Invocation facts, and adapts live events through Runtime Core streams."
-    },
-    {
-      "case_id": "admin_gateway/carrier_status",
-      "profile": "admin_gateway",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "java_test",
-          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
-        }
-      ],
-      "message": "Java Admin + Gateway builds agent/session lifecycle Invocation carriers, projects daemon GatewayStatus, agent records, lifecycle results, pairing facts, device credentials, and device sessions, rejects system-agent lifecycle leakage, and leaves product session policy outside the SDK."
+      "message": null
     },
     {
       "case_id": "host_binding/codec_hash",
@@ -352,8 +196,8 @@
       "message": "Java Host Binding builds host-stream binding requests, decodes request envelopes, projects item/error/terminal frames, validates output-hash cursor state, and drives explicit readiness/cleanup lifecycle providers over injected transports."
     },
     {
-      "case_id": "surface/page_carriers",
-      "profile": "surface",
+      "case_id": "identity/ura_descriptor_projection",
+      "profile": "directory_identity",
       "status": "passed",
       "evidence": [
         {
@@ -361,11 +205,11 @@
           "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
         }
       ],
-      "message": "Java Surface builds page list/create/delete/manifest/health carriers, projects page records/manifests/public refs/health, and keeps rendering outside the SDK."
+      "message": null
     },
     {
-      "case_id": "compatibility/openai_carrier_projection",
-      "profile": "compatibility",
+      "case_id": "invocation/builder_handle_state",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -373,11 +217,11 @@
           "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
         }
       ],
-      "message": "Java Compatibility builds OpenAI-compatible model/chat Invocation carriers, projects model/chat/stream/file DTOs over injected transports, and leaves HTTP auth, quota, billing, storage, and fanout outside the SDK."
+      "message": null
     },
     {
-      "case_id": "wrappers/profile_records",
-      "profile": "wrappers",
+      "case_id": "invocation/canonical_material",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -385,7 +229,19 @@
           "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
         }
       ],
-      "message": "Java Wrappers project file, terminal, remote desktop, browser, and media session records over injected transports while leaving HTTP/WebSocket bridge policy outside the SDK."
+      "message": "Java RuntimeClient.prepare delegates complete Invocation draft JSON to the injected transport and projects daemon-provided PreparedInvocation signing material without deriving canonical bytes."
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": null
     },
     {
       "case_id": "invocation/descriptor_ref_helper_delegation",
@@ -398,6 +254,30 @@
         }
       ],
       "message": "Java invocation-facing descriptor refs come from Identity projection helpers rather than facade grammar assembly."
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java rejects PreparedInvocation submission before transport; only SignedInvocation is accepted by submitSigned."
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java SignedInvocation preserves caller signature material and daemon-provided canonical bytes when submitSigned serializes the envelope."
     },
     {
       "case_id": "memc/consumer_coverage",
@@ -434,6 +314,138 @@
         }
       ],
       "message": "Java profile-specific operations outside directly declared seam clients remain unsupported."
+    },
+    {
+      "case_id": "mission/carrier_status",
+      "profile": "mission",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Mission builds complete run/run-file/track/cancel/events carriers, projects daemon MissionStatus and MissionEventPage facts, validates opaque mission ids and receipt-backed child Invocation facts, and adapts live events through Runtime Core streams."
+    },
+    {
+      "case_id": "publication/resource_carriers",
+      "profile": "publication",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Publication builds daemon-authored resource refs, validates package manifests, builds deploy/unpublish Invocation carriers, and rejects relative paths, reserved namespaces, and incomplete carriers over injected transports."
+    },
+    {
+      "case_id": "receipt/fetch_carrier",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java ReceiptClient builds invocation.history.get carriers from complete request tuples and exactly one selector."
+    },
+    {
+      "case_id": "receipt/projection_causal_ref",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java receipt projection refuses summary-only cryptographic claims and requires explicit receipt_ura plus receipt_hash_hex for causal refs."
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
+    },
+    {
+      "case_id": "stream/backpressure_bound",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
+    },
+    {
+      "case_id": "surface/page_carriers",
+      "profile": "surface",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Surface builds page list/create/delete/manifest/health carriers, projects page records/manifests/public refs/health, and keeps rendering outside the SDK."
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "wrappers/profile_records",
+      "profile": "wrappers",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        }
+      ],
+      "message": "Java Wrappers project file, terminal, remote desktop, browser, and media session records over injected transports while leaving HTTP/WebSocket bridge policy outside the SDK."
     }
   ]
 }

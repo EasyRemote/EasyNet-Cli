@@ -16,6 +16,18 @@
       "message": null
     },
     {
+      "case_id": "aggregate/partial_result",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": "Go Directory + Identity aggregate read model projects bounded partial results with child receipt refs instead of SDK-side fan-out."
+    },
+    {
       "case_id": "authority/mutual_exclusion",
       "profile": "runtime_core",
       "status": "passed",
@@ -52,6 +64,30 @@
       "message": null
     },
     {
+      "case_id": "bidi/close_send_not_cancel",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": "Go Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": "Go Runtime Core keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload."
+    },
+    {
       "case_id": "compatibility/openai_carrier_projection",
       "profile": "compatibility",
       "status": "passed",
@@ -74,6 +110,18 @@
         }
       ],
       "message": null
+    },
+    {
+      "case_id": "daemon/permission_denied",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/errors_test.go"
+        }
+      ],
+      "message": "Go SDK maps permission-denied daemon/runtime failures to the canonical permission error class and non-retryable retry hint."
     },
     {
       "case_id": "directory/list_pagination",
@@ -148,18 +196,6 @@
       "message": null
     },
     {
-      "case_id": "error/typed_json",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": null
-    },
-    {
       "case_id": "error/retry_hint",
       "profile": "runtime_core",
       "status": "passed",
@@ -170,6 +206,18 @@
         }
       ],
       "message": "Go typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages or legacy error-code aliases."
+    },
+    {
+      "case_id": "error/typed_json",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
     },
     {
       "case_id": "events/device_invocation_history",
@@ -292,18 +340,6 @@
       "message": null
     },
     {
-      "case_id": "invocation/terminal_monotonicity",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": null
-    },
-    {
       "case_id": "invocation/local_daemon_signing_boundary",
       "profile": "runtime_core",
       "status": "passed",
@@ -329,6 +365,18 @@
     },
     {
       "case_id": "invocation/presigned_submit",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/terminal_monotonicity",
       "profile": "runtime_core",
       "status": "passed",
       "evidence": [
@@ -412,18 +460,6 @@
       "message": null
     },
     {
-      "case_id": "receipt/fetch_carrier",
-      "profile": "receipt",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": null
-    },
-    {
       "case_id": "receipt/axon_chain_verification",
       "profile": "receipt",
       "status": "passed",
@@ -440,8 +476,32 @@
       "message": null
     },
     {
+      "case_id": "receipt/fetch_carrier",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "receipt/projection_causal_ref",
       "profile": "receipt",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
@@ -464,30 +524,6 @@
       "message": null
     },
     {
-      "case_id": "stream/order_terminal",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": "Go Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
-    },
-    {
-      "case_id": "bidi/close_send_not_cancel",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": "Go Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
-    },
-    {
       "case_id": "stream/backpressure_bound",
       "profile": "runtime_core",
       "status": "passed",
@@ -498,6 +534,18 @@
         }
       ],
       "message": null
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": "Go Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
     },
     {
       "case_id": "surface/page_carriers",
@@ -525,18 +573,6 @@
     },
     {
       "case_id": "version/abi_incompatible",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "runtime_core/feature_discovery",
       "profile": "runtime_core",
       "status": "passed",
       "evidence": [

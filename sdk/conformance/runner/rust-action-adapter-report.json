@@ -16,6 +16,30 @@
       "message": null
     },
     {
+      "case_id": "bidi/close_send_not_cancel",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs"
+        }
+      ],
+      "message": "Rust Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/bidi.rs"
+        }
+      ],
+      "message": "Rust Runtime Core rejects bidi open paths without the required opening frame0 payload before session admission."
+    },
+    {
       "case_id": "compatibility/openai_carrier_projection",
       "profile": "compatibility",
       "status": "passed",
@@ -38,6 +62,18 @@
         }
       ],
       "message": null
+    },
+    {
+      "case_id": "daemon/permission_denied",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+        }
+      ],
+      "message": "Rust daemon runtime maps permission-denied admission and dispatch failures to typed PermissionDenied without untyped transport fallback."
     },
     {
       "case_id": "directory/list_pagination",
@@ -76,18 +112,6 @@
       "message": null
     },
     {
-      "case_id": "error/typed_json",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "rust_test",
-          "ref_path": "src/ffi/errors/mod.rs"
-        }
-      ],
-      "message": null
-    },
-    {
       "case_id": "error/retry_hint",
       "profile": "runtime_core",
       "status": "passed",
@@ -98,6 +122,18 @@
         }
       ],
       "message": "Rust typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages."
+    },
+    {
+      "case_id": "error/typed_json",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/errors/mod.rs"
+        }
+      ],
+      "message": null
     },
     {
       "case_id": "events/device_invocation_history",
@@ -220,18 +256,6 @@
       "message": null
     },
     {
-      "case_id": "invocation/terminal_monotonicity",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
-        }
-      ],
-      "message": null
-    },
-    {
       "case_id": "invocation/local_daemon_signing_boundary",
       "profile": "runtime_core",
       "status": "passed",
@@ -263,6 +287,18 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/request.rs"
+        }
+      ],
+      "message": null
+    },
+    {
+      "case_id": "invocation/terminal_monotonicity",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs"
         }
       ],
       "message": null
@@ -328,7 +364,7 @@
       "message": null
     },
     {
-      "case_id": "receipt/fetch_carrier",
+      "case_id": "receipt/axon_chain_verification",
       "profile": "receipt",
       "status": "passed",
       "evidence": [
@@ -340,7 +376,7 @@
       "message": null
     },
     {
-      "case_id": "receipt/axon_chain_verification",
+      "case_id": "receipt/fetch_carrier",
       "profile": "receipt",
       "status": "passed",
       "evidence": [
@@ -364,28 +400,16 @@
       "message": null
     },
     {
-      "case_id": "stream/order_terminal",
+      "case_id": "runtime_core/feature_discovery",
       "profile": "runtime_core",
       "status": "passed",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/features.rs"
         }
       ],
-      "message": "Rust Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
-    },
-    {
-      "case_id": "bidi/close_send_not_cancel",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
-        }
-      ],
-      "message": "Rust Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
+      "message": "Rust owns the canonical feature discovery catalog and checks it against the shared fixture."
     },
     {
       "case_id": "stream/backpressure_bound",
@@ -398,6 +422,18 @@
         }
       ],
       "message": null
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs"
+        }
+      ],
+      "message": "Rust Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
     },
     {
       "case_id": "surface/page_carriers",
@@ -434,18 +470,6 @@
         }
       ],
       "message": null
-    },
-    {
-      "case_id": "runtime_core/feature_discovery",
-      "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "rust_test",
-          "ref_path": "src/ffi/features.rs"
-        }
-      ],
-      "message": "Rust owns the canonical feature discovery catalog and checks it against the shared fixture."
     },
     {
       "case_id": "wrappers/profile_records",
