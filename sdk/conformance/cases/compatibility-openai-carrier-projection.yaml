@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: CompatibilityClient builds complete Invocation carriers for daemon OpenAI-compatible model and chat abilities and projects daemon OpenAI-compatible result envelopes into stable SDK DTOs without owning HTTP auth, quota, billing, or SSE fanout policy.
 steps:
   - action: build_list_models_invocation

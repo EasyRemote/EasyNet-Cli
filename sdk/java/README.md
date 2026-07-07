@@ -2,7 +2,7 @@
 
 Java/JVM is a P1 facade for enterprise and Android-adjacent integrations.
 
-Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Wrappers seam. The package exposes dependency-free Java
+Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Compatibility plus Wrappers seam. The package exposes dependency-free Java
 objects for typed SDK errors, feature discovery, complete Invocation draft
 construction, `PreparedInvocation`/`SigningMaterial`/`SignedInvocation`
 prepare-sign-submit seams over an injected transport, `RuntimeClient` dispatch,
@@ -33,10 +33,13 @@ policy. It exposes Events request/filter/cursor/frame/page DTOs and `EventClient
 carrier/projection/stream methods over injected transports without SDK-owned
 event fan-out. Surface DTOs and `SurfaceClient` build page, manifest, and health
 carriers and project daemon page facts without backend rendering or HTTP route
-ownership. Wrappers DTOs and `WrapperClient` project file, terminal, remote
+ownership. Compatibility DTOs and `CompatibilityClient` build OpenAI-compatible
+model/chat carriers, project chat/model/file DTOs, and leave product HTTP auth,
+quota, billing, storage, and stream fanout outside the SDK. Wrappers DTOs and
+`WrapperClient` project file, terminal, remote
 desktop, browser, and media session records over injected transports without
 owning backend HTTP/WebSocket bridges, storage policy, or product UI protocols.
-does not include a daemon or C ABI provider, generated DTOs for every profile,
+It does not include a daemon or C ABI provider, generated DTOs for every profile,
 provider-backed transport evidence, or product cutover evidence. Maven package
 metadata exists for this seam, is verified by
 `tools/scripts/check-java-sdk-seam.sh`, and declares only directly exercised

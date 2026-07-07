@@ -41,6 +41,7 @@ public final class RuntimeCoreSeamTest {
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
     surfaceProfileDelegatesCarriersAndProjections();
     wrapperProfileProjectsRuntimeRecords();
+    compatibilityProfileDelegatesCarriersAndProjections();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -1350,6 +1351,65 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_HANDLE, () -> wrappers.projectFileRecord(fixture("wrapper-file-record.v4.json")));
   }
 
+  private static void compatibilityProfileDelegatesCarriersAndProjections() throws Exception {
+    var compatibility = new CompatibilityClient(new FixtureCompatibilityTransport());
+    var list = CompatibilityListModelsRequest.fromJSON(fixture("compatibility-list-models-request.v4.json"));
+    var chat = CompatibilityChatCompletionRequest.fromJSON(fixture("compatibility-chat-completion-request.v4.json"));
+    var streamChat = CompatibilityStreamChatCompletionRequest.fromJSON(fixture("compatibility-stream-chat-completion-request.v4.json"));
+    var upload = CompatibilityFileUploadRequest.fromJSON(fixture("compatibility-file-upload-request.v4.json"));
+    var file = CompatibilityFileRequest.fromJSON(fixture("compatibility-file-request.v4.json"));
+    var delete = CompatibilityFileDeleteRequest.fromJSON(fixture("compatibility-file-delete-request.v4.json"));
+
+    check(
+        compatibility
+            .buildListModelsInvocation(list)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/device.dev-a.openai.list_models@1.0.0"),
+        "compatibility list models descriptor");
+    check(
+        compatibility
+            .buildChatCompletionInvocation(chat)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0"),
+        "compatibility chat descriptor");
+    var streamDraft = compatibility.buildStreamChatCompletionInvocation(streamChat);
+    check(streamDraft.get("descriptor_ref").equals("easynet:///r/example/ability/device.dev-a.openai.chat_completions@1.0.0"), "compatibility stream descriptor");
+
+    check(compatibility.listModels(list).data().size() == 1, "compatibility model page");
+    check(compatibility.chatCompletions(chat).choices().size() == 1, "compatibility chat completion");
+    check(compatibility.streamChatCompletions(streamChat).doneSentinel().equals("[DONE]"), "compatibility chat stream");
+    check(compatibility.uploadFile(upload).bytes() == 19L, "compatibility upload file");
+    check(compatibility.getFile(file).filename().equals("prompt.jsonl"), "compatibility get file");
+    check(compatibility.deleteFile(delete).deleted(), "compatibility delete file");
+
+    check(compatibility.projectModelPage(fixture("compatibility-model-page.v4.json")).data().get(0).abilityRef().contains("/ability/"), "compatibility project model page");
+    check(compatibility.projectChatCompletion(fixture("compatibility-chat-completion.v4.json")).model().contains("/ability/"), "compatibility project chat");
+    check(compatibility.projectChatStream(fixture("compatibility-chat-stream.v4.json")).items().size() == 1, "compatibility project stream");
+    check(compatibility.projectFileUpload(upload).status().equals("processed"), "compatibility project upload");
+    check(compatibility.projectFile(file).purpose().equals("batch"), "compatibility project file");
+    check(compatibility.projectFileDeleteResult(delete).id().equals("file-easynet-docs-1"), "compatibility project delete");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            CompatibilityChatCompletionRequest.fromJSON(
+                bytes(
+                    """
+                    {"caller_ura":"easynet:///r/example/agent/alice.sdk","callee_ura":"easynet:///r/example/device/dev-a","subject_ura":"easynet:///r/example/device/dev-a","descriptor_version":"1.0.0","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"request":{"model":"gpt-4o","messages":[{"role":"user","content":"x"}]}}
+                    """)));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            CompatibilityChatCompletionRequest.fromJSON(
+                bytes(
+                    """
+                    {"caller_ura":"easynet:///r/example/agent/alice.sdk","callee_ura":"easynet:///r/example/device/dev-a","subject_ura":"easynet:///r/example/device/dev-a","descriptor_version":"1.0.0","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"request":{"model":"easynet:///r/example/ability/alice.codex.chat","messages":[{"role":"user","content":"x"}],"stream":true}}
+                    """)));
+    compatibility.close();
+    compatibility.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> compatibility.listModels(list));
+  }
+
   private static SurfaceCarrierBase surfaceCarrierBase(Map<String, Object> metadata) {
     return new SurfaceCarrierBase(
         "easynet:///r/example/agent/alice.sdk",
@@ -2206,6 +2266,115 @@ public final class RuntimeCoreSeamTest {
     public byte[] projectMediaSession(byte[] requestJSON) {
       expectRequest(requestJSON, "wrapper-media-session.v4.json", "wrapper media session");
       return fixture("wrapper-media-session.v4.json");
+    }
+  }
+
+  private static final class FixtureCompatibilityTransport implements CompatibilityTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    private void expectStreamRequest(byte[] requestJSON) {
+      var request = new LinkedHashMap<>(JsonValueReader.object(requestJSON, "compatibility stream request"));
+      var expected = new LinkedHashMap<>(JsonValueReader.object(fixture("compatibility-stream-chat-completion-request.v4.json"), "compatibility stream fixture"));
+      var requestBody = new LinkedHashMap<>(CompatibilitySupport.requiredObject(request.get("request"), "request"));
+      var expectedBody = new LinkedHashMap<>(CompatibilitySupport.requiredObject(expected.get("request"), "request"));
+      expectedBody.put("stream", true);
+      request.put("request", requestBody);
+      expected.put("request", expectedBody);
+      check(request.equals(expected), "compatibility stream request");
+    }
+
+    @Override
+    public byte[] buildListModelsInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-list-models-request.v4.json", "compatibility list models request");
+      return fixture("compatibility-list-models-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildChatCompletionInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-chat-completion-request.v4.json", "compatibility chat request");
+      return fixture("compatibility-chat-completion-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildStreamChatCompletionInvocation(byte[] requestJSON) {
+      expectStreamRequest(requestJSON);
+      return fixture("compatibility-stream-chat-completion-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] listModels(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-list-models-request.v4.json", "compatibility list models");
+      return fixture("compatibility-model-page.v4.json");
+    }
+
+    @Override
+    public byte[] chatCompletions(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-chat-completion-request.v4.json", "compatibility chat completion");
+      return fixture("compatibility-chat-completion.v4.json");
+    }
+
+    @Override
+    public byte[] streamChatCompletions(byte[] requestJSON) {
+      expectStreamRequest(requestJSON);
+      return fixture("compatibility-chat-stream.v4.json");
+    }
+
+    @Override
+    public byte[] uploadFile(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-file-upload-request.v4.json", "compatibility upload file");
+      return fixture("compatibility-file.v4.json");
+    }
+
+    @Override
+    public byte[] getFile(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-file-request.v4.json", "compatibility get file");
+      return fixture("compatibility-file.v4.json");
+    }
+
+    @Override
+    public byte[] deleteFile(byte[] requestJSON) {
+      expectRequest(requestJSON, "compatibility-file-delete-request.v4.json", "compatibility delete file");
+      return fixture("compatibility-file-delete-result.v4.json");
+    }
+
+    @Override
+    public byte[] projectModelPage(byte[] valueJSON) {
+      expectRequest(valueJSON, "compatibility-model-page.v4.json", "compatibility project model page");
+      return valueJSON;
+    }
+
+    @Override
+    public byte[] projectChatCompletion(byte[] valueJSON) {
+      expectRequest(valueJSON, "compatibility-chat-completion.v4.json", "compatibility project chat");
+      return valueJSON;
+    }
+
+    @Override
+    public byte[] projectChatStream(byte[] valueJSON) {
+      expectRequest(valueJSON, "compatibility-chat-stream.v4.json", "compatibility project stream");
+      return valueJSON;
+    }
+
+    @Override
+    public byte[] projectFileUpload(byte[] valueJSON) {
+      expectRequest(valueJSON, "compatibility-file-upload-request.v4.json", "compatibility project upload");
+      return fixture("compatibility-file.v4.json");
+    }
+
+    @Override
+    public byte[] projectFile(byte[] valueJSON) {
+      expectRequest(valueJSON, "compatibility-file-request.v4.json", "compatibility project file");
+      return fixture("compatibility-file.v4.json");
+    }
+
+    @Override
+    public byte[] projectFileDeleteResult(byte[] valueJSON) {
+      expectRequest(valueJSON, "compatibility-file-delete-request.v4.json", "compatibility project delete");
+      return fixture("compatibility-file-delete-result.v4.json");
     }
   }
 

@@ -1097,6 +1097,69 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testCompatibilityProfileDelegatesCarriersAndProjections() async throws {
+        let compatibility = CompatibilityClient(transport: FixtureCompatibilityTransport())
+        let list = try CompatibilityListModelsRequest.fromJSON(fixture("compatibility-list-models-request.v4.json"))
+        let chat = try CompatibilityChatCompletionRequest.fromJSON(fixture("compatibility-chat-completion-request.v4.json"))
+        let stream = try CompatibilityStreamChatCompletionRequest.fromJSON(fixture("compatibility-stream-chat-completion-request.v4.json"))
+        let upload = try CompatibilityFileUploadRequest.fromJSON(fixture("compatibility-file-upload-request.v4.json"))
+        let file = try CompatibilityFileRequest.fromJSON(fixture("compatibility-file-request.v4.json"))
+        let delete = try CompatibilityFileDeleteRequest.fromJSON(fixture("compatibility-file-delete-request.v4.json"))
+
+        let listCarrier = try await compatibility.buildListModelsInvocation(list)
+        let chatCarrier = try await compatibility.buildChatCompletionInvocation(chat)
+        let streamCarrier = try await compatibility.buildStreamChatCompletionInvocation(stream)
+        XCTAssertEqual(listCarrier, try decodeObject(fixture("compatibility-list-models-invocation.v4.json"), label: "compatibility list carrier"))
+        XCTAssertEqual(chatCarrier, try decodeObject(fixture("compatibility-chat-completion-invocation.v4.json"), label: "compatibility chat carrier"))
+        XCTAssertEqual(streamCarrier, try decodeObject(fixture("compatibility-stream-chat-completion-invocation.v4.json"), label: "compatibility stream carrier"))
+
+        let modelPage = try await compatibility.listModels(list)
+        let completion = try await compatibility.chatCompletions(chat)
+        let streamResult = try await compatibility.streamChatCompletions(stream)
+        let uploaded = try await compatibility.uploadFile(upload)
+        let fetched = try await compatibility.getFile(file)
+        let deleted = try await compatibility.deleteFile(delete)
+        XCTAssertEqual(modelPage.data.count, 1)
+        XCTAssertEqual(completion.choices.count, 1)
+        XCTAssertEqual(streamResult.doneSentinel, "[DONE]")
+        XCTAssertEqual(uploaded.bytes, 19)
+        XCTAssertEqual(fetched.filename, "prompt.jsonl")
+        XCTAssertTrue(deleted.deleted)
+
+        let projectedModels = try await compatibility.projectModelPage(fixture("compatibility-model-page.v4.json"))
+        let projectedCompletion = try await compatibility.projectChatCompletion(fixture("compatibility-chat-completion.v4.json"))
+        let projectedStream = try await compatibility.projectChatStream(fixture("compatibility-chat-stream.v4.json"))
+        let projectedUpload = try await compatibility.projectFileUpload(upload)
+        let projectedFile = try await compatibility.projectFile(file)
+        let projectedDelete = try await compatibility.projectFileDeleteResult(delete)
+        XCTAssertEqual(projectedModels.data.count, 1)
+        XCTAssertEqual(projectedCompletion.object, "chat.completion")
+        XCTAssertEqual(projectedStream.items.count, 1)
+        XCTAssertEqual(projectedUpload.status, "processed")
+        XCTAssertEqual(projectedFile.purpose, "batch")
+        XCTAssertEqual(projectedDelete.id, "file-easynet-docs-1")
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try CompatibilityChatCompletionRequest.fromJSON(
+                replacingFixture(
+                    "compatibility-chat-completion-request.v4.json",
+                    "easynet:///r/example/ability/alice.codex.chat",
+                    "gpt-4o"
+                )
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try CompatibilityChatCompletionRequest.fromJSON(
+                replacingFixture("compatibility-chat-completion-request.v4.json", "\"temperature\": 0.2", "\"stream\": true")
+            )
+        }
+        try await compatibility.close()
+        try await compatibility.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await compatibility.listModels(list)
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -2024,6 +2087,99 @@ final class FixtureWrapperTransport: WrapperTransport, @unchecked Sendable {
         let request = try decodedObject(data)
         let expected = try decodedObject(fixture(fixtureName))
         XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+}
+
+final class FixtureCompatibilityTransport: CompatibilityTransport, @unchecked Sendable {
+    func buildListModelsInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-list-models-request.v4.json")
+        return fixture("compatibility-list-models-invocation.v4.json")
+    }
+
+    func buildChatCompletionInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-chat-completion-request.v4.json")
+        return fixture("compatibility-chat-completion-invocation.v4.json")
+    }
+
+    func buildStreamChatCompletionInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectStreamJSON(requestJSON)
+        return fixture("compatibility-stream-chat-completion-invocation.v4.json")
+    }
+
+    func listModels(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-list-models-request.v4.json")
+        return fixture("compatibility-model-page.v4.json")
+    }
+
+    func chatCompletions(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-chat-completion-request.v4.json")
+        return fixture("compatibility-chat-completion.v4.json")
+    }
+
+    func streamChatCompletions(_ requestJSON: Data) async throws -> Data {
+        try expectStreamJSON(requestJSON)
+        return fixture("compatibility-chat-stream.v4.json")
+    }
+
+    func uploadFile(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-file-upload-request.v4.json")
+        return fixture("compatibility-file.v4.json")
+    }
+
+    func getFile(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-file-request.v4.json")
+        return fixture("compatibility-file.v4.json")
+    }
+
+    func deleteFile(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "compatibility-file-delete-request.v4.json")
+        return fixture("compatibility-file-delete-result.v4.json")
+    }
+
+    func projectModelPage(_ valueJSON: Data) async throws -> Data {
+        try expectJSON(valueJSON, equalsFixture: "compatibility-model-page.v4.json")
+        return valueJSON
+    }
+
+    func projectChatCompletion(_ valueJSON: Data) async throws -> Data {
+        try expectJSON(valueJSON, equalsFixture: "compatibility-chat-completion.v4.json")
+        return valueJSON
+    }
+
+    func projectChatStream(_ valueJSON: Data) async throws -> Data {
+        try expectJSON(valueJSON, equalsFixture: "compatibility-chat-stream.v4.json")
+        return valueJSON
+    }
+
+    func projectFileUpload(_ valueJSON: Data) async throws -> Data {
+        try expectJSON(valueJSON, equalsFixture: "compatibility-file-upload-request.v4.json")
+        return fixture("compatibility-file.v4.json")
+    }
+
+    func projectFile(_ valueJSON: Data) async throws -> Data {
+        try expectJSON(valueJSON, equalsFixture: "compatibility-file-request.v4.json")
+        return fixture("compatibility-file.v4.json")
+    }
+
+    func projectFileDeleteResult(_ valueJSON: Data) async throws -> Data {
+        try expectJSON(valueJSON, equalsFixture: "compatibility-file-delete-request.v4.json")
+        return fixture("compatibility-file-delete-result.v4.json")
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+
+    private func expectStreamJSON(_ data: Data) throws {
+        var request = try decodedObject(data)
+        var expected = try decodedObject(fixture("compatibility-stream-chat-completion-request.v4.json"))
+        var expectedRequest = expected["request"] as? [String: Any] ?? [:]
+        expectedRequest["stream"] = true
+        expected["request"] = expectedRequest
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+        request.removeAll()
     }
 }
 

@@ -401,6 +401,23 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/SurfacePublicPageRef.java \
   sdk/java/src/main/java/run/easynet/daemon/SurfaceSupport.java \
   sdk/java/src/main/java/run/easynet/daemon/SurfaceTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityCarrierBase.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityChatCompletion.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityChatCompletionChunk.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityChatCompletionRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityChatCompletionStream.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityFile.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityFileDeleteRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityFileDeleteResult.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityFileRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityFileUploadRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityListModelsRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityModel.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityModelPage.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityStreamChatCompletionRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilitySupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/CompatibilityTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/UnpublishAbilityRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/ValidatePackageOptions.java \
   sdk/java/src/main/java/run/easynet/daemon/ValidatePairingRequest.java \
@@ -420,6 +437,7 @@ for path in \
   sdk/swift/README.md \
   sdk/swift/Sources/EasyNetDaemonSDK/Admin.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Compatibility.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
