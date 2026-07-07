@@ -18,6 +18,7 @@ public final class RuntimeCoreSeamTest {
     asyncRuntimeUsesCompletableFutureAndCancellation();
     streamHistoryIsBounded();
     bidiHistoryIsBounded();
+    bidiCloseSendKeepsReceiveOpenAndRejectsFurtherSend();
     runtimeHealthDistinguishesLivenessFromReadiness();
     runtimeDiagnosticsRequireTransportCapability();
     runtimeHealthWrapsTransportFailures();
@@ -162,6 +163,17 @@ public final class RuntimeCoreSeamTest {
     check(session.terminalFrame().kind().equals("backpressure_terminated"), "bidi overflow");
     check(session.retainedFrames().size() == BidiSession.MAX_RETAINED_FRAMES + 1, "bidi bound");
     session.close();
+  }
+
+  private static void bidiCloseSendKeepsReceiveOpenAndRejectsFurtherSend() throws Exception {
+    var session = new BidiSession(new QueueBidiSource(1));
+    session.send(BidiFrame.data(0, "{\"hello\":true}"));
+    check(session.closeSend().kind().equals("send_closed"), "bidi close-send frame");
+    expectSDKError(ErrorCode.CANCELLED, () -> session.send(BidiFrame.data(1, "{\"after\":true}")));
+    check(session.next().payloadJson().contains("\"n\":0"), "bidi receive after close-send");
+    session.close();
+    session.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, session::next);
   }
 
   private static void runtimeHealthDistinguishesLivenessFromReadiness() throws Exception {

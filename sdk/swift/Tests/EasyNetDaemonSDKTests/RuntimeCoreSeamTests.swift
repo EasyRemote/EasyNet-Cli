@@ -94,6 +94,23 @@ final class RuntimeCoreSeamTests: XCTestCase {
         try await session.close()
     }
 
+    func testBidiCloseSendKeepsReceiveOpenAndRejectsFurtherSend() async throws {
+        let session = BidiSession(source: QueueBidiSource(count: 1))
+        try await session.send(.data(0, payloadJSON: "{\"hello\":true}"))
+        let closeSend = try await session.closeSend()
+        XCTAssertEqual(closeSend.kind, "send_closed")
+        await expectSDKError(.cancelled) {
+            try await session.send(.data(1, payloadJSON: "{\"after\":true}"))
+        }
+        let received = try await session.next()
+        XCTAssertTrue(received.payloadJSON.contains("\"n\":0"))
+        try await session.close()
+        try await session.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await session.next()
+        }
+    }
+
     func testRuntimeHealthDistinguishesLivenessFromReadiness() async throws {
         let client = HealthClient(transport: MemoryHealthTransport(
             healthJSON: """

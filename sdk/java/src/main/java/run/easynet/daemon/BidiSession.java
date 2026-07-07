@@ -11,6 +11,7 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
   private final BidiSource source;
   private final ArrayDeque<BidiFrame> retained = new ArrayDeque<>();
   private boolean closed;
+  private boolean sendClosed;
   private BidiFrame terminal;
 
   public BidiSession(BidiSource source) {
@@ -19,6 +20,19 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
 
   public void send(BidiFrame frame) {
     requireOpen();
+    if (sendClosed) {
+      throw new SDKError(
+          ErrorCode.CANCELLED,
+          "bidi",
+          RetryHint.NEVER,
+          false,
+          "bidi send side is closed",
+          "",
+          "",
+          "",
+          java.util.Map.of("state", "send_closed"),
+          null);
+    }
     if (terminal != null) {
       throw SDKError.closed("bidi");
     }
@@ -46,7 +60,15 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
 
   public BidiFrame closeSend() {
     requireOpen();
-    return source.closeSend();
+    if (sendClosed) {
+      throw SDKError.closed("bidi_send");
+    }
+    BidiFrame frame = source.closeSend();
+    if (frame == null) {
+      throw SDKError.validation("bidi", "bidi source returned null close-send frame");
+    }
+    sendClosed = true;
+    return frame;
   }
 
   public BidiFrame cancel(String reason) {

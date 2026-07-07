@@ -51,6 +51,7 @@ public final class BidiSession: @unchecked Sendable {
 
     private let source: BidiSource
     private var closed = false
+    private var sendClosed = false
     private var retained: [BidiFrame] = []
     private var terminal: BidiFrame?
 
@@ -60,6 +61,14 @@ public final class BidiSession: @unchecked Sendable {
 
     public func send(_ frame: BidiFrame) async throws {
         try requireOpen()
+        if sendClosed {
+            throw SDKError(
+                code: .cancelled,
+                stage: "bidi",
+                message: "bidi send side is closed",
+                details: ["state": "send_closed"]
+            )
+        }
         if terminal != nil {
             throw SDKError.closed("bidi")
         }
@@ -81,7 +90,12 @@ public final class BidiSession: @unchecked Sendable {
 
     public func closeSend() async throws -> BidiFrame {
         try requireOpen()
-        return try await source.closeSend()
+        if sendClosed {
+            throw SDKError.closed("bidi_send")
+        }
+        let frame = try await source.closeSend()
+        sendClosed = true
+        return frame
     }
 
     public func cancel(reason: String) async throws -> BidiFrame {

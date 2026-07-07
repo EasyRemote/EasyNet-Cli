@@ -46,6 +46,13 @@
       "message": null
     },
     {
+      "case_id": "stream_bidi/lifecycle_state",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [{"kind": "java_test", "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"}],
+      "message": "Java stream/bidi handles preserve idempotent close, keep bidi receive active after closeSend, and reject sends after closeSend with CANCELLED."
+    },
+    {
       "case_id": "health/api_vs_runtime",
       "profile": "health",
       "status": "passed",
