@@ -52,12 +52,7 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
                 "not a macOS companion plan",
             ));
         };
-        let target = installed_app_path(app_bundle);
-        if target.exists() {
-            return Ok(CompanionActionReport::unchanged(
-                "app bundle already installed",
-            ));
-        }
+        let target = installed_app_path(plan, app_bundle);
         copy_dir_replacing(app_bundle, &target)?;
         Ok(CompanionActionReport::changed(format!(
             "installed app bundle at {}",
@@ -92,6 +87,11 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
                 "LaunchAgent already absent",
             ));
         }
+        if !launch_agent_points_at_plan(&plist, plan)? {
+            return Ok(CompanionActionReport::unchanged(
+                "LaunchAgent points at a different companion version",
+            ));
+        }
         std::fs::remove_file(&plist).map_err(|source| PluginHostError::WriteFailed {
             path: plist.clone(),
             source,
@@ -106,7 +106,7 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
                 "not a macOS companion plan",
             ));
         };
-        let target = installed_app_path(app_bundle);
+        let target = installed_app_path(plan, app_bundle);
         if target.exists() {
             std::fs::remove_dir_all(&target).map_err(|source| PluginHostError::WriteFailed {
                 path: target.clone(),
@@ -184,7 +184,7 @@ pub(crate) fn render_launch_agent_plist(plan: &DesktopCompanionPlan) -> Result<S
             reason: "not a macOS companion plan".to_string(),
         });
     };
-    let executable = app_executable_path(&installed_app_path(app_bundle));
+    let executable = app_executable_path(&installed_app_path(plan, app_bundle));
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -252,10 +252,12 @@ fn launch_agent_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
         .join(format!("{}.plist", launch_agent_label(plan)?)))
 }
 
-fn installed_app_path(source_app_bundle: &Path) -> PathBuf {
+fn installed_app_path(plan: &DesktopCompanionPlan, source_app_bundle: &Path) -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".easynet/apps")
+        .join(&plan.package_id)
+        .join(&plan.package_version)
         .join(source_app_bundle.file_name().unwrap_or_default())
 }
 
@@ -265,6 +267,27 @@ fn app_executable_path(app_bundle: &Path) -> PathBuf {
         .map(|stem| stem.to_os_string())
         .unwrap_or_default();
     app_bundle.join("Contents/MacOS").join(stem)
+}
+
+fn expected_app_executable_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
+    match &plan.spec {
+        PlatformCompanionSpec::Macos { app_bundle, .. } => {
+            Ok(app_executable_path(&installed_app_path(plan, app_bundle)))
+        }
+        _ => Err(PluginHostError::InvalidCompanionManifest {
+            id: plan.package_id.clone(),
+            reason: "not a macOS companion plan".to_string(),
+        }),
+    }
+}
+
+fn launch_agent_points_at_plan(plist: &Path, plan: &DesktopCompanionPlan) -> Result<bool> {
+    let expected = expected_app_executable_path(plan)?.display().to_string();
+    let body = std::fs::read_to_string(plist).map_err(|source| PluginHostError::ReadFailed {
+        path: plist.to_path_buf(),
+        source,
+    })?;
+    Ok(body.contains(&expected))
 }
 
 fn find_process_by_name(name: &str) -> Option<u64> {
@@ -332,7 +355,46 @@ mod tests {
         let plist = render_launch_agent_plist(&plan).expect("plist");
 
         assert!(plist.contains("Contents/MacOS/EasyNetMenuBar"));
+        assert!(plist.contains(".easynet/apps/easynet.desktop.menubar/0.1.0"));
         assert!(!plist.contains("/usr/bin/open"));
         assert!(plist.contains("LimitLoadToSessionType"));
+    }
+
+    #[test]
+    fn launch_agent_target_check_is_version_specific() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan = test_plan("0.1.0");
+        let matching = temp.path().join("matching.plist");
+        std::fs::write(&matching, render_launch_agent_plist(&plan).expect("plist"))
+            .expect("write matching plist");
+        assert!(launch_agent_points_at_plan(&matching, &plan).expect("match"));
+
+        let other = temp.path().join("other.plist");
+        std::fs::write(
+            &other,
+            render_launch_agent_plist(&test_plan("0.2.0")).expect("plist"),
+        )
+        .expect("write other plist");
+        assert!(!launch_agent_points_at_plan(&other, &plan).expect("no match"));
+    }
+
+    fn test_plan(version: &str) -> DesktopCompanionPlan {
+        DesktopCompanionPlan {
+            package_id: "easynet.desktop.menubar".to_string(),
+            package_version: version.to_string(),
+            display_name: "EasyNet Menu Bar".to_string(),
+            package_root: PathBuf::from("/tmp/pkg"),
+            platform: "macos".to_string(),
+            spec: PlatformCompanionSpec::Macos {
+                bundle_id: "tech.silan.easynet.menubar".to_string(),
+                app_bundle: PathBuf::from("/tmp/pkg/dist/macos/EasyNetMenuBar.app"),
+                launch_agent_label: "tech.silan.easynet.menubar".to_string(),
+                session: "aqua".to_string(),
+            },
+            boot_policy: PluginCompanionBootPolicy::EnsureRunningAfterDaemonReady,
+            stop_policy: PluginCompanionStopPolicy::KeepRunning,
+            health: PluginCompanionHealthMode::StatusFile,
+            status_file: None,
+        }
     }
 }

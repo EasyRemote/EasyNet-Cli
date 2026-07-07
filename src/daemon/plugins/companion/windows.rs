@@ -52,7 +52,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                 id: plan.package_id.clone(),
                 reason: "Windows companion executable has no parent directory".to_string(),
             })?;
-        let target_dir = installed_windows_app_dir(exe);
+        let target_dir = installed_windows_app_dir(plan, exe);
         copy_dir_replacing(source_dir, &target_dir)?;
         Ok(CompanionActionReport::changed(format!(
             "installed Windows companion at {}",
@@ -68,7 +68,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                     "not a Windows companion plan",
                 ));
             };
-            let installed_exe = installed_windows_exe_path(exe);
+            let installed_exe = installed_windows_exe_path(plan, exe);
             let installed_exe_arg = installed_exe.display().to_string();
             let status = Command::new("reg")
                 .args([
@@ -105,11 +105,17 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     fn disable(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         #[cfg(target_os = "windows")]
         {
-            let PlatformCompanionSpec::Windows { task_name, .. } = &plan.spec else {
+            let PlatformCompanionSpec::Windows { exe, task_name, .. } = &plan.spec else {
                 return Ok(CompanionActionReport::unchanged(
                     "not a Windows companion plan",
                 ));
             };
+            let expected_exe = installed_windows_exe_path(plan, exe);
+            if !windows_startup_entry_matches(task_name, &expected_exe) {
+                return Ok(CompanionActionReport::unchanged(
+                    "HKCU Run entry already absent or points at a different companion version",
+                ));
+            }
             let _ = Command::new("reg")
                 .args([
                     "delete",
@@ -131,7 +137,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     fn remove(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         self.disable(plan)?;
         if let PlatformCompanionSpec::Windows { exe, .. } = &plan.spec {
-            let target_dir = installed_windows_app_dir(exe);
+            let target_dir = installed_windows_app_dir(plan, exe);
             if target_dir.exists() {
                 std::fs::remove_dir_all(&target_dir).map_err(|source| {
                     PluginHostError::WriteFailed {
@@ -155,7 +161,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
                 "not a Windows companion plan",
             ));
         };
-        let installed_exe = installed_windows_exe_path(exe);
+        let installed_exe = installed_windows_exe_path(plan, exe);
         Command::new(&installed_exe)
             .spawn()
             .map_err(|source| PluginHostError::WriteFailed {
@@ -198,10 +204,10 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
         let PlatformCompanionSpec::Windows { exe, task_name, .. } = &plan.spec else {
             return CompanionSupervisorState::UnsupportedPlatform;
         };
-        if !installed_windows_exe_path(exe).exists() {
+        if !installed_windows_exe_path(plan, exe).exists() {
             return CompanionSupervisorState::NotInstalled;
         }
-        if windows_startup_entry_exists(task_name) {
+        if windows_startup_entry_matches(task_name, &installed_windows_exe_path(plan, exe)) {
             CompanionSupervisorState::InstalledEnabled
         } else {
             CompanionSupervisorState::InstalledDisabled
@@ -234,20 +240,22 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     }
 }
 
-fn installed_windows_exe_path(source_exe: &Path) -> PathBuf {
-    installed_windows_app_dir(source_exe).join(source_exe.file_name().unwrap_or_default())
+fn installed_windows_exe_path(plan: &DesktopCompanionPlan, source_exe: &Path) -> PathBuf {
+    installed_windows_app_dir(plan, source_exe).join(source_exe.file_name().unwrap_or_default())
 }
 
-fn installed_windows_app_dir(source_exe: &Path) -> PathBuf {
+fn installed_windows_app_dir(plan: &DesktopCompanionPlan, source_exe: &Path) -> PathBuf {
     let app_name = source_exe.file_stem().unwrap_or_default();
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".easynet/apps")
+        .join(&plan.package_id)
+        .join(&plan.package_version)
         .join(app_name)
 }
 
 #[cfg(target_os = "windows")]
-fn windows_startup_entry_exists(task_name: &str) -> bool {
+fn windows_startup_entry_matches(task_name: &str, expected_exe: &Path) -> bool {
     Command::new("reg")
         .args([
             "query",
@@ -255,15 +263,25 @@ fn windows_startup_entry_exists(task_name: &str) -> bool {
             "/v",
             task_name,
         ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|output| windows_startup_query_matches(&output, expected_exe))
 }
 
 #[cfg(not(target_os = "windows"))]
-fn windows_startup_entry_exists(_task_name: &str) -> bool {
+fn windows_startup_entry_matches(_task_name: &str, _expected_exe: &Path) -> bool {
     false
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_startup_query_matches(output: &str, expected_exe: &Path) -> bool {
+    let expected = expected_exe.display().to_string();
+    output.lines().any(|line| {
+        let normalized = line.trim().trim_matches('"');
+        normalized == expected || normalized.ends_with(&expected)
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -354,11 +372,46 @@ mod tests {
     #[test]
     fn installed_windows_paths_use_app_directory_by_exe_stem() {
         let source = PathBuf::from("dist/windows/EasyNetTray/EasyNetTray.exe");
-        let app_dir = installed_windows_app_dir(&source);
-        let exe_path = installed_windows_exe_path(&source);
+        let plan = test_plan("0.1.0", source.clone());
+        let app_dir = installed_windows_app_dir(&plan, &source);
+        let exe_path = installed_windows_exe_path(&plan, &source);
 
-        assert!(app_dir.ends_with(".easynet/apps/EasyNetTray"));
-        assert!(exe_path.ends_with(".easynet/apps/EasyNetTray/EasyNetTray.exe"));
+        assert!(app_dir.ends_with(".easynet/apps/easynet.desktop.menubar/0.1.0/EasyNetTray"));
+        assert!(exe_path
+            .ends_with(".easynet/apps/easynet.desktop.menubar/0.1.0/EasyNetTray/EasyNetTray.exe"));
+    }
+
+    #[test]
+    fn windows_startup_query_match_is_version_specific() {
+        let source = PathBuf::from("dist/windows/EasyNetTray/EasyNetTray.exe");
+        let plan = test_plan("0.1.0", source.clone());
+        let expected = installed_windows_exe_path(&plan, &source);
+        let matching = format!("EasyNetTray    REG_SZ    {}\r\n", expected.display());
+        assert!(windows_startup_query_matches(&matching, &expected));
+
+        let other_plan = test_plan("0.2.0", source.clone());
+        let other = installed_windows_exe_path(&other_plan, &source);
+        let mismatched = format!("EasyNetTray    REG_SZ    {}\r\n", other.display());
+        assert!(!windows_startup_query_matches(&mismatched, &expected));
+    }
+
+    fn test_plan(version: &str, exe: PathBuf) -> DesktopCompanionPlan {
+        DesktopCompanionPlan {
+            package_id: "easynet.desktop.menubar".to_string(),
+            package_version: version.to_string(),
+            display_name: "EasyNet Tray".to_string(),
+            package_root: PathBuf::from("/tmp/pkg"),
+            platform: "windows".to_string(),
+            spec: PlatformCompanionSpec::Windows {
+                exe,
+                task_name: "EasyNetTray".to_string(),
+                session: "interactive_desktop".to_string(),
+            },
+            boot_policy: crate::daemon::plugins::manifest::PluginCompanionBootPolicy::EnsureRunningAfterDaemonReady,
+            stop_policy: crate::daemon::plugins::manifest::PluginCompanionStopPolicy::KeepRunning,
+            health: crate::daemon::plugins::manifest::PluginCompanionHealthMode::StatusFile,
+            status_file: None,
+        }
     }
 }
 
