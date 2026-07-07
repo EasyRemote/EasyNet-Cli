@@ -490,14 +490,10 @@ export interface EventsSubscriptionRequest extends EventsCarrierBase {
   heartbeat_interval_ms?: number;
 }
 
-export type EventsDirectorySubscriptionRequest = EventsSubscriptionRequest;
-export type EventsDeviceSubscriptionRequest = EventsSubscriptionRequest;
-export type EventsSessionSubscriptionRequest = EventsSubscriptionRequest;
-export type EventsInvocationSubscriptionRequest = EventsSubscriptionRequest;
-export type DirectoryEventQuery = EventsDirectorySubscriptionRequest;
-export type DeviceEventQuery = EventsDeviceSubscriptionRequest;
-export type SessionEventQuery = EventsSessionSubscriptionRequest;
-export type InvocationEventQuery = EventsInvocationSubscriptionRequest;
+export interface DirectoryEventQuery extends EventsSubscriptionRequest {}
+export interface DeviceEventQuery extends EventsSubscriptionRequest {}
+export interface SessionEventQuery extends EventsSubscriptionRequest {}
+export interface InvocationEventQuery extends EventsSubscriptionRequest {}
 
 export interface EventsDeviceEventListRequest extends EventsCarrierBase {
   filter?: EventFilter;
@@ -660,14 +656,14 @@ export interface EventTransport {
 
 export class EventClient {
   constructor(transport: EventTransport);
-  buildDirectorySubscriptionInvocation(request: EventsDirectorySubscriptionRequest): Promise<InvocationDraft>;
-  buildDeviceSubscriptionInvocation(request: EventsDeviceSubscriptionRequest): Promise<InvocationDraft>;
-  buildSessionSubscriptionInvocation(request: EventsSessionSubscriptionRequest): Promise<InvocationDraft>;
-  buildInvocationSubscriptionInvocation(request: EventsInvocationSubscriptionRequest): Promise<InvocationDraft>;
-  subscribeDirectory(request: EventsDirectorySubscriptionRequest): Promise<EventStream>;
-  subscribeDevices(request: EventsDeviceSubscriptionRequest): Promise<EventStream>;
-  subscribeSessions(request: EventsSessionSubscriptionRequest): Promise<EventStream>;
-  subscribeInvocations(request: EventsInvocationSubscriptionRequest): Promise<EventStream>;
+  buildDirectorySubscriptionInvocation(request: DirectoryEventQuery): Promise<InvocationDraft>;
+  buildDeviceSubscriptionInvocation(request: DeviceEventQuery): Promise<InvocationDraft>;
+  buildSessionSubscriptionInvocation(request: SessionEventQuery): Promise<InvocationDraft>;
+  buildInvocationSubscriptionInvocation(request: InvocationEventQuery): Promise<InvocationDraft>;
+  subscribeDirectory(request: DirectoryEventQuery): Promise<EventStream>;
+  subscribeDevices(request: DeviceEventQuery): Promise<EventStream>;
+  subscribeSessions(request: SessionEventQuery): Promise<EventStream>;
+  subscribeInvocations(request: InvocationEventQuery): Promise<EventStream>;
   listDeviceEvents(request: EventsDeviceEventListRequest): Promise<DeviceEventPage>;
   projectDirectoryEvent(input: EventProjectionInput): Promise<DirectoryEvent>;
   projectLiveEvent(input: EventProjectionInput): Promise<EventFrame>;

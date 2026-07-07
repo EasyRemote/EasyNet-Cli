@@ -2145,7 +2145,7 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 
 	events, err := NewEventClient(&sharedEventsTransport{
 		t:                                    t,
-		expectedDirectorySubscriptionRequest: sharedEventsDirectorySubscriptionRequestJSON(t, root),
+		expectedDirectorySubscriptionRequest: sharedDirectoryEventQueryJSON(t, root),
 		expectedDirectoryProjectionInput:     sharedEventsProjectionInputJSON(t, root),
 		expectedDropReportInput:              sharedEventsDropReportInputJSON(t, root),
 		expectedTerminalInput:                sharedEventsTerminalInputJSON(t, root),
@@ -2158,7 +2158,7 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 		t.Fatalf("NewEventClient: %v", err)
 	}
 
-	subscription, err := events.BuildDirectorySubscriptionInvocation(context.Background(), sharedEventsDirectorySubscriptionRequest(t, root))
+	subscription, err := events.BuildDirectorySubscriptionInvocation(context.Background(), sharedDirectoryEventQuery(t, root))
 	if err != nil {
 		t.Fatalf("BuildDirectorySubscriptionInvocation(shared fixture): %v", err)
 	}
@@ -2193,7 +2193,7 @@ func TestGoEventsFacadeExecutesSharedDirectoryStreamConformanceCase(t *testing.T
 		t.Fatalf("unexpected shared events terminal frame: %#v", terminal)
 	}
 
-	incomplete := sharedEventsDirectorySubscriptionRequest(t, root)
+	incomplete := sharedDirectoryEventQuery(t, root)
 	incomplete.CallerURA = ""
 	if _, err := events.BuildDirectorySubscriptionInvocation(context.Background(), incomplete); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("incomplete events carrier did not produce InvalidArgument: %v", err)
@@ -2248,8 +2248,8 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 
 	events, err := NewEventClient(&sharedEventsTransport{
 		t:                                     t,
-		expectedDeviceSubscriptionRequest:     sharedEventsDeviceSubscriptionRequestJSON(t, root),
-		expectedInvocationSubscriptionRequest: sharedEventsInvocationSubscriptionRequestJSON(t, root),
+		expectedDeviceSubscriptionRequest:     sharedDeviceEventQueryJSON(t, root),
+		expectedInvocationSubscriptionRequest: sharedInvocationEventQueryJSON(t, root),
 		expectedDeviceEventListRequest:        sharedEventsDeviceEventListRequestJSON(t, root),
 		expectedDeviceLiveProjectionInput:     sharedEventsLiveProjectionInputJSON(t, root, "event.device-live.v4.json"),
 		expectedInvocationLiveProjectionInput: sharedEventsLiveProjectionInputJSON(t, root, "event.invocation-live.v4.json"),
@@ -2263,7 +2263,7 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 		t.Fatalf("NewEventClient: %v", err)
 	}
 
-	deviceSubscription, err := events.BuildDeviceSubscriptionInvocation(context.Background(), sharedEventsDeviceSubscriptionRequest(t, root))
+	deviceSubscription, err := events.BuildDeviceSubscriptionInvocation(context.Background(), sharedDeviceEventQuery(t, root))
 	if err != nil {
 		t.Fatalf("BuildDeviceSubscriptionInvocation(shared fixture): %v", err)
 	}
@@ -2275,7 +2275,7 @@ func TestGoEventsFacadeExecutesSharedDeviceInvocationHistoryConformanceCase(t *t
 		t.Fatalf("unexpected device subscription args: %#v", args)
 	}
 
-	invocationSubscription, err := events.BuildInvocationSubscriptionInvocation(context.Background(), sharedEventsInvocationSubscriptionRequest(t, root))
+	invocationSubscription, err := events.BuildInvocationSubscriptionInvocation(context.Background(), sharedInvocationEventQuery(t, root))
 	if err != nil {
 		t.Fatalf("BuildInvocationSubscriptionInvocation(shared fixture): %v", err)
 	}
@@ -2326,14 +2326,14 @@ func TestGoEventsFacadeExecutesSharedSessionStreamConformanceCase(t *testing.T) 
 
 	events, err := NewEventClient(&sharedEventsTransport{
 		t:                                  t,
-		expectedSessionSubscriptionRequest: sharedEventsSessionSubscriptionRequestJSON(t, root),
+		expectedSessionSubscriptionRequest: sharedSessionEventQueryJSON(t, root),
 		sessionSubscriptionInvocationJSON:  sharedFixture(t, root, "events-session-subscription-invocation.v4.json"),
 	})
 	if err != nil {
 		t.Fatalf("NewEventClient: %v", err)
 	}
 
-	subscription, err := events.BuildSessionSubscriptionInvocation(context.Background(), sharedEventsSessionSubscriptionRequest(t, root))
+	subscription, err := events.BuildSessionSubscriptionInvocation(context.Background(), sharedSessionEventQuery(t, root))
 	if err != nil {
 		t.Fatalf("BuildSessionSubscriptionInvocation(shared fixture): %v", err)
 	}
@@ -2348,7 +2348,7 @@ func TestGoEventsFacadeExecutesSharedSessionStreamConformanceCase(t *testing.T) 
 		t.Fatalf("unexpected shared events session subscription invocation: %#v", subscription)
 	}
 
-	productSession := sharedEventsSessionSubscriptionRequest(t, root)
+	productSession := sharedSessionEventQuery(t, root)
 	productSession.SessionID = ""
 	productSession.SessionURA = "easynet:///r/example/resource/daemon.browser/run-1"
 	if _, err := events.BuildSessionSubscriptionInvocation(context.Background(), productSession); !IsCode(err, ErrInvalidArgument) {
@@ -4556,18 +4556,18 @@ func sharedControlOnlyGatewayStatus(t *testing.T, root string) []byte {
 	return raw
 }
 
-func sharedEventsDirectorySubscriptionRequest(t *testing.T, root string) EventsDirectorySubscriptionRequest {
+func sharedDirectoryEventQuery(t *testing.T, root string) DirectoryEventQuery {
 	t.Helper()
-	var request EventsDirectorySubscriptionRequest
+	var request DirectoryEventQuery
 	if err := json.Unmarshal(sharedFixture(t, root, "events-directory-subscription-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared events directory subscription request: %v", err)
 	}
 	return request
 }
 
-func sharedEventsDirectorySubscriptionRequestJSON(t *testing.T, root string) []byte {
+func sharedDirectoryEventQueryJSON(t *testing.T, root string) []byte {
 	t.Helper()
-	raw, err := marshalEventsSubscriptionRequest(sharedEventsDirectorySubscriptionRequest(t, root), EventStreamDirectory)
+	raw, err := marshalEventsSubscriptionRequest(EventsSubscriptionRequest(sharedDirectoryEventQuery(t, root)), EventStreamDirectory)
 	if err != nil {
 		t.Fatalf("marshal shared events directory subscription request: %v", err)
 	}
@@ -4604,54 +4604,54 @@ func sharedIdentityAbilityProjectionJSON(t *testing.T, root string) []byte {
 	return raw
 }
 
-func sharedEventsSessionSubscriptionRequest(t *testing.T, root string) EventsSessionSubscriptionRequest {
+func sharedSessionEventQuery(t *testing.T, root string) SessionEventQuery {
 	t.Helper()
-	var request EventsSessionSubscriptionRequest
+	var request SessionEventQuery
 	if err := json.Unmarshal(sharedFixture(t, root, "events-session-subscription-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared events session subscription request: %v", err)
 	}
 	return request
 }
 
-func sharedEventsSessionSubscriptionRequestJSON(t *testing.T, root string) []byte {
+func sharedSessionEventQueryJSON(t *testing.T, root string) []byte {
 	t.Helper()
-	raw, err := marshalEventsSubscriptionRequest(sharedEventsSessionSubscriptionRequest(t, root), EventStreamSession)
+	raw, err := marshalEventsSubscriptionRequest(EventsSubscriptionRequest(sharedSessionEventQuery(t, root)), EventStreamSession)
 	if err != nil {
 		t.Fatalf("marshal shared events session subscription request: %v", err)
 	}
 	return raw
 }
 
-func sharedEventsDeviceSubscriptionRequest(t *testing.T, root string) EventsDeviceSubscriptionRequest {
+func sharedDeviceEventQuery(t *testing.T, root string) DeviceEventQuery {
 	t.Helper()
-	var request EventsDeviceSubscriptionRequest
+	var request DeviceEventQuery
 	if err := json.Unmarshal(sharedFixture(t, root, "events-device-subscription-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared events device subscription request: %v", err)
 	}
 	return request
 }
 
-func sharedEventsDeviceSubscriptionRequestJSON(t *testing.T, root string) []byte {
+func sharedDeviceEventQueryJSON(t *testing.T, root string) []byte {
 	t.Helper()
-	raw, err := marshalEventsSubscriptionRequest(sharedEventsDeviceSubscriptionRequest(t, root), EventStreamDevice)
+	raw, err := marshalEventsSubscriptionRequest(EventsSubscriptionRequest(sharedDeviceEventQuery(t, root)), EventStreamDevice)
 	if err != nil {
 		t.Fatalf("marshal shared events device subscription request: %v", err)
 	}
 	return raw
 }
 
-func sharedEventsInvocationSubscriptionRequest(t *testing.T, root string) EventsInvocationSubscriptionRequest {
+func sharedInvocationEventQuery(t *testing.T, root string) InvocationEventQuery {
 	t.Helper()
-	var request EventsInvocationSubscriptionRequest
+	var request InvocationEventQuery
 	if err := json.Unmarshal(sharedFixture(t, root, "events-invocation-subscription-request.v4.json"), &request); err != nil {
 		t.Fatalf("decode shared events invocation subscription request: %v", err)
 	}
 	return request
 }
 
-func sharedEventsInvocationSubscriptionRequestJSON(t *testing.T, root string) []byte {
+func sharedInvocationEventQueryJSON(t *testing.T, root string) []byte {
 	t.Helper()
-	raw, err := marshalEventsSubscriptionRequest(sharedEventsInvocationSubscriptionRequest(t, root), EventStreamInvocation)
+	raw, err := marshalEventsSubscriptionRequest(EventsSubscriptionRequest(sharedInvocationEventQuery(t, root)), EventStreamInvocation)
 	if err != nil {
 		t.Fatalf("marshal shared events invocation subscription request: %v", err)
 	}

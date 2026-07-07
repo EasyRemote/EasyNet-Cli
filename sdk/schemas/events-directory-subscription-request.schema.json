@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://easynet.run/sdk/schemas/events-directory-subscription-request.schema.json",
-  "title": "EventsDirectorySubscriptionRequest",
+  "title": "DirectoryEventQuery",
   "type": "object",
   "additionalProperties": false,
   "required": [

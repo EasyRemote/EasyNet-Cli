@@ -123,7 +123,7 @@ func TestEventsBuildsDirectorySubscriptionInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), EventsDirectorySubscriptionRequest{
+	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), DirectoryEventQuery{
 		EventsCarrierBase:   eventsBaseForTest(),
 		Realm:               "example",
 		AgentURA:            "easynet:///r/example/agent/alice.main",
@@ -153,7 +153,7 @@ func TestEventsFilterNormalizesIntoSubscriptionRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+	_, err = client.BuildDeviceSubscriptionInvocation(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		Stream:            EventStreamDevice,
 		Filter: &EventFilter{
@@ -179,7 +179,7 @@ func TestEventsFilterConflictFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+	_, err = client.BuildDeviceSubscriptionInvocation(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		Stream:            EventStreamDevice,
 		DeviceURA:         "easynet:///r/example/device/dev-a",
@@ -208,7 +208,7 @@ func TestEventsProjectsFramesAndStream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stream, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	stream, err := client.SubscribeDirectory(context.Background(), DirectoryEventQuery{EventsCarrierBase: eventsBaseForTest()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deviceStream, err := client.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+	deviceStream, err := client.SubscribeDevices(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		DeviceURA:         "easynet:///r/example/device/dev-a",
 		ResumeCursor:      &deviceCursor,
@@ -286,7 +286,7 @@ func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
 		t.Fatalf("device subscription stream not normalized: %#v", transport.seen["subscribe_devices"])
 	}
 
-	sessionStream, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
+	sessionStream, err := client.SubscribeSessions(context.Background(), SessionEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		SessionID:         "sess-1",
 	})
@@ -297,7 +297,7 @@ func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
 		t.Fatalf("unexpected session stream/request: stream=%#v request=%#v", sessionStream, transport.seen["subscribe_sessions"])
 	}
 
-	invocationStream, err := client.SubscribeInvocations(context.Background(), EventsInvocationSubscriptionRequest{
+	invocationStream, err := client.SubscribeInvocations(context.Background(), InvocationEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		InvocationID:      "inv-1",
 	})
@@ -308,7 +308,7 @@ func TestEventsSubscribesDeviceSessionAndInvocationStreams(t *testing.T) {
 		t.Fatalf("unexpected invocation stream/request: stream=%#v request=%#v", invocationStream, transport.seen["subscribe_invocations"])
 	}
 
-	if _, err := client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{EventsCarrierBase: eventsBaseForTest()}); err != nil {
+	if _, err := client.BuildDeviceSubscriptionInvocation(context.Background(), DeviceEventQuery{EventsCarrierBase: eventsBaseForTest()}); err != nil {
 		t.Fatal(err)
 	}
 	if transport.seen["build_device_subscription"]["stream"] != "device" {
@@ -348,26 +348,26 @@ func TestEventsRejectsIncompleteCarrierAndInvalidCursors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := client.BuildDirectorySubscriptionInvocation(context.Background(), EventsDirectorySubscriptionRequest{}); err == nil {
+	if _, err := client.BuildDirectorySubscriptionInvocation(context.Background(), DirectoryEventQuery{}); err == nil {
 		t.Fatal("expected incomplete carrier rejection")
 	}
 	if _, err := NewEventCursor("sessions", 1); err == nil {
 		t.Fatal("expected unsupported stream rejection")
 	}
 	sessionCursor, _ := NewEventCursor("session", 1)
-	if _, err := client.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+	if _, err := client.SubscribeDevices(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		ResumeCursor:      &sessionCursor,
 	}); err == nil {
 		t.Fatal("expected cursor stream mismatch rejection")
 	}
-	if _, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
+	if _, err := client.SubscribeSessions(context.Background(), SessionEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		SessionURA:        "easynet:///r/example/resource/daemon.browser/sess-1",
 	}); err == nil {
 		t.Fatal("expected session_ura rejection")
 	}
-	if _, err := client.SubscribeSessions(context.Background(), EventsSessionSubscriptionRequest{
+	if _, err := client.SubscribeSessions(context.Background(), SessionEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 	}); err == nil {
 		t.Fatal("expected missing session_id rejection")
@@ -402,7 +402,7 @@ func TestEventClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 	if transport.closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", transport.closeCalls)
 	}
-	_, err = client.BuildDirectorySubscriptionInvocation(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	_, err = client.BuildDirectorySubscriptionInvocation(context.Background(), DirectoryEventQuery{EventsCarrierBase: eventsBaseForTest()})
 	if err == nil {
 		t.Fatalf("BuildDirectorySubscriptionInvocation after close succeeded")
 	}

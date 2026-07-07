@@ -32,7 +32,7 @@ func TestRuntimeEventsBuildsDirectorySubscriptionInvocation(t *testing.T) {
 		t.Fatalf("NewEventCursor: %v", err)
 	}
 
-	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), EventsDirectorySubscriptionRequest{
+	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), DirectoryEventQuery{
 		EventsCarrierBase:   eventsBaseForTest(),
 		Realm:               "example",
 		AgentURA:            "easynet:///r/example/agent/alice.main",
@@ -133,7 +133,7 @@ func TestRuntimeEventsMapsStreamAbilitiesAndOpensRuntimeStream(t *testing.T) {
 		t.Fatalf("NewRuntimeEventClient: %v", err)
 	}
 
-	draft, err := client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+	draft, err := client.BuildDeviceSubscriptionInvocation(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		DeviceURA:         "easynet:///r/example/device/dev-a",
 	})
@@ -146,7 +146,7 @@ func TestRuntimeEventsMapsStreamAbilitiesAndOpensRuntimeStream(t *testing.T) {
 	}
 
 	sessionCursor, _ := NewEventCursor("session", 4)
-	sessionDraft, err := client.BuildSessionSubscriptionInvocation(context.Background(), EventsSessionSubscriptionRequest{
+	sessionDraft, err := client.BuildSessionSubscriptionInvocation(context.Background(), SessionEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		SessionID:         "run-1",
 		ResumeCursor:      &sessionCursor,
@@ -164,7 +164,7 @@ func TestRuntimeEventsMapsStreamAbilitiesAndOpensRuntimeStream(t *testing.T) {
 		t.Fatalf("unexpected session event args: draft=%#v args=%#v", sessionDraft, sessionArgs)
 	}
 
-	invocationDraft, err := client.BuildInvocationSubscriptionInvocation(context.Background(), EventsInvocationSubscriptionRequest{
+	invocationDraft, err := client.BuildInvocationSubscriptionInvocation(context.Background(), InvocationEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		InvocationID:      "inv-1",
 	})
@@ -179,7 +179,7 @@ func TestRuntimeEventsMapsStreamAbilitiesAndOpensRuntimeStream(t *testing.T) {
 		t.Fatalf("unexpected invocation event args: draft=%#v args=%#v", invocationDraft, invocationArgs)
 	}
 
-	stream, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	stream, err := client.SubscribeDirectory(context.Background(), DirectoryEventQuery{EventsCarrierBase: eventsBaseForTest()})
 	if err != nil {
 		t.Fatalf("SubscribeDirectory: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestRuntimeEventsProjectsRawDirectoryStreamPayload(t *testing.T) {
 		t.Fatalf("NewRuntimeEventClientWithProjectionProvider: %v", err)
 	}
 
-	stream, err := client.SubscribeDirectory(context.Background(), EventsDirectorySubscriptionRequest{EventsCarrierBase: eventsBaseForTest()})
+	stream, err := client.SubscribeDirectory(context.Background(), DirectoryEventQuery{EventsCarrierBase: eventsBaseForTest()})
 	if err != nil {
 		t.Fatalf("SubscribeDirectory: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestRuntimeEventsProjectsRawDeviceAndInvocationStreamPayloads(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewRuntimeEventClient device: %v", err)
 	}
-	deviceStream, err := deviceClient.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+	deviceStream, err := deviceClient.SubscribeDevices(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		DeviceURA:         "easynet:///r/example/device/dev-a",
 	})
@@ -380,7 +380,7 @@ func TestRuntimeEventsProjectsRawDeviceAndInvocationStreamPayloads(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewRuntimeEventClient invocation: %v", err)
 	}
-	invocationStream, err := invocationClient.SubscribeInvocations(context.Background(), EventsInvocationSubscriptionRequest{
+	invocationStream, err := invocationClient.SubscribeInvocations(context.Background(), InvocationEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		InvocationID:      "inv-1",
 	})

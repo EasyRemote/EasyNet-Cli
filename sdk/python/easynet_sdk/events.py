@@ -195,14 +195,24 @@ class EventsSubscriptionRequest:
         return _json_bytes(value)
 
 
-EventsDirectorySubscriptionRequest = EventsSubscriptionRequest
-EventsDeviceSubscriptionRequest = EventsSubscriptionRequest
-EventsSessionSubscriptionRequest = EventsSubscriptionRequest
-EventsInvocationSubscriptionRequest = EventsSubscriptionRequest
-DirectoryEventQuery = EventsDirectorySubscriptionRequest
-DeviceEventQuery = EventsDeviceSubscriptionRequest
-SessionEventQuery = EventsSessionSubscriptionRequest
-InvocationEventQuery = EventsInvocationSubscriptionRequest
+@dataclass(frozen=True)
+class DirectoryEventQuery(EventsSubscriptionRequest):
+    pass
+
+
+@dataclass(frozen=True)
+class DeviceEventQuery(EventsSubscriptionRequest):
+    pass
+
+
+@dataclass(frozen=True)
+class SessionEventQuery(EventsSubscriptionRequest):
+    pass
+
+
+@dataclass(frozen=True)
+class InvocationEventQuery(EventsSubscriptionRequest):
+    pass
 
 
 @dataclass(frozen=True)
@@ -562,43 +572,43 @@ class EventClient:
         object.__setattr__(self, "_lifecycle", ClientLifecycle("events"))
 
     def build_directory_subscription_invocation(
-        self, request: EventsDirectorySubscriptionRequest
+        self, request: DirectoryEventQuery
     ) -> InvocationDraft:
         self._require_open()
         return self._subscription_invocation(request, _DIRECTORY_STREAM)
 
     def build_device_subscription_invocation(
-        self, request: EventsDeviceSubscriptionRequest
+        self, request: DeviceEventQuery
     ) -> InvocationDraft:
         self._require_open()
         return self._subscription_invocation(request, _DEVICE_STREAM)
 
     def build_session_subscription_invocation(
-        self, request: EventsSessionSubscriptionRequest
+        self, request: SessionEventQuery
     ) -> InvocationDraft:
         self._require_open()
         return self._subscription_invocation(request, _SESSION_STREAM)
 
     def build_invocation_subscription_invocation(
-        self, request: EventsInvocationSubscriptionRequest
+        self, request: InvocationEventQuery
     ) -> InvocationDraft:
         self._require_open()
         return self._subscription_invocation(request, _INVOCATION_STREAM)
 
-    def subscribe_directory(self, request: EventsDirectorySubscriptionRequest) -> EventStream:
+    def subscribe_directory(self, request: DirectoryEventQuery) -> EventStream:
         self._require_open()
         return self._subscribe(request, _DIRECTORY_STREAM)
 
-    def subscribe_devices(self, request: EventsDeviceSubscriptionRequest) -> EventStream:
+    def subscribe_devices(self, request: DeviceEventQuery) -> EventStream:
         self._require_open()
         return self._subscribe(request, _DEVICE_STREAM)
 
-    def subscribe_sessions(self, request: EventsSessionSubscriptionRequest) -> EventStream:
+    def subscribe_sessions(self, request: SessionEventQuery) -> EventStream:
         self._require_open()
         return self._subscribe(request, _SESSION_STREAM)
 
     def subscribe_invocations(
-        self, request: EventsInvocationSubscriptionRequest
+        self, request: InvocationEventQuery
     ) -> EventStream:
         self._require_open()
         return self._subscribe(request, _INVOCATION_STREAM)

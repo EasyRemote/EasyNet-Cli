@@ -27,7 +27,7 @@ func TestCABIEventsTransportBuildsCarriersAndProjectsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventCursor: %v", err)
 	}
-	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), EventsDirectorySubscriptionRequest{
+	draft, err := client.BuildDirectorySubscriptionInvocation(context.Background(), DirectoryEventQuery{
 		EventsCarrierBase:   eventsBaseForTest(),
 		Realm:               "example",
 		AgentURA:            "easynet:///r/example/agent/alice.main",
@@ -45,7 +45,7 @@ func TestCABIEventsTransportBuildsCarriersAndProjectsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventCursor(session): %v", err)
 	}
-	sessionDraft, err := client.BuildSessionSubscriptionInvocation(context.Background(), EventsSessionSubscriptionRequest{
+	sessionDraft, err := client.BuildSessionSubscriptionInvocation(context.Background(), SessionEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		SessionID:         "run-1",
 		ResumeCursor:      &sessionCursor,
@@ -61,7 +61,7 @@ func TestCABIEventsTransportBuildsCarriersAndProjectsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEventCursor(device): %v", err)
 	}
-	deviceDraft, err := client.BuildDeviceSubscriptionInvocation(context.Background(), EventsDeviceSubscriptionRequest{
+	deviceDraft, err := client.BuildDeviceSubscriptionInvocation(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		DeviceURA:         "easynet:///r/example/device/dev-a",
 		ResumeCursor:      &deviceCursor,
@@ -73,7 +73,7 @@ func TestCABIEventsTransportBuildsCarriersAndProjectsFrames(t *testing.T) {
 		t.Fatalf("device descriptor_ref = %q", deviceDraft.DescriptorRef())
 	}
 
-	invocationDraft, err := client.BuildInvocationSubscriptionInvocation(context.Background(), EventsInvocationSubscriptionRequest{
+	invocationDraft, err := client.BuildInvocationSubscriptionInvocation(context.Background(), InvocationEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		InvocationID:      "inv-1",
 	})
@@ -146,7 +146,7 @@ func TestCABIEventsTransportStreamsThroughRuntimeCoreAndCloses(t *testing.T) {
 		t.Fatalf("NewCABIEventClient: %v", err)
 	}
 
-	stream, err := client.SubscribeDevices(context.Background(), EventsDeviceSubscriptionRequest{
+	stream, err := client.SubscribeDevices(context.Background(), DeviceEventQuery{
 		EventsCarrierBase: eventsBaseForTest(),
 		DeviceURA:         "easynet:///r/example/device/dev-a",
 	})

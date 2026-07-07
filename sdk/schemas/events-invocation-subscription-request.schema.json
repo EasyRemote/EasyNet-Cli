@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://easynet.run/sdk/schemas/events-invocation-subscription-request.schema.json",
-  "title": "EventsInvocationSubscriptionRequest",
+  "title": "InvocationEventQuery",
   "type": "object",
   "additionalProperties": false,
   "required": [

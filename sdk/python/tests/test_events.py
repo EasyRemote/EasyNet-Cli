@@ -16,10 +16,10 @@ from easynet_sdk.events import (
     EventTerminalInput,
     EventsCarrierBase,
     EventsDeviceEventListRequest,
-    EventsDeviceSubscriptionRequest,
-    EventsDirectorySubscriptionRequest,
-    EventsInvocationSubscriptionRequest,
-    EventsSessionSubscriptionRequest,
+    DeviceEventQuery,
+    DirectoryEventQuery,
+    InvocationEventQuery,
+    SessionEventQuery,
 )
 from easynet_sdk.stream import StreamHandle
 
@@ -339,7 +339,7 @@ class EventClientTests(unittest.TestCase):
         client = EventClient(transport)
 
         draft = client.build_directory_subscription_invocation(
-            EventsDirectorySubscriptionRequest(
+            DirectoryEventQuery(
                 events_base(),
                 realm="example",
                 agent_ura="easynet:///r/example/agent/alice.main",
@@ -362,7 +362,7 @@ class EventClientTests(unittest.TestCase):
         client = EventClient(transport)
 
         client.build_device_subscription_invocation(
-            EventsDeviceSubscriptionRequest(
+            DeviceEventQuery(
                 events_base(),
                 stream="device",
                 filter=EventFilter(device_ura="easynet:///r/example/device/dev-a"),
@@ -384,7 +384,7 @@ class EventClientTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as caught:
             client.build_device_subscription_invocation(
-                EventsDeviceSubscriptionRequest(
+                DeviceEventQuery(
                     events_base(),
                     stream="device",
                     device_ura="easynet:///r/example/device/dev-a",
@@ -398,7 +398,7 @@ class EventClientTests(unittest.TestCase):
         client = EventClient(MemoryEventTransport())
 
         stream = client.subscribe_directory(
-            EventsDirectorySubscriptionRequest(events_base())
+            DirectoryEventQuery(events_base())
         )
         self.assertEqual(stream.stream, "directory")
         self.assertEqual(stream.state, "Open")
@@ -565,7 +565,7 @@ class EventClientTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as caught:
             client.subscribe_sessions(
-                EventsSessionSubscriptionRequest(
+                SessionEventQuery(
                     events_base(),
                     session_ura="easynet:///r/example/resource/daemon.browser/run-1",
                 )
@@ -577,7 +577,7 @@ class EventClientTests(unittest.TestCase):
         )
 
         with self.assertRaises(SDKError) as caught:
-            client.subscribe_sessions(EventsSessionSubscriptionRequest(events_base()))
+            client.subscribe_sessions(SessionEventQuery(events_base()))
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIn("session_id is required", caught.exception.message)
 
@@ -586,7 +586,7 @@ class EventClientTests(unittest.TestCase):
         client = EventClient(transport)
 
         device_stream = client.subscribe_devices(
-            EventsDeviceSubscriptionRequest(
+            DeviceEventQuery(
                 events_base(),
                 device_ura="easynet:///r/example/device/dev-a",
                 resume_cursor=EventCursor("device", 2),
@@ -596,7 +596,7 @@ class EventClientTests(unittest.TestCase):
         self.assertEqual(transport.seen["subscribe_devices"]["stream"], "device")
 
         session_stream = client.subscribe_sessions(
-            EventsSessionSubscriptionRequest(
+            SessionEventQuery(
                 events_base(),
                 session_id="run-1",
                 resume_cursor=EventCursor("session", 4),
@@ -610,7 +610,7 @@ class EventClientTests(unittest.TestCase):
         )
 
         invocation_stream = client.subscribe_invocations(
-            EventsInvocationSubscriptionRequest(events_base(), invocation_id="inv-1")
+            InvocationEventQuery(events_base(), invocation_id="inv-1")
         )
         self.assertEqual(invocation_stream.stream, "invocation")
         self.assertEqual(
@@ -618,7 +618,7 @@ class EventClientTests(unittest.TestCase):
         )
 
         client.build_device_subscription_invocation(
-            EventsDeviceSubscriptionRequest(events_base())
+            DeviceEventQuery(events_base())
         )
         self.assertEqual(transport.seen["build_device_subscription"]["stream"], "device")
 
@@ -644,7 +644,7 @@ class EventClientTests(unittest.TestCase):
 
         with self.assertRaises(Exception):
             client.build_directory_subscription_invocation(
-                EventsDirectorySubscriptionRequest(
+                DirectoryEventQuery(
                     EventsCarrierBase("", "", "", "", "", {})
                 )
             )
@@ -652,7 +652,7 @@ class EventClientTests(unittest.TestCase):
             EventCursor("sessions", 1).to_json_dict()
         with self.assertRaises(Exception):
             client.subscribe_devices(
-                EventsDeviceSubscriptionRequest(
+                DeviceEventQuery(
                     events_base(),
                     resume_cursor=EventCursor("session", 1),
                 )
@@ -682,7 +682,7 @@ class EventClientTests(unittest.TestCase):
         self.assertEqual(transport.close_calls, 1)
         with self.assertRaises(SDKError) as caught:
             client.build_directory_subscription_invocation(
-                EventsDirectorySubscriptionRequest(events_base())
+                DirectoryEventQuery(events_base())
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(transport.seen, {})

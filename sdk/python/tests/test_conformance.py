@@ -62,10 +62,10 @@ from easynet_sdk import (
     EventTerminalInput,
     EventsCarrierBase,
     EventsDeviceEventListRequest,
-    EventsDeviceSubscriptionRequest,
-    EventsDirectorySubscriptionRequest,
-    EventsInvocationSubscriptionRequest,
-    EventsSessionSubscriptionRequest,
+    DeviceEventQuery,
+    DirectoryEventQuery,
+    InvocationEventQuery,
+    SessionEventQuery,
     GatewayStatus,
     HOST_STREAM_FRAME_SCHEMA,
     HOST_STREAM_HASH_ALGORITHM,
@@ -3490,7 +3490,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         request = shared_events_directory_subscription_request()
         with self.assertRaises(SDKError) as caught:
             events.build_directory_subscription_invocation(
-                EventsDirectorySubscriptionRequest(
+                DirectoryEventQuery(
                     base=EventsCarrierBase(
                         caller_ura="",
                         callee_ura=request.base.callee_ura,
@@ -3563,7 +3563,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         product_session = shared_events_session_subscription_request()
         with self.assertRaises(SDKError) as caught:
             events.build_session_subscription_invocation(
-                EventsSessionSubscriptionRequest(
+                SessionEventQuery(
                     base=product_session.base,
                     stream="session",
                     session_ura="easynet:///r/example/resource/daemon.browser/run-1",
@@ -5313,10 +5313,10 @@ def shared_events_carrier_base(fixture: str) -> EventsCarrierBase:
     )
 
 
-def shared_events_directory_subscription_request() -> EventsDirectorySubscriptionRequest:
+def shared_events_directory_subscription_request() -> DirectoryEventQuery:
     decoded = json.loads(shared_fixture("events-directory-subscription-request.v4.json"))
     cursor = decoded.get("resume_cursor")
-    return EventsDirectorySubscriptionRequest(
+    return DirectoryEventQuery(
         base=shared_events_carrier_base(
             "events-directory-subscription-request.v4.json"
         ),
@@ -5331,10 +5331,10 @@ def shared_events_directory_subscription_request_json() -> bytes:
     return shared_events_directory_subscription_request().to_json_bytes("directory")
 
 
-def shared_events_session_subscription_request() -> EventsSessionSubscriptionRequest:
+def shared_events_session_subscription_request() -> SessionEventQuery:
     decoded = json.loads(shared_fixture("events-session-subscription-request.v4.json"))
     cursor = decoded.get("resume_cursor")
-    return EventsSessionSubscriptionRequest(
+    return SessionEventQuery(
         base=shared_events_carrier_base(
             "events-session-subscription-request.v4.json"
         ),
@@ -5348,10 +5348,10 @@ def shared_events_session_subscription_request_json() -> bytes:
     return shared_events_session_subscription_request().to_json_bytes("session")
 
 
-def shared_events_device_subscription_request() -> EventsDeviceSubscriptionRequest:
+def shared_events_device_subscription_request() -> DeviceEventQuery:
     decoded = json.loads(shared_fixture("events-device-subscription-request.v4.json"))
     cursor = decoded.get("resume_cursor")
-    return EventsDeviceSubscriptionRequest(
+    return DeviceEventQuery(
         base=shared_events_carrier_base(
             "events-device-subscription-request.v4.json"
         ),
@@ -5367,12 +5367,12 @@ def shared_events_device_subscription_request_json() -> bytes:
     return shared_events_device_subscription_request().to_json_bytes("device")
 
 
-def shared_events_invocation_subscription_request() -> EventsInvocationSubscriptionRequest:
+def shared_events_invocation_subscription_request() -> InvocationEventQuery:
     decoded = json.loads(
         shared_fixture("events-invocation-subscription-request.v4.json")
     )
     cursor = decoded.get("resume_cursor")
-    return EventsInvocationSubscriptionRequest(
+    return InvocationEventQuery(
         base=shared_events_carrier_base(
             "events-invocation-subscription-request.v4.json"
         ),

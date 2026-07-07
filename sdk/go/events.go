@@ -80,14 +80,10 @@ type EventsSubscriptionRequest struct {
 	HeartbeatIntervalMS int             `json:"heartbeat_interval_ms,omitempty"`
 }
 
-type EventsDirectorySubscriptionRequest = EventsSubscriptionRequest
-type EventsDeviceSubscriptionRequest = EventsSubscriptionRequest
-type EventsSessionSubscriptionRequest = EventsSubscriptionRequest
-type EventsInvocationSubscriptionRequest = EventsSubscriptionRequest
-type DirectoryEventQuery = EventsDirectorySubscriptionRequest
-type DeviceEventQuery = EventsDeviceSubscriptionRequest
-type SessionEventQuery = EventsSessionSubscriptionRequest
-type InvocationEventQuery = EventsInvocationSubscriptionRequest
+type DirectoryEventQuery EventsSubscriptionRequest
+type DeviceEventQuery EventsSubscriptionRequest
+type SessionEventQuery EventsSubscriptionRequest
+type InvocationEventQuery EventsSubscriptionRequest
 
 // EventsDeviceEventListRequest requests a bounded historical device-event page.
 type EventsDeviceEventListRequest struct {
@@ -143,14 +139,14 @@ type EventTerminalInput struct {
 
 // EventStream is the Events profile subscription state seam.
 type EventStream struct {
-	Stream           string         `json:"stream"`
-	StreamID         string         `json:"stream_id,omitempty"`
-	State            string         `json:"state"`
-	ResumeToken      string         `json:"resume_token,omitempty"`
-	Metadata         map[string]any `json:"metadata"`
-	handle           *StreamHandle  `json:"-"`
-	projectLive      func(context.Context, EventProjectionInput) (EventFrame, error)
-	release          func(string) `json:"-"`
+	Stream      string         `json:"stream"`
+	StreamID    string         `json:"stream_id,omitempty"`
+	State       string         `json:"state"`
+	ResumeToken string         `json:"resume_token,omitempty"`
+	Metadata    map[string]any `json:"metadata"`
+	handle      *StreamHandle  `json:"-"`
+	projectLive func(context.Context, EventProjectionInput) (EventFrame, error)
+	release     func(string) `json:"-"`
 }
 
 type EventFrame struct {
@@ -326,36 +322,36 @@ func NewEventClient(transport EventTransport) (*EventClient, error) {
 	return &EventClient{transport: transport}, nil
 }
 
-func (c *EventClient) BuildDirectorySubscriptionInvocation(ctx context.Context, req EventsDirectorySubscriptionRequest) (InvocationDraft, error) {
-	return c.buildSubscriptionInvocation(ctx, req, EventStreamDirectory)
+func (c *EventClient) BuildDirectorySubscriptionInvocation(ctx context.Context, req DirectoryEventQuery) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, EventsSubscriptionRequest(req), EventStreamDirectory)
 }
 
-func (c *EventClient) BuildDeviceSubscriptionInvocation(ctx context.Context, req EventsDeviceSubscriptionRequest) (InvocationDraft, error) {
-	return c.buildSubscriptionInvocation(ctx, req, EventStreamDevice)
+func (c *EventClient) BuildDeviceSubscriptionInvocation(ctx context.Context, req DeviceEventQuery) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, EventsSubscriptionRequest(req), EventStreamDevice)
 }
 
-func (c *EventClient) BuildSessionSubscriptionInvocation(ctx context.Context, req EventsSessionSubscriptionRequest) (InvocationDraft, error) {
-	return c.buildSubscriptionInvocation(ctx, req, EventStreamSession)
+func (c *EventClient) BuildSessionSubscriptionInvocation(ctx context.Context, req SessionEventQuery) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, EventsSubscriptionRequest(req), EventStreamSession)
 }
 
-func (c *EventClient) BuildInvocationSubscriptionInvocation(ctx context.Context, req EventsInvocationSubscriptionRequest) (InvocationDraft, error) {
-	return c.buildSubscriptionInvocation(ctx, req, EventStreamInvocation)
+func (c *EventClient) BuildInvocationSubscriptionInvocation(ctx context.Context, req InvocationEventQuery) (InvocationDraft, error) {
+	return c.buildSubscriptionInvocation(ctx, EventsSubscriptionRequest(req), EventStreamInvocation)
 }
 
-func (c *EventClient) SubscribeDirectory(ctx context.Context, req EventsDirectorySubscriptionRequest) (EventStream, error) {
-	return c.subscribe(ctx, req, EventStreamDirectory)
+func (c *EventClient) SubscribeDirectory(ctx context.Context, req DirectoryEventQuery) (EventStream, error) {
+	return c.subscribe(ctx, EventsSubscriptionRequest(req), EventStreamDirectory)
 }
 
-func (c *EventClient) SubscribeDevices(ctx context.Context, req EventsDeviceSubscriptionRequest) (EventStream, error) {
-	return c.subscribe(ctx, req, EventStreamDevice)
+func (c *EventClient) SubscribeDevices(ctx context.Context, req DeviceEventQuery) (EventStream, error) {
+	return c.subscribe(ctx, EventsSubscriptionRequest(req), EventStreamDevice)
 }
 
-func (c *EventClient) SubscribeSessions(ctx context.Context, req EventsSessionSubscriptionRequest) (EventStream, error) {
-	return c.subscribe(ctx, req, EventStreamSession)
+func (c *EventClient) SubscribeSessions(ctx context.Context, req SessionEventQuery) (EventStream, error) {
+	return c.subscribe(ctx, EventsSubscriptionRequest(req), EventStreamSession)
 }
 
-func (c *EventClient) SubscribeInvocations(ctx context.Context, req EventsInvocationSubscriptionRequest) (EventStream, error) {
-	return c.subscribe(ctx, req, EventStreamInvocation)
+func (c *EventClient) SubscribeInvocations(ctx context.Context, req InvocationEventQuery) (EventStream, error) {
+	return c.subscribe(ctx, EventsSubscriptionRequest(req), EventStreamInvocation)
 }
 
 func (c *EventClient) ListDeviceEvents(ctx context.Context, req EventsDeviceEventListRequest) (DeviceEventPage, error) {

@@ -49,10 +49,10 @@ from easynet_sdk import (
     EventCursor,
     EventsCarrierBase,
     EventsDeviceEventListRequest,
-    EventsDeviceSubscriptionRequest,
-    EventsDirectorySubscriptionRequest,
-    EventsInvocationSubscriptionRequest,
-    EventsSessionSubscriptionRequest,
+    DeviceEventQuery,
+    DirectoryEventQuery,
+    InvocationEventQuery,
+    SessionEventQuery,
     HealthClient,
     IdentityCarrierBase,
     IdentityClient,
@@ -3804,7 +3804,7 @@ class CABITransportTests(unittest.TestCase):
         client = EventClient(CABIEventTransport(lib, handle=7))
 
         stream = client.subscribe_directory(
-            EventsDirectorySubscriptionRequest(
+            DirectoryEventQuery(
                 EventsCarrierBase(
                     caller_ura="easynet:///r/example/agent/alice.sdk",
                     callee_ura="easynet:///r/example/device/dev-a",
@@ -3860,7 +3860,7 @@ class CABITransportTests(unittest.TestCase):
         )
 
         draft = client.build_session_subscription_invocation(
-            EventsSessionSubscriptionRequest(
+            SessionEventQuery(
                 base,
                 stream="session",
                 session_id="run-1",
@@ -3868,7 +3868,7 @@ class CABITransportTests(unittest.TestCase):
             )
         )
         stream = client.subscribe_sessions(
-            EventsSessionSubscriptionRequest(
+            SessionEventQuery(
                 base,
                 stream="session",
                 session_id="run-1",
@@ -3917,14 +3917,14 @@ class CABITransportTests(unittest.TestCase):
         )
 
         device_stream = client.subscribe_devices(
-            EventsDeviceSubscriptionRequest(
+            DeviceEventQuery(
                 base,
                 device_ura="easynet:///r/example/device/dev-a",
                 resume_cursor=EventCursor("device", 2),
             )
         )
         invocation_stream = client.subscribe_invocations(
-            EventsInvocationSubscriptionRequest(base, invocation_id="inv-1")
+            InvocationEventQuery(base, invocation_id="inv-1")
         )
 
         self.assertEqual(device_stream.stream, "device")
@@ -3996,7 +3996,7 @@ class CABITransportTests(unittest.TestCase):
         client = EventClient(CABIEventTransport(lib, handle=7))
 
         client.subscribe_directory(
-            EventsDirectorySubscriptionRequest(
+            DirectoryEventQuery(
                 EventsCarrierBase(
                     caller_ura="easynet:///r/example/agent/alice.sdk",
                     callee_ura="easynet:///r/example/device/dev-a",

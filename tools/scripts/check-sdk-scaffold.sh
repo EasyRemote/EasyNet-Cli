@@ -27,6 +27,14 @@ require_literal() {
   fi
 }
 
+reject_literal() {
+  local path="$1"
+  local literal="$2"
+  if [[ -f "$ROOT/$path" ]] && grep -Fq "$literal" "$ROOT/$path"; then
+    fail "forbidden literal in $path: $literal"
+  fi
+}
+
 validate_json_file() {
   local path="$1"
   if ! python3 -m json.tool "$ROOT/$path" >/dev/null 2>&1; then
@@ -967,10 +975,14 @@ require_literal sdk/go/admin.go "DeviceSession"
 require_literal sdk/go/events.go "EventClient"
 require_literal sdk/go/events.go "EventTransport"
 require_literal sdk/go/events.go "EventsSubscriptionRequest"
-require_literal sdk/go/events.go "EventsDirectorySubscriptionRequest"
-require_literal sdk/go/events.go "EventsDeviceSubscriptionRequest"
-require_literal sdk/go/events.go "EventsSessionSubscriptionRequest"
-require_literal sdk/go/events.go "EventsInvocationSubscriptionRequest"
+require_literal sdk/go/events.go "DirectoryEventQuery"
+require_literal sdk/go/events.go "DeviceEventQuery"
+require_literal sdk/go/events.go "SessionEventQuery"
+require_literal sdk/go/events.go "InvocationEventQuery"
+reject_literal sdk/go/events.go "EventsDirectorySubscriptionRequest"
+reject_literal sdk/go/events.go "EventsDeviceSubscriptionRequest"
+reject_literal sdk/go/events.go "EventsSessionSubscriptionRequest"
+reject_literal sdk/go/events.go "EventsInvocationSubscriptionRequest"
 require_literal sdk/go/events.go "EventsDeviceEventListRequest"
 require_literal sdk/go/events.go "DeviceEventPage"
 require_literal sdk/go/events.go "EventFrame"
@@ -1129,10 +1141,14 @@ require_literal sdk/python/easynet_sdk/admin.py "DeviceSession"
 require_literal sdk/python/easynet_sdk/events.py "EventClient"
 require_literal sdk/python/easynet_sdk/events.py "EventTransport"
 require_literal sdk/python/easynet_sdk/events.py "EventsSubscriptionRequest"
-require_literal sdk/python/easynet_sdk/events.py "EventsDirectorySubscriptionRequest"
-require_literal sdk/python/easynet_sdk/events.py "EventsDeviceSubscriptionRequest"
-require_literal sdk/python/easynet_sdk/events.py "EventsSessionSubscriptionRequest"
-require_literal sdk/python/easynet_sdk/events.py "EventsInvocationSubscriptionRequest"
+require_literal sdk/python/easynet_sdk/events.py "DirectoryEventQuery"
+require_literal sdk/python/easynet_sdk/events.py "DeviceEventQuery"
+require_literal sdk/python/easynet_sdk/events.py "SessionEventQuery"
+require_literal sdk/python/easynet_sdk/events.py "InvocationEventQuery"
+reject_literal sdk/python/easynet_sdk/events.py "EventsDirectorySubscriptionRequest"
+reject_literal sdk/python/easynet_sdk/events.py "EventsDeviceSubscriptionRequest"
+reject_literal sdk/python/easynet_sdk/events.py "EventsSessionSubscriptionRequest"
+reject_literal sdk/python/easynet_sdk/events.py "EventsInvocationSubscriptionRequest"
 require_literal sdk/python/easynet_sdk/events.py "EventsDeviceEventListRequest"
 require_literal sdk/python/easynet_sdk/events.py "DeviceEventPage"
 require_literal sdk/python/easynet_sdk/events.py "EventFrame"
