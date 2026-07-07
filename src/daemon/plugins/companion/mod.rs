@@ -325,6 +325,7 @@ impl DesktopCompanionManager {
             }
         }
         if desired == CompanionDesiredState::Enabled && was_running {
+            self.supervisor.stop(&plan)?;
             self.supervisor.start(&plan)?;
         }
         let after = self.status_for_plan(&plan).ok();
@@ -705,6 +706,78 @@ mod tests {
         assert_eq!(error["message"], "status_file_invalid");
     }
 
+    #[test]
+    fn running_package_update_restarts_with_stop_then_start() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(state_root.path().join("state.toml")),
+        );
+        let previous = previous_status("running");
+
+        let result = manager
+            .commit_package_update(&package, Some(&previous))
+            .expect("update");
+
+        assert_eq!(result["action"], "restart");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["install", "enable", "stop", "start"]
+        );
+    }
+
+    #[test]
+    fn stopped_package_update_preserves_desired_without_restart() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(state_root.path().join("state.toml")),
+        );
+        let previous = previous_status("not_running");
+
+        let result = manager
+            .commit_package_update(&package, Some(&previous))
+            .expect("update");
+
+        assert_eq!(result["action"], "install");
+        assert_eq!(*calls.lock().expect("calls"), vec!["install", "enable"]);
+    }
+
+    fn previous_status(observed_state: &str) -> DesktopCompanionStatus {
+        DesktopCompanionStatus {
+            package_id: "test.desktop.menubar".to_string(),
+            package_version: "0.1.0".to_string(),
+            display_name: "EasyNet Menu Bar".to_string(),
+            platform: "macos".to_string(),
+            desired_state: "enabled".to_string(),
+            supervisor_state: "installed_enabled".to_string(),
+            observed_state: observed_state.to_string(),
+            projected_state: "running".to_string(),
+            boot_policy: "ensure_running_after_daemon_ready".to_string(),
+            stop_policy: "keep_running".to_string(),
+            health: "status_file".to_string(),
+            pid: None,
+            version: None,
+            last_seen_unix_ms: None,
+            launch_method: Some("launch_agent".to_string()),
+            error: None,
+        }
+    }
+
     fn test_manager(state_path: std::path::PathBuf, fail_start: bool) -> DesktopCompanionManager {
         DesktopCompanionManager::new(
             DesktopCompanionPlanner::new("macos"),
@@ -715,6 +788,67 @@ mod tests {
 
     struct TestCompanionSupervisor {
         fail_start: bool,
+    }
+
+    struct RecordingSupervisor {
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingSupervisor {
+        fn record(&self, action: &'static str) {
+            self.calls.lock().expect("calls").push(action);
+        }
+    }
+
+    impl DesktopCompanionSupervisor for RecordingSupervisor {
+        fn platform(&self) -> &'static str {
+            "macos"
+        }
+
+        fn probe_session(&self) -> CompanionSessionStatus {
+            CompanionSessionStatus::Available
+        }
+
+        fn install(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("install");
+            Ok(CompanionActionReport::changed("installed"))
+        }
+
+        fn enable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("enable");
+            Ok(CompanionActionReport::changed("enabled"))
+        }
+
+        fn disable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("disable");
+            Ok(CompanionActionReport::changed("disabled"))
+        }
+
+        fn remove(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("remove");
+            Ok(CompanionActionReport::changed("removed"))
+        }
+
+        fn start(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("start");
+            Ok(CompanionActionReport::changed("started"))
+        }
+
+        fn stop(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("stop");
+            Ok(CompanionActionReport::changed("stopped"))
+        }
+
+        fn supervisor_state(&self, _plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
+            CompanionSupervisorState::InstalledEnabled
+        }
+
+        fn observe(&self, _plan: &DesktopCompanionPlan) -> CompanionObservation {
+            CompanionObservation {
+                observed_state: CompanionObservedState::NotRunning,
+                ..CompanionObservation::default()
+            }
+        }
     }
 
     impl DesktopCompanionSupervisor for TestCompanionSupervisor {
