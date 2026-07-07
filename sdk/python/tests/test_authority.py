@@ -46,11 +46,10 @@ class AuthorityTests(unittest.TestCase):
     def test_session_authority_metadata_projects_typed_authority(self) -> None:
         value = _authority_metadata(
             {
-                "backend_ura": "easynet:///r/example/agent/backend",
-                "user_ura": "easynet:///r/example/user/alice",
-                "session_id": "sa-example",
+                "issuer_ura": "easynet:///r/example/agent/backend",
+                "subject_ura": "easynet:///r/example/user/alice",
+                "audience": "easynet:///r/example/device/dev-a",
                 "scopes": ["device.observe.*"],
-                "audiences": ["easynet:///r/example/device/dev-a"],
                 "issued_at_ms": 1000,
                 "expires_at_ms": 2000,
             },
@@ -59,8 +58,8 @@ class AuthorityTests(unittest.TestCase):
 
         authority = SessionAuthority.from_metadata(value)
 
-        self.assertEqual(authority.backend_ura, "easynet:///r/example/agent/backend")
-        self.assertEqual(authority.session_id, "sa-example")
+        self.assertEqual(authority.issuer_ura, "easynet:///r/example/agent/backend")
+        self.assertEqual(authority.subject_ura, "easynet:///r/example/user/alice")
         self.assertEqual(authority.signature, b"session-signature")
         metadata = authority.metadata()
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
@@ -167,11 +166,10 @@ class AuthorityTests(unittest.TestCase):
     def test_authority_client_mints_session_through_transport(self) -> None:
         value = _authority_metadata(
             {
-                "backend_ura": "easynet:///r/example/agent/backend",
-                "user_ura": "easynet:///r/example/user/alice",
-                "session_id": "sa-example",
+                "issuer_ura": "easynet:///r/example/agent/backend",
+                "subject_ura": "easynet:///r/example/user/alice",
+                "audience": "easynet:///r/example/device/dev-a",
                 "scopes": ["device.observe.*"],
-                "audiences": ["easynet:///r/example/device/dev-a"],
                 "issued_at_ms": 1000,
                 "expires_at_ms": 2000,
             },
@@ -186,19 +184,18 @@ class AuthorityTests(unittest.TestCase):
 
         authority = client.mint_session_authority(
             SessionAuthorityRequest(
-                backend_ura="easynet:///r/example/agent/backend",
-                user_ura="easynet:///r/example/user/alice",
-                session_id="sa-example",
+                issuer_ura="easynet:///r/example/agent/backend",
+                subject_ura="easynet:///r/example/user/alice",
+                audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
-                audiences=("easynet:///r/example/device/dev-a",),
                 issued_at_ms=1000,
                 expires_at_ms=2000,
             )
         )
 
-        self.assertEqual(authority.session_id, "sa-example")
+        self.assertEqual(authority.audience, "easynet:///r/example/device/dev-a")
         self.assertEqual(authority.metadata().value, value)
-        self.assertEqual(transport.seen_session["session_id"], "sa-example")
+        self.assertEqual(transport.seen_session["audience"], "easynet:///r/example/device/dev-a")
 
     def test_authority_client_rejects_invalid_mint_before_transport(self) -> None:
         transport = _MemoryAuthorityTransport()
@@ -222,11 +219,10 @@ class AuthorityTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             client.mint_session_authority(
                 SessionAuthorityRequest(
-                    backend_ura="easynet:///r/example/agent/backend",
-                    user_ura="easynet:///r/example/user/alice",
-                    session_id="sa-example",
+                    issuer_ura="easynet:///r/example/agent/backend",
+                    subject_ura="easynet:///r/example/user/alice",
+                    audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
-                    audiences=("easynet:///r/example/device/dev-a",),
                     issued_at_ms=2000,
                     expires_at_ms=1000,
                 )
@@ -249,11 +245,10 @@ class AuthorityTests(unittest.TestCase):
         )
         session_value = _authority_metadata(
             {
-                "backend_ura": "easynet:///r/example/agent/backend",
-                "user_ura": "easynet:///r/example/user/alice",
-                "session_id": "sa-example",
+                "issuer_ura": "easynet:///r/example/agent/backend",
+                "subject_ura": "easynet:///r/example/user/alice",
+                "audience": "easynet:///r/example/device/dev-a",
                 "scopes": ["device.observe.*"],
-                "audiences": ["easynet:///r/example/device/dev-a"],
                 "issued_at_ms": 1000,
                 "expires_at_ms": 2000,
             },
@@ -283,11 +278,10 @@ class AuthorityTests(unittest.TestCase):
         )
         session = client.mint_session_authority(
             SessionAuthorityRequest(
-                backend_ura="easynet:///r/example/agent/backend",
-                user_ura="easynet:///r/example/user/alice",
-                session_id="sa-example",
+                issuer_ura="easynet:///r/example/agent/backend",
+                subject_ura="easynet:///r/example/user/alice",
+                audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
-                audiences=("easynet:///r/example/device/dev-a",),
                 issued_at_ms=1000,
                 expires_at_ms=2000,
             )
@@ -412,8 +406,8 @@ class _FakeCABIAuthorityLibrary:
                 "metadata_key": SESSION_AUTHORITY_METADATA_KEY,
                 "canonical_bytes_base64": base64.b64encode(b"canonical").decode("ascii"),
                 "canonical_hash_hex": "b" * 64,
-                "signed_fields": ["backend_ura"],
-                "payload": {"backend_ura": "easynet:///r/example/agent/backend"},
+                "signed_fields": ["issuer_ura"],
+                "payload": {"issuer_ura": "easynet:///r/example/agent/backend"},
             }
         ).encode("utf-8")
 

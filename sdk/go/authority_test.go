@@ -39,11 +39,10 @@ func TestDelegationProofFromMetadataProjectsTypedAuthority(t *testing.T) {
 
 func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	value := authorityMetadataFixture(t, map[string]any{
-		"backend_ura":   "easynet:///r/example/agent/backend",
-		"user_ura":      "easynet:///r/example/user/alice",
-		"session_id":    "sa-example",
+		"issuer_ura":    "easynet:///r/example/agent/backend",
+		"subject_ura":   "easynet:///r/example/user/alice",
+		"audience":      "easynet:///r/example/device/dev-a",
 		"scopes":        []string{"device.observe.*"},
-		"audiences":     []string{"easynet:///r/example/device/dev-a"},
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
 	}, []byte("session-signature"))
@@ -52,7 +51,7 @@ func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSessionAuthorityFromMetadata: %v", err)
 	}
-	if authority.BackendURA != "easynet:///r/example/agent/backend" || authority.SessionID != "sa-example" {
+	if authority.IssuerURA != "easynet:///r/example/agent/backend" || authority.SubjectURA != "easynet:///r/example/user/alice" {
 		t.Fatalf("unexpected session authority projection: %#v", authority)
 	}
 	metadata, err := authority.Metadata()
@@ -162,11 +161,10 @@ func TestAuthorityClientMintsDelegationThroughTransport(t *testing.T) {
 
 func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 	value := authorityMetadataFixture(t, map[string]any{
-		"backend_ura":   "easynet:///r/example/agent/backend",
-		"user_ura":      "easynet:///r/example/user/alice",
-		"session_id":    "sa-example",
+		"issuer_ura":    "easynet:///r/example/agent/backend",
+		"subject_ura":   "easynet:///r/example/user/alice",
+		"audience":      "easynet:///r/example/device/dev-a",
 		"scopes":        []string{"device.observe.*"},
-		"audiences":     []string{"easynet:///r/example/device/dev-a"},
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
 	}, []byte("session-signature"))
@@ -179,21 +177,20 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 	}
 
 	authority, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		BackendURA:  "easynet:///r/example/agent/backend",
-		UserURA:     "easynet:///r/example/user/alice",
-		SessionID:   "sa-example",
+		IssuerURA:   "easynet:///r/example/agent/backend",
+		SubjectURA:  "easynet:///r/example/user/alice",
+		Audience:    "easynet:///r/example/device/dev-a",
 		Scopes:      []string{"device.observe.*"},
-		Audiences:   []string{"easynet:///r/example/device/dev-a"},
 		IssuedAtMS:  1000,
 		ExpiresAtMS: 2000,
 	})
 	if err != nil {
 		t.Fatalf("MintSessionAuthority: %v", err)
 	}
-	if authority.SessionID != "sa-example" || authority.metadataValue != value {
+	if authority.Audience != "easynet:///r/example/device/dev-a" || authority.metadataValue != value {
 		t.Fatalf("unexpected authority: %#v", authority)
 	}
-	if transport.seenSession["session_id"] != "sa-example" {
+	if transport.seenSession["audience"] != "easynet:///r/example/device/dev-a" {
 		t.Fatalf("transport did not receive session request: %#v", transport.seenSession)
 	}
 }
@@ -221,11 +218,10 @@ func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 	}
 
 	_, err = client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		BackendURA:  "easynet:///r/example/agent/backend",
-		UserURA:     "easynet:///r/example/user/alice",
-		SessionID:   "sa-example",
+		IssuerURA:   "easynet:///r/example/agent/backend",
+		SubjectURA:  "easynet:///r/example/user/alice",
+		Audience:    "easynet:///r/example/device/dev-a",
 		Scopes:      []string{"device.observe.*"},
-		Audiences:   []string{"easynet:///r/example/device/dev-a"},
 		IssuedAtMS:  2000,
 		ExpiresAtMS: 1000,
 	})

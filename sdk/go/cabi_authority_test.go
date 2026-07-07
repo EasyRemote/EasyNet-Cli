@@ -25,11 +25,10 @@ func TestCABIAuthorityTransportMintsViaCoreAndSigner(t *testing.T) {
 		"expires_at_ms": float64(2000),
 	}, []byte("cabi-signature"))
 	sessionValue := authorityMetadataFixture(t, map[string]any{
-		"backend_ura":   "easynet:///r/example/agent/backend",
-		"user_ura":      "easynet:///r/example/user/alice",
-		"session_id":    "sa-example",
+		"issuer_ura":    "easynet:///r/example/agent/backend",
+		"subject_ura":   "easynet:///r/example/user/alice",
+		"audience":      "easynet:///r/example/device/dev-a",
 		"scopes":        []string{"device.observe.*"},
-		"audiences":     []string{"easynet:///r/example/device/dev-a"},
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
 	}, []byte("cabi-signature"))
@@ -67,11 +66,10 @@ func TestCABIAuthorityTransportMintsViaCoreAndSigner(t *testing.T) {
 	}
 
 	session, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		BackendURA:  "easynet:///r/example/agent/backend",
-		UserURA:     "easynet:///r/example/user/alice",
-		SessionID:   "sa-example",
+		IssuerURA:   "easynet:///r/example/agent/backend",
+		SubjectURA:  "easynet:///r/example/user/alice",
+		Audience:    "easynet:///r/example/device/dev-a",
 		Scopes:      []string{"device.observe.*"},
-		Audiences:   []string{"easynet:///r/example/device/dev-a"},
 		IssuedAtMS:  1000,
 		ExpiresAtMS: 2000,
 	})
@@ -184,7 +182,7 @@ int32_t easynet_authority_materialize_delegation(const char *request_json, const
 
 int32_t easynet_authority_prepare_session(const char *request_json, char **out_material_json) {
 	(void)request_json;
-	*out_material_json = dup_json("{\"profile\":\"authority\",\"kind\":\"session_authority\",\"algorithm\":\"ed25519\",\"metadata_key\":\"x-easynet-session-authority\",\"canonical_bytes_base64\":\"Y2Fub24=\",\"canonical_hash_hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signed_fields\":[\"backend_ura\"],\"payload\":{\"backend_ura\":\"easynet:///r/example/agent/backend\"}}");
+	*out_material_json = dup_json("{\"profile\":\"authority\",\"kind\":\"session_authority\",\"algorithm\":\"ed25519\",\"metadata_key\":\"x-easynet-session-authority\",\"canonical_bytes_base64\":\"Y2Fub24=\",\"canonical_hash_hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signed_fields\":[\"issuer_ura\"],\"payload\":{\"issuer_ura\":\"easynet:///r/example/agent/backend\"}}");
 	return 0;
 }
 

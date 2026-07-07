@@ -131,9 +131,9 @@ func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSessionAuthorityFromMetadata(shared fixture): %v", err)
 	}
-	if session.BackendURA != fixture.ExpectedSessionAuthority.BackendURA ||
-		session.UserURA != fixture.ExpectedSessionAuthority.UserURA ||
-		session.SessionID != fixture.ExpectedSessionAuthority.SessionID ||
+	if session.IssuerURA != fixture.ExpectedSessionAuthority.IssuerURA ||
+		session.SubjectURA != fixture.ExpectedSessionAuthority.SubjectURA ||
+		session.Audience != fixture.ExpectedSessionAuthority.Audience ||
 		session.IssuedAtMS != fixture.ExpectedSessionAuthority.IssuedAtMS ||
 		session.ExpiresAtMS != fixture.ExpectedSessionAuthority.ExpiresAtMS {
 		t.Fatalf("unexpected session authority projection: %#v", session)
@@ -165,11 +165,10 @@ func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
 		t.Fatalf("minted delegation metadata mismatch")
 	}
 	mintedSession, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		BackendURA:  fixture.ExpectedSessionAuthority.BackendURA,
-		UserURA:     fixture.ExpectedSessionAuthority.UserURA,
-		SessionID:   fixture.ExpectedSessionAuthority.SessionID,
+		IssuerURA:   fixture.ExpectedSessionAuthority.IssuerURA,
+		SubjectURA:  fixture.ExpectedSessionAuthority.SubjectURA,
+		Audience:    fixture.ExpectedSessionAuthority.Audience,
 		Scopes:      fixture.ExpectedSessionAuthority.Scopes,
-		Audiences:   fixture.ExpectedSessionAuthority.Audiences,
 		IssuedAtMS:  fixture.ExpectedSessionAuthority.IssuedAtMS,
 		ExpiresAtMS: fixture.ExpectedSessionAuthority.ExpiresAtMS,
 	})
@@ -4945,11 +4944,10 @@ type sharedDelegationAuthorityProjection struct {
 }
 
 type sharedSessionAuthorityProjection struct {
-	BackendURA      string   `json:"backend_ura"`
-	UserURA         string   `json:"user_ura"`
-	SessionID       string   `json:"session_id"`
+	IssuerURA       string   `json:"issuer_ura"`
+	SubjectURA      string   `json:"subject_ura"`
+	Audience        string   `json:"audience"`
 	Scopes          []string `json:"scopes"`
-	Audiences       []string `json:"audiences"`
 	IssuedAtMS      int64    `json:"issued_at_ms"`
 	ExpiresAtMS     int64    `json:"expires_at_ms"`
 	SignatureBase64 string   `json:"signature_base64"`

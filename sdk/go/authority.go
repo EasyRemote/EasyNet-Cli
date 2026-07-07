@@ -75,11 +75,10 @@ type DelegationProof struct {
 // SessionAuthority is a typed projection of daemon/Axon session-authority
 // metadata. It does not own canonical signing or verification.
 type SessionAuthority struct {
-	BackendURA  string
-	UserURA     string
-	SessionID   string
+	IssuerURA   string
+	SubjectURA  string
+	Audience    string
 	Scopes      []string
-	Audiences   []string
 	IssuedAtMS  int64
 	ExpiresAtMS int64
 	Signature   []byte
@@ -102,14 +101,13 @@ type DelegationRequest struct {
 }
 
 // SessionAuthorityRequest asks the authority transport to mint session
-// authority metadata. It is backend/session policy input, not backend
-// JWT/OAuth state.
+// authority metadata. It carries generic authority facts, not product session
+// or backend auth state.
 type SessionAuthorityRequest struct {
-	BackendURA  string         `json:"backend_ura"`
-	UserURA     string         `json:"user_ura"`
-	SessionID   string         `json:"session_id"`
+	IssuerURA   string         `json:"issuer_ura"`
+	SubjectURA  string         `json:"subject_ura"`
+	Audience    string         `json:"audience"`
 	Scopes      []string       `json:"scopes"`
-	Audiences   []string       `json:"audiences"`
 	IssuedAtMS  int64          `json:"issued_at_ms"`
 	ExpiresAtMS int64          `json:"expires_at_ms"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
@@ -241,11 +239,10 @@ func NewSessionAuthorityFromMetadata(value string) (SessionAuthority, error) {
 		return SessionAuthority{}, err
 	}
 	authority := SessionAuthority{
-		BackendURA:    payload.BackendURA,
-		UserURA:       payload.UserURA,
-		SessionID:     payload.SessionID,
+		IssuerURA:     payload.IssuerURA,
+		SubjectURA:    payload.SubjectURA,
+		Audience:      payload.Audience,
 		Scopes:        append([]string(nil), payload.Scopes...),
-		Audiences:     append([]string(nil), payload.Audiences...),
 		IssuedAtMS:    payload.IssuedAtMS,
 		ExpiresAtMS:   payload.ExpiresAtMS,
 		Signature:     append([]byte(nil), signature...),
@@ -382,11 +379,10 @@ func validateDelegationRequest(req DelegationRequest) error {
 
 func validateSessionAuthorityRequest(req SessionAuthorityRequest) error {
 	authority := SessionAuthority{
-		BackendURA:  req.BackendURA,
-		UserURA:     req.UserURA,
-		SessionID:   req.SessionID,
+		IssuerURA:   req.IssuerURA,
+		SubjectURA:  req.SubjectURA,
+		Audience:    req.Audience,
 		Scopes:      req.Scopes,
-		Audiences:   req.Audiences,
 		IssuedAtMS:  req.IssuedAtMS,
 		ExpiresAtMS: req.ExpiresAtMS,
 		Signature:   []byte("shape-only"),
@@ -503,11 +499,10 @@ type delegationAuthorityPayload struct {
 }
 
 type sessionAuthorityPayload struct {
-	BackendURA  string   `json:"backend_ura"`
-	UserURA     string   `json:"user_ura"`
-	SessionID   string   `json:"session_id"`
+	IssuerURA   string   `json:"issuer_ura"`
+	SubjectURA  string   `json:"subject_ura"`
+	Audience    string   `json:"audience"`
 	Scopes      []string `json:"scopes"`
-	Audiences   []string `json:"audiences"`
 	IssuedAtMS  int64    `json:"issued_at_ms"`
 	ExpiresAtMS int64    `json:"expires_at_ms"`
 }
@@ -564,13 +559,13 @@ func validateDelegationProof(proof DelegationProof) error {
 }
 
 func validateSessionAuthority(authority SessionAuthority) error {
-	if strings.TrimSpace(authority.BackendURA) == "" ||
-		strings.TrimSpace(authority.UserURA) == "" ||
-		strings.TrimSpace(authority.SessionID) == "" {
-		return invalidInvocation("session authority must bind backend, user, and session_id", nil)
+	if strings.TrimSpace(authority.IssuerURA) == "" ||
+		strings.TrimSpace(authority.SubjectURA) == "" ||
+		strings.TrimSpace(authority.Audience) == "" {
+		return invalidInvocation("session authority must bind issuer, subject, and audience", nil)
 	}
-	if len(authority.Scopes) == 0 || len(authority.Audiences) == 0 {
-		return invalidInvocation("session authority scopes and audiences are required", nil)
+	if len(authority.Scopes) == 0 {
+		return invalidInvocation("session authority scopes are required", nil)
 	}
 	if authority.ExpiresAtMS <= authority.IssuedAtMS {
 		return invalidInvocation("session authority expires_at_ms must be greater than issued_at_ms", nil)

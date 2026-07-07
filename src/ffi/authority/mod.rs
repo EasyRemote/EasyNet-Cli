@@ -34,15 +34,14 @@ use std::os::raw::c_char;
 use serde_json::Value;
 
 use crate::daemon::invocation::admission::authority_metadata::{
-    AuthorityMetadataError, materialize_delegation_from_json,
-    materialize_session_authority_from_json, prepare_delegation_from_json,
-    prepare_session_authority_from_json,
+    materialize_delegation_from_json, materialize_session_authority_from_json,
+    prepare_delegation_from_json, prepare_session_authority_from_json, AuthorityMetadataError,
 };
 use crate::ffi::errors::{
-    EASYNET_OK, ERR_GENERIC, ERR_INVALID_ARG, ERR_INVALID_UTF8, ERR_NULL_POINTER, clear_last_error,
-    set_last_error_code,
+    clear_last_error, set_last_error_code, EASYNET_OK, ERR_GENERIC, ERR_INVALID_ARG,
+    ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
-use crate::ffi::strings::{StringError, alloc_output_cstring, read_cstr};
+use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
 
 type AuthorityFn = fn(&str) -> Result<Value, AuthorityMetadataError>;
 type AuthorityMaterializeFn = fn(&str, &str) -> Result<Value, AuthorityMetadataError>;

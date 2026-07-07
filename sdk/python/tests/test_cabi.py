@@ -439,8 +439,8 @@ class FakeRawCABI:
                     "metadata_key": "x-easynet-session-authority",
                     "canonical_bytes_base64": "Y2Fub24=",
                     "canonical_hash_hex": "b" * 64,
-                    "signed_fields": ["backend_ura"],
-                    "payload": {"backend_ura": "easynet:///r/example/agent/backend"},
+                    "signed_fields": ["issuer_ura"],
+                    "payload": {"issuer_ura": "easynet:///r/example/agent/backend"},
                 },
                 separators=(",", ":"),
             ).encode("utf-8"),
@@ -451,11 +451,10 @@ class FakeRawCABI:
         signature = json.loads(signature_json.value.decode("utf-8"))
         value = _authority_metadata_value(
             {
-                "backend_ura": request["backend_ura"],
-                "user_ura": request["user_ura"],
-                "session_id": request["session_id"],
+                "issuer_ura": request["issuer_ura"],
+                "subject_ura": request["subject_ura"],
+                "audience": request["audience"],
                 "scopes": request["scopes"],
-                "audiences": request["audiences"],
                 "issued_at_ms": request["issued_at_ms"],
                 "expires_at_ms": request["expires_at_ms"],
             },

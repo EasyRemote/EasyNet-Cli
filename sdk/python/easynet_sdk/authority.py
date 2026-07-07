@@ -147,11 +147,10 @@ class DelegationProof:
 class SessionAuthority:
     """Typed projection of daemon/Axon session-authority metadata."""
 
-    backend_ura: str
-    user_ura: str
-    session_id: str
+    issuer_ura: str
+    subject_ura: str
+    audience: str
     scopes: tuple[str, ...]
-    audiences: tuple[str, ...]
     issued_at_ms: int
     expires_at_ms: int
     signature: bytes
@@ -161,13 +160,10 @@ class SessionAuthority:
     def from_metadata(cls, value: str) -> "SessionAuthority":
         payload, signature = _decode_authority_metadata(value, "session authority")
         authority = cls(
-            backend_ura=_required_payload_string(payload, "backend_ura", "session authority"),
-            user_ura=_required_payload_string(payload, "user_ura", "session authority"),
-            session_id=_required_payload_string(payload, "session_id", "session authority"),
+            issuer_ura=_required_payload_string(payload, "issuer_ura", "session authority"),
+            subject_ura=_required_payload_string(payload, "subject_ura", "session authority"),
+            audience=_required_payload_string(payload, "audience", "session authority"),
             scopes=_required_string_tuple(payload.get("scopes"), "scopes", "session authority"),
-            audiences=_required_string_tuple(
-                payload.get("audiences"), "audiences", "session authority"
-            ),
             issued_at_ms=_required_payload_int(payload, "issued_at_ms", "session authority"),
             expires_at_ms=_required_payload_int(payload, "expires_at_ms", "session authority"),
             signature=signature,
@@ -221,11 +217,10 @@ class DelegationRequest:
 class SessionAuthorityRequest:
     """Typed request for session-authority metadata minting."""
 
-    backend_ura: str
-    user_ura: str
-    session_id: str
+    issuer_ura: str
+    subject_ura: str
+    audience: str
     scopes: tuple[str, ...]
-    audiences: tuple[str, ...]
     issued_at_ms: int
     expires_at_ms: int
     metadata: Mapping[str, object] = field(default_factory=dict)
@@ -234,11 +229,10 @@ class SessionAuthorityRequest:
         _validate_session_authority_request(self)
         return json.dumps(
             {
-                "backend_ura": self.backend_ura,
-                "user_ura": self.user_ura,
-                "session_id": self.session_id,
+                "issuer_ura": self.issuer_ura,
+                "subject_ura": self.subject_ura,
+                "audience": self.audience,
                 "scopes": list(self.scopes),
-                "audiences": list(self.audiences),
                 "issued_at_ms": self.issued_at_ms,
                 "expires_at_ms": self.expires_at_ms,
                 "metadata": dict(self.metadata),
@@ -443,13 +437,13 @@ def _validate_delegation(proof: DelegationProof) -> None:
 
 def _validate_session_authority(authority: SessionAuthority) -> None:
     if not (
-        authority.backend_ura.strip()
-        and authority.user_ura.strip()
-        and authority.session_id.strip()
+        authority.issuer_ura.strip()
+        and authority.subject_ura.strip()
+        and authority.audience.strip()
     ):
-        raise _invalid_authority("session authority must bind backend, user, and session_id")
-    if not authority.scopes or not authority.audiences:
-        raise _invalid_authority("session authority scopes and audiences are required")
+        raise _invalid_authority("session authority must bind issuer, subject, and audience")
+    if not authority.scopes:
+        raise _invalid_authority("session authority scopes are required")
     if authority.expires_at_ms <= authority.issued_at_ms:
         raise _invalid_authority(
             "session authority expires_at_ms must be greater than issued_at_ms"
@@ -477,11 +471,10 @@ def _validate_delegation_request(request: DelegationRequest) -> None:
 def _validate_session_authority_request(request: SessionAuthorityRequest) -> None:
     _validate_session_authority(
         SessionAuthority(
-            backend_ura=request.backend_ura,
-            user_ura=request.user_ura,
-            session_id=request.session_id,
+            issuer_ura=request.issuer_ura,
+            subject_ura=request.subject_ura,
+            audience=request.audience,
             scopes=tuple(request.scopes),
-            audiences=tuple(request.audiences),
             issued_at_ms=request.issued_at_ms,
             expires_at_ms=request.expires_at_ms,
             signature=b"shape-only",

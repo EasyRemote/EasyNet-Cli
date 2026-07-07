@@ -33,9 +33,9 @@
 // `libeasynet_cli` authority ABI projection. Language SDKs are facades over
 // this contract, not owners of canonical authority payload construction.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::canonical_json_bytes;
@@ -89,11 +89,10 @@ pub(crate) struct DelegationPayload {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct SessionAuthorityPayload {
-    pub(crate) backend_ura: String,
-    pub(crate) user_ura: String,
-    pub(crate) session_id: String,
+    pub(crate) issuer_ura: String,
+    pub(crate) subject_ura: String,
+    pub(crate) audience: String,
     pub(crate) scopes: Vec<String>,
-    pub(crate) audiences: Vec<String>,
     pub(crate) issued_at_ms: i64,
     pub(crate) expires_at_ms: i64,
 }
@@ -113,11 +112,10 @@ struct DelegationRequest {
 
 #[derive(Debug, Deserialize)]
 struct SessionAuthorityRequest {
-    backend_ura: String,
-    user_ura: String,
-    session_id: String,
+    issuer_ura: String,
+    subject_ura: String,
+    audience: String,
     scopes: Vec<String>,
-    audiences: Vec<String>,
     issued_at_ms: i64,
     expires_at_ms: i64,
     #[serde(default)]
@@ -225,28 +223,26 @@ pub(crate) fn validate_session_authority_payload_shape(
     payload: &SessionAuthorityPayload,
     now_ms: Option<i64>,
 ) -> Result<(), AuthorityMetadataError> {
-    if payload.backend_ura.trim().is_empty()
-        || payload.user_ura.trim().is_empty()
-        || payload.session_id.trim().is_empty()
+    if payload.issuer_ura.trim().is_empty()
+        || payload.subject_ura.trim().is_empty()
+        || payload.audience.trim().is_empty()
         || payload.scopes.is_empty()
-        || payload.audiences.is_empty()
         || payload.scopes.iter().any(|scope| scope.trim().is_empty())
-        || payload
-            .audiences
-            .iter()
-            .any(|audience| audience.trim().is_empty())
     {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
-            "session authority must carry backend, user, session_id, at least one audience, and at least one scope",
+            "session authority must carry issuer, subject, audience, and at least one scope",
         ));
     }
-    if authority_subject_kind(&payload.user_ura) != AuthoritySubjectKind::User {
+    if !matches!(
+        authority_subject_kind(&payload.subject_ura),
+        AuthoritySubjectKind::User | AuthoritySubjectKind::Session
+    ) {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             format!(
-                "session authority user_ura `{}` must be a canonical user subject",
-                payload.user_ura
+                "session authority subject_ura `{}` must be a canonical user or session subject",
+                payload.subject_ura
             ),
         ));
     }
@@ -264,32 +260,6 @@ pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind 
         Some("session" | "sessions") => AuthoritySubjectKind::Session,
         _ => AuthoritySubjectKind::Other,
     }
-}
-
-pub(crate) fn session_subject_matches_session_id(subject_ura: &str, session_id: &str) -> bool {
-    if session_id.trim().is_empty() {
-        return false;
-    }
-    let Some(rest) = subject_ura
-        .trim()
-        .strip_prefix(crate::core::ura::URA_SCHEME)
-    else {
-        return false;
-    };
-    let mut segments = rest.split('/');
-    let Some(realm) = segments.next() else {
-        return false;
-    };
-    let Some(role) = segments.next() else {
-        return false;
-    };
-    let Some(id) = segments.next() else {
-        return false;
-    };
-    segments.next().is_none()
-        && !realm.is_empty()
-        && matches!(role, "session" | "sessions")
-        && id == session_id
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -320,11 +290,10 @@ impl SessionAuthorityRequest {
     fn into_payload(self) -> Result<SessionAuthorityPayload, AuthorityMetadataError> {
         reject_private_key_metadata(&self.metadata)?;
         let payload = SessionAuthorityPayload {
-            backend_ura: self.backend_ura,
-            user_ura: self.user_ura,
-            session_id: self.session_id,
+            issuer_ura: self.issuer_ura,
+            subject_ura: self.subject_ura,
+            audience: self.audience,
             scopes: self.scopes,
-            audiences: self.audiences,
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
         };
@@ -438,11 +407,10 @@ fn authority_signed_fields(kind: &str) -> &'static [&'static str] {
             "expires_at_ms",
         ],
         "session_authority" => &[
-            "backend_ura",
-            "user_ura",
-            "session_id",
+            "issuer_ura",
+            "subject_ura",
+            "audience",
             "scopes",
-            "audiences",
             "issued_at_ms",
             "expires_at_ms",
         ],
@@ -539,11 +507,10 @@ mod tests {
     }"#;
 
     const SESSION_REQUEST: &str = r#"{
-      "backend_ura":"easynet:///r/example/agent/backend",
-      "user_ura":"easynet:///r/example/user/alice",
-      "session_id":"sa-example",
+      "issuer_ura":"easynet:///r/example/agent/backend",
+      "subject_ura":"easynet:///r/example/user/alice",
+      "audience":"easynet:///r/example/device/dev-a",
       "scopes":["device.observe.*"],
-      "audiences":["easynet:///r/example/device/dev-a"],
       "issued_at_ms":1000,
       "expires_at_ms":2000
     }"#;
@@ -578,8 +545,12 @@ mod tests {
         let wire = BASE64_STANDARD.decode(value).unwrap();
         let wire_json: Value = serde_json::from_slice(&wire).unwrap();
         assert_eq!(
-            wire_json["payload"]["backend_ura"],
+            wire_json["payload"]["issuer_ura"],
             "easynet:///r/example/agent/backend"
+        );
+        assert_eq!(
+            wire_json["payload"]["subject_ura"],
+            "easynet:///r/example/user/alice"
         );
         assert_eq!(wire_json["signature"], "c2Vzc2lvbi1zaWduYXR1cmU=");
     }

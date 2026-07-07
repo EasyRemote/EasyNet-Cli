@@ -1438,11 +1438,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             fixture["session_authority_metadata_value"]
         )
         expected_session = fixture["expected_session_authority"]
-        self.assertEqual(session.backend_ura, expected_session["backend_ura"])
-        self.assertEqual(session.user_ura, expected_session["user_ura"])
-        self.assertEqual(session.session_id, expected_session["session_id"])
+        self.assertEqual(session.issuer_ura, expected_session["issuer_ura"])
+        self.assertEqual(session.subject_ura, expected_session["subject_ura"])
+        self.assertEqual(session.audience, expected_session["audience"])
         self.assertEqual(list(session.scopes), expected_session["scopes"])
-        self.assertEqual(list(session.audiences), expected_session["audiences"])
         self.assertEqual(session.issued_at_ms, expected_session["issued_at_ms"])
         self.assertEqual(session.expires_at_ms, expected_session["expires_at_ms"])
         self.assertEqual(
@@ -1473,11 +1472,10 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         minted_session = authority_client.mint_session_authority(
             SessionAuthorityRequest(
-                backend_ura=expected_session["backend_ura"],
-                user_ura=expected_session["user_ura"],
-                session_id=expected_session["session_id"],
+                issuer_ura=expected_session["issuer_ura"],
+                subject_ura=expected_session["subject_ura"],
+                audience=expected_session["audience"],
                 scopes=tuple(expected_session["scopes"]),
-                audiences=tuple(expected_session["audiences"]),
                 issued_at_ms=expected_session["issued_at_ms"],
                 expires_at_ms=expected_session["expires_at_ms"],
             )

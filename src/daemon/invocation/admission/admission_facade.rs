@@ -85,14 +85,14 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use tonic::Status;
 
 use easynet_axon::invocation::admission::{
-    REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
-    now_ms as axon_now_ms, run_descriptor_bound_admission,
+    now_ms as axon_now_ms, run_descriptor_bound_admission, REASON_CALLER_SIGNATURE_INVALID,
+    REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
 };
 use easynet_axon::invocation::axiom::{CallerSignature as AxiomCallerSignature, KeyResolver};
 use easynet_axon::invocation::{
@@ -103,14 +103,14 @@ use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 use crate::daemon::axon_bridge::wire_descriptor::{
-    WireCallerIdentity, descriptor_bound_from_wire_parts,
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::invocation::admission::authority_metadata::{
-    self, AuthorityMetadataError, AuthoritySubjectKind, DELEGATION_METADATA_KEY, DelegationPayload,
-    REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID, SESSION_AUTHORITY_METADATA_KEY,
-    SessionAuthorityPayload,
+    self, AuthorityMetadataError, AuthoritySubjectKind, DelegationPayload, SessionAuthorityPayload,
+    DELEGATION_METADATA_KEY, REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID,
+    SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::daemon::invocation::admission::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
@@ -993,14 +993,14 @@ fn parse_and_verify_session_authority(
         ))
     })?;
 
-    let backend = trust_anchor.lookup(&payload.backend_ura).ok_or_else(|| {
+    let issuer = trust_anchor.lookup(&payload.issuer_ura).ok_or_else(|| {
         Status::permission_denied(format!(
-            "{REASON_AUTHORITY_ISSUER_UNKNOWN}: session authority backend `{}` is not in the realm \
+            "{REASON_AUTHORITY_ISSUER_UNKNOWN}: session authority issuer `{}` is not in the realm \
              trust anchor",
-            payload.backend_ura
+            payload.issuer_ura
         ))
     })?;
-    verify_delegation_signature(&backend.public_key_b64, &payload_bytes, &signature)?;
+    verify_delegation_signature(&issuer.public_key_b64, &payload_bytes, &signature)?;
 
     Ok(payload)
 }
@@ -1015,11 +1015,11 @@ fn verify_session_authority_bindings(
         .as_ref()
         .map(|c| c.ura.as_str())
         .unwrap_or("");
-    if payload.backend_ura != caller {
+    if payload.issuer_ura != caller {
         return Err(Status::permission_denied(format!(
-            "{REASON_AUTHORITY_CALLER_MISMATCH}: session backend `{}` does not match envelope \
+            "{REASON_AUTHORITY_CALLER_MISMATCH}: session issuer `{}` does not match envelope \
              caller `{caller}`",
-            payload.backend_ura
+            payload.issuer_ura
         )));
     }
 
@@ -1029,23 +1029,13 @@ fn verify_session_authority_bindings(
         .map(|s| s.ura.as_str())
         .unwrap_or("");
     match authority_metadata::authority_subject_kind(subject) {
-        AuthoritySubjectKind::User if payload.user_ura != subject => {
-            return Err(Status::permission_denied(format!(
-                "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session user `{}` does not match envelope \
-                 subject `{subject}`",
-                payload.user_ura
-            )));
-        }
-        AuthoritySubjectKind::Session
-            if !authority_metadata::session_subject_matches_session_id(
-                subject,
-                &payload.session_id,
-            ) =>
+        AuthoritySubjectKind::User | AuthoritySubjectKind::Session
+            if payload.subject_ura != subject =>
         {
             return Err(Status::permission_denied(format!(
-                "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session authority id `{}` does not bind \
-                 envelope subject `{subject}`",
-                payload.session_id
+                "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session subject `{}` does not match envelope \
+                 subject `{subject}`",
+                payload.subject_ura
             )));
         }
         AuthoritySubjectKind::Other => {
@@ -1062,15 +1052,11 @@ fn verify_session_authority_bindings(
         .as_ref()
         .map(|c| c.ura.as_str())
         .unwrap_or("");
-    if !payload
-        .audiences
-        .iter()
-        .any(|audience| audience_admits(audience, callee))
-    {
+    if !audience_admits(&payload.audience, callee) {
         return Err(Status::permission_denied(format!(
-            "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session audiences {:?} do not admit \
+            "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session audience `{}` does not admit \
              envelope callee `{callee}`",
-            payload.audiences
+            payload.audience
         )));
     }
 
@@ -1863,7 +1849,7 @@ mod tests {
     #[test]
     fn quota_rejects_oversized_ability_key_as_invalid_argument() {
         use crate::daemon::invocation::admission::usage_quota::{
-            MAX_QUOTA_ABILITY_NAME_BYTES, SharedUsageQuotaGate,
+            SharedUsageQuotaGate, MAX_QUOTA_ABILITY_NAME_BYTES,
         };
         use crate::daemon::persistence::daemon_config::QuotaConfig;
 
