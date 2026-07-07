@@ -126,3 +126,32 @@ public final class BidiSession: @unchecked Sendable {
         }
     }
 }
+
+public struct BidiFrameIterator: AsyncIteratorProtocol {
+    private let session: BidiSession
+    private var finished = false
+
+    init(session: BidiSession) {
+        self.session = session
+    }
+
+    public mutating func next() async throws -> BidiFrame? {
+        if finished {
+            return nil
+        }
+        let frame = try await session.next()
+        if frame.terminal {
+            finished = true
+        }
+        return frame
+    }
+}
+
+extension BidiSession: AsyncSequence {
+    public typealias Element = BidiFrame
+    public typealias AsyncIterator = BidiFrameIterator
+
+    public func makeAsyncIterator() -> BidiFrameIterator {
+        BidiFrameIterator(session: self)
+    }
+}

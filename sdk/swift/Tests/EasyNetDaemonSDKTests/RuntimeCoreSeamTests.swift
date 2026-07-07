@@ -50,6 +50,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
         try await handle.close()
     }
 
+    func testStreamHandleIsAsyncSequence() async throws {
+        let handle = StreamHandle(source: QueueStreamSource(count: 2))
+        var sequences: [Int] = []
+        var terminalCount = 0
+        for try await event in handle {
+            sequences.append(event.sequence)
+            if event.terminal {
+                terminalCount += 1
+            }
+        }
+        XCTAssertEqual(sequences, [0, 1, 9999])
+        XCTAssertEqual(terminalCount, 1)
+        XCTAssertEqual(handle.terminalEvent()?.state, "Completed")
+        try await handle.close()
+    }
+
     func testBidiHistoryIsBounded() async throws {
         let session = BidiSession(source: QueueBidiSource(count: BidiSession.maxRetainedFrames + 2))
         try await session.send(.data(0, payloadJSON: "{\"hello\":true}"))
@@ -58,6 +74,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
         XCTAssertEqual(session.terminalFrame()?.kind, "backpressure_terminated")
         XCTAssertEqual(session.retainedFrames().count, BidiSession.maxRetainedFrames + 1)
+        try await session.close()
+    }
+
+    func testBidiSessionIsAsyncSequence() async throws {
+        let session = BidiSession(source: QueueBidiSource(count: 2))
+        var sequences: [Int] = []
+        var terminalCount = 0
+        for try await frame in session {
+            sequences.append(frame.sequence)
+            if frame.terminal {
+                terminalCount += 1
+            }
+        }
+        XCTAssertEqual(sequences, [0, 1, 9999])
+        XCTAssertEqual(terminalCount, 1)
+        XCTAssertEqual(session.terminalFrame()?.kind, "completed")
         try await session.close()
     }
 

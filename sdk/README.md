@@ -24,7 +24,7 @@ workspace entrypoint; it must not drift into a second status ledger.
 | Python facade | provider-backed for the shipped P0 EasyRemote/local automation profiles listed in `SDK_PARITY.md` |
 | Node / TypeScript facade | Runtime Core seam over injected transports with Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers profile seams; daemon providers remain unsupported |
 | Java / JVM facade | Runtime Core seam as a Maven package for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, `CompletableFuture` async adapters, and iterator-backed bounded stream/bidi state; daemon providers remain unsupported |
-| Swift facade | Runtime Core seam as a Swift Package Manager package for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; daemon providers remain unsupported |
+| Swift facade | Runtime Core seam as a Swift Package Manager package for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and `AsyncSequence` bounded stream/bidi state; daemon providers remain unsupported |
 
 P0 consumer cutover readiness is tracked by
 `tools/scripts/check-sdk-cutover-readiness.sh` and summarized by

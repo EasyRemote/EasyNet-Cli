@@ -57,7 +57,7 @@
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
-      "message": "Swift Runtime Core seam exposes lifecycle, invocation, runtime transport, stream/bidi, and typed errors only."
+      "message": "Swift Runtime Core seam exposes lifecycle, invocation, runtime transport, AsyncSequence stream/bidi handles, and typed errors only."
     },
     {
       "case_id": "memc/profile_exclusivity",

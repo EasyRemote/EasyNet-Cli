@@ -149,3 +149,32 @@ public final class StreamHandle: @unchecked Sendable {
         }
     }
 }
+
+public struct StreamEventIterator: AsyncIteratorProtocol {
+    private let handle: StreamHandle
+    private var finished = false
+
+    init(handle: StreamHandle) {
+        self.handle = handle
+    }
+
+    public mutating func next() async throws -> StreamEvent? {
+        if finished {
+            return nil
+        }
+        let event = try await handle.next()
+        if event.terminal {
+            finished = true
+        }
+        return event
+    }
+}
+
+extension StreamHandle: AsyncSequence {
+    public typealias Element = StreamEvent
+    public typealias AsyncIterator = StreamEventIterator
+
+    public func makeAsyncIterator() -> StreamEventIterator {
+        StreamEventIterator(handle: self)
+    }
+}
