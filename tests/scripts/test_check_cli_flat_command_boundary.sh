@@ -19,10 +19,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src" "$sandbox/scripts" "$sandbox/tests"
+    mkdir -p "$sandbox/src"
     cp -R "$REPO_ROOT/src/cli" "$sandbox/src/"
-    cp -R "$REPO_ROOT/scripts" "$sandbox/"
-    cp -R "$REPO_ROOT/tests" "$sandbox/"
     echo "$sandbox"
 }
 
@@ -60,5 +58,17 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing layered 'device' group should exit 1 (got $rc)"
+
+# Reintroducing the retired `easynet agent discuss` compatibility route must
+# fail. Multi-agent discussion is now only `easynet mission discuss`.
+SB="$(make_sandbox)"
+cat >> "$SB/src/cli/commands/groups/agent.rs" <<'RS'
+// DEPRECATED: use `easynet mission discuss`.
+// AgentAction::Discuss(discuss_cmd::DiscussArgs)
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "retired agent discuss alias should exit 1 (got $rc)"
 
 echo "test_check_cli_flat_command_boundary.sh: all cases passed"

@@ -21,7 +21,9 @@ fail() {
 }
 
 CLI_MOD="src/cli/mod.rs"
+AGENT_GROUP="src/cli/commands/groups/agent.rs"
 [[ -f "$CLI_MOD" ]] || fail "missing $CLI_MOD"
+[[ -f "$AGENT_GROUP" ]] || fail "missing $AGENT_GROUP"
 
 # Quickstart shortcuts must be present and wired.
 grep -q 'Join(join::JoinArgs)' "$CLI_MOD" \
@@ -37,5 +39,13 @@ grep -q 'Device(groups::device::DeviceArgs)' "$CLI_MOD" \
     || fail "layered device command is missing"
 grep -q 'Runtime(groups::runtime::RuntimeArgs)' "$CLI_MOD" \
     || fail "layered runtime command is missing"
+
+retired_agent_aliases="$(
+    grep -nE 'DEPRECATED.*mission discuss|Discuss\(discuss_cmd::DiscussArgs\)|AgentAction::Discuss|easynet agent discuss|deprecated aliases' "$AGENT_GROUP" 2>/dev/null || true
+)"
+if [[ -n "$retired_agent_aliases" ]]; then
+    fail "retired agent mission aliases must stay removed:
+$retired_agent_aliases"
+fi
 
 echo "check-cli-flat-command-boundary: ok"
