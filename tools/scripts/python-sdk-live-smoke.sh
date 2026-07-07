@@ -4,7 +4,8 @@
 #
 # Builds `libeasynet_cli` and `easynet-daemon`, starts a hermetic daemon through
 # `easynet_sdk.CABIDaemonTransport`, then exercises Runtime Core unary, stream,
-# and bidi paths through the Python SDK object model.
+# bidi file transfer, and typed terminal failure paths through the Python SDK
+# object model.
 
 set -euo pipefail
 
@@ -26,6 +27,8 @@ LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
 
 if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
+  grep -q "fs.transfer" "$0"
+  grep -q "typed terminal failure decoded" "$0"
   PYTHONPATH="$REPO_ROOT/sdk/python" "$PYTHON_BIN" - <<'PY'
 import easynet_sdk
 from easynet_sdk._cabi import EXPECTED_ABI_VERSION
@@ -75,6 +78,7 @@ from easynet_sdk import (
     DaemonControl,
     DaemonMode,
     HealthClient,
+    InvocationSignature,
     LocalResourceRefRequest,
     PublicationClient,
     StartConfig,
@@ -203,6 +207,35 @@ try:
     assert unary.output_json["status"] == "healthy", unary.output_json
     assert unary.output_json["echo"]["smoke"] == "python-sdk", unary.output_json
     print("[python-sdk-live-smoke] unary RuntimeClient.invoke OK")
+
+    prepared_failure, _ = runtime.prepare(
+        draft(
+            runtime,
+            addressing,
+            device_ura,
+            "sdk.live_smoke_missing",
+            {"smoke": "python-sdk-terminal-failure"},
+            65,
+        )
+    )
+    signed_failure = prepared_failure.sign_with_caller_signature(
+        InvocationSignature(
+            algorithm="ed25519",
+            signature_base64="c2lnbmF0dXJl",
+            key_id_hint="python-sdk-live-smoke-invalid-signature",
+        )
+    )
+    terminal_failure = runtime.await_result(runtime.submit_signed(signed_failure))
+    assert terminal_failure.ok is False, terminal_failure
+    assert terminal_failure.terminal_state == "Failed", terminal_failure
+    assert terminal_failure.error is not None, terminal_failure
+    assert terminal_failure.error.code, terminal_failure.error
+    assert terminal_failure.error.stage, terminal_failure.error
+    assert terminal_failure.error.message, terminal_failure.error
+    print(
+        "[python-sdk-live-smoke] typed terminal failure decoded: "
+        f"code={terminal_failure.error.code} stage={terminal_failure.error.stage}"
+    )
 
     browser = runtime.invoke(
         draft(

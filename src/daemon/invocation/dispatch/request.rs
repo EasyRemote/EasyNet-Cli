@@ -415,6 +415,10 @@ impl InvocationDraft {
         InvocationTuple::from_invocation(&self.invocation)
     }
 
+    pub(crate) fn invocation(&self) -> &DaemonInvocation {
+        &self.invocation
+    }
+
     /// Prepare canonical signing material by delegating to Axon's
     /// descriptor-bound envelope helpers.
     pub fn prepare(&self, options: PrepareOptions) -> Result<PreparedInvocation> {
@@ -539,6 +543,10 @@ pub struct PreparedInvocation {
 
 #[cfg(feature = "axon-pb")]
 impl PreparedInvocation {
+    pub fn draft(&self) -> &InvocationDraft {
+        &self.draft
+    }
+
     pub fn tuple(&self) -> InvocationTuple {
         self.draft.inspect_tuple()
     }

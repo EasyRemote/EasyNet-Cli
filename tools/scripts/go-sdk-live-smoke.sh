@@ -4,7 +4,8 @@
 #
 # Builds `libeasynet_cli` and `easynet-daemon`, then runs the tagged Go SDK
 # live smoke against a hermetic daemon. The test exercises daemon lifecycle,
-# Runtime Core health, unary, stream, and bidi through public Go SDK objects.
+# Runtime Core health, unary, stream, bidi file transfer, and typed terminal
+# failure through public Go SDK objects.
 
 set -euo pipefail
 
@@ -27,6 +28,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
   grep -q "TestGoSDKLiveDaemonSmoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "easynet_live_smoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "fs.transfer" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "typed terminal failure decoded" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   echo "go-sdk-live-smoke self-test ok"
   exit 0
 fi

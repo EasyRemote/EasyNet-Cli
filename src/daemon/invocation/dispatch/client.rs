@@ -357,7 +357,7 @@ impl InvocationResult {
         let error = response.error.as_ref().map(RuntimeErrorSummary::from_wire);
         Self {
             tuple,
-            terminal_state: response.state.to_string(),
+            terminal_state: invocation_state_name(response.state),
             output_content_type: response.result_content_type,
             output: response.result,
             selected_node_id: response.selected_node_id,
@@ -369,6 +369,30 @@ impl InvocationResult {
                 .map(ReceiptSummary::from_wire),
             error,
         }
+    }
+}
+
+fn invocation_state_name(state: i32) -> String {
+    use easynet_axon::invocation::InvocationState;
+
+    if state == InvocationState::Accepted.to_wire_i32() {
+        "Accepted".to_string()
+    } else if state == InvocationState::Admitted.to_wire_i32() {
+        "Admitted".to_string()
+    } else if state == InvocationState::Dispatched.to_wire_i32() {
+        "Dispatched".to_string()
+    } else if state == InvocationState::Running.to_wire_i32() {
+        "Running".to_string()
+    } else if state == InvocationState::Completed.to_wire_i32() {
+        "Completed".to_string()
+    } else if state == InvocationState::Failed.to_wire_i32() {
+        "Failed".to_string()
+    } else if state == InvocationState::TimedOut.to_wire_i32() {
+        "TimedOut".to_string()
+    } else if state == InvocationState::Cancelled.to_wire_i32() {
+        "Cancelled".to_string()
+    } else {
+        state.to_string()
     }
 }
 

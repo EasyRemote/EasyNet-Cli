@@ -2036,12 +2036,12 @@ fn submit_signed_sync_with_axon_pb(
             );
         }
     };
-    let result = handle.await_result();
+    let (result, tuple_json) = handle.await_result_with_tuple_json();
     let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
     if let Some(code) = record_sync_submit_terminal_error(&result) {
         return code;
     }
-    let json = invocation_result_json(result).to_string();
+    let json = invocation_result_json_with_tuple(result, tuple_json).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
         return record_invocation_error(
@@ -2088,7 +2088,8 @@ fn submit_signed_handle_with_axon_pb(
     };
 
     let tuple = signed.prepared().tuple();
-    let active = ActiveInvocationHandle::new(owner, tuple.clone());
+    let tuple_json = invocation_json(signed.prepared().draft().invocation());
+    let active = ActiveInvocationHandle::new(owner, tuple.clone(), tuple_json.clone());
     let cancel = active.cancel.clone();
     let shared = active.shared.clone();
     let invocation_handle_id = insert_invocation_handle(active);
@@ -2146,7 +2147,7 @@ fn invocation_handle_await_with_axon_pb(
             );
         }
     };
-    let json = invocation_result_json(handle.await_result()).to_string();
+    let json = handle.await_result_json().to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
         return record_invocation_error(
@@ -2660,11 +2661,15 @@ struct ActiveInvocationHandle {
 
 #[cfg(feature = "axon-pb")]
 impl ActiveInvocationHandle {
-    fn new(owner: EasynetHandle, tuple: crate::daemon::InvocationTuple) -> Self {
+    fn new(
+        owner: EasynetHandle,
+        tuple: crate::daemon::InvocationTuple,
+        tuple_json: serde_json::Value,
+    ) -> Self {
         Self {
             owner,
             cancel: tokio_util::sync::CancellationToken::new(),
-            shared: Arc::new(InvocationHandleShared::new(tuple)),
+            shared: Arc::new(InvocationHandleShared::new(tuple, tuple_json)),
         }
     }
 
@@ -2672,8 +2677,18 @@ impl ActiveInvocationHandle {
         self.shared.snapshot_json(invocation_handle_id)
     }
 
+    fn await_result_with_tuple_json(&self) -> (crate::daemon::InvocationResult, serde_json::Value) {
+        self.shared.await_result_with_tuple_json()
+    }
+
+    #[cfg(test)]
     fn await_result(&self) -> crate::daemon::InvocationResult {
         self.shared.await_result()
+    }
+
+    fn await_result_json(&self) -> serde_json::Value {
+        let (result, tuple_json) = self.shared.await_result_with_tuple_json();
+        invocation_result_json_with_tuple(result, tuple_json)
     }
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
@@ -2694,9 +2709,9 @@ struct InvocationHandleShared {
 
 #[cfg(feature = "axon-pb")]
 impl InvocationHandleShared {
-    fn new(tuple: crate::daemon::InvocationTuple) -> Self {
+    fn new(tuple: crate::daemon::InvocationTuple, tuple_json: serde_json::Value) -> Self {
         Self {
-            inner: Mutex::new(InvocationHandleState::submitted(tuple)),
+            inner: Mutex::new(InvocationHandleState::submitted(tuple, tuple_json)),
             terminal: Condvar::new(),
         }
     }
@@ -2707,7 +2722,7 @@ impl InvocationHandleShared {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn await_result(&self) -> crate::daemon::InvocationResult {
+    fn await_result_with_tuple_json(&self) -> (crate::daemon::InvocationResult, serde_json::Value) {
         let mut state = self.lock();
         while state.terminal_result.is_none() {
             state = self
@@ -2715,10 +2730,18 @@ impl InvocationHandleShared {
                 .wait(state)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
-        state
-            .terminal_result
-            .clone()
-            .expect("terminal result is present after wait")
+        (
+            state
+                .terminal_result
+                .clone()
+                .expect("terminal result is present after wait"),
+            state.tuple_json.clone(),
+        )
+    }
+
+    #[cfg(test)]
+    fn await_result(&self) -> crate::daemon::InvocationResult {
+        self.await_result_with_tuple_json().0
     }
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
@@ -2765,6 +2788,7 @@ impl InvocationHandleShared {
 #[cfg(feature = "axon-pb")]
 struct InvocationHandleState {
     tuple: crate::daemon::InvocationTuple,
+    tuple_json: serde_json::Value,
     phase: InvocationHandlePhase,
     next_sequence: u64,
     events: Vec<InvocationHandleEvent>,
@@ -2773,9 +2797,10 @@ struct InvocationHandleState {
 
 #[cfg(feature = "axon-pb")]
 impl InvocationHandleState {
-    fn submitted(tuple: crate::daemon::InvocationTuple) -> Self {
+    fn submitted(tuple: crate::daemon::InvocationTuple, tuple_json: serde_json::Value) -> Self {
         Self {
             tuple,
+            tuple_json,
             phase: InvocationHandlePhase::Submitted,
             next_sequence: 2,
             events: vec![InvocationHandleEvent {
@@ -2815,8 +2840,8 @@ impl InvocationHandleState {
             "handle_id": invocation_handle_id,
             "state": self.phase.as_str(),
             "terminal": self.phase.is_terminal(),
-            "events": self.events.iter().map(InvocationHandleEvent::to_json).collect::<Vec<_>>(),
-            "result": self.terminal_result.clone().map(invocation_result_json),
+            "events": self.events.iter().map(|event| event.to_json(&self.tuple_json)).collect::<Vec<_>>(),
+            "result": self.terminal_result.clone().map(|result| invocation_result_json_with_tuple(result, self.tuple_json.clone())),
         })
     }
 }
@@ -2834,14 +2859,14 @@ struct InvocationHandleEvent {
 
 #[cfg(feature = "axon-pb")]
 impl InvocationHandleEvent {
-    fn to_json(&self) -> serde_json::Value {
+    fn to_json(&self, tuple_json: &serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "sequence": self.sequence,
             "kind": self.kind,
             "state": self.state.as_str(),
             "terminal": self.terminal,
             "reason": self.reason,
-            "result": self.result.clone().map(invocation_result_json),
+            "result": self.result.clone().map(|result| invocation_result_json_with_tuple(result, tuple_json.clone())),
         })
     }
 }
@@ -4580,22 +4605,6 @@ fn decode_hash(
 }
 
 #[cfg(feature = "axon-pb")]
-fn invocation_tuple_json(tuple: &crate::daemon::InvocationTuple) -> serde_json::Value {
-    serde_json::json!({
-        "caller_ura": tuple.caller_ura,
-        "callee_ura": tuple.callee_ura,
-        "descriptor_ref": tuple.descriptor_ref,
-        "subject_ura": tuple.subject_ura,
-        "nonce_base64": tuple.nonce_base64,
-        "causal_context": tuple.causal_context,
-        "args_digest_hex": tuple.args_digest_hex,
-        "content_type": tuple.content_type,
-        "metadata": tuple.metadata,
-        "timeout_seconds": tuple.timeout_seconds,
-    })
-}
-
-#[cfg(feature = "axon-pb")]
 fn invocation_json(invocation: &crate::daemon::DaemonInvocation) -> serde_json::Value {
     use base64::Engine;
     let mut obj = serde_json::json!({
@@ -4622,9 +4631,6 @@ fn invocation_json(invocation: &crate::daemon::DaemonInvocation) -> serde_json::
     } else {
         obj["arguments_base64"] =
             serde_json::json!(base64::engine::general_purpose::STANDARD.encode(invocation.args()));
-    }
-    if let Some(timeout_seconds) = invocation.timeout_seconds() {
-        obj["timeout_seconds"] = serde_json::json!(timeout_seconds);
     }
     if let Some(signature) = invocation.caller_signature() {
         obj["caller_signature"] = serde_json::json!({
@@ -4673,10 +4679,13 @@ fn prepared_invocation_json(prepared: &crate::daemon::PreparedInvocation) -> ser
         "schema_hash_hex": prepared.schema_hash_hex(),
         "canonical_hash_hex": prepared.canonical_hash_hex(),
         "expires_at_unix_ms": prepared.expires_at_unix_ms(),
-        "tuple": invocation_tuple_json(&prepared.tuple()),
+        "tuple": invocation_json(prepared.draft().invocation()),
         "signing_material": {
+            "algorithm": "ed25519",
             "canonical_bytes_base64": material.canonical_bytes_base64(),
             "args_digest_hex": material.args_digest_hex(),
+            "descriptor_ref": prepared.descriptor_ref(),
+            "expires_at_unix_ms": prepared.expires_at_unix_ms(),
             "nonce_base64": material.nonce_base64(),
             "signed_fields": material.signed_fields(),
             "signer_policy": {
@@ -4737,12 +4746,6 @@ fn invocation_result_from_invoke_response(
             .as_ref()
             .map(crate::daemon::RuntimeErrorSummary::from_wire),
     }
-}
-
-#[cfg(feature = "axon-pb")]
-fn invocation_result_json(result: crate::daemon::InvocationResult) -> serde_json::Value {
-    let tuple_json = invocation_tuple_json(&result.tuple);
-    invocation_result_json_with_tuple(result, tuple_json)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5578,7 +5581,7 @@ mod tests {
         assert_eq!(inspect_json["args"]["probe"], true);
         assert_eq!(inspect_json["metadata"]["trace"], "sdk-builder");
         assert_eq!(inspect_json["metadata"]["idempotency_key"], "idem-1");
-        assert_eq!(inspect_json["timeout_seconds"], 45);
+        assert!(inspect_json.get("timeout_seconds").is_none());
 
         let mut build_ptr: *mut c_char = std::ptr::null_mut();
         let build_code = unsafe { easynet_invocation_builder_build(builder_id, &mut build_ptr) };
@@ -5588,6 +5591,7 @@ mod tests {
             unsafe { serde_json::from_str(CStr::from_ptr(build_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::easynet_string_free(build_ptr) };
         assert_eq!(build_json["descriptor_ref"], inspect_json["descriptor_ref"]);
+        assert!(build_json.get("timeout_seconds").is_none());
 
         let mut second_ptr: *mut c_char = std::ptr::dangling_mut();
         let second_code =
@@ -5633,6 +5637,14 @@ mod tests {
         assert_eq!(
             prepared_json["signing_material"]["signer_policy"]["signer_id"],
             "browser-key"
+        );
+        assert_eq!(
+            prepared_json["signing_material"]["descriptor_ref"],
+            prepared_json["descriptor_ref"]
+        );
+        assert_eq!(
+            prepared_json["signing_material"]["expires_at_unix_ms"],
+            prepared_json["expires_at_unix_ms"]
         );
         assert_eq!(easynet_prepared_invocation_free(prepared_id), EASYNET_OK);
         crate::ffi::client::handle::release(handle);
@@ -5784,6 +5796,14 @@ mod tests {
         assert_eq!(
             prepared_json["signing_material"]["signer_policy"]["signer_id"],
             "browser-key"
+        );
+        assert_eq!(
+            prepared_json["signing_material"]["descriptor_ref"],
+            prepared_json["descriptor_ref"]
+        );
+        assert_eq!(
+            prepared_json["signing_material"]["expires_at_unix_ms"],
+            prepared_json["expires_at_unix_ms"]
         );
         assert!(prepared_json["signing_material"]["canonical_bytes_base64"]
             .as_str()
@@ -6254,7 +6274,9 @@ mod tests {
     fn invocation_handle_cancel_before_completion_is_terminal_monotonic() {
         let (owner_handle, _) = alloc(test_session());
         let tuple = signed_fixture_tuple();
-        let active = ActiveInvocationHandle::new(owner_handle, tuple.clone());
+        let tuple_json: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
+        let active = ActiveInvocationHandle::new(owner_handle, tuple.clone(), tuple_json);
         let shared = active.shared.clone();
         let invocation_handle_id = insert_invocation_handle(active);
         let handle = get_invocation_handle_for_owner(owner_handle, invocation_handle_id)

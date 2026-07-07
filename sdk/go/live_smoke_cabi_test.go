@@ -125,6 +125,35 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("unary RuntimeClient.Invoke OK")
 
+	preparedFailure, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, identity, deviceURA, "sdk.live_smoke_missing", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
+	if err != nil {
+		t.Fatalf("typed terminal failure prepare: %v", err)
+	}
+	signedFailure, err := preparedFailure.SignWithCallerSignature(InvocationSignature{
+		Algorithm:       "ed25519",
+		SignatureBase64: "c2lnbmF0dXJl",
+		KeyIDHint:       "go-sdk-live-smoke-invalid-signature",
+	})
+	if err != nil {
+		t.Fatalf("typed terminal failure sign: %v", err)
+	}
+	failureHandle, err := runtime.SubmitSigned(ctx, signedFailure)
+	if err != nil {
+		t.Fatalf("typed terminal failure submit: %v", err)
+	}
+	terminalFailure, err := runtime.Await(ctx, failureHandle)
+	if err != nil {
+		t.Fatalf("typed terminal failure await: %v", err)
+	}
+	failure := terminalFailure.Failure()
+	if terminalFailure.OK() || terminalFailure.TerminalState() != "Failed" || failure == nil {
+		t.Fatalf("typed terminal failure result = ok:%v state:%q failure:%#v", terminalFailure.OK(), terminalFailure.TerminalState(), failure)
+	}
+	if failure.Code() == "" || failure.Stage() == "" || failure.Message() == "" {
+		t.Fatalf("typed terminal failure is incomplete: %#v", failure)
+	}
+	t.Logf("typed terminal failure decoded: code=%s stage=%s", failure.Code(), failure.Stage())
+
 	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, identity, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
 	if err != nil {
 		t.Fatalf("browser.open_session: %v", err)
