@@ -25,11 +25,15 @@ workspace entrypoint; it must not drift into a second status ledger.
 | Node / TypeScript facade | Runtime Core seam over injected transports with Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers profile seams; daemon providers remain unsupported |
 | Java / JVM facade | Runtime Core seam as a Maven package for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, `CompletableFuture` async adapters, and iterator-backed bounded stream/bidi state; daemon providers remain unsupported |
 | Swift facade | Runtime Core seam as a Swift Package Manager package for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and `AsyncSequence` bounded stream/bidi state; daemon providers remain unsupported |
+| Package metadata | Go module, Python project, Node package, Java Maven package, and Swift Package Manager manifests are machine-checked by `tools/scripts/check-sdk-package-metadata.sh`; this is package metadata, not stable release evidence |
 
 P0 consumer cutover readiness is tracked by
 `tools/scripts/check-sdk-cutover-readiness.sh` and summarized by
 `tools/scripts/check-sdk-completion-audit.sh`. Language profile rows remain
 provider-backed evidence; product cutover claims must cite the aggregate gates.
+Package metadata checks prove manifest identity only; release stability and
+publishing claims still require the package-specific evidence in
+`SDK_PARITY.md`.
 
 ## Files
 

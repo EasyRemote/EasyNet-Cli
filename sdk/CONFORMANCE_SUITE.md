@@ -89,6 +89,7 @@ cargo run --bin sdk-conformance-runner -- --language swift --adapter-report sdk/
 cargo test --lib --features axon-pb sdk_
 cargo test --lib --features axon-pb ffi::
 bash tools/scripts/check-sdk-scaffold.sh
+bash tools/scripts/check-sdk-package-metadata.sh
 bash tools/scripts/check-backend-sdk-only-boundary.sh "$EASYNET_BACKEND_ROOT"
 bash tools/scripts/check-backend-route-family-coverage.sh
 bash tools/scripts/check-sdk-parity-matrix.sh

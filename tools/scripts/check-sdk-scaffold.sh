@@ -231,6 +231,7 @@ for path in \
   tools/scripts/check-sdk-conformance-reports.sh \
   tools/scripts/check-easyremote-sdk-boundary.sh \
   tools/scripts/check-sdk-cutover-readiness.sh \
+  tools/scripts/check-sdk-package-metadata.sh \
   tools/scripts/check-sdk-parity-matrix.sh \
   tools/scripts/check-sdk-product-smokes.sh \
   tools/scripts/check-sdk-ura-naming.sh \
@@ -250,13 +251,20 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/ErrorClass.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorCode.java \
   sdk/java/src/main/java/run/easynet/daemon/FeatureSet.java \
+  sdk/java/src/main/java/run/easynet/daemon/DiagnosticCheck.java \
+  sdk/java/src/main/java/run/easynet/daemon/DiagnosticsReport.java \
+  sdk/java/src/main/java/run/easynet/daemon/DiagnosticsTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/HealthClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/HealthTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationBuilder.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationDraft.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTerminalState.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTuple.java \
+  sdk/java/src/main/java/run/easynet/daemon/JsonValueReader.java \
   sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/RuntimeHealth.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/SDKError.java \
@@ -269,6 +277,7 @@ for path in \
   sdk/swift/README.md \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \
@@ -657,6 +666,7 @@ bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/
 bash "$ROOT/tools/scripts/check-sdk-completion-audit.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-conformance-reports.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" --self-test >/dev/null
+bash "$ROOT/tools/scripts/check-sdk-package-metadata.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-product-smokes.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-sdk-ura-naming.sh" --self-test >/dev/null
@@ -1036,8 +1046,10 @@ require_literal sdk/README.md "Python facade | provider-backed"
 require_literal sdk/README.md "Node / TypeScript facade | Runtime Core seam"
 require_literal sdk/README.md "Java / JVM facade | Runtime Core seam"
 require_literal sdk/README.md "Swift facade | Runtime Core seam"
+require_literal sdk/README.md "Package metadata"
 require_literal sdk/README.md "P0 consumer cutover readiness"
 require_literal sdk/README.md "Node/Java/Swift seam action-adapter reports"
+require_literal sdk/SDK_PARITY.md "Package metadata is machine-checked"
 require_literal sdk/SDK_PARITY.md "P0 consumer cutover readiness is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null

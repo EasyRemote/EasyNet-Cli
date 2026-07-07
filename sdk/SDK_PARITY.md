@@ -45,6 +45,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | compatibility | Compatibility | provider-backed | provider-backed | Product API-key policy, quota, billing, HTTP route shaping, multipart storage, and streaming adapters remain incomplete. |
 | wrappers | Wrappers | provider-backed | provider-backed | Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade. |
 | conformance runner | SDK Parity | provider-backed | provider-backed | Provider-backed reports for non-P0 daemon transports and per-route live product smoke evidence remain incomplete outside the Go/Python SDK parity gate. |
+| package metadata | SDK Packaging | provider-backed | provider-backed | Package metadata is machine-checked for Go, Python, Node, Java, and Swift; publish/release stability, downstream deletion proof, and product cutover evidence remain incomplete. |
 
 ## Known Gaps
 
