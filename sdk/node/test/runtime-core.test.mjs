@@ -35,6 +35,7 @@ import {
   SDKError,
   SurfaceClient,
   SurfaceStatus,
+  WrapperClient,
   profileErrorDetails,
   profileSourceRef,
 } from "../index.js";
@@ -405,6 +406,58 @@ const adminDraftJSON = (descriptorRef, args = {}) =>
     .withMetadata({ profile: "admin_gateway" })
     .build()
     .toJSONString();
+
+const wrapperFileRecord = () => ({
+  profile: "wrappers",
+  kind: "file_record",
+  file_ref: "easynet:///r/example/resource/alice.files/report.txt",
+  owner_ura: "easynet:///r/example/agent/alice.sdk",
+  content_type: "text/plain",
+  size_bytes: 42,
+  content_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  metadata: { profile: "wrappers", source: "wrappers.file_record" },
+});
+
+const wrapperTerminalSession = () => ({
+  profile: "wrappers",
+  kind: "terminal_session",
+  session_id: "term-1",
+  owner_ura: "easynet:///r/example/agent/alice.sdk",
+  state: "active",
+  terminal_ref: "terminal-main",
+  metadata: { profile: "wrappers", source: "wrappers.terminal_session" },
+});
+
+const wrapperRemoteDesktopSession = () => ({
+  profile: "wrappers",
+  kind: "remote_desktop_session",
+  session_id: "rdp-1",
+  owner_ura: "easynet:///r/example/agent/alice.sdk",
+  state: "active",
+  display_ref: "display-main",
+  metadata: { profile: "wrappers", source: "wrappers.remote_desktop_session" },
+});
+
+const wrapperBrowserSession = () => ({
+  profile: "wrappers",
+  kind: "browser_session",
+  session_id: "browser-1",
+  owner_ura: "easynet:///r/example/agent/alice.sdk",
+  state: "starting",
+  browser_ref: "browser-main",
+  metadata: { profile: "wrappers", source: "wrappers.browser_session" },
+});
+
+const wrapperMediaSession = () => ({
+  profile: "wrappers",
+  kind: "media_session",
+  session_id: "media-1",
+  owner_ura: "easynet:///r/example/agent/alice.sdk",
+  state: "active",
+  media_kind: "voice",
+  stream_ref: "stream-voice-1",
+  metadata: { profile: "wrappers", source: "wrappers.media_session" },
+});
 
 const surfaceBase = () => ({
   caller_ura: "easynet:///r/example/agent/alice.sdk",
@@ -2163,6 +2216,63 @@ test("AdminClient delegates gateway carriers and projections without backend onb
   );
   await assert.rejects(
     () => admin.buildAgentStartInvocation({ ...adminBase(), name: "codex" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("WrapperClient projects wrapper records without product bridge policy", async () => {
+  const seen = [];
+  const echoProjection = (method, requestJSON) => {
+    const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+    seen.push({ method, request });
+    return JSON.stringify(request);
+  };
+  const wrappers = new WrapperClient({
+    projectFileRecord: (requestJSON) => echoProjection("project_file", requestJSON),
+    projectTerminalSession: (requestJSON) => echoProjection("project_terminal", requestJSON),
+    projectRemoteDesktopSession: (requestJSON) => echoProjection("project_remote_desktop", requestJSON),
+    projectBrowserSession: (requestJSON) => echoProjection("project_browser", requestJSON),
+    projectMediaSession: (requestJSON) => echoProjection("project_media", requestJSON),
+  });
+
+  const file = await wrappers.projectFileRecord(wrapperFileRecord());
+  const terminal = await wrappers.projectTerminalSession(JSON.stringify(wrapperTerminalSession()));
+  const remoteDesktop = await wrappers.projectRemoteDesktopSession(wrapperRemoteDesktopSession());
+  const browser = await wrappers.projectBrowserSession(Buffer.from(JSON.stringify(wrapperBrowserSession())));
+  const media = await wrappers.projectMediaSession(wrapperMediaSession());
+  const projectedFile = await wrappers.projectFileRecord(file);
+
+  assert.equal(file.fileRef, "easynet:///r/example/resource/alice.files/report.txt");
+  assert.equal(file.ownerURA, "easynet:///r/example/agent/alice.sdk");
+  assert.equal(file.contentType, "text/plain");
+  assert.equal(file.sizeBytes, 42);
+  assert.equal(terminal.terminalRef, "terminal-main");
+  assert.equal(remoteDesktop.displayRef, "display-main");
+  assert.equal(browser.browserRef, "browser-main");
+  assert.equal(browser.state, "starting");
+  assert.equal(media.mediaKind, "voice");
+  assert.equal(media.streamRef, "stream-voice-1");
+  assert.equal(projectedFile.contentHash, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.deepEqual(
+    seen.map((entry) => entry.method),
+    [
+      "project_file",
+      "project_terminal",
+      "project_remote_desktop",
+      "project_browser",
+      "project_media",
+      "project_file",
+    ],
+  );
+
+  await assert.rejects(
+    () => wrappers.projectTerminalSession({ ...wrapperTerminalSession(), owner_ura: "agent:bad" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  const { state, ...missingState } = wrapperBrowserSession();
+  assert.equal(state, "starting");
+  await assert.rejects(
+    () => wrappers.projectBrowserSession(missingState),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });

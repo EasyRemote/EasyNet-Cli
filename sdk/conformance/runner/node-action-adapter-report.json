@@ -340,6 +340,18 @@
       "message": null
     },
     {
+      "case_id": "wrappers/profile_records",
+      "profile": "wrappers",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "version/abi_compatible",
       "profile": "runtime_core",
       "status": "passed",

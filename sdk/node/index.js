@@ -67,6 +67,7 @@ export const HEALTH_PROFILE = "health";
 export const EVENTS_PROFILE = "events";
 export const MISSION_PROFILE = "mission";
 export const ADMIN_GATEWAY_PROFILE = "admin_gateway";
+export const WRAPPERS_PROFILE = "wrappers";
 export const SURFACE_PROFILE = "surface";
 export const COMPATIBILITY_PROFILE = "compatibility";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
@@ -1643,6 +1644,167 @@ export class AdminClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("admin gateway client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class WrapperFileRecord {
+  constructor(fields) {
+    const value = objectValue(fields, "wrapper file record");
+    validateWrapperKind(value, "file_record");
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.fileRef = requiredWrapperURA(value.file_ref, "file_ref");
+    this.ownerURA = requiredWrapperURA(value.owner_ura, "owner_ura");
+    this.contentType = requiredWrapperString(value.content_type, "content_type");
+    this.sizeBytes = wrapperOptionalNonNegativeInteger(value.size_bytes, "size_bytes");
+    this.contentHash = wrapperOptionalString(value.content_hash, "content_hash");
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new WrapperFileRecord(parseJSON(raw, "wrapper file record"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      file_ref: this.fileRef,
+      owner_ura: this.ownerURA,
+      content_type: this.contentType,
+      size_bytes: this.sizeBytes,
+      content_hash: this.contentHash,
+      metadata: this.metadata,
+    };
+  }
+}
+
+class WrapperSessionRecord {
+  constructor(fields, kind, refField) {
+    const value = objectValue(fields, `wrapper ${kind}`);
+    validateWrapperKind(value, kind);
+    this.profile = value.profile;
+    this.kind = value.kind;
+    this.sessionID = requiredWrapperString(value.session_id, "session_id");
+    this.ownerURA = requiredWrapperURA(value.owner_ura, "owner_ura");
+    this.state = requiredWrapperString(value.state, "state");
+    this.refField = refField;
+    this.refValue = wrapperOptionalString(value[refField], refField);
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      session_id: this.sessionID,
+      owner_ura: this.ownerURA,
+      state: this.state,
+      [this.refField]: this.refValue,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class WrapperTerminalSession extends WrapperSessionRecord {
+  constructor(fields) {
+    super(fields, "terminal_session", "terminal_ref");
+    this.terminalRef = this.refValue;
+  }
+
+  static fromJSON(raw) {
+    return new WrapperTerminalSession(parseJSON(raw, "wrapper terminal session"));
+  }
+}
+
+export class WrapperRemoteDesktopSession extends WrapperSessionRecord {
+  constructor(fields) {
+    super(fields, "remote_desktop_session", "display_ref");
+    this.displayRef = this.refValue;
+  }
+
+  static fromJSON(raw) {
+    return new WrapperRemoteDesktopSession(parseJSON(raw, "wrapper remote desktop session"));
+  }
+}
+
+export class WrapperBrowserSession extends WrapperSessionRecord {
+  constructor(fields) {
+    super(fields, "browser_session", "browser_ref");
+    this.browserRef = this.refValue;
+  }
+
+  static fromJSON(raw) {
+    return new WrapperBrowserSession(parseJSON(raw, "wrapper browser session"));
+  }
+}
+
+export class WrapperMediaSession extends WrapperSessionRecord {
+  constructor(fields) {
+    const value = objectValue(fields, "wrapper media session");
+    super(value, "media_session", "stream_ref");
+    this.mediaKind = requiredWrapperString(value.media_kind, "media_kind");
+    this.streamRef = this.refValue;
+  }
+
+  static fromJSON(raw) {
+    return new WrapperMediaSession(parseJSON(raw, "wrapper media session"));
+  }
+
+  toJSON() {
+    return {
+      ...super.toJSON(),
+      media_kind: this.mediaKind,
+    };
+  }
+}
+
+export class WrapperClient {
+  constructor(transport) {
+    if (!transport || typeof transport.projectFileRecord !== "function") {
+      throw invalidSDK("wrapper transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async projectFileRecord(value) {
+    return WrapperFileRecord.fromJSON(await callWrapperProjection(this.requireOpen(), "projectFileRecord", value));
+  }
+
+  async projectTerminalSession(value) {
+    return WrapperTerminalSession.fromJSON(await callWrapperProjection(this.requireOpen(), "projectTerminalSession", value));
+  }
+
+  async projectRemoteDesktopSession(value) {
+    return WrapperRemoteDesktopSession.fromJSON(await callWrapperProjection(this.requireOpen(), "projectRemoteDesktopSession", value));
+  }
+
+  async projectBrowserSession(value) {
+    return WrapperBrowserSession.fromJSON(await callWrapperProjection(this.requireOpen(), "projectBrowserSession", value));
+  }
+
+  async projectMediaSession(value) {
+    return WrapperMediaSession.fromJSON(await callWrapperProjection(this.requireOpen(), "projectMediaSession", value));
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("wrapper client is closed");
     }
     return this.transport;
   }
@@ -4359,6 +4521,40 @@ function callAdminProjection(transport, method, value) {
   throw invalidAdminGateway("admin gateway projection must be bytes, string, or object");
 }
 
+function validateWrapperKind(value, kind) {
+  if (requiredWrapperString(value.profile, "profile") !== WRAPPERS_PROFILE || requiredWrapperString(value.kind, "kind") !== kind) {
+    throw invalidWrappers(`invalid ${kind} projection`);
+  }
+}
+
+function callWrapperProjection(transport, method, value) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  if (
+    value instanceof WrapperFileRecord ||
+    value instanceof WrapperTerminalSession ||
+    value instanceof WrapperRemoteDesktopSession ||
+    value instanceof WrapperBrowserSession ||
+    value instanceof WrapperMediaSession
+  ) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value.toJSON()))));
+  }
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw invalidWrappers("wrapper projection JSON is required");
+    }
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value))));
+  }
+  throw invalidWrappers("wrapper projection must be bytes, string, or object");
+}
+
 function compatibilityCarrierBaseFields() {
   return [
     "caller_ura",
@@ -5217,6 +5413,41 @@ function adminStringArray(value, field) {
     throw invalidAdminGateway(`${field} must be an array`);
   }
   return value.map((item) => requiredAdminString(item, field));
+}
+
+function requiredWrapperString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidWrappers(`${field} is required`);
+  }
+  return value;
+}
+
+function wrapperOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidWrappers(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredWrapperURA(value, field) {
+  const text = requiredWrapperString(value, field);
+  if (!text.startsWith("easynet:///r/")) {
+    throw invalidWrappers(`${field} must be a URA`);
+  }
+  return text;
+}
+
+function wrapperOptionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidWrappers(`${field} must be a non-negative integer`);
+  }
+  return value;
 }
 
 function requiredCompatibilityString(value, field) {
@@ -6435,6 +6666,10 @@ function invalidMission(message, details = {}) {
 
 function invalidAdminGateway(message, details = {}) {
   return invalidProfile(ADMIN_GATEWAY_PROFILE, "admin_gateway", message, details);
+}
+
+function invalidWrappers(message, details = {}) {
+  return invalidProfile(WRAPPERS_PROFILE, "wrappers", message, details);
 }
 
 function invalidSurface(message, details = {}) {

@@ -50,6 +50,7 @@ export declare const HEALTH_PROFILE: "health";
 export declare const EVENTS_PROFILE: "events";
 export declare const MISSION_PROFILE: "mission";
 export declare const ADMIN_GATEWAY_PROFILE: "admin_gateway";
+export declare const WRAPPERS_PROFILE: "wrappers";
 export declare const SURFACE_PROFILE: "surface";
 export declare const COMPATIBILITY_PROFILE: "compatibility";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
@@ -1105,6 +1106,127 @@ export class AdminClient {
   projectDeviceSession(value: AdminProjectionInput): Promise<DeviceSession>;
   projectDeviceSessionPage(value: AdminProjectionInput): Promise<DeviceSessionPage>;
   projectDeviceAdminResult(value: AdminProjectionInput): Promise<AdminGatewayResult>;
+  close(): Promise<void>;
+}
+
+export interface WrapperFileRecordFields {
+  profile: "wrappers";
+  kind: "file_record";
+  file_ref: string;
+  owner_ura: string;
+  content_type: string;
+  size_bytes?: number | null;
+  content_hash?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export class WrapperFileRecord {
+  profile: "wrappers";
+  kind: "file_record";
+  fileRef: string;
+  ownerURA: string;
+  contentType: string;
+  sizeBytes: number | null;
+  contentHash: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: WrapperFileRecordFields);
+  static fromJSON(raw: Uint8Array | string): WrapperFileRecord;
+  toJSON(): Required<WrapperFileRecordFields>;
+}
+
+export interface WrapperSessionRecordFields {
+  profile: "wrappers";
+  kind: "terminal_session" | "remote_desktop_session" | "browser_session" | "media_session";
+  session_id: string;
+  owner_ura: string;
+  state: string;
+  terminal_ref?: string | null;
+  display_ref?: string | null;
+  browser_ref?: string | null;
+  media_kind?: string;
+  stream_ref?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export class WrapperTerminalSession {
+  profile: "wrappers";
+  kind: "terminal_session";
+  sessionID: string;
+  ownerURA: string;
+  state: string;
+  terminalRef: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: WrapperSessionRecordFields);
+  static fromJSON(raw: Uint8Array | string): WrapperTerminalSession;
+  toJSON(): Record<string, unknown>;
+}
+
+export class WrapperRemoteDesktopSession {
+  profile: "wrappers";
+  kind: "remote_desktop_session";
+  sessionID: string;
+  ownerURA: string;
+  state: string;
+  displayRef: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: WrapperSessionRecordFields);
+  static fromJSON(raw: Uint8Array | string): WrapperRemoteDesktopSession;
+  toJSON(): Record<string, unknown>;
+}
+
+export class WrapperBrowserSession {
+  profile: "wrappers";
+  kind: "browser_session";
+  sessionID: string;
+  ownerURA: string;
+  state: string;
+  browserRef: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: WrapperSessionRecordFields);
+  static fromJSON(raw: Uint8Array | string): WrapperBrowserSession;
+  toJSON(): Record<string, unknown>;
+}
+
+export class WrapperMediaSession {
+  profile: "wrappers";
+  kind: "media_session";
+  sessionID: string;
+  ownerURA: string;
+  state: string;
+  mediaKind: string;
+  streamRef: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: WrapperSessionRecordFields);
+  static fromJSON(raw: Uint8Array | string): WrapperMediaSession;
+  toJSON(): Record<string, unknown>;
+}
+
+export type WrapperProjectionInput =
+  | Uint8Array
+  | string
+  | Record<string, unknown>
+  | WrapperFileRecord
+  | WrapperTerminalSession
+  | WrapperRemoteDesktopSession
+  | WrapperBrowserSession
+  | WrapperMediaSession;
+
+export interface WrapperTransport {
+  projectFileRecord(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectTerminalSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectRemoteDesktopSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectBrowserSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectMediaSession?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class WrapperClient {
+  constructor(transport: WrapperTransport);
+  projectFileRecord(value: WrapperProjectionInput): Promise<WrapperFileRecord>;
+  projectTerminalSession(value: WrapperProjectionInput): Promise<WrapperTerminalSession>;
+  projectRemoteDesktopSession(value: WrapperProjectionInput): Promise<WrapperRemoteDesktopSession>;
+  projectBrowserSession(value: WrapperProjectionInput): Promise<WrapperBrowserSession>;
+  projectMediaSession(value: WrapperProjectionInput): Promise<WrapperMediaSession>;
   close(): Promise<void>;
 }
 
