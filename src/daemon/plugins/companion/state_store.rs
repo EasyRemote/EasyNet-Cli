@@ -97,12 +97,17 @@ impl DesktopCompanionStateStore {
 
     pub fn desired_state(&self, id: &str, version: &str) -> Result<CompanionDesiredState> {
         Ok(self
+            .record(id, version)?
+            .map(|record| record.desired_state)
+            .unwrap_or_default())
+    }
+
+    pub fn record(&self, id: &str, version: &str) -> Result<Option<CompanionStateRecord>> {
+        Ok(self
             .read()?
             .companion
             .into_iter()
-            .find(|record| record.id == id && record.version == version)
-            .map(|record| record.desired_state)
-            .unwrap_or_default())
+            .find(|record| record.id == id && record.version == version))
     }
 
     pub fn set_desired_state(

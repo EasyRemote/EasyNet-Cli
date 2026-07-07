@@ -231,6 +231,22 @@ pub fn project_state(
     }
 }
 
+pub fn project_state_with_action_error(
+    desired: CompanionDesiredState,
+    supervisor: CompanionSupervisorState,
+    observed: CompanionObservedState,
+    has_action_error: bool,
+) -> CompanionProjectedState {
+    let projected = project_state(desired, supervisor, observed);
+    if has_action_error
+        && desired == CompanionDesiredState::Enabled
+        && projected == CompanionProjectedState::ReadyStopped
+    {
+        return CompanionProjectedState::Error;
+    }
+    projected
+}
+
 pub const fn boot_policy_wire(policy: PluginCompanionBootPolicy) -> &'static str {
     match policy {
         PluginCompanionBootPolicy::Manual => "manual",
@@ -281,6 +297,19 @@ mod tests {
                 CompanionObservedState::Running
             ),
             CompanionProjectedState::Running
+        );
+    }
+
+    #[test]
+    fn action_error_overrides_ready_stopped_projection() {
+        assert_eq!(
+            project_state_with_action_error(
+                CompanionDesiredState::Enabled,
+                CompanionSupervisorState::InstalledEnabled,
+                CompanionObservedState::NotRunning,
+                true,
+            ),
+            CompanionProjectedState::Error
         );
     }
 }

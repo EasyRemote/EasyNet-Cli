@@ -24,9 +24,10 @@ pub use planner::{
 };
 pub use state_store::DesktopCompanionStateStore;
 pub use status::{
-    boot_policy_wire, health_wire, project_state, stop_policy_wire, CompanionDesiredState,
-    CompanionObservation, CompanionObservedState, CompanionProjectedState, CompanionSessionStatus,
-    CompanionSupervisorState, DesktopCompanionStatus,
+    boot_policy_wire, health_wire, project_state, project_state_with_action_error,
+    stop_policy_wire, CompanionDesiredState, CompanionObservation, CompanionObservedState,
+    CompanionProjectedState, CompanionSessionStatus, CompanionSupervisorState,
+    DesktopCompanionStatus,
 };
 
 /// Report returned by platform supervisor actions.
@@ -49,6 +50,47 @@ impl CompanionActionReport {
             changed: true,
             message: message.into(),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DesktopCompanionReconcileFailure {
+    pub package_id: String,
+    pub package_version: String,
+    pub action: &'static str,
+    pub code: &'static str,
+    pub reason: String,
+}
+
+impl DesktopCompanionReconcileFailure {
+    fn start_failed(plan: &DesktopCompanionPlan, reason: impl Into<String>) -> Self {
+        Self {
+            package_id: plan.package_id.clone(),
+            package_version: plan.package_version.clone(),
+            action: "start",
+            code: "start_failed",
+            reason: reason.into(),
+        }
+    }
+
+    fn state_store_failed(plan: &DesktopCompanionPlan, reason: impl Into<String>) -> Self {
+        Self {
+            package_id: plan.package_id.clone(),
+            package_version: plan.package_version.clone(),
+            action: "record",
+            code: "state_store_failed",
+            reason: reason.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for DesktopCompanionReconcileFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}@{} {}: {}",
+            self.package_id, self.package_version, self.code, self.reason
+        )
     }
 }
 
@@ -118,9 +160,13 @@ impl DesktopCompanionManager {
     }
 
     pub fn status_for_plan(&self, plan: &DesktopCompanionPlan) -> Result<DesktopCompanionStatus> {
-        let desired = self
+        let state_record = self
             .state_store
-            .desired_state(&plan.package_id, &plan.package_version)?;
+            .record(&plan.package_id, &plan.package_version)?;
+        let desired = state_record
+            .as_ref()
+            .map(|record| record.desired_state)
+            .unwrap_or_default();
         let session = self.supervisor.probe_session();
         let supervisor = if !session.is_available() {
             CompanionSupervisorState::UnsupportedSession
@@ -128,14 +174,20 @@ impl DesktopCompanionManager {
             self.supervisor.supervisor_state(plan)
         };
         let observation = self.supervisor.observe(plan);
-        Ok(status_from_parts(plan, desired, supervisor, observation))
+        Ok(status_from_parts(
+            plan,
+            desired,
+            supervisor,
+            observation,
+            state_record.as_ref(),
+        ))
     }
 
     pub fn ensure_running_after_daemon_ready(
         &self,
         packages: &[SharedPluginPackage],
-    ) -> Vec<String> {
-        let mut warnings = Vec::new();
+    ) -> Vec<DesktopCompanionReconcileFailure> {
+        let mut failures = Vec::new();
         for package in packages {
             if package.manifest().kind() != PluginKind::DesktopCompanion {
                 continue;
@@ -155,14 +207,42 @@ impl DesktopCompanionManager {
             if desired != CompanionDesiredState::Enabled {
                 continue;
             }
-            if let Err(err) = self.supervisor.start(&plan) {
-                warnings.push(format!(
-                    "{}@{} start_failed: {err}",
-                    plan.package_id, plan.package_version
-                ));
+            match self.supervisor.start(&plan) {
+                Ok(_) => {
+                    if let Err(err) = self.state_store.set_desired_state(
+                        &plan.package_id,
+                        &plan.package_version,
+                        CompanionDesiredState::Enabled,
+                        "start",
+                        None,
+                    ) {
+                        failures.push(DesktopCompanionReconcileFailure::state_store_failed(
+                            &plan,
+                            err.to_string(),
+                        ));
+                    }
+                }
+                Err(err) => {
+                    let reason = err.to_string();
+                    if let Err(record_err) = self.state_store.set_desired_state(
+                        &plan.package_id,
+                        &plan.package_version,
+                        CompanionDesiredState::Enabled,
+                        "start",
+                        Some(reason.clone()),
+                    ) {
+                        failures.push(DesktopCompanionReconcileFailure::state_store_failed(
+                            &plan,
+                            record_err.to_string(),
+                        ));
+                    }
+                    failures.push(DesktopCompanionReconcileFailure::start_failed(
+                        &plan, reason,
+                    ));
+                }
             }
         }
-        warnings
+        failures
     }
 
     pub fn enable(&self, package: &SharedPluginPackage) -> Result<serde_json::Value> {
@@ -382,8 +462,21 @@ fn status_from_parts(
     desired: CompanionDesiredState,
     supervisor: CompanionSupervisorState,
     observation: CompanionObservation,
+    state_record: Option<&state_store::CompanionStateRecord>,
 ) -> DesktopCompanionStatus {
-    let projected = project_state(desired, supervisor, observation.observed_state);
+    let state_error = state_record.and_then(state_record_error);
+    let observed_error = observation.error.and_then(non_empty);
+    let error = status_error(observation.observed_state, observed_error, state_error);
+    let projected = project_state_with_action_error(
+        desired,
+        supervisor,
+        observation.observed_state,
+        error
+            .as_ref()
+            .and_then(|value| value.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|code| action_error_code_is_projected(code)),
+    );
     DesktopCompanionStatus {
         package_id: plan.package_id.clone(),
         package_version: plan.package_version.clone(),
@@ -400,10 +493,74 @@ fn status_from_parts(
         version: observation.version,
         last_seen_unix_ms: observation.last_seen_unix_ms,
         launch_method: Some(plan.spec.launch_method().to_string()),
-        error: observation
-            .error
-            .map(|message| json!({ "message": message })),
+        error,
     }
+}
+
+fn state_record_error(record: &state_store::CompanionStateRecord) -> Option<(&str, String)> {
+    let message = record
+        .last_error
+        .as_ref()
+        .and_then(|value| non_empty(value.clone()))?;
+    let action = record.last_action.as_deref().unwrap_or("action");
+    Some((action_error_code(action), message))
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn status_error(
+    observed: CompanionObservedState,
+    observed_error: Option<String>,
+    state_error: Option<(&str, String)>,
+) -> Option<serde_json::Value> {
+    if let Some(message) = observed_error {
+        return Some(json!({
+            "code": observed_error_code(observed),
+            "message": message,
+        }));
+    }
+    let (code, message) = state_error?;
+    Some(json!({
+        "code": code,
+        "message": message,
+    }))
+}
+
+fn observed_error_code(observed: CompanionObservedState) -> &'static str {
+    match observed {
+        CompanionObservedState::VersionMismatch => "version_mismatch",
+        CompanionObservedState::HealthError => "health_stale",
+        _ => "status_file_invalid",
+    }
+}
+
+fn action_error_code(action: &str) -> &'static str {
+    match action {
+        "install" => "supervisor_install_failed",
+        "enable" => "supervisor_enable_failed",
+        "disable" => "supervisor_disable_failed",
+        "start" => "start_failed",
+        "stop" => "stop_failed",
+        _ => "action_failed",
+    }
+}
+
+fn action_error_code_is_projected(code: &str) -> bool {
+    matches!(
+        code,
+        "supervisor_install_failed"
+            | "supervisor_enable_failed"
+            | "supervisor_disable_failed"
+            | "start_failed"
+            | "stop_failed"
+            | "action_failed"
+    )
 }
 
 fn companion_status_is_running(status: &DesktopCompanionStatus) -> bool {
@@ -460,4 +617,178 @@ pub fn companion_status_file(package_id: &str) -> std::path::PathBuf {
         .join(".easynet/companions")
         .join(package_id)
         .join("status.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use crate::daemon::plugins::package::PluginPackage;
+
+    use super::*;
+
+    #[test]
+    fn post_ready_start_failure_is_nonfatal_and_status_visible() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let manager = test_manager(state_root.path().join("state.toml"), true);
+        manager
+            .state_store
+            .set_desired_state(
+                "test.desktop.menubar",
+                "0.1.0",
+                CompanionDesiredState::Enabled,
+                "enable",
+                None,
+            )
+            .expect("desired state");
+
+        let failures = manager.ensure_running_after_daemon_ready(&[package.clone()]);
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].code, "start_failed");
+        assert_eq!(failures[0].action, "start");
+        assert!(
+            failures[0].reason.contains("injected start failure"),
+            "failure reason should preserve supervisor detail"
+        );
+
+        let status = manager.status_for_package(&package).expect("status");
+        assert_eq!(status.projected_state, "error");
+        let error = status.error.expect("status error");
+        assert_eq!(error["code"], "start_failed");
+        assert!(error["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("injected start failure"));
+    }
+
+    #[test]
+    fn post_ready_start_success_clears_previous_start_error() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let manager = test_manager(state_root.path().join("state.toml"), false);
+        manager
+            .state_store
+            .set_desired_state(
+                "test.desktop.menubar",
+                "0.1.0",
+                CompanionDesiredState::Enabled,
+                "start",
+                Some("old start failure".to_string()),
+            )
+            .expect("desired state");
+
+        let failures = manager.ensure_running_after_daemon_ready(&[package.clone()]);
+
+        assert!(failures.is_empty());
+        let status = manager.status_for_package(&package).expect("status");
+        assert_eq!(status.projected_state, "ready_stopped");
+        assert!(status.error.is_none());
+    }
+
+    fn test_manager(state_path: std::path::PathBuf, fail_start: bool) -> DesktopCompanionManager {
+        DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(TestCompanionSupervisor { fail_start }),
+            DesktopCompanionStateStore::new(state_path),
+        )
+    }
+
+    struct TestCompanionSupervisor {
+        fail_start: bool,
+    }
+
+    impl DesktopCompanionSupervisor for TestCompanionSupervisor {
+        fn platform(&self) -> &'static str {
+            "macos"
+        }
+
+        fn probe_session(&self) -> CompanionSessionStatus {
+            CompanionSessionStatus::Available
+        }
+
+        fn install(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            Ok(CompanionActionReport::changed("installed"))
+        }
+
+        fn enable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            Ok(CompanionActionReport::changed("enabled"))
+        }
+
+        fn disable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            Ok(CompanionActionReport::changed("disabled"))
+        }
+
+        fn remove(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            Ok(CompanionActionReport::changed("removed"))
+        }
+
+        fn start(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            if self.fail_start {
+                return Err(PluginHostError::InvalidCompanionManifest {
+                    id: plan.package_id.clone(),
+                    reason: "injected start failure".to_string(),
+                });
+            }
+            Ok(CompanionActionReport::changed("started"))
+        }
+
+        fn stop(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            Ok(CompanionActionReport::changed("stopped"))
+        }
+
+        fn supervisor_state(&self, _plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
+            CompanionSupervisorState::InstalledEnabled
+        }
+
+        fn observe(&self, _plan: &DesktopCompanionPlan) -> CompanionObservation {
+            CompanionObservation {
+                observed_state: CompanionObservedState::NotRunning,
+                ..CompanionObservation::default()
+            }
+        }
+    }
+
+    fn write_companion_test_package(root: &Path) {
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "test.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "state/easynet-menubar.status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect("manifest");
+    }
 }

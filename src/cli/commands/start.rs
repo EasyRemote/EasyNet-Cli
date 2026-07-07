@@ -204,10 +204,19 @@ fn ensure_desktop_companions_after_ready() {
     let Ok(state) = crate::daemon::plugins::default_state() else {
         return;
     };
-    let warnings = crate::daemon::plugins::DesktopCompanionManager::current()
+    let failures = crate::daemon::plugins::DesktopCompanionManager::current()
         .ensure_running_after_daemon_ready(state.index().packages());
-    for warning in warnings {
-        output::warn(&format!("desktop companion reconcile warning: {warning}"));
+    for failure in failures {
+        crate::op_event!(
+            component = desktop_companion,
+            kind = post_ready_reconcile_failed,
+            package_id = failure.package_id,
+            package_version = failure.package_version,
+            action = failure.action,
+            code = failure.code,
+            reason = failure.reason,
+        );
+        output::warn(&format!("desktop companion reconcile warning: {failure}"));
     }
 }
 
