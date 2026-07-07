@@ -625,6 +625,98 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testSurfaceProfileDelegatesCarriersAndProjections() async throws {
+        let surface = SurfaceClient(transport: FixtureSurfaceTransport())
+        let list = try SurfaceListPagesRequest(
+            base: surfaceCarrierBase(metadata: ["request_id": .string("surface-list-1")]),
+            limit: 50
+        )
+        let create = try SurfaceCreatePageRequest(
+            base: surfaceCarrierBase(metadata: ["request_id": .string("surface-create-1")]),
+            projectID: "docs",
+            folder: "/tmp/easynet-pages-docs",
+            visibility: "public"
+        )
+        let delete = try SurfaceDeletePageRequest(
+            base: surfaceCarrierBase(metadata: ["request_id": .string("surface-delete-1")]),
+            projectID: "docs"
+        )
+        let manifest = try SurfaceManifestRequest(
+            base: surfaceCarrierBase(metadata: ["request_id": .string("surface-manifest-1")]),
+            projectID: "docs"
+        )
+        let health = try SurfaceHealthRequest(
+            base: surfaceCarrierBase(metadata: ["request_id": .string("surface-health-1")]),
+            surfaceRef: "easynet:///r/example/resource/alice.docs"
+        )
+
+        let listInvocation = try await surface.buildListPagesInvocation(list)
+        let createInvocation = try await surface.buildCreatePageInvocation(create)
+        let deleteInvocation = try await surface.buildDeletePageInvocation(delete)
+        let manifestInvocation = try await surface.buildManifestInvocation(manifest)
+        let healthInvocation = try await surface.buildHealthInvocation(health)
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(listInvocation["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/alice.pages.pages.list@1.0.0"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(createInvocation["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(deleteInvocation["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(manifestInvocation["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/alice.pages.pages.get@1.0.0"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(healthInvocation["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/alice.pages.pages.health@1.0.0"
+        )
+
+        let pagePage = try await surface.listPages(list)
+        XCTAssertEqual(pagePage.limit, 50)
+        XCTAssertEqual(pagePage.items.count, 1)
+        XCTAssertEqual(try surface.projectPagePage(fixture("surface-page-page.v4.json")).source, "pages_read_model")
+        let record = try await surface.createPage(create)
+        XCTAssertEqual(record.pageID, "docs")
+        let mutation = try await surface.deletePage(delete)
+        let projectedManifest = try await surface.surfaceManifest(manifest)
+        let publicRef = try await surface.publicPageRef(record)
+        let projectedHealth = try await surface.surfaceHealth(health)
+        let status = try await surface.surfaceStatus(health)
+        XCTAssertTrue(mutation.removed)
+        XCTAssertEqual(projectedManifest.entrypoint["kind"], .string("public_page_ref"))
+        XCTAssertEqual(publicRef.routeKind, "hub_web")
+        XCTAssertTrue(projectedHealth.ready)
+        XCTAssertTrue(status.descriptorRef.contains("pages.health"))
+        XCTAssertEqual(try surface.projectManifest(fixture("surface-manifest.v4.json")).pageID, "docs")
+        XCTAssertEqual(try surface.projectHealth(fixture("surface-health.v4.json")).pageCount, 1)
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try SurfaceListPagesRequest(base: surfaceCarrierBase(metadata: [:]), limit: 501)
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try SurfaceCreatePageRequest(
+                base: surfaceCarrierBase(metadata: [:]),
+                projectID: "docs",
+                folder: "tmp/easynet-pages-docs"
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try SurfaceHealthRequest(
+                base: surfaceCarrierBase(metadata: [:]),
+                surfaceRef: "https://example/web/alice/docs/"
+            )
+        }
+        try await surface.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await surface.listPages(list)
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -670,6 +762,18 @@ final class RuntimeCoreSeamTests: XCTestCase {
             callerURA: "easynet:///r/example/agent/alice.sdk",
             calleeURA: "easynet:///r/example/device/dev-a",
             subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            metadata: metadata
+        )
+    }
+
+    private func surfaceCarrierBase(metadata: [String: JSONValue]) throws -> SurfaceCarrierBase {
+        try SurfaceCarrierBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/agent/alice.pages",
+            subjectURA: "easynet:///r/example/agent/alice.pages",
             descriptorVersion: "1.0.0",
             nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
             causalContext: ["form": .string("none")],
@@ -987,6 +1091,70 @@ final class FixtureEventTransport: EventTransport, @unchecked Sendable {
 
     func projectTerminal(_ terminalJSON: Data) async throws -> Data {
         fixture("event.directory-terminal.v4.json")
+    }
+}
+
+final class FixtureSurfaceTransport: SurfaceTransport, @unchecked Sendable {
+    func buildListPagesInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-list-pages-request.v4.json")
+        return fixture("surface-list-pages-invocation.v4.json")
+    }
+
+    func buildCreatePageInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-create-page-request.v4.json")
+        return fixture("surface-create-page-invocation.v4.json")
+    }
+
+    func buildDeletePageInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-delete-page-request.v4.json")
+        return fixture("surface-delete-page-invocation.v4.json")
+    }
+
+    func buildManifestInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-manifest-request.v4.json")
+        return fixture("surface-manifest-invocation.v4.json")
+    }
+
+    func buildHealthInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-health-request.v4.json")
+        return fixture("surface-health-invocation.v4.json")
+    }
+
+    func listPages(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-list-pages-request.v4.json")
+        return fixture("surface-page-page.v4.json")
+    }
+
+    func createPage(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-create-page-request.v4.json")
+        return fixture("surface-page-record.v4.json")
+    }
+
+    func deletePage(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-delete-page-request.v4.json")
+        return fixture("surface-mutation-result.v4.json")
+    }
+
+    func surfaceManifest(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-manifest-request.v4.json")
+        return fixture("surface-manifest.v4.json")
+    }
+
+    func publicPageRef(_ pageJSON: Data) async throws -> Data {
+        let page = try decodedObject(pageJSON)
+        XCTAssertEqual(page["page_id"] as? String, "docs")
+        return fixture("surface-public-page-ref.v4.json")
+    }
+
+    func surfaceHealth(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "surface-health-request.v4.json")
+        return fixture("surface-health.v4.json")
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
     }
 }
 

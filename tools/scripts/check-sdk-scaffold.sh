@@ -317,12 +317,27 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/StreamEvent.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamHandle.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamSource.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceCarrierBase.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceCreatePageRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceDeletePageRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceHealth.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceHealthCheck.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceHealthRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceListPagesRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceManifest.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceManifestRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceMutationResult.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfacePagePage.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfacePageRecord.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfacePublicPageRef.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/SurfaceTransport.java \
   sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
   sdk/swift/.gitignore \
   sdk/swift/Package.swift \
   sdk/swift/README.md \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
-  sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
@@ -331,6 +346,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Stream.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Surface.swift \
   sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \

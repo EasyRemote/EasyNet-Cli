@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Surface page APIs build complete Invocation carriers over daemon pages abilities and project daemon page facts without owning backend rendering.
 steps:
   - action: build_surface_list_pages_invocation

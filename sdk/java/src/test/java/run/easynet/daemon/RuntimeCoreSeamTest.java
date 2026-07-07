@@ -33,6 +33,7 @@ public final class RuntimeCoreSeamTest {
     receiptRejectsInvalidSelectorAndSummaryVerification();
     receiptOpaqueRefRequiresExplicitAnchorFacts();
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
+    surfaceProfileDelegatesCarriersAndProjections();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -814,6 +815,98 @@ public final class RuntimeCoreSeamTest {
         metadata);
   }
 
+  private static void surfaceProfileDelegatesCarriersAndProjections() throws Exception {
+    var transport = new FixtureSurfaceTransport();
+    var surface = new SurfaceClient(transport);
+
+    var list =
+        new SurfaceListPagesRequest(
+            surfaceCarrierBase(Map.of("request_id", "surface-list-1")), 50, "");
+    var create =
+        new SurfaceCreatePageRequest(
+            surfaceCarrierBase(Map.of("request_id", "surface-create-1")),
+            "docs",
+            "/tmp/easynet-pages-docs",
+            "public");
+    var delete =
+        new SurfaceDeletePageRequest(
+            surfaceCarrierBase(Map.of("request_id", "surface-delete-1")), "docs");
+    var manifest =
+        new SurfaceManifestRequest(
+            surfaceCarrierBase(Map.of("request_id", "surface-manifest-1")), "docs");
+    var health =
+        new SurfaceHealthRequest(
+            surfaceCarrierBase(Map.of("request_id", "surface-health-1")),
+            null,
+            "easynet:///r/example/resource/alice.docs");
+
+    check(
+        surface.buildListPagesInvocation(list)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/alice.pages.pages.list@1.0.0"),
+        "surface list descriptor");
+    check(
+        surface.buildCreatePageInvocation(create)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/alice.pages.pages.publish@1.0.0"),
+        "surface create descriptor");
+    check(
+        surface.buildDeletePageInvocation(delete)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0"),
+        "surface delete descriptor");
+    check(
+        surface.buildManifestInvocation(manifest)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/alice.pages.pages.get@1.0.0"),
+        "surface manifest descriptor");
+    check(
+        surface.buildHealthInvocation(health)
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/alice.pages.pages.health@1.0.0"),
+        "surface health descriptor");
+
+    var pagePage = surface.listPages(list);
+    check(pagePage.limit() == 50 && pagePage.items().size() == 1, "surface page page");
+    check(
+        surface.projectPagePage(fixture("surface-page-page.v4.json")).source().equals("pages_read_model"),
+        "surface project page");
+    var record = surface.createPage(create);
+    check(record.pageID().equals("docs"), "surface create page record");
+    check(surface.deletePage(delete).removed(), "surface delete mutation");
+    check(
+        surface.surfaceManifest(manifest).entrypoint().get("kind").equals("public_page_ref"),
+        "surface manifest entrypoint");
+    check(surface.publicPageRef(record).routeKind().equals("hub_web"), "surface public ref");
+    check(surface.surfaceHealth(health).ready(), "surface health");
+    check(surface.surfaceStatus(health).descriptorRef().contains("pages.health"), "surface status alias");
+    check(surface.projectManifest(fixture("surface-manifest.v4.json")).pageID().equals("docs"), "surface project manifest");
+    check(surface.projectHealth(fixture("surface-health.v4.json")).pageCount() == 1, "surface project health");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> new SurfaceListPagesRequest(surfaceCarrierBase(Map.of()), 501, ""));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> new SurfaceCreatePageRequest(surfaceCarrierBase(Map.of()), "docs", "tmp/easynet-pages-docs", "public"));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> new SurfaceHealthRequest(surfaceCarrierBase(Map.of()), null, "https://example/web/alice/docs/"));
+    surface.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> surface.listPages(list));
+  }
+
+  private static SurfaceCarrierBase surfaceCarrierBase(Map<String, Object> metadata) {
+    return new SurfaceCarrierBase(
+        "easynet:///r/example/agent/alice.sdk",
+        "easynet:///r/example/agent/alice.pages",
+        "easynet:///r/example/agent/alice.pages",
+        "1.0.0",
+        "AQIDBAUGBwgJCgsMDQ4PEA==",
+        Map.of("form", "none"),
+        metadata);
+  }
+
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
     try {
       action.run();
@@ -1174,4 +1267,80 @@ public final class RuntimeCoreSeamTest {
       return fixture("event.directory-terminal.v4.json");
     }
   }
+
+  private static final class FixtureSurfaceTransport implements SurfaceTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    @Override
+    public byte[] buildListPagesInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-list-pages-request.v4.json", "surface list request");
+      return fixture("surface-list-pages-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildCreatePageInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-create-page-request.v4.json", "surface create request");
+      return fixture("surface-create-page-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildDeletePageInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-delete-page-request.v4.json", "surface delete request");
+      return fixture("surface-delete-page-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildManifestInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-manifest-request.v4.json", "surface manifest request");
+      return fixture("surface-manifest-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildHealthInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-health-request.v4.json", "surface health request");
+      return fixture("surface-health-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] listPages(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-list-pages-request.v4.json", "surface list pages request");
+      return fixture("surface-page-page.v4.json");
+    }
+
+    @Override
+    public byte[] createPage(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-create-page-request.v4.json", "surface create page request");
+      return fixture("surface-page-record.v4.json");
+    }
+
+    @Override
+    public byte[] deletePage(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-delete-page-request.v4.json", "surface delete page request");
+      return fixture("surface-mutation-result.v4.json");
+    }
+
+    @Override
+    public byte[] surfaceManifest(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-manifest-request.v4.json", "surface manifest request");
+      return fixture("surface-manifest.v4.json");
+    }
+
+    @Override
+    public byte[] publicPageRef(byte[] pageJSON) {
+      var page = JsonValueReader.object(pageJSON, "surface page record JSON");
+      check(page.get("page_id").equals("docs"), "surface public page input");
+      return fixture("surface-public-page-ref.v4.json");
+    }
+
+    @Override
+    public byte[] surfaceHealth(byte[] requestJSON) {
+      expectRequest(requestJSON, "surface-health-request.v4.json", "surface health request");
+      return fixture("surface-health.v4.json");
+    }
+  }
+
 }
