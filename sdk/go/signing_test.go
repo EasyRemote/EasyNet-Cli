@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -60,8 +61,7 @@ func TestPreparedInvocationRejectsMissingCanonicalBytes(t *testing.T) {
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
 			"args": {},
-			"content_type": "application/json",
-			"args_digest_hex": "00"
+			"content_type": "application/json"
 		},
 		"signing_material": {
 			"args_digest_hex": "00",
@@ -73,6 +73,38 @@ func TestPreparedInvocationRejectsMissingCanonicalBytes(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestPreparedInvocationRejectsMaterialFieldsInTuple(t *testing.T) {
+	_, err := NewPreparedInvocationFromJSON([]byte(`{
+		"prepared_id": "prepared-example-1",
+		"tuple": {
+			"caller_ura": "easynet:///r/example/agent/alice.sdk",
+			"callee_ura": "easynet:///r/example/device/dev-a",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"subject_ura": "easynet:///r/example/device/dev-a",
+			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+			"causal_context": {"form": "none"},
+			"args": {},
+			"content_type": "application/json",
+			"args_digest_hex": "00"
+		},
+		"signing_material": {
+			"canonical_bytes_base64": "ZXhhbXBsZQ==",
+			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"expires_at_unix_ms": 1783000000000
+		}
+	}`))
+	if err == nil {
+		t.Fatalf("NewPreparedInvocationFromJSON succeeded, want invalid argument")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "args_digest_hex is not an invocation field") {
+		t.Fatalf("error = %v, want material tuple field rejection", err)
 	}
 }
 
