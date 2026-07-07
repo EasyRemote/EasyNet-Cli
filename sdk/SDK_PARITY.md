@@ -13,7 +13,7 @@ method spelling.
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | seam for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; provider transports and package stability unsupported |
-| Swift | P1 | macOS/iOS-adjacent clients | unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | seam for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; provider transports and package stability unsupported |
 
 ## Capability Matrix
 

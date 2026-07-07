@@ -19,12 +19,12 @@ workspace entrypoint; it must not drift into a second status ledger.
 | Rust Runtime Core | source-of-truth implementation substrate for daemon SDK semantics and C ABI projection |
 | C ABI | ABI v4 projection with opaque handles, feature discovery, runtime core, and shipped profile carrier/projection entry points |
 | Schemas | shared DTO schema set for Runtime Core, profile clients, stream/bidi terminal projections, and conformance fixtures |
-| Conformance | shared cases, fixtures, manifest runner, Rust/C ABI/Go/Python action-adapter reports, Node seam action-adapter reports, and Java seam scaffold guard |
+| Conformance | shared cases, fixtures, manifest runner, Rust/C ABI/Go/Python action-adapter reports, Node seam action-adapter reports, and Java/Swift seam scaffold guards |
 | Go facade | provider-backed for the shipped P0 Hub/backend profiles listed in `SDK_PARITY.md` |
 | Python facade | provider-backed for the shipped P0 EasyRemote/local automation profiles listed in `SDK_PARITY.md` |
 | Node / TypeScript facade | Runtime Core seam over injected transports with Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers profile seams; daemon providers remain unsupported |
 | Java / JVM facade | Runtime Core seam for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; daemon providers remain unsupported |
-| Swift facade | unsupported |
+| Swift facade | Runtime Core seam for typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; daemon providers remain unsupported |
 
 P0 consumer cutover readiness is tracked by
 `tools/scripts/check-sdk-cutover-readiness.sh` and summarized by

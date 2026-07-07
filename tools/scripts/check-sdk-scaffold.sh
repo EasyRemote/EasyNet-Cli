@@ -235,6 +235,7 @@ for path in \
   tools/scripts/check-sdk-product-smokes.sh \
   tools/scripts/check-sdk-ura-naming.sh \
   tools/scripts/check-java-sdk-seam.sh \
+  tools/scripts/check-swift-sdk-seam.sh \
   tools/scripts/go-sdk-live-smoke.sh \
   tools/scripts/python-sdk-live-smoke.sh \
   sdk/java/README.md \
@@ -259,6 +260,14 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/StreamHandle.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamSource.java \
   sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
+  sdk/swift/README.md \
+  sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Stream.swift \
+  sdk/swift/Tests/RuntimeCoreSeamTest.swift \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
@@ -1016,12 +1025,14 @@ require_literal sdk/README.md "Go facade | provider-backed"
 require_literal sdk/README.md "Python facade | provider-backed"
 require_literal sdk/README.md "Node / TypeScript facade | Runtime Core seam"
 require_literal sdk/README.md "Java / JVM facade | Runtime Core seam"
+require_literal sdk/README.md "Swift facade | Runtime Core seam"
 require_literal sdk/README.md "P0 consumer cutover readiness"
 require_literal sdk/README.md "Rust/C ABI/Go/Python action-adapter reports"
 require_literal sdk/SDK_PARITY.md "P0 consumer cutover readiness is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null
 bash "$ROOT/tools/scripts/check-java-sdk-seam.sh" >/dev/null
+bash "$ROOT/tools/scripts/check-swift-sdk-seam.sh" >/dev/null
 
 if [[ "${#failures[@]}" -eq 0 ]]; then
   printf 'check-sdk-scaffold ok\n'
