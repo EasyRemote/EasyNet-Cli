@@ -448,12 +448,12 @@ func projectDirectoryResolvedRef(raw []byte, sourceAbility string) ([]byte, erro
 	if nested, ok := payload["answer"].(map[string]any); ok {
 		answer = nested
 	}
-	answerKind := firstStringFromMap(answer, "answer_kind")
+	answerKind := firstStringFromMap(answer, "answerKind")
 	if answerKind == "" && firstValue(answer, "negative") != nil {
 		answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"
 	}
 	if answerKind == "" {
-		return nil, invalidProfilePayload(directoryIdentityProfile, "directory resolve answer_kind is required", nil)
+		return nil, invalidProfilePayload(directoryIdentityProfile, "directory resolve answerKind is required", nil)
 	}
 	records, ok := answer["records"].([]any)
 	if !ok {
@@ -463,19 +463,19 @@ func projectDirectoryResolvedRef(raw []byte, sourceAbility string) ([]byte, erro
 		"profile":          directoryIdentityProfile,
 		"kind":             "resolved_ref",
 		"answer_kind":      answerKind,
-		"query_name":       firstStringPtr(firstStringFromMap(answer, "query_name")),
-		"canonical_name":   firstStringPtr(firstStringFromMap(answer, "canonical_name")),
-		"owner_ura":        firstStringPtr(firstStringFromMap(answer, "owner_ura")),
-		"ability_ura":      firstStringPtr(firstStringFromMap(answer, "ability_ura")),
-		"route_ura":        firstStringPtr(firstStringFromMap(answer, "route_ura")),
-		"next_hop":         firstValue(answer, "next_hop"),
-		"selected_route":   firstValue(answer, "selected_route"),
-		"route_candidates": firstNonNilValue(answer, []any{}, "route_candidates"),
+		"query_name":       firstStringPtr(firstStringFromMap(answer, "queryName")),
+		"canonical_name":   firstStringPtr(firstStringFromMap(answer, "canonicalName")),
+		"owner_ura":        firstStringPtr(firstStringFromMap(answer, "ownerUra")),
+		"ability_ura":      firstStringPtr(firstStringFromMap(answer, "abilityUra")),
+		"route_ura":        firstStringPtr(firstStringFromMap(answer, "routeUra")),
+		"next_hop":         firstValue(answer, "nextHop"),
+		"selected_route":   firstValue(answer, "selectedRoute"),
+		"route_candidates": firstNonNilValue(answer, []any{}, "routeCandidates"),
 		"records":          records,
 		"negative":         firstValue(answer, "negative"),
-		"release_profile":  firstStringPtr(firstStringFromMap(answer, "release_profile")),
+		"release_profile":  firstStringPtr(firstStringFromMap(answer, "releaseProfile")),
 		"authority":        firstValue(answer, "authority"),
-		"cache_policy":     firstValue(answer, "cache_policy"),
+		"cache_policy":     firstValue(answer, "cachePolicy"),
 		"metadata": map[string]any{
 			"profile":    directoryIdentityProfile,
 			"source":     sourceAbility,

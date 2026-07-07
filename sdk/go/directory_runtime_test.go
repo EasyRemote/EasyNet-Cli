@@ -52,16 +52,16 @@ func TestDirectoryRuntimeTransportResolvesThroughRuntime(t *testing.T) {
 	}
 }
 
-func TestDirectoryRuntimeTransportRejectsLegacyResolveAliases(t *testing.T) {
+func TestDirectoryRuntimeTransportRejectsSnakeCaseResolveAliases(t *testing.T) {
 	identity, err := NewIdentityClient(newDirectoryRuntimeIdentityTransport())
 	if err != nil {
 		t.Fatalf("NewIdentityClient: %v", err)
 	}
 	runtime, err := NewRuntimeClient(&compatibilityRuntimeInvokeTransport{outputJSON: `{
-		"answerKind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
-		"canonicalName": "easynet:///r/example/device/dev-a",
-		"ownerUra": "easynet:///r/example/device/dev-a",
-		"abilityUra": "easynet:///r/example/ability/device.dev-a.agent.list",
+		"answer_kind": "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+		"canonical_name": "easynet:///r/example/device/dev-a",
+		"owner_ura": "easynet:///r/example/device/dev-a",
+		"ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
 		"records": []
 	}`})
 	if err != nil {
@@ -80,8 +80,8 @@ func TestDirectoryRuntimeTransportRejectsLegacyResolveAliases(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Resolve succeeded for alias-only provider output")
 	}
-	if sdkErr, ok := err.(*SDKError); !ok || sdkErr.Code != ErrInvalidArgument || !strings.Contains(sdkErr.Message, "answer_kind is required") {
-		t.Fatalf("Resolve error = %#v, want invalid argument mentioning answer_kind is required", err)
+	if sdkErr, ok := err.(*SDKError); !ok || sdkErr.Code != ErrInvalidArgument || !strings.Contains(sdkErr.Message, "answerKind is required") {
+		t.Fatalf("Resolve error = %#v, want invalid argument mentioning answerKind is required", err)
 	}
 }
 
@@ -429,16 +429,16 @@ func directoryBaseForTest() DirectoryQueryBase {
 }
 
 const directoryRuntimeResolveRawJSON = `{
-	"answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
-	"canonical_name": "easynet:///r/example/device/dev-a",
+	"answerKind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+	"canonicalName": "easynet:///r/example/device/dev-a",
 	"records": [{
 		"name": "easynet:///r/example/device/dev-a",
 		"recordType": "RECORD_TYPE_ID",
 		"value": {"id": {"ura": "easynet:///r/example/device/dev-a", "kind": "URA_KIND_DEVICE"}},
 		"metadata": {"status": "active"}
 	}],
-	"release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
-	"cache_policy": {"ttl_ms": 0}
+	"releaseProfile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+	"cachePolicy": {"ttlMs": 0}
 }`
 
 const directoryRuntimeDeviceListRawJSON = `{
