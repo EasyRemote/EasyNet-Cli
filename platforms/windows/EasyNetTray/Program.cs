@@ -64,6 +64,7 @@ internal sealed class TrayController : IDisposable
 {
     private readonly Application _app;
     private readonly ClipboardHistoryStore _store = new();
+    private readonly CompanionHeartbeatWriter _heartbeat = new();
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ToolStripMenuItem _daemonStatusItem;
     private readonly ClipboardHistoryWindow _historyWindow;
@@ -113,6 +114,7 @@ internal sealed class TrayController : IDisposable
     public void Dispose()
     {
         _statusTimer.Stop();
+        _heartbeat.Remove();
         _hotKey.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
@@ -137,6 +139,7 @@ internal sealed class TrayController : IDisposable
         _notifyIcon.Text = running
             ? "EasyNet is running in the background"
             : "EasyNet daemon is not running";
+        _heartbeat.Write(running);
     }
 
     private void ToggleHistory()
@@ -176,6 +179,94 @@ internal sealed class TrayController : IDisposable
     {
         Dispose();
         _app.Shutdown();
+    }
+}
+
+internal sealed class CompanionHeartbeatWriter
+{
+    private const string PackageId = "easynet.desktop.menubar";
+    private const string PackageVersion = "0.1.0";
+    private const string AppName = "EasyNetTray";
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+    };
+
+    private readonly string _statusPath;
+    private readonly long _startedAtUnixMs = UnixNowMs();
+
+    public CompanionHeartbeatWriter()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        _statusPath = Path.Combine(home, ".easynet", "companions", PackageId, "status.json");
+    }
+
+    public void Write(bool daemonRunning)
+    {
+        var payload = new
+        {
+            schema_version = "1",
+            package_id = PackageId,
+            package_version = PackageVersion,
+            app = AppName,
+            pid = Environment.ProcessId,
+            started_at_unix_ms = _startedAtUnixMs,
+            last_seen_unix_ms = UnixNowMs(),
+            daemon = new
+            {
+                runtime_status = daemonRunning ? "running" : "stopped",
+                control_accepting = daemonRunning,
+                invocation_accepting = daemonRunning,
+            },
+        };
+
+        try
+        {
+            var dir = Path.GetDirectoryName(_statusPath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            var tempPath = _statusPath + ".tmp";
+            File.WriteAllText(
+                tempPath,
+                JsonSerializer.Serialize(payload, JsonOptions),
+                Encoding.UTF8
+            );
+            File.Move(tempPath, _statusPath, overwrite: true);
+        }
+        catch (IOException)
+        {
+            // Heartbeat failure must not terminate the local UI process.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Heartbeat failure must not terminate the local UI process.
+        }
+    }
+
+    public void Remove()
+    {
+        try
+        {
+            if (File.Exists(_statusPath))
+            {
+                File.Delete(_statusPath);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static long UnixNowMs()
+    {
+        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     }
 }
 
