@@ -304,6 +304,18 @@
       "message": null
     },
     {
+      "case_id": "stream/backpressure_bound",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "stream_bidi/lifecycle_state",
       "profile": "runtime_core",
       "status": "passed",

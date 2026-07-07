@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Runtime Core stream and bidi adapters keep callback/history queues bounded and project overflow as typed terminal backpressure rather than allowing unbounded buffering.
 steps:
   - action: overflow_stream_callback_queue

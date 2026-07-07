@@ -32,8 +32,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; daemon-core keyring-backed local signing now preserves signer policy proof on `SignedInvocation`; C ABI exposes a daemon-keyring `sign_prepared_local` transition; Go/Python C ABI transports select caller-signing vs local-daemon signing from `SignedInvocation.policy.mode`; and Go/Python direct runtimes can compose an SDK-owned handle transport for prepare/submit/handle operations with explicit ownership. Backend SDK-only runtime cutover and Python non-CABI live daemon keyring transport cutover remain incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
-| stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
-| bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; P1 language facades and product stream cutovers remain incomplete outside the daemon SDK. |
+| stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; Node exposes the same bounded backpressure seam; product stream cutovers remain incomplete outside the daemon SDK. |
+| bidi | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; Node exposes the same bounded backpressure seam; product stream cutovers remain incomplete outside the daemon SDK. |
 | directory + identity | Directory + Identity | provider-backed | provider-backed | External consumer repository extraction and route cutover remain incomplete outside the daemon SDK. |
 | receipt | Receipt | provider-backed | provider-backed | Go/Python opaque `ReceiptRef`/`ReceiptChain` anchors, Axon-backed single-receipt verification, cross-invocation chain signature, and parent-receipt DAG closure verification exist for full Axon audit bundles; RFC-007 receipt URA construction remains incomplete. |
 | publication | Publication | provider-backed | provider-backed | Plugin policy, host binding bridge, and external product extraction remain incomplete outside the daemon SDK. |
@@ -509,9 +509,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   remote desktop/browser/media projection seams, TypeScript declarations, and
   a scaffold-backed test gate plus a shared Node action-adapter report for
   Runtime Core, Errors, Health, Directory + Identity, MEMC, Receipt, Publication,
-  Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and
-  Wrappers seam cases. It is not provider-backed: daemon transports,
-  C ABI-style callback overflow, plugin policy, host binding bridge,
+  Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility,
+  Wrappers, and stream/bidi backpressure seam cases. It is not provider-backed:
+  daemon transports, plugin policy, host binding bridge,
   Axon-backed receipt verification, and package stability remain incomplete.
 
 ## Capability States
