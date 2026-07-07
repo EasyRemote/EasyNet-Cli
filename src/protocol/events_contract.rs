@@ -176,8 +176,7 @@ pub(crate) fn project_live_event(input: &Value) -> Result<Value, EventsError> {
         INVOCATION_STREAM => project_invocation_live_event(obj, cursor),
         SESSION_STREAM => Err(EventsError::InvalidField(
             "cursor",
-            "session live event projection is not part of the Events profile contract"
-                .to_string(),
+            "session live event projection is not part of the Events profile contract".to_string(),
         )),
         _ => Err(EventsError::InvalidField(
             "cursor",
@@ -608,7 +607,9 @@ fn project_device_live_event(
     cursor: EventCursor,
 ) -> Result<Value, EventsError> {
     cursor.require_stream(DEVICE_STREAM, "cursor")?;
-    let event = input.get("event").ok_or(EventsError::MissingField("event"))?;
+    let event = input
+        .get("event")
+        .ok_or(EventsError::MissingField("event"))?;
     let event_obj = object(event, "DeviceEvent")?;
     reject_sequence_mismatch(event_obj, &cursor)?;
     let device_ura = required_string(event_obj, "device_ura")?;
@@ -645,14 +646,15 @@ fn project_invocation_live_event(
     cursor: EventCursor,
 ) -> Result<Value, EventsError> {
     cursor.require_stream(INVOCATION_STREAM, "cursor")?;
-    let event = input.get("event").ok_or(EventsError::MissingField("event"))?;
+    let event = input
+        .get("event")
+        .ok_or(EventsError::MissingField("event"))?;
     let event_obj = object(event, "InvocationEvent")?;
     reject_sequence_mismatch(event_obj, &cursor)?;
     let invocation_id = required_string(event_obj, "invocation_id")?;
     validate_token(invocation_id, "invocation_id")?;
     let occurred_unix_ms = event_unix_ms(event_obj)?;
-    let kind =
-        optional_string(event_obj, "kind").unwrap_or_else(|| "invocation.event".to_string());
+    let kind = optional_string(event_obj, "kind").unwrap_or_else(|| "invocation.event".to_string());
     let payload = event_obj
         .get("payload")
         .cloned()
@@ -954,10 +956,7 @@ impl EventFrame {
             Value::String(self.lifecycle.to_string()),
         );
         if let Some(event_type) = self.daemon_event_type {
-            metadata.insert(
-                "daemon_event_type".to_string(),
-                Value::String(event_type),
-            );
+            metadata.insert("daemon_event_type".to_string(), Value::String(event_type));
         }
         if let Value::Object(extra) = self.metadata_extra {
             for (key, value) in extra {
@@ -1556,7 +1555,10 @@ mod tests {
         assert_eq!(frame["kind"], "device.status_changed");
         assert_eq!(frame["cursor"]["token"], "device:8");
         assert_eq!(frame["subject_ref"]["role"], "device");
-        assert_eq!(frame["metadata"]["stream_ability"], "events.device.subscribe");
+        assert_eq!(
+            frame["metadata"]["stream_ability"],
+            "events.device.subscribe"
+        );
         assert_eq!(frame["metadata"]["lifecycle"], "live");
     }
 

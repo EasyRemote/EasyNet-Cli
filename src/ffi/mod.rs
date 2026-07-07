@@ -122,10 +122,10 @@ use std::os::raw::c_char;
 
 use crate::daemon::control::discovery;
 use crate::ffi::client as ipc_client;
-use crate::ffi::client::handle::{ClientSession, EasynetHandle, alloc, get, lib_runtime, release};
+use crate::ffi::client::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
 use crate::ffi::errors::{
-    EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE, ERR_INVALID_UTF8,
-    ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE, clear_last_error, set_last_error_code,
+    clear_last_error, set_last_error_code, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC,
+    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
 };
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 

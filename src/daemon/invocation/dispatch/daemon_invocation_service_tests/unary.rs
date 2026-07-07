@@ -1025,7 +1025,7 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
     // the dispatch arm then reads the trust anchor again and finds
     // the role is Device, not Hub.
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
     let device_caller_ura = "easynet:///r/realm-b/device/device-not-hub";
@@ -1081,7 +1081,7 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
 
 #[tokio::test]
 async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_write() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     let device_caller_ura = "easynet:///r/local/device/device-writer";
     let device_signing_key = test_device_signing_key();
@@ -1157,7 +1157,7 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
 
 #[tokio::test]
 async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     let device_caller_ura = "easynet:///r/local/device/device-writer";
     let device_signing_key = test_device_signing_key();
@@ -1246,7 +1246,7 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
 
 #[tokio::test]
 async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     let backend_ura = crate::core::ura::hub_ura("local");
     let backend_signing_key = test_device_signing_key();
@@ -1360,7 +1360,7 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
 
 #[tokio::test]
 async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presence() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     let backend_ura = crate::core::ura::hub_ura("local");
     let backend_signing_key = test_device_signing_key();
@@ -1469,24 +1469,21 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
         !presence.contains(host_ura),
         "successful user revoke must force-remove the host device that made owned agents online",
     );
-    assert!(
-        svc.directory
-            .advertised_agents
-            .get("easynet:///r/local/agent/alice.helper")
-            .is_none()
-    );
-    assert!(
-        svc.directory
-            .advertised_agents
-            .get("easynet:///r/local/agent/alice.researcher")
-            .is_none()
-    );
-    assert!(
-        svc.directory
-            .advertised_agents
-            .get("easynet:///r/local/agent/bob.helper")
-            .is_some()
-    );
+    assert!(svc
+        .directory
+        .advertised_agents
+        .get("easynet:///r/local/agent/alice.helper")
+        .is_none());
+    assert!(svc
+        .directory
+        .advertised_agents
+        .get("easynet:///r/local/agent/alice.researcher")
+        .is_none());
+    assert!(svc
+        .directory
+        .advertised_agents
+        .get("easynet:///r/local/agent/bob.helper")
+        .is_some());
 
     let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
         .await
@@ -1513,7 +1510,7 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
 
 #[tokio::test]
 async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
     let backend_ura = crate::core::ura::hub_ura("local");
     let backend_signing_key = test_device_signing_key();
@@ -1690,7 +1687,7 @@ async fn federation_proxy_caller_gate_accepts_local_hub_identity_with_hub_role()
 
 #[tokio::test]
 async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_caller() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
@@ -2055,7 +2052,7 @@ async fn invoke_unknown_ability_without_projection_returns_resolver_negative() {
 /// and returns the handler's JSON output.
 #[tokio::test]
 async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
-    use easynet_axon::invocation::{AbilityCallModes, AbilityOptions, LocalRuntime, make_ability};
+    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions, LocalRuntime};
 
     let rt = LocalRuntime::new();
     let ability = "test.fallback.echo";
@@ -2144,7 +2141,7 @@ async fn invoke_runtime_bootstrap_self_identity_is_not_cli_shadow_acked() {
 
 #[tokio::test]
 async fn invoke_runtime_bootstrap_self_identity_succeeds_when_sdk_admin_installed() {
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
     // Admin installed, NO catalog route published: `runtime.*`

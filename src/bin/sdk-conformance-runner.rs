@@ -736,10 +736,10 @@ fn inline_internal_schema_refs(value: &mut Value, schema_root: &Value) -> Result
         Value::Object(object) => {
             if let Some(raw_ref) = object.get("$ref").and_then(Value::as_str) {
                 if let Some(pointer) = raw_ref.strip_prefix('#') {
-                    let mut referenced = schema_root
-                        .pointer(pointer)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("unresolved schema reference `{raw_ref}`"))?;
+                    let mut referenced =
+                        schema_root.pointer(pointer).cloned().ok_or_else(|| {
+                            anyhow::anyhow!("unresolved schema reference `{raw_ref}`")
+                        })?;
                     if object.len() > 1 {
                         let siblings = object
                             .iter()
@@ -1231,7 +1231,10 @@ expect:
                 "python",
                 "sdk/conformance/runner/python-action-adapter-report.json",
             ),
-            ("node", "sdk/conformance/runner/node-action-adapter-report.json"),
+            (
+                "node",
+                "sdk/conformance/runner/node-action-adapter-report.json",
+            ),
         ] {
             let report = root.join(report);
             let records = run_manifest(root, language, Some(&report))

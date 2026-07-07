@@ -4,7 +4,7 @@
 //! `easynet_feature_discovery`. Language facades decode this DTO; they do not
 //! maintain an independent capability list.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::EASYNET_ABI_VERSION;
 

@@ -43,7 +43,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1266,10 +1266,9 @@ mod tests {
             "byte-identical input must produce byte-identical hash"
         );
         assert_eq!(a.len(), 64, "SHA-256 hex must be 64 characters");
-        assert!(
-            a.chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        );
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]
@@ -2002,8 +2001,8 @@ mod tests {
 
     // ── N3-N4 bridge: handle_discover_with_user_filter ─────────
 
-    fn populated_view_two_realms()
-    -> crate::daemon::federation::directory::SharedFederatedDirectoryView {
+    fn populated_view_two_realms(
+    ) -> crate::daemon::federation::directory::SharedFederatedDirectoryView {
         use crate::daemon::federation::directory::{
             DirectoryEntry, DirectoryView, SharedFederatedDirectoryView,
         };

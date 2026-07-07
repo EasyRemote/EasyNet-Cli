@@ -517,7 +517,10 @@ mod tests {
         let value = read_json(out_device);
         assert_eq!(value["stream"], "device");
         assert_eq!(value["kind"], "device.status_changed");
-        assert_eq!(value["metadata"]["stream_ability"], "events.device.subscribe");
+        assert_eq!(
+            value["metadata"]["stream_ability"],
+            "events.device.subscribe"
+        );
 
         let raw_invocation = CString::new(
             serde_json::json!({
