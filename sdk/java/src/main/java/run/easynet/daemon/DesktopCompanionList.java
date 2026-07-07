@@ -20,8 +20,12 @@ public record DesktopCompanionList(List<DesktopCompanionStatus> companions) {
       if (!(item instanceof Map<?, ?> decoded)) {
         throw CompanionSupport.invalid("companions entries must be objects");
       }
-      statuses.add(DesktopCompanionStatus.fromObject(CompanionSupport.optionalObject(decoded, "companions")));
+      statuses.add(DesktopCompanionStatus.fromObject(companionStatusObject(decoded)));
     }
     return new DesktopCompanionList(statuses);
+  }
+
+  private static Map<String, Object> companionStatusObject(Map<?, ?> decoded) {
+    return CompanionSupport.optionalObject(decoded, "companions entry");
   }
 }

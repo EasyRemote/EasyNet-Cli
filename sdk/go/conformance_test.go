@@ -2811,6 +2811,12 @@ func TestGoMEMCExecutesSharedProfileExclusivityConformanceCase(t *testing.T) {
 			Owner: "runtime_core",
 			Type:  reflect.TypeOf((*DaemonHandle)(nil)),
 			Operations: map[string]string{
+				"CompanionDisable":    "desktop_companion.disable",
+				"CompanionEnable":     "desktop_companion.enable",
+				"CompanionList":       "desktop_companion.list",
+				"CompanionStart":      "desktop_companion.start",
+				"CompanionStatus":     "desktop_companion.status",
+				"CompanionStop":       "desktop_companion.stop",
 				"Detach":              "runtime_core.daemon_handle.detach",
 				"Endpoints":           "runtime_core.daemon_handle.endpoints",
 				"HandleID":            "runtime_core.daemon_handle.id",
