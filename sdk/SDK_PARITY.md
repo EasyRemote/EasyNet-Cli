@@ -11,7 +11,7 @@ method spelling.
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers, including authority signing-material and metadata-materialization core helpers |
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
-| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Directory + Identity, Receipt, Publication, Host Binding, Events, and Surface DTO/client lifecycle over injected transports; daemon providers, local daemon signing, and remaining profile clients unsupported |
+| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Directory + Identity, Receipt, Publication, Host Binding, Events, Surface, and Compatibility DTO/client lifecycle over injected transports; daemon providers, local daemon signing, and remaining profile clients unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
 | Swift | P1 | macOS/iOS-adjacent clients | unsupported |
 
@@ -485,12 +485,12 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   behavior, Surface page carrier/projection behavior, Compatibility OpenAI
   carrier/projection behavior, Host Binding codec/hash behavior, Receipt
   projection, and Wrapper record projection. The shared conformance runner now
-  validates Rust/C ABI/Go/Python action-adapter reports against every required
-  shared case. The aggregate cutover readiness gate now runs EasyRemote and
-  backend product test smokes; non-P0 language adapter reports and per-route
+  validates Rust/C ABI/Go/Python/Node action-adapter reports against every
+  declared shared case. The aggregate cutover readiness gate now runs EasyRemote and
+  backend product test smokes; broader non-P0 language coverage and per-route
   live product smoke evidence remain incomplete.
 - Node/TypeScript now exposes Runtime Core, Health, Directory + Identity,
-  Receipt, Publication, and Host Binding seams with feature discovery, typed errors, Invocation draft construction,
+  Receipt, Publication, Host Binding, Events, Surface, and Compatibility seams with feature discovery, typed errors, Invocation draft construction,
   profile source-ref accessors, RuntimeClient transport delegation, stream/bidi lifecycle handles, async
   iteration, `AbortSignal` cancellation, HealthClient runtime health and
   diagnostics DTOs, InvocationHandle await/cancel/events/free observation
@@ -499,10 +499,13 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   methods, ReceiptClient fetch/projection/verification/causal-ref/history
   methods, opaque ReceiptRef/ReceiptChain helpers, PublicationClient resource,
   package, deploy/unpublish, read-model, lifecycle carrier seams,
-  HostBindingClient host-stream codec/hash/lifecycle seams, TypeScript declarations, and
+  HostBindingClient host-stream codec/hash/lifecycle seams, EventClient
+  event carrier/projection/history seams, SurfaceClient page
+  carrier/projection/health seams, CompatibilityClient OpenAI-compatible
+  model/chat/file carrier and projection seams, TypeScript declarations, and
   a scaffold-backed test gate plus a shared Node action-adapter report for
-  Runtime Core, Errors, Health, Directory + Identity, MEMC, Receipt, Publication, and Host Binding seam
-  cases. It is not provider-backed: daemon transports, remaining profile
+  Runtime Core, Errors, Health, Directory + Identity, MEMC, Receipt, Publication,
+  Host Binding, Events, Surface, and Compatibility seam cases. It is not provider-backed: daemon transports, remaining profile
   clients, C ABI-style callback overflow, plugin policy, host binding bridge,
   Axon-backed receipt verification, and package stability remain incomplete.
 

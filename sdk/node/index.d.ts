@@ -49,6 +49,7 @@ export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
 export declare const EVENTS_PROFILE: "events";
 export declare const SURFACE_PROFILE: "surface";
+export declare const COMPATIBILITY_PROFILE: "compatibility";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
 export declare const MAX_BIDI_BUFFERED_FRAMES: 1024;
 export declare const DEFAULT_EVENT_PAGE_SIZE: 50;
@@ -809,6 +810,308 @@ export class SurfaceClient {
   projectMutationResult(value: SurfaceProjectionInput): Promise<SurfaceMutationResult>;
   projectHealth(value: SurfaceProjectionInput): Promise<SurfaceHealth>;
   projectStatus(value: SurfaceProjectionInput): Promise<SurfaceHealth>;
+  close(): Promise<void>;
+}
+
+export interface CompatibilityCarrierBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  auth_token?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CompatibilityListModelsRequest extends CompatibilityCarrierBase {}
+
+export interface CompatibilityChatCompletionRequest extends CompatibilityCarrierBase {
+  request: {
+    model: string;
+    messages: Record<string, unknown>[];
+    stream?: false;
+    [key: string]: unknown;
+  };
+}
+
+export interface CompatibilityStreamChatCompletionRequest extends CompatibilityCarrierBase {
+  request: {
+    model: string;
+    messages: Record<string, unknown>[];
+    stream?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+export interface CompatibilityFileUploadRequest extends CompatibilityCarrierBase {
+  id?: string;
+  file_id?: string;
+  file_ref?: string;
+  resource_ref?: string;
+  resource_ura?: string;
+  filename: string;
+  purpose: string;
+  owner_ura?: string;
+  content_type?: string;
+  content_hash?: string;
+  bytes_b64?: string;
+  bytes?: number;
+  size_bytes?: number;
+  created_at?: number;
+  status?: string;
+}
+
+export interface CompatibilityFileRequest extends CompatibilityCarrierBase {
+  id?: string;
+  file_id?: string;
+  file_ref?: string;
+  resource_ref?: string;
+  resource_ura?: string;
+  filename?: string;
+  purpose?: string;
+  owner_ura?: string;
+  content_type?: string;
+  content_hash?: string;
+  bytes?: number;
+  size_bytes?: number;
+  created_at?: number;
+  created?: number;
+  status?: string;
+}
+
+export interface CompatibilityFileDeleteRequest extends CompatibilityCarrierBase {
+  id?: string;
+  file_id?: string;
+  file_ref?: string;
+  resource_ref?: string;
+  resource_ura?: string;
+  content_hash?: string;
+  deleted: true;
+}
+
+export interface CompatibilityModelFields {
+  profile: "compatibility";
+  kind: "model";
+  id: string;
+  object: "model";
+  created: number;
+  owned_by: string;
+  ability_ref: string;
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityModel {
+  profile: "compatibility";
+  kind: "model";
+  id: string;
+  object: "model";
+  created: number;
+  ownedBy: string;
+  abilityRef: string;
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityModelFields);
+  static fromJSON(raw: Uint8Array | string): CompatibilityModel;
+  toJSON(): CompatibilityModelFields;
+}
+
+export interface CompatibilityModelPageFields {
+  profile: "compatibility";
+  kind: "model_page";
+  object: "list";
+  data: CompatibilityModelFields[];
+  next_cursor: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityModelPage {
+  profile: "compatibility";
+  kind: "model_page";
+  object: "list";
+  data: CompatibilityModel[];
+  nextCursor: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityModelPageFields);
+  static fromJSON(raw: Uint8Array | string): CompatibilityModelPage;
+  toJSON(): CompatibilityModelPageFields;
+}
+
+export interface CompatibilityChatCompletionFields {
+  profile: "compatibility";
+  kind: "chat_completion";
+  id: string;
+  object: "chat.completion";
+  created: number;
+  model: string;
+  choices: Record<string, unknown>[];
+  usage: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityChatCompletion {
+  profile: "compatibility";
+  kind: "chat_completion";
+  id: string;
+  object: "chat.completion";
+  created: number;
+  model: string;
+  choices: Record<string, unknown>[];
+  usage: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityChatCompletionFields);
+  static fromJSON(raw: Uint8Array | string): CompatibilityChatCompletion;
+  toJSON(): CompatibilityChatCompletionFields;
+}
+
+export interface CompatibilityChatCompletionChunkFields {
+  profile: "compatibility";
+  kind: "chat_completion_chunk";
+  id: string;
+  object: "chat.completion.chunk";
+  created: number;
+  model: string;
+  choices: Record<string, unknown>[];
+  usage?: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityChatCompletionChunk {
+  profile: "compatibility";
+  kind: "chat_completion_chunk";
+  id: string;
+  object: "chat.completion.chunk";
+  created: number;
+  model: string;
+  choices: Record<string, unknown>[];
+  usage: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityChatCompletionChunkFields);
+  toJSON(): Required<CompatibilityChatCompletionChunkFields>;
+}
+
+export interface CompatibilityChatCompletionStreamFields {
+  profile: "compatibility";
+  kind: "chat_completion_stream";
+  stream: true;
+  items: CompatibilityChatCompletionChunkFields[];
+  done_sentinel: "[DONE]";
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityChatCompletionStream {
+  profile: "compatibility";
+  kind: "chat_completion_stream";
+  stream: true;
+  items: CompatibilityChatCompletionChunk[];
+  doneSentinel: "[DONE]";
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityChatCompletionStreamFields);
+  static fromJSON(raw: Uint8Array | string): CompatibilityChatCompletionStream;
+  toJSON(): CompatibilityChatCompletionStreamFields;
+}
+
+export interface CompatibilityFileFields {
+  profile: "compatibility";
+  kind: "file";
+  id: string;
+  object: "file";
+  bytes: number;
+  created_at: number;
+  filename: string;
+  purpose: string;
+  status: string;
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityFile {
+  profile: "compatibility";
+  kind: "file";
+  id: string;
+  object: "file";
+  bytes: number;
+  createdAt: number;
+  filename: string;
+  purpose: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityFileFields);
+  static fromJSON(raw: Uint8Array | string): CompatibilityFile;
+  toJSON(): CompatibilityFileFields;
+}
+
+export interface CompatibilityFileDeleteResultFields {
+  profile: "compatibility";
+  kind: "file_delete_result";
+  id: string;
+  object: "file";
+  deleted: true;
+  metadata: Record<string, unknown>;
+}
+
+export class CompatibilityFileDeleteResult {
+  profile: "compatibility";
+  kind: "file_delete_result";
+  id: string;
+  object: "file";
+  deleted: true;
+  metadata: Record<string, unknown>;
+  constructor(fields: CompatibilityFileDeleteResultFields);
+  static fromJSON(raw: Uint8Array | string): CompatibilityFileDeleteResult;
+  toJSON(): CompatibilityFileDeleteResultFields;
+}
+
+export type CompatibilityProjectionInput =
+  | Uint8Array
+  | string
+  | Record<string, unknown>
+  | CompatibilityModelPage
+  | CompatibilityChatCompletion
+  | CompatibilityChatCompletionStream
+  | CompatibilityFile
+  | CompatibilityFileDeleteResult;
+
+export interface CompatibilityTransport {
+  buildListModelsInvocation(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildChatCompletionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildStreamChatCompletionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildFileUploadInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildFileRetrieveInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildFileDeleteInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listModels?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  chatCompletions?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  streamChatCompletions?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  uploadFile?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  getFile?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  deleteFile?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectModelPage?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectChatCompletion?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectChatStream?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectFileUpload?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectFile?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectFileDeleteResult?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class CompatibilityClient {
+  constructor(transport: CompatibilityTransport);
+  buildListModelsInvocation(request: CompatibilityListModelsRequest): Promise<InvocationDraft>;
+  buildChatCompletionInvocation(request: CompatibilityChatCompletionRequest): Promise<InvocationDraft>;
+  buildStreamChatCompletionInvocation(request: CompatibilityStreamChatCompletionRequest): Promise<InvocationDraft>;
+  buildFileUploadInvocation(request: CompatibilityFileUploadRequest): Promise<InvocationDraft>;
+  buildFileRetrieveInvocation(request: CompatibilityFileRequest): Promise<InvocationDraft>;
+  buildFileDeleteInvocation(request: CompatibilityFileDeleteRequest): Promise<InvocationDraft>;
+  listModels(request: CompatibilityListModelsRequest): Promise<CompatibilityModelPage>;
+  chatCompletions(request: CompatibilityChatCompletionRequest): Promise<CompatibilityChatCompletion>;
+  streamChatCompletions(request: CompatibilityStreamChatCompletionRequest): Promise<CompatibilityChatCompletionStream>;
+  uploadFile(request: CompatibilityFileUploadRequest): Promise<CompatibilityFile>;
+  getFile(request: CompatibilityFileRequest): Promise<CompatibilityFile>;
+  deleteFile(request: CompatibilityFileDeleteRequest): Promise<CompatibilityFileDeleteResult>;
+  projectModelPage(value: CompatibilityProjectionInput): Promise<CompatibilityModelPage>;
+  projectChatCompletion(value: CompatibilityProjectionInput): Promise<CompatibilityChatCompletion>;
+  projectChatStream(value: CompatibilityProjectionInput): Promise<CompatibilityChatCompletionStream>;
+  projectFileUpload(value: CompatibilityProjectionInput): Promise<CompatibilityFile>;
+  projectFile(value: CompatibilityProjectionInput): Promise<CompatibilityFile>;
+  projectFileDeleteResult(value: CompatibilityProjectionInput): Promise<CompatibilityFileDeleteResult>;
   close(): Promise<void>;
 }
 

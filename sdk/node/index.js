@@ -66,6 +66,7 @@ export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
 export const EVENTS_PROFILE = "events";
 export const SURFACE_PROFILE = "surface";
+export const COMPATIBILITY_PROFILE = "compatibility";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 export const DEFAULT_EVENT_PAGE_SIZE = 50;
@@ -1240,6 +1241,377 @@ export class SurfaceClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("surface client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class CompatibilityModel {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility model");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    this.object = requiredCompatibilityString(value.object, "object");
+    if (this.profile !== COMPATIBILITY_PROFILE || this.kind !== "model" || this.object !== "model") {
+      throw invalidCompatibility("invalid compatibility model projection");
+    }
+    this.id = requiredAbilityURA(value.id, "id");
+    this.created = compatibilityNonNegativeInteger(value.created, "created");
+    this.ownedBy = requiredCompatibilityString(value.owned_by, "owned_by");
+    this.abilityRef = requiredAbilityURA(value.ability_ref, "ability_ref");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new CompatibilityModel(parseJSON(raw, "compatibility model"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      id: this.id,
+      object: this.object,
+      created: this.created,
+      owned_by: this.ownedBy,
+      ability_ref: this.abilityRef,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityModelPage {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility model page");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    this.object = requiredCompatibilityString(value.object, "object");
+    if (this.profile !== COMPATIBILITY_PROFILE || this.kind !== "model_page" || this.object !== "list") {
+      throw invalidCompatibility("invalid compatibility model page projection");
+    }
+    if (!Array.isArray(value.data)) {
+      throw invalidCompatibility("model page data must be an array");
+    }
+    this.data = value.data.map((item) => new CompatibilityModel(item));
+    this.nextCursor = compatibilityOptionalString(value.next_cursor, "next_cursor");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new CompatibilityModelPage(parseJSON(raw, "compatibility model page"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      object: this.object,
+      data: this.data.map((item) => item.toJSON()),
+      next_cursor: this.nextCursor,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityChatCompletion {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility chat completion");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    this.object = requiredCompatibilityString(value.object, "object");
+    if (
+      this.profile !== COMPATIBILITY_PROFILE ||
+      this.kind !== "chat_completion" ||
+      this.object !== "chat.completion"
+    ) {
+      throw invalidCompatibility("invalid compatibility chat completion projection");
+    }
+    this.id = requiredCompatibilityString(value.id, "id");
+    this.created = compatibilityNonNegativeInteger(value.created, "created");
+    this.model = requiredAbilityURA(value.model, "model");
+    this.choices = compatibilityObjectArray(value.choices, "choices");
+    this.usage = objectValue(value.usage, "usage");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new CompatibilityChatCompletion(parseJSON(raw, "compatibility chat completion"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      id: this.id,
+      object: this.object,
+      created: this.created,
+      model: this.model,
+      choices: this.choices,
+      usage: this.usage,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityChatCompletionChunk {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility chat completion chunk");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    this.object = requiredCompatibilityString(value.object, "object");
+    if (
+      this.profile !== COMPATIBILITY_PROFILE ||
+      this.kind !== "chat_completion_chunk" ||
+      this.object !== "chat.completion.chunk"
+    ) {
+      throw invalidCompatibility("invalid compatibility chat chunk projection");
+    }
+    this.id = requiredCompatibilityString(value.id, "id");
+    this.created = compatibilityNonNegativeInteger(value.created, "created");
+    this.model = requiredAbilityURA(value.model, "model");
+    this.choices = compatibilityObjectArray(value.choices, "choices");
+    this.usage = value.usage ?? null;
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      id: this.id,
+      object: this.object,
+      created: this.created,
+      model: this.model,
+      choices: this.choices,
+      usage: this.usage,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityChatCompletionStream {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility chat completion stream");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    if (
+      this.profile !== COMPATIBILITY_PROFILE ||
+      this.kind !== "chat_completion_stream" ||
+      value.stream !== true ||
+      value.done_sentinel !== "[DONE]"
+    ) {
+      throw invalidCompatibility("invalid compatibility chat stream projection");
+    }
+    if (!Array.isArray(value.items)) {
+      throw invalidCompatibility("stream items must be an array");
+    }
+    this.stream = true;
+    this.items = value.items.map((item) => new CompatibilityChatCompletionChunk(item));
+    this.doneSentinel = value.done_sentinel;
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new CompatibilityChatCompletionStream(parseJSON(raw, "compatibility chat completion stream"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      stream: this.stream,
+      items: this.items.map((item) => item.toJSON()),
+      done_sentinel: this.doneSentinel,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityFile {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility file");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    this.object = requiredCompatibilityString(value.object, "object");
+    if (this.profile !== COMPATIBILITY_PROFILE || this.kind !== "file" || this.object !== "file") {
+      throw invalidCompatibility("invalid compatibility file projection");
+    }
+    this.id = requiredCompatibilityString(value.id, "id");
+    this.bytes = compatibilityNonNegativeInteger(value.bytes, "bytes");
+    this.createdAt = compatibilityNonNegativeInteger(value.created_at, "created_at");
+    this.filename = requiredCompatibilityString(value.filename, "filename");
+    this.purpose = requiredCompatibilityString(value.purpose, "purpose");
+    this.status = requiredCompatibilityString(value.status, "status");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new CompatibilityFile(parseJSON(raw, "compatibility file"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      id: this.id,
+      object: this.object,
+      bytes: this.bytes,
+      created_at: this.createdAt,
+      filename: this.filename,
+      purpose: this.purpose,
+      status: this.status,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityFileDeleteResult {
+  constructor(fields) {
+    const value = objectValue(fields, "compatibility file delete result");
+    this.profile = requiredCompatibilityString(value.profile, "profile");
+    this.kind = requiredCompatibilityString(value.kind, "kind");
+    this.object = requiredCompatibilityString(value.object, "object");
+    if (
+      this.profile !== COMPATIBILITY_PROFILE ||
+      this.kind !== "file_delete_result" ||
+      this.object !== "file" ||
+      value.deleted !== true
+    ) {
+      throw invalidCompatibility("invalid compatibility file delete projection");
+    }
+    this.id = requiredCompatibilityString(value.id, "id");
+    this.deleted = true;
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new CompatibilityFileDeleteResult(parseJSON(raw, "compatibility file delete result"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      id: this.id,
+      object: this.object,
+      deleted: this.deleted,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class CompatibilityClient {
+  constructor(transport) {
+    if (!transport || typeof transport.buildListModelsInvocation !== "function") {
+      throw invalidSDK("compatibility transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async buildListModelsInvocation(request) {
+    return this.buildInvocation("buildListModelsInvocation", compatibilityListModelsRequest(request));
+  }
+
+  async buildChatCompletionInvocation(request) {
+    return this.buildInvocation("buildChatCompletionInvocation", compatibilityChatCompletionRequest(request, false));
+  }
+
+  async buildStreamChatCompletionInvocation(request) {
+    return this.buildInvocation("buildStreamChatCompletionInvocation", compatibilityChatCompletionRequest(request, true));
+  }
+
+  async buildFileUploadInvocation(request) {
+    return this.buildInvocation("buildFileUploadInvocation", compatibilityFileUploadRequest(request));
+  }
+
+  async buildFileRetrieveInvocation(request) {
+    return this.buildInvocation("buildFileRetrieveInvocation", compatibilityFileRequest(request));
+  }
+
+  async buildFileDeleteInvocation(request) {
+    return this.buildInvocation("buildFileDeleteInvocation", compatibilityFileDeleteRequest(request));
+  }
+
+  async buildInvocation(method, payload) {
+    return InvocationDraft.fromJSON(await callRaw(this.requireOpen(), method, payload));
+  }
+
+  async listModels(request) {
+    return CompatibilityModelPage.fromJSON(
+      await callRaw(this.requireOpen(), "listModels", compatibilityListModelsRequest(request)),
+    );
+  }
+
+  async chatCompletions(request) {
+    return CompatibilityChatCompletion.fromJSON(
+      await callRaw(this.requireOpen(), "chatCompletions", compatibilityChatCompletionRequest(request, false)),
+    );
+  }
+
+  async streamChatCompletions(request) {
+    return CompatibilityChatCompletionStream.fromJSON(
+      await callRaw(this.requireOpen(), "streamChatCompletions", compatibilityChatCompletionRequest(request, true)),
+    );
+  }
+
+  async uploadFile(request) {
+    return CompatibilityFile.fromJSON(
+      await callRaw(this.requireOpen(), "uploadFile", compatibilityFileUploadRequest(request)),
+    );
+  }
+
+  async getFile(request) {
+    return CompatibilityFile.fromJSON(
+      await callRaw(this.requireOpen(), "getFile", compatibilityFileRequest(request)),
+    );
+  }
+
+  async deleteFile(request) {
+    return CompatibilityFileDeleteResult.fromJSON(
+      await callRaw(this.requireOpen(), "deleteFile", compatibilityFileDeleteRequest(request)),
+    );
+  }
+
+  async projectModelPage(value) {
+    return CompatibilityModelPage.fromJSON(await callCompatibilityProjection(this.requireOpen(), "projectModelPage", value));
+  }
+
+  async projectChatCompletion(value) {
+    return CompatibilityChatCompletion.fromJSON(await callCompatibilityProjection(this.requireOpen(), "projectChatCompletion", value));
+  }
+
+  async projectChatStream(value) {
+    return CompatibilityChatCompletionStream.fromJSON(await callCompatibilityProjection(this.requireOpen(), "projectChatStream", value));
+  }
+
+  async projectFileUpload(value) {
+    return CompatibilityFile.fromJSON(await callCompatibilityProjection(this.requireOpen(), "projectFileUpload", value));
+  }
+
+  async projectFile(value) {
+    return CompatibilityFile.fromJSON(await callCompatibilityProjection(this.requireOpen(), "projectFile", value));
+  }
+
+  async projectFileDeleteResult(value) {
+    return CompatibilityFileDeleteResult.fromJSON(await callCompatibilityProjection(this.requireOpen(), "projectFileDeleteResult", value));
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("compatibility client is closed");
     }
     return this.transport;
   }
@@ -2792,6 +3164,247 @@ function surfaceCarrierBaseFields() {
   ];
 }
 
+function compatibilityCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "auth_token",
+    "metadata",
+  ];
+}
+
+function compatibilityListModelsRequest(value) {
+  const payload = compatibilityRequest(
+    value,
+    compatibilityCarrierBaseFields(),
+    "compatibility list models request",
+  );
+  validateCompatibilityCarrierBase(payload);
+  return payload;
+}
+
+function compatibilityChatCompletionRequest(value, stream) {
+  const payload = compatibilityRequest(
+    value,
+    [...compatibilityCarrierBaseFields(), "request"],
+    stream ? "compatibility stream chat completion request" : "compatibility chat completion request",
+  );
+  validateCompatibilityCarrierBase(payload);
+  const request = objectValue(payload.request, "request");
+  const model = requiredAbilityURA(request.model, "model");
+  if (!Array.isArray(request.messages) || request.messages.length === 0) {
+    throw invalidCompatibility("messages must be a non-empty array");
+  }
+  for (const message of request.messages) {
+    objectValue(message, "message");
+  }
+  if (!stream && request.stream === true) {
+    throw invalidCompatibility("unary chat completion request must not set stream=true");
+  }
+  payload.request = { ...request, model };
+  if (stream) {
+    payload.request.stream = true;
+  }
+  return payload;
+}
+
+function compatibilityFileUploadRequest(value) {
+  const payload = compatibilityRequest(
+    value,
+    [
+      ...compatibilityCarrierBaseFields(),
+      "id",
+      "file_id",
+      "file_ref",
+      "resource_ref",
+      "resource_ura",
+      "filename",
+      "purpose",
+      "owner_ura",
+      "content_type",
+      "content_hash",
+      "bytes_b64",
+      "bytes",
+      "size_bytes",
+      "created_at",
+      "status",
+    ],
+    "compatibility file upload request",
+  );
+  validateCompatibilityCarrierBase(payload);
+  requiredCompatibilityString(payload.purpose, "purpose");
+  validateCompatibilityFileSelector(payload);
+  validateCompatibilityFileFacts(payload, true);
+  mergeCompatibilityMetadata(payload, value);
+  return payload;
+}
+
+function compatibilityFileRequest(value) {
+  const payload = compatibilityRequest(
+    value,
+    [
+      ...compatibilityCarrierBaseFields(),
+      "id",
+      "file_id",
+      "file_ref",
+      "resource_ref",
+      "resource_ura",
+      "filename",
+      "purpose",
+      "owner_ura",
+      "content_type",
+      "content_hash",
+      "bytes",
+      "size_bytes",
+      "created_at",
+      "created",
+      "status",
+    ],
+    "compatibility file request",
+  );
+  validateCompatibilityCarrierBase(payload);
+  validateCompatibilityFileSelector(payload);
+  validateCompatibilityFileFacts(payload, false);
+  mergeCompatibilityMetadata(payload, value);
+  return payload;
+}
+
+function compatibilityFileDeleteRequest(value) {
+  const payload = compatibilityRequest(
+    value,
+    [
+      ...compatibilityCarrierBaseFields(),
+      "id",
+      "file_id",
+      "file_ref",
+      "resource_ref",
+      "resource_ura",
+      "content_hash",
+      "deleted",
+    ],
+    "compatibility file delete request",
+  );
+  validateCompatibilityCarrierBase(payload);
+  validateCompatibilityFileSelector(payload);
+  if (payload.deleted !== true) {
+    throw invalidCompatibility("deleted must be true");
+  }
+  if (payload.content_hash !== undefined) {
+    validateCompatibilityHash(payload.content_hash, "content_hash");
+  }
+  mergeCompatibilityMetadata(payload, value);
+  return payload;
+}
+
+function compatibilityRequest(value, allowed, label) {
+  const payload = objectValue(value, label);
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(payload)) {
+    if (!allowedSet.has(key)) {
+      throw invalidCompatibility(`${key} is not a compatibility field`);
+    }
+  }
+  for (const [key, raw] of Object.entries(payload)) {
+    if (typeof raw === "string" && raw.trim() !== raw) {
+      throw invalidCompatibility(`${key} must not contain surrounding whitespace`);
+    }
+  }
+  return payload;
+}
+
+function validateCompatibilityCarrierBase(payload) {
+  requiredCompatibilityURA(payload.caller_ura, "caller_ura");
+  requiredCompatibilityURA(payload.callee_ura, "callee_ura");
+  requiredCompatibilityURA(payload.subject_ura, "subject_ura");
+  requiredCompatibilityString(payload.descriptor_version, "descriptor_version");
+  requiredCompatibilityString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (payload.auth_token !== undefined) {
+    compatibilityOptionalString(payload.auth_token, "auth_token");
+  }
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+}
+
+function validateCompatibilityFileSelector(payload) {
+  const selectors = [
+    payload.id,
+    payload.file_id,
+    payload.file_ref,
+    payload.resource_ref,
+    payload.resource_ura,
+  ].filter((value) => typeof value === "string" && value !== "");
+  if (selectors.length === 0) {
+    throw invalidCompatibility("file selector is required");
+  }
+  for (const field of ["id", "file_id", "filename", "purpose", "owner_ura", "content_type", "status"]) {
+    if (payload[field] !== undefined && payload[field] !== "") {
+      requiredCompatibilityString(payload[field], field);
+    }
+  }
+  for (const field of ["file_ref", "resource_ref", "resource_ura"]) {
+    if (payload[field] !== undefined && payload[field] !== "") {
+      requiredCompatibilityURA(payload[field], field);
+    }
+  }
+}
+
+function validateCompatibilityFileFacts(payload, upload) {
+  if (upload && !payload.filename) {
+    throw invalidCompatibility("filename is required");
+  }
+  if (payload.content_hash !== undefined && payload.content_hash !== "") {
+    validateCompatibilityHash(payload.content_hash, "content_hash");
+  }
+  for (const field of ["bytes", "size_bytes", "created_at", "created"]) {
+    if (payload[field] !== undefined) {
+      compatibilityNonNegativeInteger(payload[field], field);
+    }
+  }
+}
+
+function mergeCompatibilityMetadata(payload, original) {
+  const carrierMetadata = objectValue(payload.metadata ?? {}, "metadata");
+  const fileMetadata = objectValue(original.metadata ?? {}, "metadata");
+  const merged = { ...carrierMetadata, ...fileMetadata };
+  if (Object.keys(merged).length > 0) {
+    payload.metadata = merged;
+  }
+}
+
+function callCompatibilityProjection(transport, method, value) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  if (
+    value instanceof CompatibilityModelPage ||
+    value instanceof CompatibilityChatCompletion ||
+    value instanceof CompatibilityChatCompletionStream ||
+    value instanceof CompatibilityFile ||
+    value instanceof CompatibilityFileDeleteResult
+  ) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value.toJSON()))));
+  }
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw invalidCompatibility("compatibility projection JSON is required");
+    }
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value))));
+  }
+  throw invalidCompatibility("compatibility projection must be bytes, string, or object");
+}
+
 function surfaceListPagesRequest(value) {
   const payload = surfaceRequest(
     value,
@@ -3273,6 +3886,61 @@ function surfacePositiveBoundedInteger(value, field, max) {
     throw invalidSurface(`${field} exceeds bounds`);
   }
   return value;
+}
+
+function requiredCompatibilityString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidCompatibility(`${field} is required`);
+  }
+  return value;
+}
+
+function compatibilityOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidCompatibility(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredCompatibilityURA(value, field) {
+  const text = requiredCompatibilityString(value, field);
+  if (!text.startsWith("easynet:///r/")) {
+    throw invalidCompatibility(`${field} must be a URA`);
+  }
+  return text;
+}
+
+function requiredAbilityURA(value, field) {
+  const text = requiredCompatibilityURA(value, field);
+  if (!text.includes("/ability/")) {
+    throw invalidCompatibility(`${field} must be an Ability URA`);
+  }
+  return text;
+}
+
+function compatibilityNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidCompatibility(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function compatibilityObjectArray(value, field) {
+  if (!Array.isArray(value)) {
+    throw invalidCompatibility(`${field} must be an array`);
+  }
+  return value.map((item) => objectValue(item, field));
+}
+
+function validateCompatibilityHash(value, field) {
+  const text = requiredCompatibilityString(value, field);
+  if (!/^sha256:[0-9a-f]{64}$/.test(text)) {
+    throw invalidCompatibility(`${field} must use sha256:<64 lowercase hex> form`);
+  }
+  return text;
 }
 
 function receiptFetchRequest(value) {
@@ -4432,6 +5100,10 @@ function invalidEvents(message, details = {}) {
 
 function invalidSurface(message, details = {}) {
   return invalidProfile(SURFACE_PROFILE, "surface", message, details);
+}
+
+function invalidCompatibility(message, details = {}) {
+  return invalidProfile(COMPATIBILITY_PROFILE, "compatibility", message, details);
 }
 
 function invalidProfile(profile, stage, message, details = {}) {

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   Client,
+  CompatibilityClient,
   DEFAULT_DIRECTORY_PAGE_SIZE,
   DEFAULT_EVENT_PAGE_SIZE,
   DEFAULT_SURFACE_PAGE_SIZE,
@@ -197,6 +198,137 @@ const surfaceDraftJSON = (descriptorRef, args = {}) =>
     .withJSONArgs(args)
     .withContentType("application/json")
     .withMetadata({ profile: "surface" })
+    .build()
+    .toJSONString();
+
+const compatibilityBase = () => ({
+  caller_ura: "easynet:///r/example/agent/alice.sdk",
+  callee_ura: "easynet:///r/example/device/dev-a",
+  subject_ura: "easynet:///r/example/device/dev-a",
+  descriptor_version: "1.0.0",
+  nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+  causal_context: { form: "none" },
+  auth_token: "tok_example",
+  metadata: { request_id: "compatibility-1" },
+});
+
+const compatibilityAbilityURA = "easynet:///r/example/ability/alice.codex.chat";
+
+const compatibilityChatRequest = (overrides = {}) => ({
+  ...compatibilityBase(),
+  request: {
+    model: compatibilityAbilityURA,
+    messages: [{ role: "user", content: "reply with: ok" }],
+    temperature: 0.2,
+    ...overrides,
+  },
+});
+
+const compatibilityFileRequest = (overrides = {}) => ({
+  ...compatibilityBase(),
+  id: "file-easynet-docs-1",
+  file_ref: "easynet:///r/example/resource/alice.files/prompt.jsonl",
+  owner_ura: "easynet:///r/example/agent/alice.sdk",
+  filename: "prompt.jsonl",
+  purpose: "batch",
+  content_type: "application/jsonl",
+  content_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  size_bytes: 19,
+  created_at: 1783094400,
+  status: "processed",
+  ...overrides,
+});
+
+const compatibilityModelPage = () => ({
+  profile: "compatibility",
+  kind: "model_page",
+  object: "list",
+  data: [
+    {
+      profile: "compatibility",
+      kind: "model",
+      id: compatibilityAbilityURA,
+      object: "model",
+      created: 1783094400,
+      owned_by: "easynet:///r/example/agent/alice.sdk",
+      ability_ref: compatibilityAbilityURA,
+      metadata: { profile: "compatibility", source: "openai.list_models" },
+    },
+  ],
+  next_cursor: null,
+  metadata: { profile: "compatibility", source: "openai.list_models" },
+});
+
+const compatibilityChatCompletion = () => ({
+  profile: "compatibility",
+  kind: "chat_completion",
+  id: "chatcmpl-easynet-1",
+  object: "chat.completion",
+  created: 1783094401,
+  model: compatibilityAbilityURA,
+  choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+  usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
+  metadata: { profile: "compatibility", source: "openai.chat_completions" },
+});
+
+const compatibilityChatStream = () => ({
+  profile: "compatibility",
+  kind: "chat_completion_stream",
+  stream: true,
+  items: [
+    {
+      profile: "compatibility",
+      kind: "chat_completion_chunk",
+      id: "chatcmpl-easynet-1",
+      object: "chat.completion.chunk",
+      created: 1783094401,
+      model: compatibilityAbilityURA,
+      choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }],
+      usage: null,
+      metadata: { profile: "compatibility", sequence: 1 },
+    },
+  ],
+  done_sentinel: "[DONE]",
+  metadata: { profile: "compatibility", source: "openai.chat_completions.stream" },
+});
+
+const compatibilityFile = () => ({
+  profile: "compatibility",
+  kind: "file",
+  id: "file-easynet-docs-1",
+  object: "file",
+  bytes: 19,
+  created_at: 1783094400,
+  filename: "prompt.jsonl",
+  purpose: "batch",
+  status: "processed",
+  metadata: {
+    profile: "compatibility",
+    source: "compatibility.file",
+    file_ref: "easynet:///r/example/resource/alice.files/prompt.jsonl",
+  },
+});
+
+const compatibilityFileDeleteResult = () => ({
+  profile: "compatibility",
+  kind: "file_delete_result",
+  id: "file-easynet-docs-1",
+  object: "file",
+  deleted: true,
+  metadata: { profile: "compatibility", source: "compatibility.file.delete" },
+});
+
+const compatibilityDraftJSON = (descriptorRef, args = {}) =>
+  new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/alice.sdk")
+    .withCalleeURA("easynet:///r/example/device/dev-a")
+    .withDescriptorRef(descriptorRef)
+    .withSubjectURA("easynet:///r/example/device/dev-a")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs(args)
+    .withContentType("application/json")
+    .withMetadata({ profile: "compatibility" })
     .build()
     .toJSONString();
 
@@ -1702,6 +1834,176 @@ test("SurfaceClient delegates page carriers and daemon projections without rende
   );
   await assert.rejects(
     () => surface.listPages({ ...surfaceBase(), limit: 501 }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("CompatibilityClient delegates OpenAI-compatible carriers and daemon projections without product HTTP policy", async () => {
+  const seen = [];
+  const compatibility = new CompatibilityClient({
+    buildListModelsInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_list_models", request });
+      return compatibilityDraftJSON("easynet:///r/example/ability/openai.list_models@1.0.0");
+    },
+    buildChatCompletionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_chat", request });
+      return compatibilityDraftJSON("easynet:///r/example/ability/openai.chat_completions@1.0.0", request.request);
+    },
+    buildStreamChatCompletionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_stream_chat", request });
+      return compatibilityDraftJSON("easynet:///r/example/ability/openai.chat_completions.stream@1.0.0", request.request);
+    },
+    buildFileUploadInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_file_upload", request });
+      return compatibilityDraftJSON("easynet:///r/example/ability/openai.files.upload@1.0.0", request);
+    },
+    buildFileRetrieveInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_file_retrieve", request });
+      return compatibilityDraftJSON("easynet:///r/example/ability/openai.files.retrieve@1.0.0", request);
+    },
+    buildFileDeleteInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_file_delete", request });
+      return compatibilityDraftJSON("easynet:///r/example/ability/openai.files.delete@1.0.0", request);
+    },
+    listModels: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "list_models", request });
+      return JSON.stringify(compatibilityModelPage());
+    },
+    chatCompletions: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "chat", request });
+      return JSON.stringify(compatibilityChatCompletion());
+    },
+    streamChatCompletions: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "stream_chat", request });
+      return JSON.stringify(compatibilityChatStream());
+    },
+    uploadFile: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "file_upload", request });
+      return JSON.stringify(compatibilityFile());
+    },
+    getFile: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "file_get", request });
+      return JSON.stringify(compatibilityFile());
+    },
+    deleteFile: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "file_delete", request });
+      return JSON.stringify(compatibilityFileDeleteResult());
+    },
+    projectModelPage: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_model_page", request });
+      return JSON.stringify(request);
+    },
+    projectChatCompletion: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_chat", request });
+      return JSON.stringify(request);
+    },
+    projectChatStream: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_stream", request });
+      return JSON.stringify(request);
+    },
+    projectFileUpload: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_file_upload", request });
+      return JSON.stringify(compatibilityFile());
+    },
+    projectFile: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_file", request });
+      return JSON.stringify(request);
+    },
+    projectFileDeleteResult: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_file_delete", request });
+      return JSON.stringify(request);
+    },
+  });
+
+  const listDraft = await compatibility.buildListModelsInvocation(compatibilityBase());
+  const chatDraft = await compatibility.buildChatCompletionInvocation(compatibilityChatRequest());
+  const streamDraft = await compatibility.buildStreamChatCompletionInvocation(compatibilityChatRequest());
+  const uploadDraft = await compatibility.buildFileUploadInvocation(compatibilityFileRequest());
+  const retrieveDraft = await compatibility.buildFileRetrieveInvocation({
+    ...compatibilityBase(),
+    id: "file-easynet-docs-1",
+  });
+  const deleteDraft = await compatibility.buildFileDeleteInvocation({
+    ...compatibilityBase(),
+    id: "file-easynet-docs-1",
+    deleted: true,
+  });
+  const models = await compatibility.listModels(compatibilityBase());
+  const completion = await compatibility.chatCompletions(compatibilityChatRequest());
+  const stream = await compatibility.streamChatCompletions(compatibilityChatRequest());
+  const uploaded = await compatibility.uploadFile(compatibilityFileRequest());
+  const file = await compatibility.getFile({ ...compatibilityBase(), id: "file-easynet-docs-1" });
+  const deleted = await compatibility.deleteFile({
+    ...compatibilityBase(),
+    id: "file-easynet-docs-1",
+    deleted: true,
+  });
+  const projectedModels = await compatibility.projectModelPage(models);
+  const projectedCompletion = await compatibility.projectChatCompletion(completion.toJSON());
+  const projectedStream = await compatibility.projectChatStream(stream);
+  const projectedUpload = await compatibility.projectFileUpload(compatibilityFileRequest());
+  const projectedFile = await compatibility.projectFile(file.toJSON());
+  const projectedDelete = await compatibility.projectFileDeleteResult(deleted);
+
+  assert.equal(listDraft.descriptorRef, "easynet:///r/example/ability/openai.list_models@1.0.0");
+  assert.equal(chatDraft.descriptorRef, "easynet:///r/example/ability/openai.chat_completions@1.0.0");
+  assert.equal(streamDraft.descriptorRef, "easynet:///r/example/ability/openai.chat_completions.stream@1.0.0");
+  assert.equal(uploadDraft.descriptorRef, "easynet:///r/example/ability/openai.files.upload@1.0.0");
+  assert.equal(retrieveDraft.descriptorRef, "easynet:///r/example/ability/openai.files.retrieve@1.0.0");
+  assert.equal(deleteDraft.descriptorRef, "easynet:///r/example/ability/openai.files.delete@1.0.0");
+  assert.equal(models.data[0].id, compatibilityAbilityURA);
+  assert.equal(completion.object, "chat.completion");
+  assert.equal(stream.stream, true);
+  assert.equal(stream.items[0].object, "chat.completion.chunk");
+  assert.equal(uploaded.id, "file-easynet-docs-1");
+  assert.equal(file.createdAt, 1783094400);
+  assert.equal(deleted.deleted, true);
+  assert.equal(projectedModels.object, "list");
+  assert.equal(projectedCompletion.model, compatibilityAbilityURA);
+  assert.equal(projectedStream.doneSentinel, "[DONE]");
+  assert.equal(projectedUpload.status, "processed");
+  assert.equal(projectedFile.metadata.file_ref, "easynet:///r/example/resource/alice.files/prompt.jsonl");
+  assert.equal(projectedDelete.id, "file-easynet-docs-1");
+  assert.equal(seen[2].request.request.stream, true);
+  assert.equal(seen[3].request.file_ref, "easynet:///r/example/resource/alice.files/prompt.jsonl");
+  assert.deepEqual(
+    seen
+      .filter((entry) => entry.method.startsWith("project_"))
+      .map((entry) => entry.method),
+    [
+      "project_model_page",
+      "project_chat",
+      "project_stream",
+      "project_file_upload",
+      "project_file",
+      "project_file_delete",
+    ],
+  );
+
+  await assert.rejects(
+    () => compatibility.buildChatCompletionInvocation(compatibilityChatRequest({ stream: true })),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => compatibility.buildChatCompletionInvocation(compatibilityChatRequest({ model: "gpt-4o" })),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });
