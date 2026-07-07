@@ -267,10 +267,13 @@ fn run_disable(args: CompanionPackageArgs) -> anyhow::Result<()> {
 fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
     let package = resolve_package(&args.id, args.version.as_deref())?;
     if package.manifest().kind() == PluginKind::DesktopCompanion {
-        let status = match invoke_companion_status(&args.id, args.version.as_deref())? {
-            Some(status) => status,
-            None => DesktopCompanionManager::current().status_json(&package)?,
-        };
+        let local_status = DesktopCompanionManager::current().status_json(&package)?;
+        let daemon_status = invoke_companion_status(&args.id, args.version.as_deref())?;
+        let selected = select_companion_status(local_status, daemon_status);
+        if let Some(warning) = selected.warning {
+            output::warn(&warning);
+        }
+        let status = selected.status;
         if args.json {
             println!("{}", serde_json::to_string_pretty(&status)?);
         } else {
@@ -395,6 +398,34 @@ fn string_json(value: &serde_json::Value, field: &str) -> String {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("-")
         .to_string()
+}
+
+struct CompanionStatusSelection {
+    status: serde_json::Value,
+    warning: Option<String>,
+}
+
+fn select_companion_status(
+    local_status: serde_json::Value,
+    daemon_status: Option<serde_json::Value>,
+) -> CompanionStatusSelection {
+    match daemon_status {
+        Some(daemon_status) if daemon_status == local_status => CompanionStatusSelection {
+            status: daemon_status,
+            warning: None,
+        },
+        Some(_) => CompanionStatusSelection {
+            status: local_status,
+            warning: Some(
+                "daemon companion plugin state may be stale; showing local manager observation"
+                    .to_string(),
+            ),
+        },
+        None => CompanionStatusSelection {
+            status: local_status,
+            warning: None,
+        },
+    }
 }
 
 fn offline_plugin_surface_report() -> anyhow::Result<PluginSurfaceReport> {
@@ -715,6 +746,42 @@ fn is_missing_or_incomplete_credentials(err: &anyhow::Error) -> bool {
 #[cfg(all(test, feature = "axon-pb"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn companion_status_selection_uses_daemon_when_equal() {
+        let status = serde_json::json!({
+            "kind": "desktop_companion_status",
+            "package_id": "easynet.desktop.menubar",
+            "projected_state": "running"
+        });
+
+        let selected = select_companion_status(status.clone(), Some(status.clone()));
+
+        assert_eq!(selected.status, status);
+        assert!(selected.warning.is_none());
+    }
+
+    #[test]
+    fn companion_status_selection_warns_and_uses_local_when_daemon_differs() {
+        let local_status = serde_json::json!({
+            "kind": "desktop_companion_status",
+            "package_id": "easynet.desktop.menubar",
+            "projected_state": "running"
+        });
+        let daemon_status = serde_json::json!({
+            "kind": "desktop_companion_status",
+            "package_id": "easynet.desktop.menubar",
+            "projected_state": "ready_stopped"
+        });
+
+        let selected = select_companion_status(local_status.clone(), Some(daemon_status));
+
+        assert_eq!(selected.status, local_status);
+        assert_eq!(
+            selected.warning.as_deref(),
+            Some("daemon companion plugin state may be stale; showing local manager observation")
+        );
+    }
 
     #[test]
     fn plugin_control_subject_is_unavailable_when_unpaired() {
