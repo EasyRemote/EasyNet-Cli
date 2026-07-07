@@ -1256,6 +1256,32 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testCompanionProfileProjectsStateMachineAndLifecycleActions() async throws {
+        let transport = FixtureCompanionTransport()
+        let companion = CompanionClient(transport: transport)
+
+        let listed = try await companion.list()
+        XCTAssertEqual(listed.companions.count, 1)
+        XCTAssertEqual(listed.companions[0].projectedState, .running)
+
+        let status = try await companion.status(packageID: " easynet.desktop.menubar ", packageVersion: " 0.1.0 ")
+        XCTAssertEqual(status.packageID, "easynet.desktop.menubar")
+        XCTAssertEqual(status.bootPolicy, .ensureRunningAfterDaemonReady)
+        XCTAssertEqual(transport.statusInputs.last?.packageVersion, "0.1.0")
+
+        let result = try await companion.disable(packageID: "easynet.desktop.menubar")
+        XCTAssertEqual(result.action, "disable")
+        XCTAssertEqual(result.statusAfter?.health, .statusFile)
+
+        await expectSDKError(.invalidArgument) {
+            _ = try await companion.status(packageID: " ")
+        }
+        try await companion.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await companion.list()
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -1650,6 +1676,92 @@ final class HealthOnlyTransport: HealthTransport, @unchecked Sendable {
 final class FailingHealthTransport: HealthTransport, @unchecked Sendable {
     func runtimeHealth() async throws -> Data {
         throw FixtureFailure.down
+    }
+}
+
+final class FixtureCompanionTransport: CompanionTransport, @unchecked Sendable {
+    var statusInputs: [(packageID: String, packageVersion: String)] = []
+    var closed = false
+
+    func companionList() async throws -> Data {
+        if closed {
+            throw SDKError.closed("desktop_companion_transport")
+        }
+        return Data("""
+        {
+          "kind": "desktop_companion_list",
+          "companions": [
+            \(companionStatusJSON())
+          ]
+        }
+        """.utf8)
+    }
+
+    func companionStatus(packageID: String, packageVersion: String) async throws -> Data {
+        statusInputs.append((packageID, packageVersion))
+        return Data(companionStatusJSON(packageID: packageID, packageVersion: packageVersion.isEmpty ? "0.1.0" : packageVersion).utf8)
+    }
+
+    func companionEnable(packageID: String, packageVersion: String) async throws -> Data {
+        action("enable", packageID: packageID, packageVersion: packageVersion)
+    }
+
+    func companionDisable(packageID: String, packageVersion: String) async throws -> Data {
+        action("disable", packageID: packageID, packageVersion: packageVersion)
+    }
+
+    func companionStart(packageID: String, packageVersion: String) async throws -> Data {
+        action("start", packageID: packageID, packageVersion: packageVersion)
+    }
+
+    func companionStop(packageID: String, packageVersion: String) async throws -> Data {
+        action("stop", packageID: packageID, packageVersion: packageVersion)
+    }
+
+    func close() async throws {
+        closed = true
+    }
+
+    private func action(_ name: String, packageID: String, packageVersion: String) -> Data {
+        Data("""
+        {
+          "profile": "desktop_companion",
+          "kind": "desktop_companion_action_result",
+          "package_id": "\(packageID)",
+          "action": "\(name)",
+          "changed": true,
+          "status_before": null,
+          "status_after": \(companionStatusJSON(packageID: packageID, packageVersion: packageVersion.isEmpty ? "0.1.0" : packageVersion)),
+          "error": null,
+          "metadata": {}
+        }
+        """.utf8)
+    }
+
+    private func companionStatusJSON(packageID: String = "easynet.desktop.menubar", packageVersion: String = "0.1.0") -> String {
+        """
+        {
+          "profile": "desktop_companion",
+          "kind": "desktop_companion_status",
+          "package_id": "\(packageID)",
+          "package_version": "\(packageVersion)",
+          "display_name": "EasyNet Menu Bar",
+          "platform": "macos",
+          "desired_state": "enabled",
+          "supervisor_state": "installed_enabled",
+          "observed_state": "running",
+          "projected_state": "running",
+          "boot_policy": "ensure_running_after_daemon_ready",
+          "stop_policy": "keep_running",
+          "health": "status_file",
+          "pid": 123,
+          "version": "0.1.0",
+          "last_seen_unix_ms": 1783411200000,
+          "launch_method": "launch_agent",
+          "error": null,
+          "metadata": {}
+        }
+        """
     }
 }
 

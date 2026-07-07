@@ -43,6 +43,7 @@ public final class RuntimeCoreSeamTest {
     surfaceProfileDelegatesCarriersAndProjections();
     wrapperProfileProjectsRuntimeRecords();
     compatibilityProfileDelegatesCarriersAndProjections();
+    companionProfileProjectsStateMachineAndLifecycleActions();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -1518,6 +1519,28 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_HANDLE, () -> compatibility.listModels(list));
   }
 
+  private static void companionProfileProjectsStateMachineAndLifecycleActions() throws Exception {
+    var transport = new FixtureCompanionTransport();
+    var companion = new CompanionClient(transport);
+
+    var listed = companion.list();
+    check(listed.companions().size() == 1, "companion list size");
+    check(listed.companions().get(0).projectedState() == CompanionProjectedState.RUNNING, "companion projected state");
+
+    var status = companion.status(" easynet.desktop.menubar ", " 0.1.0 ");
+    check(status.packageID().equals("easynet.desktop.menubar"), "companion package id");
+    check(status.bootPolicy() == CompanionBootPolicy.ENSURE_RUNNING_AFTER_DAEMON_READY, "companion boot policy");
+    check(transport.lastPackageVersion.equals("0.1.0"), "companion input projection");
+
+    var result = companion.disable("easynet.desktop.menubar");
+    check(result.action().equals("disable"), "companion action");
+    check(result.statusAfter().health() == CompanionHealthMode.STATUS_FILE, "companion action status");
+
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> companion.status(" "));
+    companion.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, companion::list);
+  }
+
   private static SurfaceCarrierBase surfaceCarrierBase(Map<String, Object> metadata) {
     return new SurfaceCarrierBase(
         "easynet:///r/example/agent/alice.sdk",
@@ -1764,6 +1787,107 @@ public final class RuntimeCoreSeamTest {
       return Files.readAllBytes(Path.of("sdk/conformance/fixtures", name));
     } catch (IOException error) {
       throw new AssertionError("fixture not found: " + name, error);
+    }
+  }
+
+  private static final class FixtureCompanionTransport implements CompanionTransport {
+    String lastPackageVersion = "";
+    boolean closed;
+
+    @Override
+    public byte[] companionList() {
+      if (closed) {
+        throw SDKError.closed("desktop_companion_transport");
+      }
+      return bytes(
+          """
+          {
+            "kind": "desktop_companion_list",
+            "companions": [
+              %s
+            ]
+          }
+          """
+              .formatted(companionStatusJSON("easynet.desktop.menubar", "0.1.0")));
+    }
+
+    @Override
+    public byte[] companionStatus(String packageID, String packageVersion) {
+      lastPackageVersion = packageVersion;
+      return bytes(companionStatusJSON(packageID, packageVersion.isEmpty() ? "0.1.0" : packageVersion));
+    }
+
+    @Override
+    public byte[] companionEnable(String packageID, String packageVersion) {
+      return action("enable", packageID, packageVersion);
+    }
+
+    @Override
+    public byte[] companionDisable(String packageID, String packageVersion) {
+      return action("disable", packageID, packageVersion);
+    }
+
+    @Override
+    public byte[] companionStart(String packageID, String packageVersion) {
+      return action("start", packageID, packageVersion);
+    }
+
+    @Override
+    public byte[] companionStop(String packageID, String packageVersion) {
+      return action("stop", packageID, packageVersion);
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+    }
+
+    private byte[] action(String action, String packageID, String packageVersion) {
+      return bytes(
+          """
+          {
+            "profile": "desktop_companion",
+            "kind": "desktop_companion_action_result",
+            "package_id": "%s",
+            "action": "%s",
+            "changed": true,
+            "status_before": null,
+            "status_after": %s,
+            "error": null,
+            "metadata": {}
+          }
+          """
+              .formatted(
+                  packageID,
+                  action,
+                  companionStatusJSON(packageID, packageVersion.isEmpty() ? "0.1.0" : packageVersion)));
+    }
+
+    private static String companionStatusJSON(String packageID, String packageVersion) {
+      return """
+          {
+            "profile": "desktop_companion",
+            "kind": "desktop_companion_status",
+            "package_id": "%s",
+            "package_version": "%s",
+            "display_name": "EasyNet Menu Bar",
+            "platform": "macos",
+            "desired_state": "enabled",
+            "supervisor_state": "installed_enabled",
+            "observed_state": "running",
+            "projected_state": "running",
+            "boot_policy": "ensure_running_after_daemon_ready",
+            "stop_policy": "keep_running",
+            "health": "status_file",
+            "pid": 123,
+            "version": "0.1.0",
+            "last_seen_unix_ms": 1783411200000,
+            "launch_method": "launch_agent",
+            "error": null,
+            "metadata": {}
+          }
+          """
+          .formatted(packageID, packageVersion);
     }
   }
 
