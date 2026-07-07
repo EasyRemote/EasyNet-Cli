@@ -545,11 +545,10 @@ export class DelegationProof {
 export class SessionAuthority {
   constructor(fields) {
     const value = objectValue(fields, "session authority");
-    this.backendURA = requiredAuthorityString(value.backend_ura, "backend_ura");
-    this.userURA = requiredAuthorityString(value.user_ura, "user_ura");
-    this.sessionID = requiredAuthorityString(value.session_id, "session_id");
+    this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
+    this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
+    this.audience = requiredAuthorityString(value.audience, "audience");
     this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
-    this.audiences = requiredAuthorityStringArray(value.audiences, "audiences");
     this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
     this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
     this.signatureBase64 = requiredAuthorityBase64(value.signature_base64, "signature_base64");
@@ -581,11 +580,10 @@ export class SessionAuthority {
 
   toJSON() {
     return {
-      backend_ura: this.backendURA,
-      user_ura: this.userURA,
-      session_id: this.sessionID,
+      issuer_ura: this.issuerURA,
+      subject_ura: this.subjectURA,
+      audience: this.audience,
       scopes: [...this.scopes],
-      audiences: [...this.audiences],
       issued_at_ms: this.issuedAtMS,
       expires_at_ms: this.expiresAtMS,
       signature_base64: this.signatureBase64,
@@ -624,11 +622,10 @@ export class DelegationRequest {
 export class SessionAuthorityRequest {
   constructor(fields) {
     const value = objectValue(fields, "session authority request");
-    this.backendURA = requiredAuthorityString(value.backend_ura, "backend_ura");
-    this.userURA = requiredAuthorityString(value.user_ura, "user_ura");
-    this.sessionID = requiredAuthorityString(value.session_id, "session_id");
+    this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
+    this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
+    this.audience = requiredAuthorityString(value.audience, "audience");
     this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
-    this.audiences = requiredAuthorityStringArray(value.audiences, "audiences");
     this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
     this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
     this.metadata = objectValue(value.metadata ?? {}, "metadata");
@@ -637,11 +634,10 @@ export class SessionAuthorityRequest {
 
   toJSON() {
     return {
-      backend_ura: this.backendURA,
-      user_ura: this.userURA,
-      session_id: this.sessionID,
+      issuer_ura: this.issuerURA,
+      subject_ura: this.subjectURA,
+      audience: this.audience,
       scopes: [...this.scopes],
-      audiences: [...this.audiences],
       issued_at_ms: this.issuedAtMS,
       expires_at_ms: this.expiresAtMS,
       metadata: this.metadata,

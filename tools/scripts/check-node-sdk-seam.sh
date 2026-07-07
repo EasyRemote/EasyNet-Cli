@@ -19,4 +19,12 @@ if grep -RInE '\bURI\b|\bUri\b|\buri\b|_uri\b|uri_' "$ROOT/sdk/node" --include='
 fi
 rm -f /tmp/easynet-node-uri-scan.out
 
+if grep -RInE '\bbackend_ura\b|\buser_ura\b|backendURA|userURA' "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' >/tmp/easynet-node-authority-scan.out 2>/dev/null; then
+  echo "check-node-sdk-seam: product-specific authority fields found in Node SDK" >&2
+  cat /tmp/easynet-node-authority-scan.out >&2
+  rm -f /tmp/easynet-node-authority-scan.out
+  exit 1
+fi
+rm -f /tmp/easynet-node-authority-scan.out
+
 echo "check-node-sdk-seam ok"

@@ -952,11 +952,10 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
   );
   const sessionValue = authorityMetadata(
     {
-      backend_ura: "easynet:///r/example/agent/backend",
-      user_ura: "easynet:///r/example/user/alice",
-      session_id: "sa-example",
+      issuer_ura: "easynet:///r/example/agent/runtime",
+      subject_ura: "easynet:///r/example/user/alice",
+      audience: "easynet:///r/example/device/dev-a",
       scopes: ["device.observe.*"],
-      audiences: ["easynet:///r/example/device/dev-a"],
       issued_at_ms: 1000,
       expires_at_ms: 2000,
     },
@@ -980,7 +979,7 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
 
   assert.equal(delegation.issuerURA, "easynet:///r/example/user/alice");
   assert.equal(delegation.signatureBase64, Buffer.from("delegation-signature").toString("base64"));
-  assert.equal(session.backendURA, "easynet:///r/example/agent/backend");
+  assert.equal(session.issuerURA, "easynet:///r/example/agent/runtime");
   assert.equal(session.signatureBase64, Buffer.from("session-signature").toString("base64"));
   assert.equal(draft.metadata.trace, "authority-1");
   assert.equal(draft.metadata[DELEGATION_METADATA_KEY], delegationValue);
@@ -1028,21 +1027,20 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
     expires_at_ms: 2000,
   });
   const mintedSession = await authority.mintSessionAuthority({
-    backend_ura: "easynet:///r/example/agent/backend",
-    user_ura: "easynet:///r/example/user/alice",
-    session_id: "sa-example",
+    issuer_ura: "easynet:///r/example/agent/runtime",
+    subject_ura: "easynet:///r/example/user/alice",
+    audience: "easynet:///r/example/device/dev-a",
     scopes: ["device.observe.*"],
-    audiences: ["easynet:///r/example/device/dev-a"],
     issued_at_ms: 1000,
     expires_at_ms: 2000,
   });
 
   assert.equal(mintedDelegation.callerURA, "easynet:///r/example/agent/backend");
   assert.equal(mintedDelegation.metadata().value, delegationValue);
-  assert.equal(mintedSession.sessionID, "sa-example");
+  assert.equal(mintedSession.audience, "easynet:///r/example/device/dev-a");
   assert.equal(mintedSession.metadata().value, sessionValue);
   assert.equal(seen[0][1].caller_ura, "easynet:///r/example/agent/backend");
-  assert.equal(seen[1][1].session_id, "sa-example");
+  assert.equal(seen[1][1].audience, "easynet:///r/example/device/dev-a");
 
   await assert.rejects(
     () =>

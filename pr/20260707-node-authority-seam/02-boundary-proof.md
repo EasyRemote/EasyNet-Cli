@@ -25,3 +25,8 @@
 Node can safely expose a seam for typed authority metadata projection and
 transport delegation because it preserves the canonical runtime model while
 keeping authority cryptography and daemon-provider behavior below the facade.
+
+The seam intentionally does not mirror product-facing backend/user/session
+authority names. Those belong to provider or product adapters when needed. The
+public Node SDK authority DTO uses issuer URA, subject URA, audience, scopes,
+expiry, and signature, matching the spec's generic authority model.

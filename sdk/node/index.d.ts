@@ -296,11 +296,10 @@ export class DelegationProof {
 }
 
 export interface SessionAuthorityFields {
-  backend_ura: string;
-  user_ura: string;
-  session_id: string;
+  issuer_ura: string;
+  subject_ura: string;
+  audience: string;
   scopes: string[];
-  audiences: string[];
   issued_at_ms: number;
   expires_at_ms: number;
   signature_base64: string;
@@ -308,11 +307,10 @@ export interface SessionAuthorityFields {
 }
 
 export class SessionAuthority {
-  backendURA: string;
-  userURA: string;
-  sessionID: string;
+  issuerURA: string;
+  subjectURA: string;
+  audience: string;
   scopes: string[];
-  audiences: string[];
   issuedAtMS: number;
   expiresAtMS: number;
   signatureBase64: string;
@@ -349,22 +347,20 @@ export class DelegationRequest {
 }
 
 export interface SessionAuthorityRequestFields {
-  backend_ura: string;
-  user_ura: string;
-  session_id: string;
+  issuer_ura: string;
+  subject_ura: string;
+  audience: string;
   scopes: string[];
-  audiences: string[];
   issued_at_ms: number;
   expires_at_ms: number;
   metadata?: Record<string, unknown>;
 }
 
 export class SessionAuthorityRequest {
-  backendURA: string;
-  userURA: string;
-  sessionID: string;
+  issuerURA: string;
+  subjectURA: string;
+  audience: string;
   scopes: string[];
-  audiences: string[];
   issuedAtMS: number;
   expiresAtMS: number;
   metadata: Record<string, unknown>;
