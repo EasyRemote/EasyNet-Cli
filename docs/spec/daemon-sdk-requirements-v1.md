@@ -2761,9 +2761,9 @@ The SDK repo MUST provide these gates before backend cutover:
    and Axon/daemon-obtained canonical signing material.
 2. Rust, C ABI, Go, and Python parity tests for the same Invocation fixture.
 3. ABI v3 header/export/version checks.
-4. SDK URA naming gate: public SDK docs, C ABI headers, FFI surfaces, and
-   Go/Python SDK facades must not reintroduce retired address-era identifiers
-   or aliases.
+4. SDK URA naming gate: public SDK docs, C ABI headers, FFI surfaces,
+   conformance artifacts, schemas, and all maintained SDK language facades must
+   not reintroduce retired address-era identifiers or aliases.
 5. Go SDK import ban: Go SDK packages must not import Axon. Axon dependency is
    contained in the native Rust daemon SDK core and daemon runtime adapter.
 6. EasyNet backend SDK-only ban after cutover, using section 29.1 as the single

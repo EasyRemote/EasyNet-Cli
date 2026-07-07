@@ -11,10 +11,15 @@ collect_files() {
     "sdk/SDK_INTERFACE_SPEC.md"
     "sdk/SDK_PARITY.md"
     "sdk/CONFORMANCE_SUITE.md"
+    "sdk/conformance"
+    "sdk/schemas"
     "include"
     "src/ffi"
     "sdk/go"
-    "sdk/python/easynet_sdk"
+    "sdk/python"
+    "sdk/node"
+    "sdk/java"
+    "sdk/swift"
   )
   local root
   for root in "${roots[@]}"; do
@@ -23,6 +28,13 @@ collect_files() {
     elif [[ -d "$ROOT/$root" ]]; then
       find "$ROOT/$root" \
         \( -path '*/target/*' \
+          -o -path '*/build/*' \
+          -o -path '*/.build/*' \
+          -o -path '*/dist/*' \
+          -o -path '*/node_modules/*' \
+          -o -path '*/.venv/*' \
+          -o -path '*/venv/*' \
+          -o -path '*/site-packages/*' \
           -o -path '*/__pycache__/*' \
           -o -path '*/sdk/go/internal/axonpb/*' \
           -o -path '*/sdk/python/easynet_sdk/_axon_pb/*' \) -prune \
