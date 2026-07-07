@@ -5,6 +5,7 @@ use std::process::Command;
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 
+use super::heartbeat::CompanionStatusFileObserver;
 use super::planner::{DesktopCompanionPlan, PlatformCompanionSpec};
 use super::status::{
     CompanionObservation, CompanionObservedState, CompanionSessionStatus, CompanionSupervisorState,
@@ -132,10 +133,30 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
         Ok(CompanionActionReport::changed("started Windows companion"))
     }
 
-    fn stop(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
-        Ok(CompanionActionReport::unchanged(
-            "Windows stop uses status-file pid in a later adapter upgrade",
-        ))
+    fn stop(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(pid) = self.observe(plan).pid {
+                return stop_windows_pid(plan, pid);
+            }
+            let PlatformCompanionSpec::Windows { exe, .. } = &plan.spec else {
+                return Ok(CompanionActionReport::unchanged(
+                    "not a Windows companion plan",
+                ));
+            };
+            let Some(image_name) = exe.file_name().and_then(|name| name.to_str()) else {
+                return Err(PluginHostError::InvalidCompanionManifest {
+                    id: plan.package_id.clone(),
+                    reason: "Windows companion executable has no image name".to_string(),
+                });
+            };
+            stop_windows_image(plan, image_name)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = plan;
+            Ok(CompanionActionReport::unchanged("unsupported platform"))
+        }
     }
 
     fn supervisor_state(&self, _plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
@@ -148,22 +169,60 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
 
     fn observe(&self, plan: &DesktopCompanionPlan) -> CompanionObservation {
         let path = companion_status_file(&plan.package_id);
-        if let Ok(body) = std::fs::read_to_string(path) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-                return CompanionObservation {
-                    observed_state: CompanionObservedState::Running,
-                    pid: value["pid"].as_u64(),
-                    version: value["package_version"].as_str().map(ToOwned::to_owned),
-                    last_seen_unix_ms: value["last_seen_unix_ms"].as_u64(),
-                    launch_method: Some(plan.spec.launch_method().to_string()),
-                    error: None,
-                };
-            }
+        if let Some(observation) = CompanionStatusFileObserver::current().observe_path(plan, &path)
+        {
+            return observation;
         }
         CompanionObservation {
             observed_state: CompanionObservedState::NotRunning,
             launch_method: Some(plan.spec.launch_method().to_string()),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn stop_windows_pid(plan: &DesktopCompanionPlan, pid: u64) -> Result<CompanionActionReport> {
+    let pid_arg = pid.to_string();
+    let status = Command::new("taskkill")
+        .args(["/PID", pid_arg.as_str(), "/T", "/F"])
+        .status()
+        .map_err(|source| PluginHostError::WriteFailed {
+            path: std::path::PathBuf::from("taskkill"),
+            source,
+        })?;
+    if status.success() {
+        Ok(CompanionActionReport::changed(
+            "stopped Windows companion pid",
+        ))
+    } else {
+        Err(PluginHostError::InvalidCompanionManifest {
+            id: plan.package_id.clone(),
+            reason: format!("taskkill by pid failed with {status}"),
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn stop_windows_image(
+    plan: &DesktopCompanionPlan,
+    image_name: &str,
+) -> Result<CompanionActionReport> {
+    let status = Command::new("taskkill")
+        .args(["/IM", image_name, "/T", "/F"])
+        .status()
+        .map_err(|source| PluginHostError::WriteFailed {
+            path: std::path::PathBuf::from("taskkill"),
+            source,
+        })?;
+    if status.success() {
+        Ok(CompanionActionReport::changed(
+            "stopped Windows companion image",
+        ))
+    } else {
+        Err(PluginHostError::InvalidCompanionManifest {
+            id: plan.package_id.clone(),
+            reason: format!("taskkill by image failed with {status}"),
+        })
     }
 }

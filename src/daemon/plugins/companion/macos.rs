@@ -6,6 +6,7 @@ use std::process::Command;
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 
+use super::heartbeat::CompanionStatusFileObserver;
 use super::planner::{DesktopCompanionPlan, PlatformCompanionSpec};
 use super::status::{
     CompanionObservation, CompanionObservedState, CompanionSessionStatus, CompanionSupervisorState,
@@ -227,38 +228,7 @@ fn observe_status_file_or_process(plan: &DesktopCompanionPlan) -> CompanionObser
 
 fn read_status_file(plan: &DesktopCompanionPlan) -> Option<CompanionObservation> {
     let path = companion_status_file(&plan.package_id);
-    let body = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&body).ok()?;
-    if value["package_id"].as_str()? != plan.package_id {
-        return Some(CompanionObservation {
-            observed_state: CompanionObservedState::HealthError,
-            error: Some("status_file_invalid".to_string()),
-            ..Default::default()
-        });
-    }
-    if value["package_version"].as_str()? != plan.package_version {
-        return Some(CompanionObservation {
-            observed_state: CompanionObservedState::VersionMismatch,
-            error: Some("version_mismatch".to_string()),
-            ..Default::default()
-        });
-    }
-    let last_seen = value["last_seen_unix_ms"].as_u64();
-    let observed_state = match last_seen {
-        Some(last_seen) if current_unix_ms().saturating_sub(last_seen) <= 60_000 => {
-            CompanionObservedState::Running
-        }
-        Some(_) => CompanionObservedState::Stale,
-        None => CompanionObservedState::HealthError,
-    };
-    Some(CompanionObservation {
-        observed_state,
-        pid: value["pid"].as_u64(),
-        version: value["package_version"].as_str().map(ToOwned::to_owned),
-        last_seen_unix_ms: last_seen,
-        launch_method: Some(plan.spec.launch_method().to_string()),
-        error: None,
-    })
+    CompanionStatusFileObserver::current().observe_path(plan, &path)
 }
 
 fn launch_agent_label(plan: &DesktopCompanionPlan) -> Result<&str> {
@@ -367,15 +337,6 @@ fn current_uid() -> u32 {
     {
         0
     }
-}
-
-fn current_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 fn xml_escape(input: &str) -> String {

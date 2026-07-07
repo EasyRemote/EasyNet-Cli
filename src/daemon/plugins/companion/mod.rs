@@ -4,6 +4,7 @@
 // File: src/daemon/plugins/companion/mod.rs
 // Description: Daemon/plugin lifecycle model for user-session UI companions.
 
+mod heartbeat;
 pub mod linux;
 pub mod macos;
 pub mod planner;
@@ -521,7 +522,7 @@ fn status_error(
 ) -> Option<serde_json::Value> {
     if let Some(message) = observed_error {
         return Some(json!({
-            "code": observed_error_code(observed),
+            "code": observed_error_code(observed, &message),
             "message": message,
         }));
     }
@@ -532,9 +533,12 @@ fn status_error(
     }))
 }
 
-fn observed_error_code(observed: CompanionObservedState) -> &'static str {
+fn observed_error_code(observed: CompanionObservedState, message: &str) -> &'static str {
     match observed {
         CompanionObservedState::VersionMismatch => "version_mismatch",
+        CompanionObservedState::HealthError if message == "status_file_invalid" => {
+            "status_file_invalid"
+        }
         CompanionObservedState::HealthError => "health_stale",
         _ => "status_file_invalid",
     }
@@ -690,6 +694,19 @@ mod tests {
         let status = manager.status_for_package(&package).expect("status");
         assert_eq!(status.projected_state, "ready_stopped");
         assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn status_file_invalid_error_code_is_preserved() {
+        let error = status_error(
+            CompanionObservedState::HealthError,
+            Some("status_file_invalid".to_string()),
+            None,
+        )
+        .expect("error");
+
+        assert_eq!(error["code"], "status_file_invalid");
+        assert_eq!(error["message"], "status_file_invalid");
     }
 
     fn test_manager(state_path: std::path::PathBuf, fail_start: bool) -> DesktopCompanionManager {
