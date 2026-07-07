@@ -53,19 +53,19 @@ EOF
   cat >>"$tmp/backend/go.mod" <<'EOF'
 require easynet.run/axon/sdk/go v0.0.0
 EOF
-  if "$0" "$tmp/backend" >/tmp/backend-sdk-only-boundary-self-test.out 2>&1; then
+  self_test_out="$tmp/backend-sdk-only-boundary-self-test.out"
+  if "$0" "$tmp/backend" >"$self_test_out" 2>&1; then
     echo "self-test expected forbidden backend fixture to fail" >&2
     exit 1
   fi
-  grep -Fq "raw_axon_module_dependency" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "raw_axon_import" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "generated_axon_pb_import" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "generated_axon_pb_package" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "direct_daemon_transport_import" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "direct_daemon_transport_package" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "raw_daemon_socket_marker" /tmp/backend-sdk-only-boundary-self-test.out
-  grep -Fq "runtime_subprocess" /tmp/backend-sdk-only-boundary-self-test.out
-  rm -f /tmp/backend-sdk-only-boundary-self-test.out
+  grep -Fq "raw_axon_module_dependency" "$self_test_out"
+  grep -Fq "raw_axon_import" "$self_test_out"
+  grep -Fq "generated_axon_pb_import" "$self_test_out"
+  grep -Fq "generated_axon_pb_package" "$self_test_out"
+  grep -Fq "direct_daemon_transport_import" "$self_test_out"
+  grep -Fq "direct_daemon_transport_package" "$self_test_out"
+  grep -Fq "raw_daemon_socket_marker" "$self_test_out"
+  grep -Fq "runtime_subprocess" "$self_test_out"
   echo "check-backend-sdk-only-boundary self-test ok"
   exit 0
 fi
