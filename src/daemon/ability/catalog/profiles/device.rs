@@ -155,6 +155,22 @@ mod tests {
     }
 
     #[test]
+    fn descriptors_for_excludes_local_companion_control() {
+        let descriptors = descriptors_for("easynet:///r/acme/device/01DEV");
+        let names = descriptors
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for name in ["plugin.companion_status", "plugin.companion_reconcile"] {
+            assert!(
+                !names.contains(name),
+                "{name} is daemon-local companion control and must not be remotely advertised"
+            );
+        }
+    }
+
+    #[test]
     fn descriptors_for_emit_only_owned_names() {
         let owner = "easynet:///r/acme/device/01DEV";
         let descriptors = descriptors_for(owner);

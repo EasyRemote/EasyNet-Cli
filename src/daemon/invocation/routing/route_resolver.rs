@@ -776,6 +776,14 @@ impl<'a> DaemonRouteResolver<'a> {
         host_node_id: Option<&str>,
         kind: SelectedRouteKind,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
+        if !crate::daemon::ability::catalog::is_publishable_catalog_name(&selector.public_name) {
+            return Err(ResolveRouteFailure {
+                query_name: selector.query_name.clone(),
+                reason: axon_pb::NegativeReason::Nodata,
+                detail: "local runtime ability is daemon-local and not remotely routable"
+                    .to_string(),
+            });
+        }
         let ability = device_local
             .authority
             .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
@@ -1846,6 +1854,33 @@ mod tests {
         assert_eq!(local["ability_ura"], ability_ura);
         assert_eq!(local["route_ura"], format!("route-ref::{ability_ura}"));
         assert_eq!(local["dispatch_name"], "agent.list");
+    }
+
+    #[test]
+    fn local_runtime_authority_rejects_daemon_local_companion_control_routes() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+
+        for ability in ["plugin.companion_status", "plugin.companion_reconcile"] {
+            let authority = FakeLocalRuntimeAuthority::with_owner_keys(
+                &owner_ura,
+                &["plugin.companion_status", "plugin.companion_reconcile"],
+            );
+            let err = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+                .with_local_runtime_authority(owner_ura.clone(), authority)
+                .at(TEST_NOW_MS)
+                .resolve_route(&owner_ura, ability)
+                .expect_err("daemon-local companion control must not resolve as remote route");
+
+            assert_eq!(err.reason, axon_pb::NegativeReason::Nodata);
+            assert!(
+                err.detail.contains("daemon-local"),
+                "route failure should name local-only policy: {}",
+                err.detail
+            );
+        }
     }
 
     #[test]

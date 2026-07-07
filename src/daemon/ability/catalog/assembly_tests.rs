@@ -253,6 +253,45 @@ fn published_ability_names_matches_live_registry() {
 }
 
 #[test]
+fn companion_control_abilities_are_local_only() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let registry = build_registry();
+    let companion_controls = [
+        crate::daemon::ability::builtins::integrations::plugins::COMPANION_STATUS_ABILITY,
+        crate::daemon::ability::builtins::integrations::plugins::COMPANION_RECONCILE_ABILITY,
+    ];
+
+    for ability in companion_controls {
+        assert!(
+            registry.has_rpc(ability),
+            "{ability} must stay callable through the local daemon registry"
+        );
+        assert!(
+            !is_publishable_catalog_name(ability),
+            "{ability} must be excluded from public catalogue publication"
+        );
+    }
+
+    let published_names: std::collections::BTreeSet<String> =
+        published_ability_names().into_iter().collect();
+    let system_names: std::collections::BTreeSet<String> = published_system_abilities()
+        .into_iter()
+        .map(|metadata| metadata.name)
+        .collect();
+
+    for ability in companion_controls {
+        assert!(
+            !published_names.contains(ability),
+            "{ability} must not be advertised through published_ability_names"
+        );
+        assert!(
+            !system_names.contains(ability),
+            "{ability} must not produce public system descriptors"
+        );
+    }
+}
+
+#[test]
 fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The TOML descriptors in ability-descriptors/system/ are the

@@ -87,7 +87,12 @@ pub fn is_publishable_catalog_name(name: &str) -> bool {
     // call aggregate discovery without picking an arbitrary self agent, but
     // it is not a public/federated capability. Publishing it would duplicate
     // the device owner prefix and break RFC-005 owner-local names.
-    name != discover_ability::DEVICE_DISCOVER_ABILITY
+    !matches!(
+        name,
+        discover_ability::DEVICE_DISCOVER_ABILITY
+            | plugin_lifecycle_ability::COMPANION_STATUS_ABILITY
+            | plugin_lifecycle_ability::COMPANION_RECONCILE_ABILITY
+    )
 }
 
 /// One row of a system ability's discovery + registration metadata.
