@@ -216,7 +216,8 @@ fn run_install(args: PackageSourceArgs) -> anyhow::Result<()> {
 
 fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let record = installer.update(&args.path)?;
+    let companion_manager = DesktopCompanionManager::current();
+    let record = installer.update_with_companion_manager(&args.path, &companion_manager)?;
     output::success(&format!("updated plugin {}@{}", record.id, record.version));
     output::detail("hash", &record.hash);
     notify_daemon_reload()?;

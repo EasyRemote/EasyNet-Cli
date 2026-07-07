@@ -73,6 +73,16 @@ pub enum PluginHostError {
         rollback_error: String,
         stale_path: PathBuf,
     },
+    #[error(
+        "desktop companion update rollback failed for {id}@{version}: update_error={update_error}; rollback_error={rollback_error}; stale_path={stale_path}"
+    )]
+    CompanionUpdateRollbackFailed {
+        id: String,
+        version: String,
+        update_error: String,
+        rollback_error: String,
+        stale_path: PathBuf,
+    },
     #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
     ControlPlaneRegistrationFailed { ability: String, reason: String },
     #[error("plugin contribution for {package} ability {ability:?} is invalid: {reason}")]
@@ -247,6 +257,22 @@ impl PartialEq for PluginHostError {
                     id: bi,
                     version: bv,
                     install_error: bierr,
+                    rollback_error: brerr,
+                    stale_path: bp,
+                },
+            ) => ai == bi && av == bv && aierr == bierr && arerr == brerr && ap == bp,
+            (
+                CompanionUpdateRollbackFailed {
+                    id: ai,
+                    version: av,
+                    update_error: aierr,
+                    rollback_error: arerr,
+                    stale_path: ap,
+                },
+                CompanionUpdateRollbackFailed {
+                    id: bi,
+                    version: bv,
+                    update_error: bierr,
                     rollback_error: brerr,
                     stale_path: bp,
                 },

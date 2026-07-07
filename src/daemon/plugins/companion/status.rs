@@ -32,6 +32,14 @@ impl CompanionDesiredState {
             Self::Disabled => "disabled",
         }
     }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "enabled" => Some(Self::Enabled),
+            "disabled" => Some(Self::Disabled),
+            _ => None,
+        }
+    }
 }
 
 /// State reported by the platform user-session launcher.

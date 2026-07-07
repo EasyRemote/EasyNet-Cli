@@ -120,6 +120,24 @@ impl PluginInstaller {
     /// Update a package by installing a new unpacked version and preserving the
     /// previous package directory until state and lock files commit.
     pub fn update(&self, source: &Path) -> Result<InstalledPluginRecord> {
+        self.update_with_companion_commit(source, None)
+    }
+
+    /// Update a package and commit companion supervisor artifacts when the
+    /// package kind participates in the desktop companion lifecycle.
+    pub fn update_with_companion_manager(
+        &self,
+        source: &Path,
+        companion_manager: &DesktopCompanionManager,
+    ) -> Result<InstalledPluginRecord> {
+        self.update_with_companion_commit(source, Some(companion_manager))
+    }
+
+    fn update_with_companion_commit(
+        &self,
+        source: &Path,
+        companion_manager: Option<&DesktopCompanionManager>,
+    ) -> Result<InstalledPluginRecord> {
         let txn = txn_dir(&self.root, "update")?;
         copy_tree(source, &txn)?;
         let package = PluginPackage::from_installed(&txn, None)?;
@@ -139,6 +157,22 @@ impl PluginInstaller {
             .iter()
             .find(|record| record.id == id)
             .cloned();
+        let previous_package = previous_record.as_ref().and_then(|record| {
+            PluginPackage::from_installed(
+                &self.package_dir(&id, &record.version),
+                Some(&record.hash),
+            )
+            .ok()
+            .map(Arc::new)
+        });
+        let previous_companion_status = match (companion_manager, previous_package.as_ref()) {
+            (Some(manager), Some(previous))
+                if previous.manifest().kind() == PluginKind::DesktopCompanion =>
+            {
+                manager.status_for_package(previous).ok()
+            }
+            _ => None,
+        };
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|source| PluginHostError::WriteFailed {
                 path: parent.to_path_buf(),
@@ -167,8 +201,8 @@ impl PluginInstaller {
             path: target.clone(),
             source,
         })?;
-        let installed =
-            InstalledPluginRecord::from_package(&PluginPackage::from_installed(&target, None)?);
+        let installed_package = Arc::new(PluginPackage::from_installed(&target, None)?);
+        let installed = InstalledPluginRecord::from_package(&installed_package);
         if let Err(err) = self.commit_record(installed.clone()) {
             let _ = fs::remove_dir_all(&target);
             if let Some((prior, backup)) = rollback_backup {
@@ -177,6 +211,34 @@ impl PluginInstaller {
                 }
             }
             return Err(err);
+        }
+        if let Some(companion_manager) = companion_manager {
+            if installed_package.manifest().kind() == PluginKind::DesktopCompanion {
+                if let Err(err) = companion_manager
+                    .commit_package_update(&installed_package, previous_companion_status.as_ref())
+                {
+                    let update_error = err.to_string();
+                    let rollback_error = self.rollback_failed_companion_update(
+                        &target,
+                        &previous_state,
+                        rollback_backup.as_ref(),
+                        &installed_package,
+                        previous_package.as_ref(),
+                        previous_companion_status.as_ref(),
+                        companion_manager,
+                    );
+                    if let Err(rollback_error) = rollback_error {
+                        return Err(PluginHostError::CompanionUpdateRollbackFailed {
+                            id: installed.id,
+                            version: installed.version,
+                            update_error,
+                            rollback_error,
+                            stale_path: target,
+                        });
+                    }
+                    return Err(err);
+                }
+            }
         }
         if let Some((_, backup)) = rollback_backup {
             let _ = fs::remove_dir_all(backup);
@@ -273,6 +335,53 @@ impl PluginInstaller {
         if target.exists() {
             if let Err(err) = fs::remove_dir_all(target) {
                 failures.push(format!("package_remove={err}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
+
+    fn rollback_failed_companion_update(
+        &self,
+        target: &Path,
+        previous_state: &PluginStateToml,
+        rollback_backup: Option<&(PathBuf, PathBuf)>,
+        installed_package: &Arc<PluginPackage>,
+        previous_package: Option<&Arc<PluginPackage>>,
+        previous_companion_status: Option<
+            &crate::daemon::plugins::companion::DesktopCompanionStatus,
+        >,
+        companion_manager: &DesktopCompanionManager,
+    ) -> std::result::Result<(), String> {
+        let mut failures = Vec::new();
+        if let Err(err) = companion_manager.remove(installed_package) {
+            failures.push(format!("companion_remove_new={err}"));
+        }
+        if target.exists() {
+            if let Err(err) = fs::remove_dir_all(target) {
+                failures.push(format!("package_remove_new={err}"));
+            }
+        }
+        if let Some((prior, backup)) = rollback_backup {
+            if backup.exists() {
+                if let Err(err) = fs::rename(backup, prior) {
+                    failures.push(format!("package_restore_previous={err}"));
+                }
+            }
+        }
+        if let Err(err) = self.write_state(previous_state) {
+            failures.push(format!("state_restore={err}"));
+        }
+        if let (Some(previous_package), Some(previous_status)) =
+            (previous_package, previous_companion_status)
+        {
+            if let Err(err) = companion_manager
+                .restore_package_after_failed_update(previous_package, previous_status)
+            {
+                failures.push(format!("companion_restore_previous={err}"));
             }
         }
         if failures.is_empty() {
@@ -531,6 +640,102 @@ mod tests {
     }
 
     #[test]
+    fn plugin_host_update_commits_desktop_companion_supervisor_artifacts() {
+        let root = tempfile::tempdir().expect("root");
+        let source_v1 = tempfile::tempdir().expect("source v1");
+        write_companion_test_package_version(source_v1.path(), "0.1.0", true);
+        let source_v2 = tempfile::tempdir().expect("source v2");
+        write_companion_test_package_version(source_v2.path(), "0.2.0", true);
+        let installer = PluginInstaller::new(root.path());
+        let (manager, calls) =
+            recording_companion_manager(root.path().join("companions/state.toml"), false);
+        installer
+            .install_with_companion_manager(source_v1.path(), &manager)
+            .expect("install v1");
+        calls.lock().expect("calls").clear();
+
+        let record = installer
+            .update_with_companion_manager(source_v2.path(), &manager)
+            .expect("update companion");
+
+        assert_eq!(record.version, "0.2.0");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["install", "enable"],
+            "companion update must install and preserve enabled supervisor state"
+        );
+        assert!(root
+            .path()
+            .join("installed/test.desktop.menubar/0.2.0/plugin.toml")
+            .exists());
+        assert!(
+            !root
+                .path()
+                .join("installed/test.desktop.menubar/0.1.0")
+                .exists(),
+            "successful update must retire previous companion package directory"
+        );
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).expect("plugin state");
+        assert!(plugin_state.contains("version = \"0.2.0\""));
+        assert!(!plugin_state.contains("version = \"0.1.0\""));
+        let companion_state = std::fs::read_to_string(root.path().join("companions/state.toml"))
+            .expect("companion desired state");
+        assert!(companion_state.contains("version = \"0.2.0\""));
+        assert!(!companion_state.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn plugin_host_update_rolls_back_desktop_companion_when_supervisor_commit_fails() {
+        let root = tempfile::tempdir().expect("root");
+        let source_v1 = tempfile::tempdir().expect("source v1");
+        write_companion_test_package_version(source_v1.path(), "0.1.0", true);
+        let source_v2 = tempfile::tempdir().expect("source v2");
+        write_companion_test_package_version(source_v2.path(), "0.2.0", true);
+        let installer = PluginInstaller::new(root.path());
+        let (ok_manager, _) =
+            recording_companion_manager(root.path().join("companions/state.toml"), false);
+        installer
+            .install_with_companion_manager(source_v1.path(), &ok_manager)
+            .expect("install v1");
+        let (failing_manager, calls) =
+            recording_companion_manager(root.path().join("companions/state.toml"), true);
+
+        let err = installer
+            .update_with_companion_manager(source_v2.path(), &failing_manager)
+            .expect_err("supervisor failure must abort update");
+
+        assert!(matches!(
+            err,
+            PluginHostError::InvalidCompanionManifest { .. }
+        ));
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["install", "enable", "stop", "remove", "install", "enable"],
+            "failed companion update must clean new artifacts and restore previous supervisor state"
+        );
+        assert!(root
+            .path()
+            .join("installed/test.desktop.menubar/0.1.0/plugin.toml")
+            .exists());
+        assert!(
+            !root
+                .path()
+                .join("installed/test.desktop.menubar/0.2.0")
+                .exists(),
+            "failed update must remove the new package directory"
+        );
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).expect("plugin state");
+        assert!(plugin_state.contains("version = \"0.1.0\""));
+        assert!(!plugin_state.contains("version = \"0.2.0\""));
+        let companion_state = std::fs::read_to_string(root.path().join("companions/state.toml"))
+            .expect("companion desired state");
+        assert!(companion_state.contains("version = \"0.1.0\""));
+        assert!(!companion_state.contains("version = \"0.2.0\""));
+    }
+
+    #[test]
     fn plugin_host_install_rejects_desktop_companion_with_missing_artifact() {
         let root = tempfile::tempdir().expect("root");
         let source = tempfile::tempdir().expect("source");
@@ -670,6 +875,10 @@ layer = "control"
     }
 
     fn write_companion_test_package(root: &Path, include_artifact: bool) {
+        write_companion_test_package_version(root, "0.1.0", include_artifact)
+    }
+
+    fn write_companion_test_package_version(root: &Path, version: &str, include_artifact: bool) {
         if include_artifact {
             std::fs::create_dir_all(root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS"))
                 .expect("app bundle dir");
@@ -681,10 +890,11 @@ layer = "control"
         }
         std::fs::write(
             root.join("plugin.toml"),
-            r#"
+            format!(
+                r#"
 schema_version = "1"
 id = "test.desktop.menubar"
-version = "0.1.0"
+version = "{version}"
 kind = "desktop_companion"
 entrypoint = "platforms/macos/EasyNetMenuBar"
 abilities = []
@@ -710,7 +920,8 @@ app_bundle = "dist/macos/EasyNetMenuBar.app"
 supervisor = "launch_agent"
 launch_agent_label = "tech.silan.easynet.menubar"
 session = "aqua"
-"#,
+"#
+            ),
         )
         .expect("manifest");
     }
@@ -760,7 +971,7 @@ layer = "control"
     ) -> (DesktopCompanionManager, Arc<Mutex<Vec<&'static str>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let supervisor = RecordingCompanionSupervisor {
-            fail_enable,
+            fail_next_enable: Arc::new(Mutex::new(fail_enable)),
             calls: calls.clone(),
         };
         (
@@ -774,7 +985,7 @@ layer = "control"
     }
 
     struct RecordingCompanionSupervisor {
-        fail_enable: bool,
+        fail_next_enable: Arc<Mutex<bool>>,
         calls: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -800,7 +1011,9 @@ layer = "control"
 
         fn enable(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
             self.record("enable");
-            if self.fail_enable {
+            let mut fail_next = self.fail_next_enable.lock().expect("fail flag");
+            if *fail_next {
+                *fail_next = false;
                 return Err(PluginHostError::InvalidCompanionManifest {
                     id: plan.package_id.clone(),
                     reason: "injected supervisor failure".to_string(),

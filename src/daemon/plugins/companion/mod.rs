@@ -203,6 +203,89 @@ impl DesktopCompanionManager {
         action_result(&plan.package_id, "install", before, after, true, None)
     }
 
+    pub fn commit_package_update(
+        &self,
+        package: &SharedPluginPackage,
+        previous_status: Option<&DesktopCompanionStatus>,
+    ) -> Result<serde_json::Value> {
+        let plan = self.plan_package(package)?;
+        let desired = previous_status
+            .and_then(|status| CompanionDesiredState::from_wire(&status.desired_state))
+            .unwrap_or(CompanionDesiredState::Enabled);
+        let was_running = previous_status.is_some_and(companion_status_is_running);
+        let before = previous_status
+            .cloned()
+            .or_else(|| self.status_for_plan(&plan).ok());
+
+        self.supervisor.install(&plan)?;
+        match desired {
+            CompanionDesiredState::Enabled => {
+                self.supervisor.enable(&plan)?;
+            }
+            CompanionDesiredState::Disabled => {
+                self.supervisor.disable(&plan)?;
+            }
+        }
+        self.state_store.set_desired_state(
+            &plan.package_id,
+            &plan.package_version,
+            desired,
+            "update",
+            None,
+        )?;
+        if let Some(previous) = previous_status {
+            if previous.package_version != plan.package_version {
+                self.state_store
+                    .remove(&previous.package_id, &previous.package_version)?;
+            }
+        }
+        if desired == CompanionDesiredState::Enabled && was_running {
+            self.supervisor.start(&plan)?;
+        }
+        let after = self.status_for_plan(&plan).ok();
+        let action = if was_running { "restart" } else { "install" };
+        action_result(&plan.package_id, action, before, after, true, None)
+    }
+
+    pub fn restore_package_after_failed_update(
+        &self,
+        package: &SharedPluginPackage,
+        previous_status: &DesktopCompanionStatus,
+    ) -> Result<()> {
+        let plan = self.plan_package(package)?;
+        let desired =
+            CompanionDesiredState::from_wire(&previous_status.desired_state).ok_or_else(|| {
+                PluginHostError::InvalidCompanionManifest {
+                    id: previous_status.package_id.clone(),
+                    reason: format!(
+                        "invalid previous desired_state {:?}",
+                        previous_status.desired_state
+                    ),
+                }
+            })?;
+        self.supervisor.install(&plan)?;
+        match desired {
+            CompanionDesiredState::Enabled => {
+                self.supervisor.enable(&plan)?;
+            }
+            CompanionDesiredState::Disabled => {
+                self.supervisor.disable(&plan)?;
+            }
+        }
+        self.state_store.set_desired_state(
+            &plan.package_id,
+            &plan.package_version,
+            desired,
+            "update_rollback",
+            None,
+        )?;
+        if desired == CompanionDesiredState::Enabled && companion_status_is_running(previous_status)
+        {
+            self.supervisor.start(&plan)?;
+        }
+        Ok(())
+    }
+
     pub fn status_json(&self, package: &SharedPluginPackage) -> Result<serde_json::Value> {
         let status = self.status_for_package(package)?;
         serde_json::to_value(status)
@@ -321,6 +404,13 @@ fn status_from_parts(
             .error
             .map(|message| json!({ "message": message })),
     }
+}
+
+fn companion_status_is_running(status: &DesktopCompanionStatus) -> bool {
+    matches!(
+        status.observed_state.as_str(),
+        "running" | "starting" | "stale"
+    )
 }
 
 fn action_result(
