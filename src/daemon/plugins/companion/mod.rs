@@ -17,6 +17,7 @@ pub mod windows;
 
 use serde_json::json;
 
+use self::artifact::artifact_fingerprint;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::manifest::{
     PluginCompanionBootPolicy, PluginCompanionStopPolicy, PluginKind,
@@ -292,12 +293,15 @@ impl DesktopCompanionManager {
         &self,
         package: &SharedPluginPackage,
         previous_status: Option<&DesktopCompanionStatus>,
+        executable_artifact_changed: bool,
     ) -> Result<serde_json::Value> {
         let plan = self.plan_package(package)?;
         let desired = previous_status
             .and_then(|status| CompanionDesiredState::from_wire(&status.desired_state))
             .unwrap_or(CompanionDesiredState::Enabled);
         let was_running = previous_status.is_some_and(companion_status_is_running);
+        let should_restart =
+            desired == CompanionDesiredState::Enabled && was_running && executable_artifact_changed;
         let before = previous_status
             .cloned()
             .or_else(|| self.status_for_plan(&plan).ok());
@@ -324,13 +328,27 @@ impl DesktopCompanionManager {
                     .remove(&previous.package_id, &previous.package_version)?;
             }
         }
-        if desired == CompanionDesiredState::Enabled && was_running {
+        if should_restart {
             self.supervisor.stop(&plan)?;
             self.supervisor.start(&plan)?;
         }
         let after = self.status_for_plan(&plan).ok();
-        let action = if was_running { "restart" } else { "install" };
+        let action = if should_restart { "restart" } else { "install" };
         action_result(&plan.package_id, action, before, after, true, None)
+    }
+
+    pub fn executable_artifact_changed(
+        &self,
+        previous: &SharedPluginPackage,
+        replacement: &SharedPluginPackage,
+    ) -> Result<bool> {
+        let previous_plan = self.plan_package(previous)?;
+        let replacement_plan = self.plan_package(replacement)?;
+        let previous_fingerprint =
+            artifact_fingerprint(previous_plan.spec.executable_artifact_path())?;
+        let replacement_fingerprint =
+            artifact_fingerprint(replacement_plan.spec.executable_artifact_path())?;
+        Ok(previous_fingerprint != replacement_fingerprint)
     }
 
     pub fn restore_package_after_failed_update(
@@ -723,7 +741,7 @@ mod tests {
         let previous = previous_status("running");
 
         let result = manager
-            .commit_package_update(&package, Some(&previous))
+            .commit_package_update(&package, Some(&previous), true)
             .expect("update");
 
         assert_eq!(result["action"], "restart");
@@ -731,6 +749,30 @@ mod tests {
             *calls.lock().expect("calls"),
             vec!["install", "enable", "stop", "start"]
         );
+    }
+
+    #[test]
+    fn running_package_update_skips_restart_when_artifact_is_unchanged() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(state_root.path().join("state.toml")),
+        );
+        let previous = previous_status("running");
+
+        let result = manager
+            .commit_package_update(&package, Some(&previous), false)
+            .expect("update");
+
+        assert_eq!(result["action"], "install");
+        assert_eq!(*calls.lock().expect("calls"), vec!["install", "enable"]);
     }
 
     #[test]
@@ -750,11 +792,37 @@ mod tests {
         let previous = previous_status("not_running");
 
         let result = manager
-            .commit_package_update(&package, Some(&previous))
+            .commit_package_update(&package, Some(&previous), true)
             .expect("update");
 
         assert_eq!(result["action"], "install");
         assert_eq!(*calls.lock().expect("calls"), vec!["install", "enable"]);
+    }
+
+    #[test]
+    fn executable_artifact_changed_detects_current_platform_bundle_change() {
+        let previous_root = tempfile::tempdir().expect("previous root");
+        write_companion_test_package_with_executable(previous_root.path(), "same");
+        let previous =
+            Arc::new(PluginPackage::from_installed(previous_root.path(), None).expect("previous"));
+        let replacement_root = tempfile::tempdir().expect("replacement root");
+        write_companion_test_package_with_executable(replacement_root.path(), "same");
+        let replacement = Arc::new(
+            PluginPackage::from_installed(replacement_root.path(), None).expect("replacement"),
+        );
+        let changed_root = tempfile::tempdir().expect("changed root");
+        write_companion_test_package_with_executable(changed_root.path(), "changed");
+        let changed =
+            Arc::new(PluginPackage::from_installed(changed_root.path(), None).expect("changed"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let manager = test_manager(state_root.path().join("state.toml"), false);
+
+        assert!(!manager
+            .executable_artifact_changed(&previous, &replacement)
+            .expect("unchanged artifact"));
+        assert!(manager
+            .executable_artifact_changed(&previous, &changed)
+            .expect("changed artifact"));
     }
 
     fn previous_status(observed_state: &str) -> DesktopCompanionStatus {
@@ -903,6 +971,24 @@ mod tests {
     }
 
     fn write_companion_test_package(root: &Path) {
+        write_companion_test_package_with_executable(root, "test");
+    }
+
+    fn write_companion_test_package_with_executable(root: &Path, executable_body: &str) {
+        let executable = root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS/EasyNetMenuBar");
+        std::fs::create_dir_all(executable.parent().expect("executable parent"))
+            .expect("app bundle dir");
+        std::fs::write(&executable, executable_body).expect("app executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&executable)
+                .expect("app executable metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&executable, permissions).expect("chmod app executable");
+        }
         std::fs::write(
             root.join("plugin.toml"),
             r#"

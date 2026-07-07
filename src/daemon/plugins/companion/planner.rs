@@ -4,7 +4,7 @@
 // File: src/daemon/plugins/companion/planner.rs
 // Description: Converts companion manifests into platform-specific plans.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::daemon::plugins::manifest::{
     PluginCompanionBootPolicy, PluginCompanionHealthMode, PluginCompanionStopPolicy,
@@ -53,6 +53,13 @@ impl PlatformCompanionSpec {
         }?;
         path.file_stem()
             .map(|name| name.to_string_lossy().to_string())
+    }
+
+    pub fn executable_artifact_path(&self) -> &Path {
+        match self {
+            Self::Macos { app_bundle, .. } => app_bundle.as_path(),
+            Self::Windows { exe, .. } | Self::Linux { exe, .. } => exe.as_path(),
+        }
     }
 }
 

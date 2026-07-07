@@ -173,6 +173,16 @@ impl PluginInstaller {
             }
             _ => None,
         };
+        let executable_artifact_changed = match (companion_manager, previous_package.as_ref()) {
+            (Some(manager), Some(previous))
+                if previous.manifest().kind() == PluginKind::DesktopCompanion
+                    && package.manifest().kind() == PluginKind::DesktopCompanion =>
+            {
+                manager.executable_artifact_changed(previous, &Arc::new(package.clone()))?
+            }
+            (Some(_), None) if package.manifest().kind() == PluginKind::DesktopCompanion => true,
+            _ => false,
+        };
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|source| PluginHostError::WriteFailed {
                 path: parent.to_path_buf(),
@@ -214,9 +224,11 @@ impl PluginInstaller {
         }
         if let Some(companion_manager) = companion_manager {
             if installed_package.manifest().kind() == PluginKind::DesktopCompanion {
-                if let Err(err) = companion_manager
-                    .commit_package_update(&installed_package, previous_companion_status.as_ref())
-                {
+                if let Err(err) = companion_manager.commit_package_update(
+                    &installed_package,
+                    previous_companion_status.as_ref(),
+                    executable_artifact_changed,
+                ) {
                     let update_error = err.to_string();
                     let rollback_error = self.rollback_failed_companion_update(
                         &target,

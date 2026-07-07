@@ -721,7 +721,7 @@ fn validate_companion_fields(id: &str, companion: &PluginCompanionManifest) -> R
             "launch_agent",
         )?;
         validate_exact(id, "companion.macos.session", &macos.session, "aqua")?;
-        validate_relative_manifest_path(id, "companion.macos.app_bundle", &macos.app_bundle)?;
+        validate_relative_artifact_path(id, "companion.macos.app_bundle", &macos.app_bundle)?;
     }
     if let Some(windows) = &companion.windows {
         validate_non_empty(id, "companion.windows.task_name", &windows.task_name)?;
@@ -737,7 +737,7 @@ fn validate_companion_fields(id: &str, companion: &PluginCompanionManifest) -> R
             &windows.session,
             "interactive_desktop",
         )?;
-        validate_relative_manifest_path(id, "companion.windows.exe", &windows.exe)?;
+        validate_relative_artifact_path(id, "companion.windows.exe", &windows.exe)?;
     }
     if let Some(linux) = &companion.linux {
         validate_non_empty(id, "companion.linux.unit_name", &linux.unit_name)?;
@@ -748,7 +748,7 @@ fn validate_companion_fields(id: &str, companion: &PluginCompanionManifest) -> R
             "systemd_user",
         )?;
         validate_exact(id, "companion.linux.session", &linux.session, "graphical")?;
-        validate_relative_manifest_path(id, "companion.linux.exe", &linux.exe)?;
+        validate_relative_artifact_path(id, "companion.linux.exe", &linux.exe)?;
     }
     Ok(())
 }
@@ -795,6 +795,18 @@ fn validate_relative_manifest_path(id: &str, field: &'static str, raw: &str) -> 
         ));
     }
     Ok(())
+}
+
+fn validate_relative_artifact_path(id: &str, field: &'static str, raw: &str) -> Result<()> {
+    validate_relative_manifest_path(id, field, raw)?;
+    let mut components = Path::new(raw.trim()).components();
+    match components.next() {
+        Some(Component::Normal(root)) if root == "bin" || root == "dist" => Ok(()),
+        _ => Err(invalid_companion(
+            id,
+            &format!("{field} must be under bin/ or dist/ so package hashing covers it"),
+        )),
+    }
 }
 
 fn invalid_companion(id: &str, reason: &str) -> PluginHostError {
@@ -1243,6 +1255,53 @@ max_frame_queue = 1
             err,
             PluginHostError::InvalidCompanionManifest { .. }
         ));
+    }
+
+    #[test]
+    fn manifest_rejects_desktop_companion_artifact_outside_hashed_roots() {
+        let err = PluginPackageManifest::parse(
+            "plugins/easynet.desktop.menubar/plugin.toml",
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/easynet.desktop.menubar/status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "platforms/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect_err("companion artifacts outside bin/ or dist/ must be rejected");
+
+        assert!(
+            matches!(err, PluginHostError::InvalidCompanionManifest { .. }),
+            "wrong error: {err}"
+        );
+        assert!(
+            format!("{err}").contains("package hashing covers it"),
+            "wrong error detail: {err}"
+        );
     }
 
     fn test_manifest(extra: &str) -> String {
