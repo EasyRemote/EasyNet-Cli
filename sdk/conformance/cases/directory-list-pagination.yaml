@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Directory list APIs build read-model Invocation carriers, project bounded pages, and reject requests above MaxPageSize.
 steps:
   - action: build_list_devices_invocation

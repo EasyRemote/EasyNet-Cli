@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Ordinary Directory ability listing uses the daemon ability catalog read model and does not perform per-agent live fan-out.
 steps:
   - action: build_list_abilities_invocation

@@ -248,6 +248,17 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/BidiSource.java \
   sdk/java/src/main/java/run/easynet/daemon/Client.java \
   sdk/java/src/main/java/run/easynet/daemon/DiscoveryTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/AbilityQuery.java \
+  sdk/java/src/main/java/run/easynet/daemon/DescriptorRefBuildRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DescriptorRefRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryIdentitySupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryListRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryPage.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryQueryBase.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryResolveRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryResolvedRef.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectoryTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorClass.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorCode.java \
   sdk/java/src/main/java/run/easynet/daemon/FeatureSet.java \
@@ -256,13 +267,19 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticsTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/HealthClient.java \
   sdk/java/src/main/java/run/easynet/daemon/HealthTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/IdentityClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/IdentityProjection.java \
+  sdk/java/src/main/java/run/easynet/daemon/IdentityTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationBuilder.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationDraft.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTerminalState.java \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTuple.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueReader.java \
+  sdk/java/src/main/java/run/easynet/daemon/JsonValueWriter.java \
+  sdk/java/src/main/java/run/easynet/daemon/OwnerAbilityRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
+  sdk/java/src/main/java/run/easynet/daemon/ResolveQuery.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeHealth.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
@@ -277,6 +294,7 @@ for path in \
   sdk/swift/README.md \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \

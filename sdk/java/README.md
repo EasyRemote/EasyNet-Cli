@@ -2,14 +2,16 @@
 
 Java/JVM is a P1 facade for enterprise and Android-adjacent integrations.
 
-Current status: Runtime Core plus Health seam. The package exposes dependency-free Java
+Current status: Runtime Core plus Health plus Directory + Identity seam. The package exposes dependency-free Java
 objects for typed SDK errors, feature discovery, complete Invocation draft
 construction, `RuntimeClient` dispatch over an injected transport, and bounded
 stream/bidi retained-history state. `AsyncRuntimeClient` exposes
 `CompletableFuture`-based invocation/open/cancel methods, and stream/bidi
 handles implement `Iterator` over the same bounded lifecycle state. Health DTOs
 and `HealthClient` decode shared health and diagnostics payloads over injected
-transports. It does not
+transports. Directory + Identity DTOs and clients build read-model carrier
+requests, project pages/resolved refs, and delegate descriptor projection to
+injected transports without SDK-owned route selection or fan-out. It does not
 include a daemon or C ABI provider, generated DTOs for every profile,
 provider-backed transport evidence, or product cutover evidence. Maven package
 metadata exists for this seam, is verified by

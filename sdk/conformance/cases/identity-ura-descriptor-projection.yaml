@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: IdentityClient URA and AbilityDescriptorRef projection delegates to Axon helpers and rejects facade-owned grammar drift.
 steps:
   - action: project_ura

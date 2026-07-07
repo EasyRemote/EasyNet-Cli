@@ -12,8 +12,8 @@ method spelling.
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
-| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, and Health DTO/client state; provider transports and stable release support unsupported |
-| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, `AsyncSequence` bounded stream/bidi state, and Health DTO/client state; provider transports and stable release support unsupported |
+| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, and Directory + Identity request/projection state; provider transports and stable release support unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, and Directory + Identity request/projection state; provider transports and stable release support unsupported |
 
 ## Capability Matrix
 
@@ -24,11 +24,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 
 | Capability | Profile | Go | Python | Remaining work |
 | --- | --- | --- | --- | --- |
-| ABI/version discovery | Runtime Core | provider-backed | provider-backed | Non-P0 bindings and package stability gates remain incomplete. |
+| ABI/version discovery | Runtime Core | provider-backed | provider-backed | Package metadata is machine-checked; non-P0 provider bindings and publish/release stability gates remain incomplete. |
 | daemon start/attach/discover/stop/detach | Runtime Core | provider-backed | provider-backed | External product repositories still need lower-layer deletion gates before their own cutover claims. |
 | runtime connection state | Runtime Core | provider-backed | provider-backed | Remote TCP/TLS daemon endpoint policy is still outside the stable SDK gate. |
 | runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
-| typed errors | Runtime Core | provider-backed | provider-backed | Go/Python expose stable error classes and package-level source refs; non-P0 language bindings and package stability gates remain incomplete. |
+| typed errors | Runtime Core | provider-backed | provider-backed | Go/Python expose stable error classes and package-level source refs; package metadata is machine-checked, while non-P0 provider bindings and publish/release stability gates remain incomplete. |
 | complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; daemon-core keyring-backed local signing now preserves signer policy proof on `SignedInvocation`; C ABI exposes a daemon-keyring `sign_prepared_local` transition; Go/Python C ABI transports select caller-signing vs local-daemon signing from `SignedInvocation.policy.mode`; and Go/Python direct runtimes can compose an SDK-owned handle transport for prepare/submit/handle operations with explicit ownership. Backend SDK-only runtime cutover and Python non-CABI live daemon keyring transport cutover remain incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |

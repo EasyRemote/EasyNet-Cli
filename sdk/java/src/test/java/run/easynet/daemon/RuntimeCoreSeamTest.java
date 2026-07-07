@@ -1,6 +1,9 @@
 package run.easynet.daemon;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.Map;
@@ -20,6 +23,9 @@ public final class RuntimeCoreSeamTest {
     runtimeHealthWrapsTransportFailures();
     runtimeHealthRejectsMalformedPayload();
     runtimeHealthRejectsClosedClient();
+    directoryIdentityBuildsCarriersAndProjectsReadModels();
+    directoryIdentityRejectsInvalidState();
+    identityDescriptorHelpersDelegateToTransport();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -252,6 +258,136 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_HANDLE, client::runtimeHealth);
   }
 
+  private static void directoryIdentityBuildsCarriersAndProjectsReadModels() throws Exception {
+    var directory = new DirectoryClient(new FixtureDirectoryTransport());
+    var base =
+        new DirectoryQueryBase(
+            "easynet:///r/example/agent/alice.sdk",
+            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/device/dev-a",
+            "1.0.0",
+            "AQIDBAUGBwgJCgsMDQ4PEA==",
+            Map.of("form", "none"),
+            2,
+            "0",
+            Map.of("request_id", "directory-list-devices-1"));
+
+    var deviceCarrier = directory.buildListDevicesInvocation(base);
+    check(
+        deviceCarrier
+            .get("descriptor_ref")
+            .equals("easynet:///r/example/ability/device.dev-a.node.list@1.0.0"),
+        "directory device carrier descriptor");
+    check(directory.listDevices(base).kind().equals("device_page"), "directory device page");
+
+    var agentBase =
+        new DirectoryQueryBase(
+            base.callerURA(),
+            base.calleeURA(),
+            base.subjectURA(),
+            base.descriptorVersion(),
+            base.nonceBase64(),
+            base.causalContext(),
+            base.limit(),
+            base.cursor(),
+            Map.of("request_id", "directory-list-agents-1"));
+    check(directory.buildListAgentsInvocation(agentBase).get("descriptor_ref").toString().contains("agent.list"), "directory agent carrier");
+    check(directory.listAgents(agentBase).itemKind().equals("agent"), "directory agent page");
+
+    var abilityBase =
+        new DirectoryQueryBase(
+            base.callerURA(),
+            base.calleeURA(),
+            base.subjectURA(),
+            base.descriptorVersion(),
+            base.nonceBase64(),
+            base.causalContext(),
+            base.limit(),
+            base.cursor(),
+            Map.of("request_id", "directory-list-abilities-1"));
+    var abilityQuery =
+        new AbilityQuery(
+            abilityBase,
+            "local",
+            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/ability/device.dev-a.fs.read");
+    var abilityCarrier = directory.buildListAbilitiesInvocation(abilityQuery);
+    check(abilityCarrier.get("descriptor_ref").toString().contains("meta.list_abilities"), "directory ability carrier");
+    check(directory.listAbilities(abilityQuery).kind().equals("ability_page"), "directory ability page");
+
+    var resolveQuery =
+        new ResolveQuery(base, "easynet:///r/example/device/dev-a", "agent.list", "route", null, null);
+    check(directory.buildResolveInvocation(resolveQuery).get("descriptor_ref").toString().contains("namespace.resolve"), "directory resolve carrier");
+    check(
+        directory.resolve(resolveQuery).abilityURA().equals("easynet:///r/example/ability/device.dev-a.agent.list"),
+        "directory resolved ref");
+  }
+
+  private static void directoryIdentityRejectsInvalidState() throws Exception {
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new DirectoryQueryBase(
+                "easynet:///r/example/agent/alice.sdk",
+                "easynet:///r/example/device/dev-a",
+                "easynet:///r/example/device/dev-a",
+                "1.0.0",
+                "AQIDBAUGBwgJCgsMDQ4PEA==",
+                Map.of("form", "none"),
+                DirectoryQueryBase.MAX_PAGE_SIZE + 1,
+                "",
+                Map.of()));
+
+    var directory = new DirectoryClient(new DirectoryTransport() {});
+    var base =
+        new DirectoryQueryBase(
+            "easynet:///r/example/agent/alice.sdk",
+            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/device/dev-a",
+            "1.0.0",
+            "AQIDBAUGBwgJCgsMDQ4PEA==",
+            Map.of("form", "none"),
+            2,
+            "0",
+            Map.of());
+    expectSDKError(ErrorCode.NOT_IMPLEMENTED, () -> directory.listDevices(base));
+    directory.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> directory.listAgents(base));
+  }
+
+  private static void identityDescriptorHelpersDelegateToTransport() throws Exception {
+    var identity = new IdentityClient(new FixtureIdentityTransport());
+    var projection =
+        identity.projectDescriptorRef(
+            new DescriptorRefRequest(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0", Map.of()));
+    check(projection.valid(), "identity projection valid");
+    check(
+        identity
+            .abilityURAFromDescriptorRef(
+                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+            .equals("easynet:///r/example/ability/device.dev-a.observe.health"),
+        "identity ability URA");
+    check(
+        identity
+            .ownerAbilityDescriptorRef(
+                "easynet:///r/example/device/dev-a", "observe.health", "1.0.0")
+            .equals("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"),
+        "identity owner descriptor ref");
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> identity.canonicalAbilityDescriptorRef("", ""));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> identity.projectDescriptorRef(new DescriptorRefRequest("not-a-descriptor", Map.of())));
+    identity.close();
+    expectSDKError(
+        ErrorCode.INVALID_HANDLE,
+        () ->
+            identity.projectDescriptorRef(
+                new DescriptorRefRequest(
+                    "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                    Map.of())));
+  }
+
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
     try {
       action.run();
@@ -404,5 +540,84 @@ public final class RuntimeCoreSeamTest {
 
   private static byte[] bytes(String value) {
     return value.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] fixture(String name) {
+    try {
+      return Files.readAllBytes(Path.of("sdk/conformance/fixtures", name));
+    } catch (IOException error) {
+      throw new AssertionError("fixture not found: " + name, error);
+    }
+  }
+
+  private static final class FixtureDirectoryTransport implements DirectoryTransport {
+    @Override
+    public byte[] buildListDevicesInvocation(byte[] requestJSON) {
+      check(new String(requestJSON, StandardCharsets.UTF_8).contains("\"limit\":2"), "device request limit");
+      return fixture("directory-list-devices-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildListAgentsInvocation(byte[] requestJSON) {
+      return fixture("directory-list-agents-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildListAbilitiesInvocation(byte[] requestJSON) {
+      String request = new String(requestJSON, StandardCharsets.UTF_8);
+      check(request.contains("\"scope\":\"local\""), "ability query scope");
+      return fixture("directory-list-abilities-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildResolveInvocation(byte[] requestJSON) {
+      return fixture("directory-resolve-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] listDevices(byte[] requestJSON) {
+      return fixture("directory-device-page.v4.json");
+    }
+
+    @Override
+    public byte[] listAgents(byte[] requestJSON) {
+      return fixture("directory-agent-page.v4.json");
+    }
+
+    @Override
+    public byte[] listAbilities(byte[] requestJSON) {
+      return fixture("directory-ability-page.v4.json");
+    }
+
+    @Override
+    public byte[] resolve(byte[] requestJSON) {
+      return fixture("directory-resolved-ref.v4.json");
+    }
+  }
+
+  private static final class FixtureIdentityTransport implements IdentityTransport {
+    @Override
+    public byte[] projectDescriptorRef(byte[] requestJSON) {
+      String request = new String(requestJSON, StandardCharsets.UTF_8);
+      if (request.contains("not-a-descriptor")) {
+        throw IdentityProjection.invalid("descriptor_ref is invalid");
+      }
+      return fixture("identity.descriptor-ref.v4.json");
+    }
+
+    @Override
+    public byte[] buildDescriptorRef(byte[] requestJSON) {
+      return fixture("identity.descriptor-ref.v4.json");
+    }
+
+    @Override
+    public byte[] ownerAbilityURA(byte[] requestJSON) {
+      return bytes(
+          """
+          {
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"
+          }
+          """);
+    }
   }
 }

@@ -190,6 +190,153 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testDirectoryIdentityBuildsCarriersAndProjectsReadModels() async throws {
+        let directory = DirectoryClient(transport: FixtureDirectoryTransport())
+        let base = try DirectoryQueryBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            limit: 2,
+            cursor: "0",
+            metadata: ["request_id": .string("directory-list-devices-1")]
+        )
+
+        let deviceCarrier = try await directory.buildListDevicesInvocation(base)
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(deviceCarrier["descriptor_ref"], "descriptor_ref"),
+            "easynet:///r/example/ability/device.dev-a.node.list@1.0.0"
+        )
+        let devicePage = try await directory.listDevices(base)
+        XCTAssertEqual(devicePage.kind, "device_page")
+
+        let agentBase = try DirectoryQueryBase(
+            callerURA: base.callerURA,
+            calleeURA: base.calleeURA,
+            subjectURA: base.subjectURA,
+            descriptorVersion: base.descriptorVersion,
+            nonceBase64: base.nonceBase64,
+            causalContext: base.causalContext,
+            limit: base.limit,
+            cursor: base.cursor,
+            metadata: ["request_id": .string("directory-list-agents-1")]
+        )
+        let agentPage = try await directory.listAgents(agentBase)
+        let agentCarrier = try await directory.buildListAgentsInvocation(agentBase)
+        XCTAssertEqual(agentPage.itemKind, "agent")
+        XCTAssertTrue(
+            try optionalDirectoryJSONString(agentCarrier["descriptor_ref"], "descriptor_ref")?
+                .contains("agent.list") == true
+        )
+
+        let abilityBase = try DirectoryQueryBase(
+            callerURA: base.callerURA,
+            calleeURA: base.calleeURA,
+            subjectURA: base.subjectURA,
+            descriptorVersion: base.descriptorVersion,
+            nonceBase64: base.nonceBase64,
+            causalContext: base.causalContext,
+            limit: base.limit,
+            cursor: base.cursor,
+            metadata: ["request_id": .string("directory-list-abilities-1")]
+        )
+        let abilityQuery = try AbilityQuery(
+            base: abilityBase,
+            scope: "local",
+            ownerURA: "easynet:///r/example/device/dev-a",
+            abilityURA: "easynet:///r/example/ability/device.dev-a.fs.read"
+        )
+        let abilityPage = try await directory.listAbilities(abilityQuery)
+        let abilityCarrier = try await directory.buildListAbilitiesInvocation(abilityQuery)
+        XCTAssertEqual(abilityPage.kind, "ability_page")
+        XCTAssertTrue(
+            try optionalDirectoryJSONString(abilityCarrier["descriptor_ref"], "descriptor_ref")?
+                .contains("meta.list_abilities") == true
+        )
+
+        let resolveQuery = try ResolveQuery(
+            base: base,
+            queryName: "easynet:///r/example/device/dev-a",
+            abilityName: "agent.list",
+            queryType: "route"
+        )
+        let resolveCarrier = try await directory.buildResolveInvocation(resolveQuery)
+        let resolved = try await directory.resolve(resolveQuery)
+        XCTAssertTrue(
+            try optionalDirectoryJSONString(resolveCarrier["descriptor_ref"], "descriptor_ref")?
+                .contains("namespace.resolve") == true
+        )
+        XCTAssertEqual(resolved.abilityURA, "easynet:///r/example/ability/device.dev-a.agent.list")
+    }
+
+    func testDirectoryIdentityRejectsInvalidState() async throws {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try DirectoryQueryBase(
+                callerURA: "easynet:///r/example/agent/alice.sdk",
+                calleeURA: "easynet:///r/example/device/dev-a",
+                subjectURA: "easynet:///r/example/device/dev-a",
+                descriptorVersion: "1.0.0",
+                nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+                causalContext: ["form": .string("none")],
+                limit: maxDirectoryPageSize + 1
+            )
+        }
+
+        let directory = DirectoryClient(transport: EmptyDirectoryTransport())
+        let base = try DirectoryQueryBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            limit: 2
+        )
+        await expectSDKError(.notImplemented) {
+            _ = try await directory.listDevices(base)
+        }
+        try await directory.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await directory.listAgents(base)
+        }
+    }
+
+    func testIdentityDescriptorHelpersDelegateToTransport() async throws {
+        let identity = IdentityClient(transport: FixtureIdentityTransport())
+        let projection = try await identity.projectDescriptorRef(
+            try DescriptorRefRequest(
+                descriptorRef: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+            )
+        )
+        XCTAssertTrue(projection.valid)
+        let abilityURA = try await identity.abilityURAFromDescriptorRef(
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+        )
+        let descriptorRef = try await identity.ownerAbilityDescriptorRef(
+            ownerURA: "easynet:///r/example/device/dev-a",
+            abilityName: "observe.health",
+            descriptorVersion: "1.0.0"
+        )
+        XCTAssertEqual(abilityURA, "easynet:///r/example/ability/device.dev-a.observe.health")
+        XCTAssertEqual(descriptorRef, "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+        await expectSDKError(.invalidArgument) {
+            _ = try await identity.canonicalAbilityDescriptorRef("")
+        }
+        await expectSDKError(.invalidArgument) {
+            _ = try await identity.projectDescriptorRef(try DescriptorRefRequest(descriptorRef: "not-a-descriptor"))
+        }
+        try await identity.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await identity.projectDescriptorRef(
+                try DescriptorRefRequest(
+                    descriptorRef: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+                )
+            )
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -215,6 +362,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
         XCTFail("expected SDKError \(code)")
     }
+
 }
 
 final class MemoryDiscoveryTransport: DiscoveryTransport, @unchecked Sendable {
@@ -333,4 +481,75 @@ final class FailingHealthTransport: HealthTransport, @unchecked Sendable {
 
 enum FixtureFailure: Error {
     case down
+}
+
+final class FixtureDirectoryTransport: DirectoryTransport, @unchecked Sendable {
+    func buildListDevicesInvocation(_ requestJSON: Data) async throws -> Data {
+        XCTAssertTrue(String(decoding: requestJSON, as: UTF8.self).contains("\"limit\":2"))
+        return fixture("directory-list-devices-invocation.v4.json")
+    }
+
+    func buildListAgentsInvocation(_ requestJSON: Data) async throws -> Data {
+        fixture("directory-list-agents-invocation.v4.json")
+    }
+
+    func buildListAbilitiesInvocation(_ requestJSON: Data) async throws -> Data {
+        XCTAssertTrue(String(decoding: requestJSON, as: UTF8.self).contains("\"scope\":\"local\""))
+        return fixture("directory-list-abilities-invocation.v4.json")
+    }
+
+    func buildResolveInvocation(_ requestJSON: Data) async throws -> Data {
+        fixture("directory-resolve-invocation.v4.json")
+    }
+
+    func listDevices(_ requestJSON: Data) async throws -> Data {
+        fixture("directory-device-page.v4.json")
+    }
+
+    func listAgents(_ requestJSON: Data) async throws -> Data {
+        fixture("directory-agent-page.v4.json")
+    }
+
+    func listAbilities(_ requestJSON: Data) async throws -> Data {
+        fixture("directory-ability-page.v4.json")
+    }
+
+    func resolve(_ requestJSON: Data) async throws -> Data {
+        fixture("directory-resolved-ref.v4.json")
+    }
+}
+
+final class EmptyDirectoryTransport: DirectoryTransport, @unchecked Sendable {}
+
+final class FixtureIdentityTransport: IdentityTransport, @unchecked Sendable {
+    func projectDescriptorRef(_ requestJSON: Data) async throws -> Data {
+        if String(decoding: requestJSON, as: UTF8.self).contains("not-a-descriptor") {
+            throw invalidDirectory("descriptor_ref is invalid")
+        }
+        return fixture("identity.descriptor-ref.v4.json")
+    }
+
+    func buildDescriptorRef(_ requestJSON: Data) async throws -> Data {
+        fixture("identity.descriptor-ref.v4.json")
+    }
+
+    func ownerAbilityURA(_ requestJSON: Data) async throws -> Data {
+        Data("""
+        {
+          "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"
+        }
+        """.utf8)
+    }
+}
+
+func fixture(_ name: String) -> Data {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    let candidates = [
+        cwd.appendingPathComponent("sdk/conformance/fixtures").appendingPathComponent(name),
+        cwd.appendingPathComponent("../..").appendingPathComponent("sdk/conformance/fixtures").appendingPathComponent(name),
+    ]
+    for url in candidates where FileManager.default.fileExists(atPath: url.path) {
+        return try! Data(contentsOf: url)
+    }
+    fatalError("fixture not found: \(name)")
 }

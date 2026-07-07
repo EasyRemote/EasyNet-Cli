@@ -232,7 +232,7 @@ public final class HealthClient: @unchecked Sendable {
     }
 }
 
-private func decodeObject(_ raw: Data, label: String) throws -> [String: JSONValue] {
+func decodeObject(_ raw: Data, label: String) throws -> [String: JSONValue] {
     do {
         let decoded = try JSONSerialization.jsonObject(with: raw, options: [])
         guard let object = try jsonValue(decoded).objectValue else {
@@ -250,7 +250,7 @@ private func decodeObject(_ raw: Data, label: String) throws -> [String: JSONVal
     }
 }
 
-private func jsonValue(_ value: Any) throws -> JSONValue {
+func jsonValue(_ value: Any) throws -> JSONValue {
     if value is NSNull {
         return .null
     }
@@ -272,7 +272,7 @@ private func jsonValue(_ value: Any) throws -> JSONValue {
     throw invalidHealthField("json", "contains unsupported value")
 }
 
-private extension JSONValue {
+extension JSONValue {
     var objectValue: [String: JSONValue]? {
         if case let .object(value) = self {
             return value
