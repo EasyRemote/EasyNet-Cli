@@ -5,6 +5,7 @@ import {
   Client,
   DEFAULT_DIRECTORY_PAGE_SIZE,
   DEFAULT_EVENT_PAGE_SIZE,
+  DEFAULT_SURFACE_PAGE_SIZE,
   DirectoryClient,
   EventClient,
   ErrorClass,
@@ -29,6 +30,8 @@ import {
   ReceiptRef,
   RuntimeClient,
   SDKError,
+  SurfaceClient,
+  SurfaceStatus,
   profileErrorDetails,
   profileSourceRef,
 } from "../index.js";
@@ -111,6 +114,91 @@ const eventCarrier = () => ({
   heartbeat_interval_ms: 30000,
   metadata: { request_id: "events-directory-subscribe-1" },
 });
+
+const surfaceBase = () => ({
+  caller_ura: "easynet:///r/example/agent/alice.sdk",
+  callee_ura: "easynet:///r/example/agent/alice.pages",
+  subject_ura: "easynet:///r/example/agent/alice.pages",
+  descriptor_version: "1.0.0",
+  nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+  causal_context: { form: "none" },
+  metadata: { request_id: "surface-list-1" },
+});
+
+const surfacePageRecord = (overrides = {}) => ({
+  profile: "surface",
+  kind: "page_record",
+  page_id: "docs",
+  owner_ura: "easynet:///r/example/agent/alice.pages",
+  surface_ref: "easynet:///r/example/resource/alice.docs",
+  public_ref: "https://example/web/alice/docs/",
+  status: "published",
+  metadata: {
+    profile: "surface",
+    source_ability: "pages.get",
+    project_id: "docs",
+  },
+  ...overrides,
+});
+
+const surfaceManifest = () => ({
+  profile: "surface",
+  kind: "surface_manifest",
+  page_id: "docs",
+  owner_ura: "easynet:///r/example/agent/alice.pages",
+  surface_ref: "easynet:///r/example/resource/alice.docs",
+  public_ref: "https://example/web/alice/docs/",
+  page: surfacePageRecord(),
+  entrypoint: {
+    kind: "public_page_ref",
+    href: "https://example/web/alice/docs/",
+  },
+  metadata: {
+    profile: "surface",
+    source_ability: "pages.get",
+  },
+});
+
+const surfaceHealth = () => ({
+  profile: "surface",
+  kind: "surface_health",
+  state: "ready",
+  ready: true,
+  owner_ura: "easynet:///r/example/agent/alice.pages",
+  surface_ref: "easynet:///r/example/resource/alice.docs",
+  descriptor_ref: "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+  descriptor_version: "1.0.0",
+  page_count: 1,
+  checks: [
+    {
+      name: "manifest",
+      state: "ready",
+      ready: true,
+      message: null,
+      latency_ms: 3,
+      metadata: { source: "pages.get" },
+    },
+  ],
+  metadata: {
+    profile: "surface",
+    source_ability: "pages.health",
+    rendering_owner: "backend",
+  },
+});
+
+const surfaceDraftJSON = (descriptorRef, args = {}) =>
+  new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/alice.sdk")
+    .withCalleeURA("easynet:///r/example/agent/alice.pages")
+    .withDescriptorRef(descriptorRef)
+    .withSubjectURA("easynet:///r/example/agent/alice.pages")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs(args)
+    .withContentType("application/json")
+    .withMetadata({ profile: "surface" })
+    .build()
+    .toJSONString();
 
 const publicationResourceRef = () => ({
   resource_ura: "easynet:///r/example/resource/fs.local.pkg",
@@ -1414,6 +1502,206 @@ test("ReceiptRef rejects fabricated or malformed receipt anchors", () => {
   );
   assert.throws(
     () => new ReceiptRef({ receipt_ura: "easynet:///r/example/resource/receipt.inv-1", receipt_hash_hex: "abc" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("SurfaceClient delegates page carriers and daemon projections without rendering policy", async () => {
+  const seen = [];
+  const surface = new SurfaceClient({
+    buildListPagesInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_list", request });
+      return surfaceDraftJSON("easynet:///r/example/ability/alice.pages.pages.list@1.0.0");
+    },
+    buildCreatePageInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_create", request });
+      return surfaceDraftJSON(
+        "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0",
+        { project_id: request.project_id, folder: request.folder, visibility: request.visibility },
+      );
+    },
+    buildDeletePageInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_delete", request });
+      return surfaceDraftJSON(
+        "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0",
+        { project_id: request.project_id },
+      );
+    },
+    buildManifestInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_manifest", request });
+      return surfaceDraftJSON(
+        "easynet:///r/example/ability/alice.pages.pages.get@1.0.0",
+        { project_id: request.project_id },
+      );
+    },
+    buildHealthInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_health", request });
+      return surfaceDraftJSON(
+        "easynet:///r/example/ability/alice.pages.pages.health@1.0.0",
+        { surface_ref: request.surface_ref },
+      );
+    },
+    listPages: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "list", request });
+      return JSON.stringify({
+        profile: "surface",
+        kind: "surface_page_page",
+        item_kind: "page_record",
+        items: [surfacePageRecord()],
+        next_cursor: null,
+        limit: request.limit,
+        source: "pages_read_model",
+        metadata: {
+          profile: "surface",
+          source_ability: "pages.list",
+        },
+      });
+    },
+    createPage: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "create", request });
+      return JSON.stringify(surfacePageRecord({ page_id: request.project_id }));
+    },
+    deletePage: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "delete", request });
+      return JSON.stringify({
+        profile: "surface",
+        kind: "surface_mutation_result",
+        operation: "delete",
+        page_id: request.project_id,
+        removed: true,
+        state: "deleted",
+        metadata: { profile: "surface", source_ability: "pages.unpublish" },
+      });
+    },
+    surfaceManifest: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "manifest", request });
+      return JSON.stringify(surfaceManifest());
+    },
+    publicPageRef: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "public_ref", request });
+      return JSON.stringify({
+        profile: "surface",
+        kind: "public_page_ref",
+        page_id: request.page.page_id,
+        owner_ura: request.page.owner_ura,
+        surface_ref: request.page.surface_ref,
+        public_ref: request.page.public_ref,
+        route_kind: "hub_web",
+        metadata: { profile: "surface", source_ability: "pages.get" },
+      });
+    },
+    surfaceHealth: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "health", request });
+      return JSON.stringify(surfaceHealth());
+    },
+    projectPagePage: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_page", request });
+      return JSON.stringify(request);
+    },
+    projectManifest: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_manifest", request });
+      return JSON.stringify(request);
+    },
+    projectHealth: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_health", request });
+      return JSON.stringify(request);
+    },
+  });
+
+  const listDraft = await surface.buildListPagesInvocation({ ...surfaceBase(), limit: 50 });
+  const createDraft = await surface.buildCreatePageInvocation({
+    ...surfaceBase(),
+    project_id: "docs",
+    folder: "/tmp/easynet-pages-docs",
+    visibility: "public",
+  });
+  const deleteDraft = await surface.buildDeletePageInvocation({
+    ...surfaceBase(),
+    project_id: "docs",
+  });
+  const manifestDraft = await surface.buildManifestInvocation({
+    ...surfaceBase(),
+    project_id: "docs",
+  });
+  const healthDraft = await surface.buildHealthInvocation({
+    ...surfaceBase(),
+    surface_ref: "easynet:///r/example/resource/alice.docs",
+  });
+  const page = await surface.listPages(surfaceBase());
+  const record = await surface.createPage({
+    ...surfaceBase(),
+    project_id: "docs",
+    folder: "/tmp/easynet-pages-docs",
+    visibility: "public",
+  });
+  const mutation = await surface.deletePage({ ...surfaceBase(), project_id: "docs" });
+  const manifest = await surface.surfaceManifest({ ...surfaceBase(), project_id: "docs" });
+  const ref = await surface.publicPageRef({ page: record });
+  const health = await surface.surfaceHealth({
+    ...surfaceBase(),
+    surface_ref: "easynet:///r/example/resource/alice.docs",
+  });
+  const status = await surface.surfaceStatus({
+    ...surfaceBase(),
+    surface_ref: "easynet:///r/example/resource/alice.docs",
+  });
+  const projectedPage = await surface.projectPagePage(page);
+  const projectedManifest = await surface.projectManifest(manifest.toJSON());
+  const projectedHealth = await surface.projectStatus(health);
+
+  assert.equal(listDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.list@1.0.0");
+  assert.equal(createDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0");
+  assert.equal(deleteDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0");
+  assert.equal(manifestDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.get@1.0.0");
+  assert.equal(healthDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.health@1.0.0");
+  assert.equal(page.limit, DEFAULT_SURFACE_PAGE_SIZE);
+  assert.equal(page.items[0].pageId, "docs");
+  assert.equal(record.surfaceRef, "easynet:///r/example/resource/alice.docs");
+  assert.equal(mutation.state, "deleted");
+  assert.equal(manifest.page.pageId, "docs");
+  assert.equal(ref.routeKind, "hub_web");
+  assert.equal(health.ready, true);
+  assert.equal(status instanceof SurfaceStatus, true);
+  assert.equal(projectedPage.source, "pages_read_model");
+  assert.equal(projectedManifest.kind, "surface_manifest");
+  assert.equal(projectedHealth.descriptorVersion, "1.0.0");
+  assert.equal(seen[0].request.limit, 50);
+  assert.equal(seen[1].request.folder, "/tmp/easynet-pages-docs");
+  assert.equal(seen[4].request.surface_ref, "easynet:///r/example/resource/alice.docs");
+  assert.equal(seen[5].request.limit, DEFAULT_SURFACE_PAGE_SIZE);
+
+  await assert.rejects(
+    () => surface.buildCreatePageInvocation({
+      ...surfaceBase(),
+      project_id: "../docs",
+      folder: "/tmp/easynet-pages-docs",
+    }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => surface.buildCreatePageInvocation({
+      ...surfaceBase(),
+      project_id: "docs",
+      folder: "relative",
+    }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => surface.listPages({ ...surfaceBase(), limit: 501 }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });

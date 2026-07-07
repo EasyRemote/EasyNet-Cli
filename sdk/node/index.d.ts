@@ -48,12 +48,15 @@ export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
 export declare const EVENTS_PROFILE: "events";
+export declare const SURFACE_PROFILE: "surface";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
 export declare const MAX_BIDI_BUFFERED_FRAMES: 1024;
 export declare const DEFAULT_EVENT_PAGE_SIZE: 50;
 export declare const MAX_EVENT_PAGE_SIZE: 500;
 export declare const MIN_EVENT_HEARTBEAT_INTERVAL_MS: 1000;
 export declare const MAX_EVENT_HEARTBEAT_INTERVAL_MS: 300000;
+export declare const DEFAULT_SURFACE_PAGE_SIZE: 50;
+export declare const MAX_SURFACE_PAGE_SIZE: 500;
 export declare const HOST_STREAM_FRAME_SCHEMA: "host-stream-frame.schema.json";
 export declare const HOST_STREAM_HASH_ALGORITHM: "sha256(prev_hash || seq_be || canonical_json(value))";
 export declare const HOST_STREAM_EMPTY_OUTPUT_HASH: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -533,6 +536,279 @@ export class EventClient {
   projectLiveEvent(input: EventProjectionInput): Promise<EventFrame>;
   projectDropReport(input: EventDropReportInput): Promise<EventDropReport>;
   projectTerminal(input: EventTerminalInput): Promise<EventFrame>;
+  close(): Promise<void>;
+}
+
+export interface SurfaceCarrierBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SurfaceListPagesRequest extends SurfaceCarrierBase {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface SurfaceCreatePageRequest extends SurfaceCarrierBase {
+  project_id: string;
+  folder: string;
+  visibility?: "public" | "private";
+}
+
+export interface SurfaceDeletePageRequest extends SurfaceCarrierBase {
+  project_id: string;
+}
+
+export interface SurfaceManifestRequest extends SurfaceCarrierBase {
+  project_id: string;
+}
+
+export interface SurfaceHealthRequest extends SurfaceCarrierBase {
+  project_id?: string;
+  surface_ref?: string;
+}
+
+export type PageQuery = SurfaceListPagesRequest;
+export type CreatePageRequest = SurfaceCreatePageRequest;
+export type DeletePageRequest = SurfaceDeletePageRequest;
+export type SurfaceStatusRequest = SurfaceHealthRequest;
+
+export interface SurfacePageRecordFields {
+  profile: "surface";
+  kind: "page_record";
+  page_id: string;
+  owner_ura: string;
+  surface_ref: string;
+  public_ref?: string | null;
+  status?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export class SurfacePageRecord {
+  profile: "surface";
+  kind: "page_record";
+  pageId: string;
+  ownerURA: string;
+  surfaceRef: string;
+  publicRef: string | null;
+  status: string | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfacePageRecordFields);
+  static fromJSON(raw: Uint8Array | string): SurfacePageRecord;
+  toJSON(): SurfacePageRecordFields;
+}
+
+export interface SurfacePagePageFields {
+  profile: "surface";
+  kind: "surface_page_page";
+  item_kind: "page_record";
+  items: SurfacePageRecordFields[];
+  next_cursor: string | null;
+  limit: number;
+  source: "pages_read_model";
+  metadata: Record<string, unknown>;
+}
+
+export class SurfacePagePage {
+  profile: "surface";
+  kind: "surface_page_page";
+  itemKind: "page_record";
+  items: SurfacePageRecord[];
+  nextCursor: string | null;
+  limit: number;
+  source: "pages_read_model";
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfacePagePageFields);
+  static fromJSON(raw: Uint8Array | string): SurfacePagePage;
+  toJSON(): SurfacePagePageFields;
+}
+
+export interface SurfaceManifestFields {
+  profile: "surface";
+  kind: "surface_manifest";
+  page_id: string;
+  owner_ura: string;
+  surface_ref: string;
+  public_ref: string;
+  page: SurfacePageRecordFields;
+  entrypoint: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export class SurfaceManifest {
+  profile: "surface";
+  kind: "surface_manifest";
+  pageId: string;
+  ownerURA: string;
+  surfaceRef: string;
+  publicRef: string;
+  page: SurfacePageRecord;
+  entrypoint: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfaceManifestFields);
+  static fromJSON(raw: Uint8Array | string): SurfaceManifest;
+  toJSON(): SurfaceManifestFields;
+}
+
+export interface SurfacePublicPageRefFields {
+  profile: "surface";
+  kind: "public_page_ref";
+  page_id: string;
+  owner_ura: string;
+  surface_ref: string;
+  public_ref: string;
+  route_kind: string;
+  metadata: Record<string, unknown>;
+}
+
+export class SurfacePublicPageRef {
+  profile: "surface";
+  kind: "public_page_ref";
+  pageId: string;
+  ownerURA: string;
+  surfaceRef: string;
+  publicRef: string;
+  routeKind: string;
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfacePublicPageRefFields);
+  static fromJSON(raw: Uint8Array | string): SurfacePublicPageRef;
+  toJSON(): SurfacePublicPageRefFields;
+}
+
+export interface SurfaceMutationResultFields {
+  profile: "surface";
+  kind: "surface_mutation_result";
+  operation: "delete";
+  page_id: string;
+  removed: boolean;
+  state: "deleted" | "unknown";
+  metadata: Record<string, unknown>;
+}
+
+export class SurfaceMutationResult {
+  profile: "surface";
+  kind: "surface_mutation_result";
+  operation: "delete";
+  pageId: string;
+  removed: boolean;
+  state: "deleted" | "unknown";
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfaceMutationResultFields);
+  static fromJSON(raw: Uint8Array | string): SurfaceMutationResult;
+  toJSON(): SurfaceMutationResultFields;
+}
+
+export interface SurfaceHealthCheckFields {
+  name: string;
+  state: string;
+  ready: boolean;
+  message?: string | null;
+  latency_ms?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export class SurfaceHealthCheck {
+  name: string;
+  state: string;
+  ready: boolean;
+  message: string | null;
+  latencyMS: number;
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfaceHealthCheckFields);
+  toJSON(): Required<SurfaceHealthCheckFields>;
+}
+
+export interface SurfaceHealthFields {
+  profile: "surface";
+  kind: "surface_health";
+  state: string;
+  ready: boolean;
+  owner_ura: string;
+  surface_ref: string;
+  descriptor_ref: string;
+  descriptor_version: string;
+  page_count: number;
+  checks: SurfaceHealthCheckFields[];
+  metadata: Record<string, unknown>;
+}
+
+export class SurfaceHealth {
+  profile: "surface";
+  kind: "surface_health";
+  state: string;
+  ready: boolean;
+  ownerURA: string;
+  surfaceRef: string;
+  descriptorRef: string;
+  descriptorVersion: string;
+  pageCount: number;
+  checks: SurfaceHealthCheck[];
+  metadata: Record<string, unknown>;
+  constructor(fields: SurfaceHealthFields);
+  static fromJSON(raw: Uint8Array | string): SurfaceHealth;
+  toJSON(): SurfaceHealthFields;
+}
+
+export declare const SurfaceStatus: typeof SurfaceHealth;
+
+export type SurfaceProjectionInput =
+  | Uint8Array
+  | string
+  | Record<string, unknown>
+  | SurfacePageRecord
+  | SurfacePagePage
+  | SurfaceManifest
+  | SurfacePublicPageRef
+  | SurfaceMutationResult
+  | SurfaceHealth;
+
+export interface SurfaceTransport {
+  buildListPagesInvocation(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildCreatePageInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDeletePageInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildManifestInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildHealthInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  listPages?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  createPage?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  deletePage?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  surfaceManifest?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  publicPageRef?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  surfaceHealth?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectPageRecord?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectPagePage?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectManifest?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectPublicPageRef?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectMutationResult?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectHealth?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class SurfaceClient {
+  constructor(transport: SurfaceTransport);
+  buildListPagesInvocation(request: SurfaceListPagesRequest): Promise<InvocationDraft>;
+  buildCreatePageInvocation(request: SurfaceCreatePageRequest): Promise<InvocationDraft>;
+  buildDeletePageInvocation(request: SurfaceDeletePageRequest): Promise<InvocationDraft>;
+  buildManifestInvocation(request: SurfaceManifestRequest): Promise<InvocationDraft>;
+  buildHealthInvocation(request: SurfaceHealthRequest): Promise<InvocationDraft>;
+  listPages(request: SurfaceListPagesRequest): Promise<SurfacePagePage>;
+  createPage(request: SurfaceCreatePageRequest): Promise<SurfacePageRecord>;
+  deletePage(request: SurfaceDeletePageRequest): Promise<SurfaceMutationResult>;
+  surfaceManifest(request: SurfaceManifestRequest): Promise<SurfaceManifest>;
+  publicPageRef(request: { page: SurfacePageRecord | SurfacePageRecordFields }): Promise<SurfacePublicPageRef>;
+  surfaceHealth(request: SurfaceHealthRequest): Promise<SurfaceHealth>;
+  surfaceStatus(request: SurfaceStatusRequest): Promise<SurfaceHealth>;
+  projectPageRecord(value: SurfaceProjectionInput): Promise<SurfacePageRecord>;
+  projectPagePage(value: SurfaceProjectionInput): Promise<SurfacePagePage>;
+  projectManifest(value: SurfaceProjectionInput): Promise<SurfaceManifest>;
+  projectPublicPageRef(value: SurfaceProjectionInput): Promise<SurfacePublicPageRef>;
+  projectMutationResult(value: SurfaceProjectionInput): Promise<SurfaceMutationResult>;
+  projectHealth(value: SurfaceProjectionInput): Promise<SurfaceHealth>;
+  projectStatus(value: SurfaceProjectionInput): Promise<SurfaceHealth>;
   close(): Promise<void>;
 }
 

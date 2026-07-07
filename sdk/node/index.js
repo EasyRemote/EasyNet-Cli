@@ -65,12 +65,15 @@ export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
 export const EVENTS_PROFILE = "events";
+export const SURFACE_PROFILE = "surface";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 export const DEFAULT_EVENT_PAGE_SIZE = 50;
 export const MAX_EVENT_PAGE_SIZE = 500;
 export const MIN_EVENT_HEARTBEAT_INTERVAL_MS = 1000;
 export const MAX_EVENT_HEARTBEAT_INTERVAL_MS = 300000;
+export const DEFAULT_SURFACE_PAGE_SIZE = 50;
+export const MAX_SURFACE_PAGE_SIZE = 500;
 export const HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json";
 export const HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value))";
 export const HOST_STREAM_EMPTY_OUTPUT_HASH =
@@ -859,6 +862,384 @@ export class EventClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("events client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class SurfacePageRecord {
+  constructor(fields) {
+    const value = objectValue(fields, "surface page record");
+    this.profile = requiredSurfaceString(value.profile, "profile");
+    this.kind = requiredSurfaceString(value.kind, "kind");
+    if (this.profile !== SURFACE_PROFILE || this.kind !== "page_record") {
+      throw invalidSurface("invalid surface page record projection");
+    }
+    this.pageId = requiredSurfaceProjectID(value.page_id, "page_id");
+    this.ownerURA = requiredSurfaceString(value.owner_ura, "owner_ura");
+    this.surfaceRef = requiredSurfaceRef(value.surface_ref, "surface_ref");
+    this.publicRef = surfaceOptionalString(value.public_ref, "public_ref");
+    this.status = surfaceOptionalString(value.status, "status");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new SurfacePageRecord(parseJSON(raw, "surface page record"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      page_id: this.pageId,
+      owner_ura: this.ownerURA,
+      surface_ref: this.surfaceRef,
+      public_ref: this.publicRef,
+      status: this.status,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SurfacePagePage {
+  constructor(fields) {
+    const value = objectValue(fields, "surface page page");
+    this.profile = requiredSurfaceString(value.profile, "profile");
+    this.kind = requiredSurfaceString(value.kind, "kind");
+    this.itemKind = requiredSurfaceString(value.item_kind, "item_kind");
+    this.source = requiredSurfaceString(value.source, "source");
+    if (
+      this.profile !== SURFACE_PROFILE ||
+      this.kind !== "surface_page_page" ||
+      this.itemKind !== "page_record" ||
+      this.source !== "pages_read_model"
+    ) {
+      throw invalidSurface("invalid surface page projection");
+    }
+    if (!Array.isArray(value.items)) {
+      throw invalidSurface("items must be an array");
+    }
+    this.items = value.items.map((item) => new SurfacePageRecord(item));
+    this.nextCursor = surfaceOptionalString(value.next_cursor, "next_cursor");
+    this.limit = surfacePositiveBoundedInteger(value.limit, "limit", MAX_SURFACE_PAGE_SIZE);
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new SurfacePagePage(parseJSON(raw, "surface page page"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      item_kind: this.itemKind,
+      items: this.items.map((item) => item.toJSON()),
+      next_cursor: this.nextCursor,
+      limit: this.limit,
+      source: this.source,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SurfaceManifest {
+  constructor(fields) {
+    const value = objectValue(fields, "surface manifest");
+    this.profile = requiredSurfaceString(value.profile, "profile");
+    this.kind = requiredSurfaceString(value.kind, "kind");
+    if (this.profile !== SURFACE_PROFILE || this.kind !== "surface_manifest") {
+      throw invalidSurface("invalid surface manifest projection");
+    }
+    this.pageId = requiredSurfaceProjectID(value.page_id, "page_id");
+    this.ownerURA = requiredSurfaceString(value.owner_ura, "owner_ura");
+    this.surfaceRef = requiredSurfaceRef(value.surface_ref, "surface_ref");
+    this.publicRef = requiredSurfaceString(value.public_ref, "public_ref");
+    this.page = new SurfacePageRecord(objectValue(value.page, "page"));
+    this.entrypoint = objectValue(value.entrypoint, "entrypoint");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new SurfaceManifest(parseJSON(raw, "surface manifest"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      page_id: this.pageId,
+      owner_ura: this.ownerURA,
+      surface_ref: this.surfaceRef,
+      public_ref: this.publicRef,
+      page: this.page.toJSON(),
+      entrypoint: this.entrypoint,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SurfacePublicPageRef {
+  constructor(fields) {
+    const value = objectValue(fields, "surface public page ref");
+    this.profile = requiredSurfaceString(value.profile, "profile");
+    this.kind = requiredSurfaceString(value.kind, "kind");
+    if (this.profile !== SURFACE_PROFILE || this.kind !== "public_page_ref") {
+      throw invalidSurface("invalid surface public page ref projection");
+    }
+    this.pageId = requiredSurfaceProjectID(value.page_id, "page_id");
+    this.ownerURA = requiredSurfaceString(value.owner_ura, "owner_ura");
+    this.surfaceRef = requiredSurfaceRef(value.surface_ref, "surface_ref");
+    this.publicRef = requiredSurfaceString(value.public_ref, "public_ref");
+    this.routeKind = requiredSurfaceString(value.route_kind, "route_kind");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new SurfacePublicPageRef(parseJSON(raw, "surface public page ref"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      page_id: this.pageId,
+      owner_ura: this.ownerURA,
+      surface_ref: this.surfaceRef,
+      public_ref: this.publicRef,
+      route_kind: this.routeKind,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SurfaceMutationResult {
+  constructor(fields) {
+    const value = objectValue(fields, "surface mutation result");
+    this.profile = requiredSurfaceString(value.profile, "profile");
+    this.kind = requiredSurfaceString(value.kind, "kind");
+    this.operation = requiredSurfaceString(value.operation, "operation");
+    if (
+      this.profile !== SURFACE_PROFILE ||
+      this.kind !== "surface_mutation_result" ||
+      this.operation !== "delete"
+    ) {
+      throw invalidSurface("invalid surface mutation result projection");
+    }
+    this.pageId = requiredSurfaceProjectID(value.page_id, "page_id");
+    this.removed = surfaceBoolean(value.removed, "removed");
+    this.state = requiredSurfaceString(value.state, "state");
+    if (!["deleted", "unknown"].includes(this.state)) {
+      throw invalidSurface("invalid surface mutation state");
+    }
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new SurfaceMutationResult(parseJSON(raw, "surface mutation result"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      operation: this.operation,
+      page_id: this.pageId,
+      removed: this.removed,
+      state: this.state,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SurfaceHealthCheck {
+  constructor(fields) {
+    const value = objectValue(fields, "surface health check");
+    this.name = requiredSurfaceString(value.name, "name");
+    this.state = requiredSurfaceString(value.state, "state");
+    this.ready = surfaceBoolean(value.ready, "ready");
+    this.message = surfaceOptionalString(value.message, "message");
+    this.latencyMS = surfaceOptionalNonNegativeInteger(value.latency_ms, "latency_ms") ?? 0;
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+  }
+
+  toJSON() {
+    return {
+      name: this.name,
+      state: this.state,
+      ready: this.ready,
+      message: this.message,
+      latency_ms: this.latencyMS,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SurfaceHealth {
+  constructor(fields) {
+    const value = objectValue(fields, "surface health");
+    this.profile = requiredSurfaceString(value.profile, "profile");
+    this.kind = requiredSurfaceString(value.kind, "kind");
+    if (this.profile !== SURFACE_PROFILE || this.kind !== "surface_health") {
+      throw invalidSurface("invalid surface health projection");
+    }
+    this.state = requiredSurfaceString(value.state, "state");
+    this.ready = surfaceBoolean(value.ready, "ready");
+    this.ownerURA = requiredSurfaceString(value.owner_ura, "owner_ura");
+    this.surfaceRef = requiredSurfaceRef(value.surface_ref, "surface_ref");
+    this.descriptorRef = requiredSurfaceString(value.descriptor_ref, "descriptor_ref");
+    this.descriptorVersion = requiredSurfaceString(value.descriptor_version, "descriptor_version");
+    this.pageCount = surfaceNonNegativeInteger(value.page_count, "page_count");
+    if (!Array.isArray(value.checks)) {
+      throw invalidSurface("checks must be an array");
+    }
+    this.checks = value.checks.map((check) => new SurfaceHealthCheck(check));
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new SurfaceHealth(parseJSON(raw, "surface health"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      state: this.state,
+      ready: this.ready,
+      owner_ura: this.ownerURA,
+      surface_ref: this.surfaceRef,
+      descriptor_ref: this.descriptorRef,
+      descriptor_version: this.descriptorVersion,
+      page_count: this.pageCount,
+      checks: this.checks.map((check) => check.toJSON()),
+      metadata: this.metadata,
+    };
+  }
+}
+
+export const SurfaceStatus = SurfaceHealth;
+
+export class SurfaceClient {
+  constructor(transport) {
+    if (!transport || typeof transport.buildListPagesInvocation !== "function") {
+      throw invalidSDK("surface transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async buildListPagesInvocation(request) {
+    return this.buildInvocation("buildListPagesInvocation", surfaceListPagesRequest(request));
+  }
+
+  async buildCreatePageInvocation(request) {
+    return this.buildInvocation("buildCreatePageInvocation", surfaceCreatePageRequest(request));
+  }
+
+  async buildDeletePageInvocation(request) {
+    return this.buildInvocation("buildDeletePageInvocation", surfaceDeletePageRequest(request));
+  }
+
+  async buildManifestInvocation(request) {
+    return this.buildInvocation("buildManifestInvocation", surfaceManifestRequest(request));
+  }
+
+  async buildHealthInvocation(request) {
+    return this.buildInvocation("buildHealthInvocation", surfaceHealthRequest(request));
+  }
+
+  async buildInvocation(method, payload) {
+    return InvocationDraft.fromJSON(await callRaw(this.requireOpen(), method, payload));
+  }
+
+  async listPages(request) {
+    return SurfacePagePage.fromJSON(
+      await callRaw(this.requireOpen(), "listPages", surfaceListPagesRequest(request)),
+    );
+  }
+
+  async createPage(request) {
+    return SurfacePageRecord.fromJSON(
+      await callRaw(this.requireOpen(), "createPage", surfaceCreatePageRequest(request)),
+    );
+  }
+
+  async deletePage(request) {
+    return SurfaceMutationResult.fromJSON(
+      await callRaw(this.requireOpen(), "deletePage", surfaceDeletePageRequest(request)),
+    );
+  }
+
+  async surfaceManifest(request) {
+    return SurfaceManifest.fromJSON(
+      await callRaw(this.requireOpen(), "surfaceManifest", surfaceManifestRequest(request)),
+    );
+  }
+
+  async publicPageRef(request) {
+    const payload = surfaceRequest(request, ["page"], "surface public page ref request");
+    const page = payload.page instanceof SurfacePageRecord
+      ? payload.page.toJSON()
+      : new SurfacePageRecord(objectValue(payload.page, "page")).toJSON();
+    return SurfacePublicPageRef.fromJSON(
+      await callRaw(this.requireOpen(), "publicPageRef", { page }),
+    );
+  }
+
+  async surfaceHealth(request) {
+    return SurfaceHealth.fromJSON(
+      await callRaw(this.requireOpen(), "surfaceHealth", surfaceHealthRequest(request)),
+    );
+  }
+
+  async surfaceStatus(request) {
+    return this.surfaceHealth(request);
+  }
+
+  async projectPageRecord(value) {
+    return SurfacePageRecord.fromJSON(await callSurfaceProjection(this.requireOpen(), "projectPageRecord", value));
+  }
+
+  async projectPagePage(value) {
+    return SurfacePagePage.fromJSON(await callSurfaceProjection(this.requireOpen(), "projectPagePage", value));
+  }
+
+  async projectManifest(value) {
+    return SurfaceManifest.fromJSON(await callSurfaceProjection(this.requireOpen(), "projectManifest", value));
+  }
+
+  async projectPublicPageRef(value) {
+    return SurfacePublicPageRef.fromJSON(await callSurfaceProjection(this.requireOpen(), "projectPublicPageRef", value));
+  }
+
+  async projectMutationResult(value) {
+    return SurfaceMutationResult.fromJSON(await callSurfaceProjection(this.requireOpen(), "projectMutationResult", value));
+  }
+
+  async projectHealth(value) {
+    return SurfaceHealth.fromJSON(await callSurfaceProjection(this.requireOpen(), "projectHealth", value));
+  }
+
+  async projectStatus(value) {
+    return this.projectHealth(value);
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("surface client is closed");
     }
     return this.transport;
   }
@@ -2399,6 +2780,149 @@ function eventsCarrierBaseFields() {
   ];
 }
 
+function surfaceCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+  ];
+}
+
+function surfaceListPagesRequest(value) {
+  const payload = surfaceRequest(
+    value,
+    [...surfaceCarrierBaseFields(), "limit", "cursor"],
+    "surface list pages request",
+  );
+  validateSurfaceCarrierBase(payload);
+  if (payload.limit === undefined || payload.limit === 0) {
+    payload.limit = DEFAULT_SURFACE_PAGE_SIZE;
+  }
+  surfacePositiveBoundedInteger(payload.limit, "limit", MAX_SURFACE_PAGE_SIZE);
+  if (payload.cursor !== undefined) {
+    surfaceOptionalString(payload.cursor, "cursor");
+  }
+  return payload;
+}
+
+function surfaceCreatePageRequest(value) {
+  const payload = surfaceRequest(
+    value,
+    [...surfaceCarrierBaseFields(), "project_id", "folder", "visibility"],
+    "surface create page request",
+  );
+  validateSurfaceCarrierBase(payload);
+  requiredSurfaceProjectID(payload.project_id, "project_id");
+  const folder = requiredSurfaceString(payload.folder, "folder");
+  if (!isAbsolutePath(folder)) {
+    throw invalidSurface("surface folder must be absolute");
+  }
+  if (payload.visibility !== undefined && !["public", "private"].includes(payload.visibility)) {
+    throw invalidSurface("invalid surface visibility");
+  }
+  return payload;
+}
+
+function surfaceDeletePageRequest(value) {
+  const payload = surfaceRequest(
+    value,
+    [...surfaceCarrierBaseFields(), "project_id"],
+    "surface delete page request",
+  );
+  validateSurfaceCarrierBase(payload);
+  requiredSurfaceProjectID(payload.project_id, "project_id");
+  return payload;
+}
+
+function surfaceManifestRequest(value) {
+  const payload = surfaceRequest(
+    value,
+    [...surfaceCarrierBaseFields(), "project_id"],
+    "surface manifest request",
+  );
+  validateSurfaceCarrierBase(payload);
+  requiredSurfaceProjectID(payload.project_id, "project_id");
+  return payload;
+}
+
+function surfaceHealthRequest(value) {
+  const payload = surfaceRequest(
+    value,
+    [...surfaceCarrierBaseFields(), "project_id", "surface_ref"],
+    "surface health request",
+  );
+  validateSurfaceCarrierBase(payload);
+  if (payload.project_id !== undefined && payload.project_id !== "") {
+    requiredSurfaceProjectID(payload.project_id, "project_id");
+  }
+  if (payload.surface_ref !== undefined && payload.surface_ref !== "") {
+    requiredSurfaceRef(payload.surface_ref, "surface_ref");
+  }
+  if (!payload.project_id && !payload.surface_ref) {
+    throw invalidSurface("project_id or surface_ref is required");
+  }
+  return payload;
+}
+
+function surfaceRequest(value, allowed, label) {
+  const payload = objectValue(value, label);
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(payload)) {
+    if (!allowedSet.has(key)) {
+      throw invalidSurface(`${key} is not a surface field`);
+    }
+  }
+  for (const [key, raw] of Object.entries(payload)) {
+    if (typeof raw === "string" && raw.trim() !== raw) {
+      throw invalidSurface(`${key} must not contain surrounding whitespace`);
+    }
+  }
+  return payload;
+}
+
+function validateSurfaceCarrierBase(payload) {
+  requiredSurfaceString(payload.caller_ura, "caller_ura");
+  requiredSurfaceString(payload.callee_ura, "callee_ura");
+  requiredSurfaceString(payload.subject_ura, "subject_ura");
+  requiredSurfaceString(payload.descriptor_version, "descriptor_version");
+  requiredSurfaceString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+}
+
+function callSurfaceProjection(transport, method, value) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  if (value instanceof SurfacePageRecord ||
+      value instanceof SurfacePagePage ||
+      value instanceof SurfaceManifest ||
+      value instanceof SurfacePublicPageRef ||
+      value instanceof SurfaceMutationResult ||
+      value instanceof SurfaceHealth) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value.toJSON()))));
+  }
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw invalidSurface("surface projection JSON is required");
+    }
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value))));
+  }
+  throw invalidSurface("surface projection must be bytes, string, or object");
+}
+
 function eventsSubscriptionRequest(value, expectedStream) {
   requiredEventStream(expectedStream, "stream");
   const payload = eventsRequest(value, [
@@ -2688,6 +3212,67 @@ function rejectEventWhitespace(value, field) {
   if (typeof value === "string" && /\s/.test(value)) {
     throw invalidEvents(`${field} must not contain whitespace`);
   }
+}
+
+function requiredSurfaceString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidSurface(`${field} is required`);
+  }
+  return value;
+}
+
+function surfaceOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidSurface(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredSurfaceProjectID(value, field) {
+  const text = requiredSurfaceString(value, field);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(text) || text.includes("..")) {
+    throw invalidSurface("invalid surface project_id");
+  }
+  return text;
+}
+
+function requiredSurfaceRef(value, field) {
+  const text = requiredSurfaceString(value, field);
+  if (!text.startsWith("easynet:///r/")) {
+    throw invalidSurface(`${field} must be a URA`);
+  }
+  return text;
+}
+
+function surfaceBoolean(value, field) {
+  if (typeof value !== "boolean") {
+    throw invalidSurface(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function surfaceNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidSurface(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function surfaceOptionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return surfaceNonNegativeInteger(value, field);
+}
+
+function surfacePositiveBoundedInteger(value, field, max) {
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw invalidSurface(`${field} exceeds bounds`);
+  }
+  return value;
 }
 
 function receiptFetchRequest(value) {
@@ -3843,6 +4428,10 @@ function invalidHealth(message, details = {}) {
 
 function invalidEvents(message, details = {}) {
   return invalidProfile(EVENTS_PROFILE, "events", message, details);
+}
+
+function invalidSurface(message, details = {}) {
+  return invalidProfile(SURFACE_PROFILE, "surface", message, details);
 }
 
 function invalidProfile(profile, stage, message, details = {}) {

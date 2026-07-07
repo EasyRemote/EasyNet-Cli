@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: Surface page APIs build complete Invocation carriers over daemon pages abilities and project daemon page facts without owning backend rendering.
 steps:
   - action: build_surface_list_pages_invocation

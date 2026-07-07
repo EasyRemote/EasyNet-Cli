@@ -11,7 +11,7 @@ method spelling.
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers, including authority signing-material and metadata-materialization core helpers |
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
-| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Directory + Identity, Receipt, Publication, Host Binding, and Events DTO/client lifecycle over injected transports; daemon providers, local daemon signing, and remaining profile clients unsupported |
+| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Directory + Identity, Receipt, Publication, Host Binding, Events, and Surface DTO/client lifecycle over injected transports; daemon providers, local daemon signing, and remaining profile clients unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | unsupported |
 | Swift | P1 | macOS/iOS-adjacent clients | unsupported |
 
