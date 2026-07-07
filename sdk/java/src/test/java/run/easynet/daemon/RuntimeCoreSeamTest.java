@@ -32,6 +32,7 @@ public final class RuntimeCoreSeamTest {
     receiptBuildsFetchCarrierAndProjectsSummary();
     receiptRejectsInvalidSelectorAndSummaryVerification();
     receiptOpaqueRefRequiresExplicitAnchorFacts();
+    eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -640,6 +641,179 @@ public final class RuntimeCoreSeamTest {
         Map.of("request_id", "receipt-fetch-1"));
   }
 
+  private static void eventsProfileDelegatesCarriersProjectionsHistoryAndStreams() throws Exception {
+    var events = new EventClient(new FixtureEventTransport());
+    var base = eventsCarrierBase(Map.of("request_id", "events-directory-subscribe-1"));
+    var directoryRequest =
+        new EventsSubscriptionRequest(
+            base,
+            null,
+            null,
+            "example",
+            null,
+            null,
+            "easynet:///r/example/agent/alice.main",
+            null,
+            null,
+            null,
+            new EventCursor("directory", 7, ""),
+            30000);
+    var deviceRequest =
+        new EventsSubscriptionRequest(
+            eventsCarrierBase(Map.of("request_id", "events-device-subscribe-1")),
+            "device",
+            new EventFilter(null, null, "easynet:///r/example/device/dev-a", null, null, null),
+            null,
+            null,
+            "easynet:///r/example/device/dev-a",
+            null,
+            null,
+            null,
+            null,
+            new EventCursor("device", 2, ""),
+            30000);
+    var sessionRequest =
+        new EventsSubscriptionRequest(
+            eventsCarrierBase(Map.of("request_id", "events-session-subscribe-1")),
+            "session",
+            null,
+            null,
+            null,
+            null,
+            null,
+            "run-1",
+            null,
+            null,
+            new EventCursor("session", 4, ""),
+            null);
+    var invocationRequest =
+        new EventsSubscriptionRequest(
+            eventsCarrierBase(Map.of("request_id", "events-invocation-subscribe-1")),
+            "invocation",
+            new EventFilter(null, null, null, null, null, "inv-1"),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "inv-1",
+            new EventCursor("invocation", 9, ""),
+            null);
+
+    check(
+        events.buildDirectorySubscriptionInvocation(directoryRequest)
+            .get("descriptor_ref")
+            .toString()
+            .contains("federation.subscribe_directory_v2"),
+        "events directory carrier");
+    check(
+        events.buildDeviceSubscriptionInvocation(deviceRequest)
+            .get("descriptor_ref")
+            .toString()
+            .contains("events.device.subscribe"),
+        "events device carrier");
+    check(
+        events.buildSessionSubscriptionInvocation(sessionRequest)
+            .get("descriptor_ref")
+            .toString()
+            .contains("session.attach"),
+        "events session carrier");
+    check(
+        events.buildInvocationSubscriptionInvocation(invocationRequest)
+            .get("descriptor_ref")
+            .toString()
+            .contains("events.invocation.subscribe"),
+        "events invocation carrier");
+
+    var page =
+        events.listDeviceEvents(
+            new EventsDeviceEventListRequest(
+                eventsCarrierBase(Map.of("request_id", "events-device-history-1")),
+                new EventFilter(null, null, "easynet:///r/example/device/dev-a", null, null, null),
+                "easynet:///r/example/device/dev-a",
+                null,
+                null));
+    check(page.limit() == 50 && page.items().get(0).stream().equals("device"), "events device page");
+
+    var directoryFrame =
+        events.projectDirectoryEvent(
+            new EventProjectionInput(
+                new EventCursor("directory", 8, ""),
+                Map.of("type", "agent_advertised"),
+                null,
+                null,
+                null));
+    check(directoryFrame.cursor().resumeToken().equals("directory:8"), "events directory projection");
+    check(
+        events.projectLiveEvent(
+                new EventProjectionInput(
+                    new EventCursor("device", 8, ""), Map.of("state", "online"), null, null, null))
+            .stream()
+            .equals("device"),
+        "events live projection");
+    check(
+        events.projectDropReport(
+                new EventDropReportInput(
+                    new EventCursor("directory", 10, ""),
+                    1783100000123L,
+                    4,
+                    1000,
+                    "consumer_lagged",
+                    null,
+                    null,
+                    null))
+            .droppedCount()
+            == 4,
+        "events drop projection");
+    check(
+        events.projectTerminal(
+                new EventTerminalInput(
+                    new EventCursor("directory", 11, ""),
+                    1783100000123L,
+                    null,
+                    "client_closed",
+                    null,
+                    null,
+                    null))
+            .terminal(),
+        "events terminal projection");
+
+    var stream = events.subscribeDirectory(directoryRequest);
+    check(stream.receive().kind().equals("directory.agent_advertised"), "events stream frame");
+    check(stream.receive().terminal(), "events stream terminal frame");
+    check(stream.state().equals("Terminal"), "events stream terminal state");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            events.buildSessionSubscriptionInvocation(
+                new EventsSubscriptionRequest(
+                    base,
+                    "session",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    "easynet:///r/example/resource/session.run-1",
+                    null,
+                    null,
+                    null)));
+  }
+
+  private static EventsCarrierBase eventsCarrierBase(Map<String, Object> metadata) {
+    return new EventsCarrierBase(
+        "easynet:///r/example/agent/alice.sdk",
+        "easynet:///r/example/device/dev-a",
+        "easynet:///r/example/device/dev-a",
+        "1.0.0",
+        "AQIDBAUGBwgJCgsMDQ4PEA==",
+        Map.of("form", "none"),
+        metadata);
+  }
+
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
     try {
       action.run();
@@ -750,6 +924,20 @@ public final class RuntimeCoreSeamTest {
               {"profile":"directory_identity","stream":"directory","kind":"upsert","event_id":"evt-3","phase":"live","cursor":{"stream":"directory","sequence":3,"token":"directory:3"},"resume_token":"directory:3","terminal":false,"metadata":{"source":"directory.subscribe"}}
               """));
       events.add(StreamEvent.terminal(4, "Closed"));
+    }
+
+    @Override
+    public StreamEvent next() {
+      return events.removeFirst();
+    }
+  }
+
+  private static final class EventsDirectoryStreamSource implements StreamSource {
+    private final ArrayDeque<StreamEvent> events = new ArrayDeque<>();
+
+    EventsDirectoryStreamSource() {
+      events.add(StreamEvent.data(8, new String(fixture("event.directory.v4.json"), StandardCharsets.UTF_8)));
+      events.add(StreamEvent.data(11, new String(fixture("event.directory-terminal.v4.json"), StandardCharsets.UTF_8)));
     }
 
     @Override
@@ -918,6 +1106,72 @@ public final class RuntimeCoreSeamTest {
       var request = JsonValueReader.object(requestJSON, "receipt fetch request");
       check(request.equals(JsonValueReader.object(fixture("receipt-fetch-request.v4.json"), "receipt fetch fixture")), "receipt fetch request");
       return fixture("receipt.summary.v4.json");
+    }
+  }
+
+  private static final class FixtureEventTransport implements EventTransport {
+    @Override
+    public byte[] buildDirectorySubscriptionInvocation(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "events directory request");
+      check(request.get("stream").equals("directory"), "events directory stream");
+      return fixture("events-directory-subscription-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildDeviceSubscriptionInvocation(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "events device request");
+      check(request.get("stream").equals("device"), "events device stream");
+      return fixture("events-device-subscription-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildSessionSubscriptionInvocation(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "events session request");
+      check(request.get("session_id").equals("run-1"), "events session id");
+      return fixture("events-session-subscription-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildInvocationSubscriptionInvocation(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "events invocation request");
+      check(request.get("invocation_id").equals("inv-1"), "events invocation id");
+      return fixture("events-invocation-subscription-invocation.v4.json");
+    }
+
+    @Override
+    public StreamSource subscribeDirectory(byte[] requestJSON) {
+      return new EventsDirectoryStreamSource();
+    }
+
+    @Override
+    public byte[] listDeviceEvents(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "events device history request");
+      check(request.get("limit").equals(50L), "events default history limit");
+      return fixture("event.device-page.v4.json");
+    }
+
+    @Override
+    public byte[] projectDirectoryEvent(byte[] eventJSON) {
+      return fixture("event.directory.v4.json");
+    }
+
+    @Override
+    public byte[] projectLiveEvent(byte[] eventJSON) {
+      var request = JsonValueReader.object(eventJSON, "events live projection request");
+      var cursor = EventsSupport.requiredObject(request, "cursor");
+      return cursor.get("stream").equals("invocation")
+          ? fixture("event.invocation-live.v4.json")
+          : fixture("event.device-live.v4.json");
+    }
+
+    @Override
+    public byte[] projectDropReport(byte[] dropJSON) {
+      return fixture("event.directory-drop-report.v4.json");
+    }
+
+    @Override
+    public byte[] projectTerminal(byte[] terminalJSON) {
+      return fixture("event.directory-terminal.v4.json");
     }
   }
 }

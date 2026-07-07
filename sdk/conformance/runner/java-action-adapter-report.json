@@ -130,6 +130,27 @@
       "message": "Java receipt projection refuses summary-only cryptographic claims and requires explicit receipt_ura plus receipt_hash_hex for causal refs."
     },
     {
+      "case_id": "events/directory_stream",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [{"kind": "java_test", "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"}],
+      "message": "Java Events builds directory stream carriers, projects event/drop/terminal frames, and opens Runtime Core-backed event streams without SDK-local fanout."
+    },
+    {
+      "case_id": "events/device_invocation_history",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [{"kind": "java_test", "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"}],
+      "message": "Java Events builds device and invocation subscription carriers and projects bounded device event history pages over injected transports."
+    },
+    {
+      "case_id": "events/session_stream",
+      "profile": "events",
+      "status": "passed",
+      "evidence": [{"kind": "java_test", "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"}],
+      "message": "Java Events requires explicit daemon session_id and rejects product session_ura parsing for session streams."
+    },
+    {
       "case_id": "invocation/descriptor_ref_helper_delegation",
       "profile": "directory_identity",
       "status": "passed",
@@ -141,14 +162,14 @@
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "java_test", "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"}],
-      "message": "Java declares Runtime Core, Health, Directory + Identity, and Receipt P1 seams and keeps provider/product cutover outside the facade."
+      "message": "Java declares Runtime Core, Health, Directory + Identity, Receipt, and Events P1 seams and keeps provider/product cutover outside the facade."
     },
     {
       "case_id": "memc/no_core_bloat",
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "java_test", "ref_path": "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"}],
-      "message": "Java seam exposes lifecycle, invocation, async runtime adapter, runtime transport, stream/bidi iterators, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, and typed errors only."
+      "message": "Java seam exposes lifecycle, invocation, async runtime adapter, runtime transport, stream/bidi iterators, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Events carrier/frame/stream state, and typed errors only."
     },
     {
       "case_id": "memc/profile_exclusivity",

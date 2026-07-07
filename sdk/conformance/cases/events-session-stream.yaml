@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: EventClient builds session stream Invocation carriers for daemon session.attach with explicit daemon session_id, rejects product session_ura facade parsing, and maps session cursor sequence to since_seq.
 steps:
   - action: build_session_subscription_invocation

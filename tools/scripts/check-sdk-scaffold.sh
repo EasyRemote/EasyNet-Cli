@@ -264,6 +264,20 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorClass.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorCode.java \
+  sdk/java/src/main/java/run/easynet/daemon/DeviceEventPage.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventCursor.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventDropReportInput.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventFilter.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventFrame.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventProjectionInput.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventStream.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventTerminalInput.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventsCarrierBase.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventsDeviceEventListRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventsSubscriptionRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/EventsSupport.java \
   sdk/java/src/main/java/run/easynet/daemon/FeatureSet.java \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticCheck.java \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticsReport.java \
@@ -310,6 +324,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Receipt.swift \

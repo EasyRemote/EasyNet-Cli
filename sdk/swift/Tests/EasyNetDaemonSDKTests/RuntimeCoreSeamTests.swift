@@ -531,6 +531,100 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testEventsProfileDelegatesCarriersProjectionsHistoryAndStreams() async throws {
+        let events = EventClient(transport: FixtureEventTransport())
+        let base = try eventsCarrierBase(metadata: ["request_id": .string("events-directory-subscribe-1")])
+        let directoryRequest = try EventsSubscriptionRequest(
+            base: base,
+            realm: "example",
+            agentURA: "easynet:///r/example/agent/alice.main",
+            resumeCursor: EventCursor(stream: "directory", sequence: 7),
+            heartbeatIntervalMS: 30000
+        )
+        let deviceRequest = try EventsSubscriptionRequest(
+            base: eventsCarrierBase(metadata: ["request_id": .string("events-device-subscribe-1")]),
+            stream: "device",
+            filter: EventFilter(deviceURA: "easynet:///r/example/device/dev-a"),
+            deviceURA: "easynet:///r/example/device/dev-a",
+            resumeCursor: EventCursor(stream: "device", sequence: 2),
+            heartbeatIntervalMS: 30000
+        )
+        let sessionRequest = try EventsSubscriptionRequest(
+            base: eventsCarrierBase(metadata: ["request_id": .string("events-session-subscribe-1")]),
+            stream: "session",
+            sessionID: "run-1",
+            resumeCursor: EventCursor(stream: "session", sequence: 4)
+        )
+        let invocationRequest = try EventsSubscriptionRequest(
+            base: eventsCarrierBase(metadata: ["request_id": .string("events-invocation-subscribe-1")]),
+            stream: "invocation",
+            filter: EventFilter(invocationID: "inv-1"),
+            invocationID: "inv-1",
+            resumeCursor: EventCursor(stream: "invocation", sequence: 9)
+        )
+
+        let directoryCarrier = try await events.buildDirectorySubscriptionInvocation(directoryRequest)
+        let deviceCarrier = try await events.buildDeviceSubscriptionInvocation(deviceRequest)
+        let sessionCarrier = try await events.buildSessionSubscriptionInvocation(sessionRequest)
+        let invocationCarrier = try await events.buildInvocationSubscriptionInvocation(invocationRequest)
+        XCTAssertTrue(try optionalDirectoryJSONString(directoryCarrier["descriptor_ref"], "descriptor_ref")?
+            .contains("federation.subscribe_directory_v2") == true)
+        XCTAssertTrue(try optionalDirectoryJSONString(deviceCarrier["descriptor_ref"], "descriptor_ref")?
+            .contains("events.device.subscribe") == true)
+        XCTAssertTrue(try optionalDirectoryJSONString(sessionCarrier["descriptor_ref"], "descriptor_ref")?
+            .contains("session.attach") == true)
+        XCTAssertTrue(try optionalDirectoryJSONString(invocationCarrier["descriptor_ref"], "descriptor_ref")?
+            .contains("events.invocation.subscribe") == true)
+
+        let page = try await events.listDeviceEvents(EventsDeviceEventListRequest(
+            base: eventsCarrierBase(metadata: ["request_id": .string("events-device-history-1")]),
+            filter: EventFilter(deviceURA: "easynet:///r/example/device/dev-a"),
+            deviceURA: "easynet:///r/example/device/dev-a"
+        ))
+        XCTAssertEqual(page.limit, 50)
+        XCTAssertEqual(page.items.first?.stream, "device")
+
+        let directoryFrame = try await events.projectDirectoryEvent(EventProjectionInput(
+            cursor: EventCursor(stream: "directory", sequence: 8),
+            event: ["type": .string("agent_advertised")]
+        ))
+        XCTAssertEqual(directoryFrame.cursor.resumeToken(), "directory:8")
+        let live = try await events.projectLiveEvent(EventProjectionInput(
+            cursor: EventCursor(stream: "device", sequence: 8),
+            event: ["state": .string("online")]
+        ))
+        XCTAssertEqual(live.stream, "device")
+        let drop = try await events.projectDropReport(EventDropReportInput(
+            cursor: EventCursor(stream: "directory", sequence: 10),
+            occurredUnixMS: 1_783_100_000_123,
+            droppedCount: 4,
+            reconnectAfterMS: 1000,
+            reason: "consumer_lagged"
+        ))
+        XCTAssertEqual(drop.droppedCount, 4)
+        let terminal = try await events.projectTerminal(EventTerminalInput(
+            cursor: EventCursor(stream: "directory", sequence: 11),
+            occurredUnixMS: 1_783_100_000_123,
+            reason: "client_closed"
+        ))
+        XCTAssertTrue(terminal.terminal)
+
+        let stream = try await events.subscribeDirectory(directoryRequest)
+        let firstFrame = try await stream.receive()
+        let terminalFrame = try await stream.receive()
+        XCTAssertEqual(firstFrame.kind, "directory.agent_advertised")
+        XCTAssertTrue(terminalFrame.terminal)
+        XCTAssertEqual(stream.state, "Terminal")
+
+        await expectSDKError(.invalidArgument) {
+            _ = try await events.buildSessionSubscriptionInvocation(try EventsSubscriptionRequest(
+                base: base,
+                stream: "session",
+                sessionURA: "easynet:///r/example/resource/session.run-1"
+            ))
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -568,6 +662,18 @@ final class RuntimeCoreSeamTests: XCTestCase {
             causalContext: ["form": .string("none")],
             requestID: "inv-example-1",
             metadata: ["request_id": .string("receipt-fetch-1")]
+        )
+    }
+
+    private func eventsCarrierBase(metadata: [String: JSONValue]) throws -> EventsCarrierBase {
+        try EventsCarrierBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            metadata: metadata
         )
     }
 
@@ -648,6 +754,17 @@ final class DirectoryStreamSource: StreamSource, @unchecked Sendable {
             """
         ),
         try! .terminal(4, state: "Closed"),
+    ]
+
+    func next() async throws -> StreamEvent {
+        events.removeFirst()
+    }
+}
+
+final class EventsDirectoryStreamSource: StreamSource, @unchecked Sendable {
+    private var events: [StreamEvent] = [
+        try! .data(8, payloadJSON: String(decoding: fixture("event.directory.v4.json"), as: UTF8.self)),
+        try! .data(11, payloadJSON: String(decoding: fixture("event.directory-terminal.v4.json"), as: UTF8.self)),
     ]
 
     func next() async throws -> StreamEvent {
@@ -812,6 +929,66 @@ final class FixtureReceiptTransport: ReceiptTransport, @unchecked Sendable {
 }
 
 final class EmptyReceiptTransport: ReceiptTransport, @unchecked Sendable {}
+
+final class FixtureEventTransport: EventTransport, @unchecked Sendable {
+    func buildDirectorySubscriptionInvocation(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "events directory request")
+        XCTAssertEqual(try optionalDirectoryJSONString(request["stream"], "stream"), "directory")
+        return fixture("events-directory-subscription-invocation.v4.json")
+    }
+
+    func buildDeviceSubscriptionInvocation(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "events device request")
+        XCTAssertEqual(try optionalDirectoryJSONString(request["stream"], "stream"), "device")
+        return fixture("events-device-subscription-invocation.v4.json")
+    }
+
+    func buildSessionSubscriptionInvocation(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "events session request")
+        XCTAssertEqual(try optionalDirectoryJSONString(request["session_id"], "session_id"), "run-1")
+        return fixture("events-session-subscription-invocation.v4.json")
+    }
+
+    func buildInvocationSubscriptionInvocation(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "events invocation request")
+        XCTAssertEqual(try optionalDirectoryJSONString(request["invocation_id"], "invocation_id"), "inv-1")
+        return fixture("events-invocation-subscription-invocation.v4.json")
+    }
+
+    func subscribeDirectory(_ requestJSON: Data) async throws -> StreamSource {
+        EventsDirectoryStreamSource()
+    }
+
+    func listDeviceEvents(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "events device history request")
+        if case let .number(limit) = request["limit"] {
+            XCTAssertEqual(limit, 50)
+        } else {
+            XCTFail("missing event history limit")
+        }
+        return fixture("event.device-page.v4.json")
+    }
+
+    func projectDirectoryEvent(_ eventJSON: Data) async throws -> Data {
+        fixture("event.directory.v4.json")
+    }
+
+    func projectLiveEvent(_ eventJSON: Data) async throws -> Data {
+        let request = try decodeObject(eventJSON, label: "events live projection request")
+        let cursor = try requiredDirectoryObject(request, "cursor")
+        return try optionalDirectoryJSONString(cursor["stream"], "stream") == "invocation"
+            ? fixture("event.invocation-live.v4.json")
+            : fixture("event.device-live.v4.json")
+    }
+
+    func projectDropReport(_ dropJSON: Data) async throws -> Data {
+        fixture("event.directory-drop-report.v4.json")
+    }
+
+    func projectTerminal(_ terminalJSON: Data) async throws -> Data {
+        fixture("event.directory-terminal.v4.json")
+    }
+}
 
 func fixture(_ name: String) -> Data {
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
