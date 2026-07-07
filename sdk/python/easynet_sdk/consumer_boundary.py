@@ -37,6 +37,26 @@ _DIRECT_RUNTIME_SYMBOLS = {
     "DirectDaemonRuntimeConnector",
     "DirectDaemonRuntimeTransport",
 }
+_RAW_DAEMON_SOCKET_MARKERS = (
+    "control.sock",
+    "daemon.sock",
+    "easynet-control.sock",
+    "easynet-daemon.sock",
+    "unix:///tmp/easynet",
+)
+_RAW_DAEMON_SESSION_CALLS = {
+    "grpc.insecure_channel",
+    "socket.socket",
+    "asyncio.open_unix_connection",
+}
+_RUNTIME_SUBPROCESS_CALLS = {
+    "subprocess.call",
+    "subprocess.check_call",
+    "subprocess.check_output",
+    "subprocess.Popen",
+    "subprocess.run",
+}
+_RUNTIME_SUBPROCESS_TARGETS = {"easynet", "easynet-daemon"}
 
 
 @dataclass(frozen=True)
@@ -126,6 +146,8 @@ class ConsumerBoundaryAuditor:
         violations.extend(_audit_raw_ffi_markers(relative, text))
         violations.extend(_audit_raw_abi_symbols(relative, text))
         violations.extend(_audit_invocation_codec(relative, text))
+        violations.extend(_audit_raw_daemon_sessions(relative, text))
+        violations.extend(_audit_runtime_subprocess(relative, text))
         violations.extend(_audit_host_stream_codec(relative, text))
         violations.extend(_audit_receipt_chain_semantics(relative, text))
         violations.extend(_audit_context_causal_semantics(relative, text))
@@ -417,6 +439,111 @@ def _audit_invocation_codec(path: str, text: str) -> tuple[BoundaryViolation, ..
                     )
                 )
     return tuple(violations)
+
+
+def _audit_raw_daemon_sessions(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings:
+            continue
+        markers = sorted(_raw_daemon_session_markers(node))
+        if not markers:
+            continue
+        violations.append(
+            BoundaryViolation(
+                path=path,
+                rule="raw_daemon_session",
+                detail=", ".join(markers),
+                line=getattr(node, "lineno", 1),
+            )
+        )
+    return tuple(violations)
+
+
+def _raw_daemon_session_markers(node: ast.AST) -> set[str]:
+    markers: set[str] = set()
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        markers.update(
+            marker for marker in _RAW_DAEMON_SOCKET_MARKERS if marker in node.value
+        )
+    if isinstance(node, ast.Call):
+        dotted = _dotted_name(node.func)
+        if dotted in _RAW_DAEMON_SESSION_CALLS:
+            argument_markers = set()
+            for value in _string_constants_in_args(node.args):
+                argument_markers.update(
+                    marker
+                    for marker in _RAW_DAEMON_SOCKET_MARKERS
+                    if marker in value
+                )
+            for keyword in node.keywords:
+                argument_markers.update(_raw_daemon_markers_in_keyword(keyword))
+            if argument_markers:
+                markers.add(dotted)
+                markers.update(argument_markers)
+    return markers
+
+
+def _raw_daemon_markers_in_keyword(keyword: ast.keyword) -> set[str]:
+    return {
+        marker
+        for value in _string_constants_in(keyword.value)
+        for marker in _RAW_DAEMON_SOCKET_MARKERS
+        if marker in value
+    }
+
+
+def _audit_runtime_subprocess(path: str, text: str) -> tuple[BoundaryViolation, ...]:
+    violations: list[BoundaryViolation] = []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return tuple(violations)
+    docstrings = _docstring_node_ids(tree)
+    for node in ast.walk(tree):
+        if id(node) in docstrings or not isinstance(node, ast.Call):
+            continue
+        dotted = _dotted_name(node.func)
+        if dotted not in _RUNTIME_SUBPROCESS_CALLS:
+            continue
+        targets = sorted(_runtime_subprocess_targets(node))
+        if not targets:
+            continue
+        violations.append(
+            BoundaryViolation(
+                path=path,
+                rule="runtime_subprocess",
+                detail=", ".join(targets),
+                line=getattr(node, "lineno", 1),
+            )
+        )
+    return tuple(violations)
+
+
+def _runtime_subprocess_targets(node: ast.Call) -> set[str]:
+    if not node.args:
+        return set()
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return _matching_runtime_subprocess_targets({first.value})
+    if isinstance(first, (ast.List, ast.Tuple)):
+        return _matching_runtime_subprocess_targets(_string_constants_in(first))
+    return set()
+
+
+def _matching_runtime_subprocess_targets(values: set[str]) -> set[str]:
+    targets: set[str] = set()
+    for value in values:
+        executable = value.strip().split(maxsplit=1)[0]
+        executable = executable.rsplit("/", 1)[-1]
+        if executable in _RUNTIME_SUBPROCESS_TARGETS:
+            targets.add(executable)
+    return targets
 
 
 def _audit_host_stream_codec(path: str, text: str) -> tuple[BoundaryViolation, ...]:

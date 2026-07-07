@@ -23,6 +23,8 @@ expect:
     - axon_pb2
     - easynet_sdk.direct_runtime
     - DirectDaemonRuntimeTransport
+    - raw_daemon_session
+    - runtime_subprocess
     - caller_ura_json_dump
     - descriptor_ref_json_dump
   raw_lower_layer_dependency: false

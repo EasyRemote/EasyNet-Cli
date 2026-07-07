@@ -93,6 +93,48 @@ class ConsumerBoundaryAuditTests(unittest.TestCase):
         violations = [item for item in result.violations if item.rule == "raw_transport_module"]
         self.assertGreaterEqual(len(violations), 3)
 
+    def test_flags_raw_daemon_session_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "daemon_session.py").write_text(
+                textwrap.dedent(
+                    """
+                    import asyncio
+                    import grpc
+
+                    channel = grpc.insecure_channel("unix:///tmp/easynet-daemon.sock")
+                    control_path = "control.sock"
+                    reader, writer = asyncio.open_unix_connection("daemon.sock")
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_consumer_boundary(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("raw_daemon_session", _rules(result))
+
+    def test_flags_runtime_subprocess_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "daemon_process.py").write_text(
+                textwrap.dedent(
+                    """
+                    import subprocess
+
+                    subprocess.run(["easynet-daemon", "start"], check=True)
+                    subprocess.check_output("/usr/local/bin/easynet status")
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            result = audit_consumer_boundary(root)
+
+        self.assertFalse(result.ok)
+        self.assertIn("runtime_subprocess", _rules(result))
+
     def test_accepts_sdk_only_pyproject_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

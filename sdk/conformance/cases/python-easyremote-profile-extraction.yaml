@@ -49,5 +49,7 @@ expect:
     - raw_descriptor_ref_assembly
     - raw_ura_shape_literal
     - sdk_internal_runtime_transport
+    - raw_daemon_session
+    - runtime_subprocess
   raw_lower_layer_dependency: false
   product_facade_only: true

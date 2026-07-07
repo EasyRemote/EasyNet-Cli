@@ -115,9 +115,17 @@ def carrier_leaks(client, owner_ura, ability_ura, descriptor_ref):
     return owner_ura.split("/device/", 1)
 EOF
   cat >"$bad/easyremote/direct.py" <<'EOF'
+import socket
+import subprocess
+import grpc
+
 from easynet_sdk.direct_runtime import DirectDaemonRuntimeTransport
 
 transport = DirectDaemonRuntimeTransport
+channel = grpc.insecure_channel("unix:///tmp/easynet-daemon.sock")
+daemon_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+daemon_path = "control.sock"
+subprocess.Popen(["easynet-daemon", "start"])
 EOF
   cat >"$bad/easyremote/_transport/abi.py" <<'EOF'
 class LegacyTransport:
@@ -140,6 +148,8 @@ EOF
   grep -Fq "raw_ura_shape_literal" "$tmp/bad.out"
   grep -Fq "raw_descriptor_ref_assembly" "$tmp/bad.out"
   grep -Fq "sdk_internal_runtime_transport" "$tmp/bad.out"
+  grep -Fq "raw_daemon_session" "$tmp/bad.out"
+  grep -Fq "runtime_subprocess" "$tmp/bad.out"
 
   echo "check-easyremote-sdk-boundary self-test ok"
   exit 0
