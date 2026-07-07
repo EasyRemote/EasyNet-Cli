@@ -74,11 +74,32 @@
       "message": null
     },
     {
+      "case_id": "directory/subscription_stream",
+      "profile": "directory_identity",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift builds directory.subscribe carriers, projects subscription state, and opens injected Runtime Core stream handles without facade fanout."
+    },
+    {
       "case_id": "identity/ura_descriptor_projection",
       "profile": "directory_identity",
       "status": "passed",
       "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
       "message": null
+    },
+    {
+      "case_id": "receipt/fetch_carrier",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift ReceiptClient builds invocation.history.get carriers from complete request tuples and exactly one selector."
+    },
+    {
+      "case_id": "receipt/projection_causal_ref",
+      "profile": "receipt",
+      "status": "passed",
+      "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
+      "message": "Swift receipt projection refuses summary-only cryptographic claims and requires explicit receipt_ura plus receipt_hash_hex for causal refs."
     },
     {
       "case_id": "invocation/descriptor_ref_helper_delegation",
@@ -92,14 +113,14 @@
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
-      "message": "Swift declares Runtime Core, Health, and Directory + Identity P1 seams and keeps provider/product cutover outside the facade."
+      "message": "Swift declares Runtime Core, Health, Directory + Identity, and Receipt P1 seams and keeps provider/product cutover outside the facade."
     },
     {
       "case_id": "memc/no_core_bloat",
       "profile": "memc",
       "status": "passed",
       "evidence": [{"kind": "swift_test", "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"}],
-      "message": "Swift seam exposes lifecycle, invocation, runtime transport, AsyncSequence stream/bidi handles, Health DTO/client state, Directory + Identity request/projection state, and typed errors only."
+      "message": "Swift seam exposes lifecycle, invocation, runtime transport, AsyncSequence stream/bidi handles, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, and typed errors only."
     },
     {
       "case_id": "memc/profile_exclusivity",

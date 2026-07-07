@@ -271,6 +271,42 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(resolved.abilityURA, "easynet:///r/example/ability/device.dev-a.agent.list")
     }
 
+    func testDirectorySubscriptionUsesStreamLifecycle() async throws {
+        let directory = DirectoryClient(transport: FixtureDirectoryTransport())
+        let base = try DirectoryQueryBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            metadata: ["request_id": .string("directory-subscribe")]
+        )
+        let request = try DirectorySubscriptionRequest(base: base, itemKind: "ability")
+
+        let carrier = try await directory.buildDirectorySubscriptionInvocation(request)
+        XCTAssertTrue(
+            try optionalDirectoryJSONString(carrier["descriptor_ref"], "descriptor_ref")?
+                .contains("directory.subscribe") == true
+        )
+
+        let subscription = try await directory.projectSubscription(fixture("directory-subscription.v4.json"))
+        XCTAssertEqual(subscription.state, "Live")
+        XCTAssertEqual(subscription.resumeToken, "directory:3")
+        XCTAssertEqual(subscription.events.count, 3)
+        XCTAssertEqual(subscription.events.last?.phase, "live")
+
+        let stream = try await directory.subscribeDirectory(request)
+        let first = try await stream.next()
+        let terminal = try await stream.next()
+        XCTAssertTrue(first.payloadJSON.contains("\"phase\":\"live\""))
+        XCTAssertTrue(terminal.terminal)
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try DirectorySubscriptionRequest(base: base, stream: "device")
+        }
+    }
+
     func testDirectoryIdentityRejectsInvalidState() async throws {
         expectSyncSDKError(.invalidArgument) {
             _ = try DirectoryQueryBase(
@@ -337,6 +373,77 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testReceiptBuildsFetchCarrierAndProjectsSummary() async throws {
+        let receipt = ReceiptClient(transport: FixtureReceiptTransport())
+        let carrier = try receipt.buildFetchInvocation(receiptFetchRequest())
+        let expected = try decodeObject(fixture("receipt-fetch-invocation.v4.json"), label: "receipt fetch invocation")
+        XCTAssertEqual(carrier, expected)
+
+        let fetched = try await receipt.fetch(receiptFetchRequest())
+        XCTAssertEqual(fetched.state, "completed")
+        XCTAssertFalse(fetched.verified)
+
+        let projected = try receipt.project(fixture("receipt.summary.v4.json"))
+        XCTAssertEqual(projected.invocationID, "inv-example-1")
+        let verification = try receipt.verifySummary(projected)
+        XCTAssertFalse(verification.verified)
+    }
+
+    func testReceiptRejectsInvalidSelectorAndSummaryVerification() async throws {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try ReceiptFetchRequest(
+                callerURA: "easynet:///r/example/agent/alice.sdk",
+                calleeURA: "easynet:///r/example/device/dev-a",
+                descriptorRef: "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+                subjectURA: "easynet:///r/example/device/dev-a",
+                descriptorVersion: "1.0.0",
+                nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+                causalContext: ["form": .string("none")]
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try ReceiptFetchRequest(
+                callerURA: "easynet:///r/example/agent/alice.sdk",
+                calleeURA: "easynet:///r/example/device/dev-a",
+                descriptorRef: "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+                subjectURA: "easynet:///r/example/device/dev-a",
+                descriptorVersion: "1.0.0",
+                nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+                causalContext: ["form": .string("none")],
+                invocationURA: "easynet:///r/example/invocation/inv-example-1",
+                requestID: "inv-example-1"
+            )
+        }
+
+        let receipt = ReceiptClient(transport: FixtureReceiptTransport())
+        let summary = try receipt.project(fixture("receipt.summary.v4.json"))
+        let verification = try receipt.verifySummary(summary)
+        expectSyncSDKError(.invalidArgument) {
+            _ = try verification.requireCryptographic()
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try ReceiptRef.fromSummary(summary)
+        }
+    }
+
+    func testReceiptOpaqueRefRequiresExplicitAnchorFacts() async throws {
+        let ref = try ReceiptRef.fromJSON(fixture("receipt-ref.v4.json"))
+        XCTAssertEqual(ref.receiptURA, "easynet:///r/example/receipt/receipt-1")
+        XCTAssertEqual(ref.receiptHashHex.count, 64)
+        expectSyncSDKError(.invalidArgument) {
+            _ = try ReceiptRef(
+                receiptURA: "easynet:///r/example/receipt/receipt-1",
+                receiptHashHex: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                invocationID: "inv-example-1",
+                index: 0
+            )
+        }
+        let receipt = ReceiptClient(transport: EmptyReceiptTransport())
+        await expectSDKError(.notImplemented) {
+            _ = try await receipt.causalRef(ref)
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -361,6 +468,20 @@ final class RuntimeCoreSeamTests: XCTestCase {
             return
         }
         XCTFail("expected SDKError \(code)")
+    }
+
+    private func receiptFetchRequest() throws -> ReceiptFetchRequest {
+        try ReceiptFetchRequest(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            descriptorRef: "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            requestID: "inv-example-1",
+            metadata: ["request_id": .string("receipt-fetch-1")]
+        )
     }
 
 }
@@ -408,6 +529,22 @@ final class QueueStreamSource: StreamSource, @unchecked Sendable {
             return try .terminal(9999, state: "Completed")
         }
         return events.removeFirst()
+    }
+}
+
+final class DirectoryStreamSource: StreamSource, @unchecked Sendable {
+    private var events: [StreamEvent] = [
+        try! .data(
+            3,
+            payloadJSON: """
+            {"profile":"directory_identity","stream":"directory","kind":"upsert","event_id":"evt-3","phase":"live","cursor":{"stream":"directory","sequence":3,"token":"directory:3"},"resume_token":"directory:3","terminal":false,"metadata":{"source":"directory.subscribe"}}
+            """
+        ),
+        try! .terminal(4, state: "Closed"),
+    ]
+
+    func next() async throws -> StreamEvent {
+        events.removeFirst()
     }
 }
 
@@ -484,6 +621,13 @@ enum FixtureFailure: Error {
 }
 
 final class FixtureDirectoryTransport: DirectoryTransport, @unchecked Sendable {
+    func buildDirectorySubscriptionInvocation(_ requestJSON: Data) async throws -> Data {
+        let request = String(decoding: requestJSON, as: UTF8.self)
+        XCTAssertTrue(request.contains("\"stream\":\"directory\""))
+        XCTAssertFalse(request.contains("\"limit\""))
+        return fixture("directory-subscription-invocation.v4.json")
+    }
+
     func buildListDevicesInvocation(_ requestJSON: Data) async throws -> Data {
         XCTAssertTrue(String(decoding: requestJSON, as: UTF8.self).contains("\"limit\":2"))
         return fixture("directory-list-devices-invocation.v4.json")
@@ -517,6 +661,15 @@ final class FixtureDirectoryTransport: DirectoryTransport, @unchecked Sendable {
     func resolve(_ requestJSON: Data) async throws -> Data {
         fixture("directory-resolved-ref.v4.json")
     }
+
+    func subscribeDirectory(_ requestJSON: Data) async throws -> StreamSource {
+        XCTAssertTrue(String(decoding: requestJSON, as: UTF8.self).contains("\"item_kind\":\"ability\""))
+        return DirectoryStreamSource()
+    }
+
+    func projectSubscription(_ subscriptionJSON: Data) async throws -> Data {
+        subscriptionJSON
+    }
 }
 
 final class EmptyDirectoryTransport: DirectoryTransport, @unchecked Sendable {}
@@ -541,6 +694,17 @@ final class FixtureIdentityTransport: IdentityTransport, @unchecked Sendable {
         """.utf8)
     }
 }
+
+final class FixtureReceiptTransport: ReceiptTransport, @unchecked Sendable {
+    func fetch(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeObject(requestJSON, label: "receipt fetch request")
+        let expected = try decodeObject(fixture("receipt-fetch-request.v4.json"), label: "receipt fetch fixture")
+        XCTAssertEqual(request, expected)
+        return fixture("receipt.summary.v4.json")
+    }
+}
+
+final class EmptyReceiptTransport: ReceiptTransport, @unchecked Sendable {}
 
 func fixture(_ name: String) -> Data {
     let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)

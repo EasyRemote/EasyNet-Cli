@@ -24,8 +24,12 @@ public final class RuntimeCoreSeamTest {
     runtimeHealthRejectsMalformedPayload();
     runtimeHealthRejectsClosedClient();
     directoryIdentityBuildsCarriersAndProjectsReadModels();
+    directorySubscriptionUsesStreamLifecycle();
     directoryIdentityRejectsInvalidState();
     identityDescriptorHelpersDelegateToTransport();
+    receiptBuildsFetchCarrierAndProjectsSummary();
+    receiptRejectsInvalidSelectorAndSummaryVerification();
+    receiptOpaqueRefRequiresExplicitAnchorFacts();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -323,6 +327,66 @@ public final class RuntimeCoreSeamTest {
         "directory resolved ref");
   }
 
+  private static void directorySubscriptionUsesStreamLifecycle() throws Exception {
+    var directory = new DirectoryClient(new FixtureDirectoryTransport());
+    var request =
+        new DirectorySubscriptionRequest(
+            "easynet:///r/example/agent/alice.sdk",
+            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/device/dev-a",
+            "1.0.0",
+            "AQIDBAUGBwgJCgsMDQ4PEA==",
+            Map.of("form", "none"),
+            "directory",
+            null,
+            null,
+            null,
+            null,
+            null,
+            "ability",
+            null,
+            null,
+            Map.of("request_id", "directory-subscribe"));
+
+    var carrier = directory.buildDirectorySubscriptionInvocation(request);
+    check(
+        carrier.get("descriptor_ref").toString().contains("directory.subscribe"),
+        "directory subscription carrier");
+
+    var projection = directory.projectSubscription(fixture("directory-subscription.v4.json"));
+    check(projection.state().equals("Live"), "directory subscription state");
+    check(projection.resumeToken().equals("directory:3"), "directory subscription cursor");
+    check(projection.events().size() == 3, "directory subscription buffered events");
+    check(projection.events().get(2).phase().equals("live"), "directory subscription live event");
+
+    var stream = directory.subscribeDirectory(request);
+    var first = stream.next();
+    var second = stream.next();
+    check(first.payloadJson().contains("\"phase\":\"live\""), "directory subscription stream event");
+    check(second.terminal(), "directory subscription stream terminal");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new DirectorySubscriptionRequest(
+                request.callerURA(),
+                request.calleeURA(),
+                request.subjectURA(),
+                request.descriptorVersion(),
+                request.nonceBase64(),
+                request.causalContext(),
+                "device",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Map.of()));
+  }
+
   private static void directoryIdentityRejectsInvalidState() throws Exception {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
@@ -386,6 +450,92 @@ public final class RuntimeCoreSeamTest {
                 new DescriptorRefRequest(
                     "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                     Map.of())));
+  }
+
+  private static void receiptBuildsFetchCarrierAndProjectsSummary() throws Exception {
+    var client = new ReceiptClient(new FixtureReceiptTransport());
+    var carrier = client.buildFetchInvocation(receiptFetchRequest());
+    var expected = JsonValueReader.object(fixture("receipt-fetch-invocation.v4.json"), "receipt fetch invocation");
+    check(carrier.equals(expected), "receipt fetch carrier");
+
+    var fetched = client.fetch(receiptFetchRequest());
+    check(fetched.state().equals("completed"), "receipt fetch summary state");
+    check(!fetched.verified(), "receipt fetch summary is not cryptographic proof");
+
+    var projected = client.project(fixture("receipt.summary.v4.json"));
+    check(projected.invocationID().equals("inv-example-1"), "receipt projection invocation id");
+    check(!client.verifySummary(projected).verified(), "receipt summary verification claim");
+  }
+
+  private static void receiptRejectsInvalidSelectorAndSummaryVerification() throws Exception {
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new ReceiptFetchRequest(
+                "easynet:///r/example/agent/alice.sdk",
+                "easynet:///r/example/device/dev-a",
+                "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+                "easynet:///r/example/device/dev-a",
+                "1.0.0",
+                "AQIDBAUGBwgJCgsMDQ4PEA==",
+                Map.of("form", "none"),
+                "",
+                "",
+                "",
+                Map.of()));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new ReceiptFetchRequest(
+                "easynet:///r/example/agent/alice.sdk",
+                "easynet:///r/example/device/dev-a",
+                "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+                "easynet:///r/example/device/dev-a",
+                "1.0.0",
+                "AQIDBAUGBwgJCgsMDQ4PEA==",
+                Map.of("form", "none"),
+                "easynet:///r/example/invocation/inv-example-1",
+                "inv-example-1",
+                "",
+                Map.of()));
+
+    var client = new ReceiptClient(new FixtureReceiptTransport());
+    var summary = client.project(fixture("receipt.summary.v4.json"));
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> client.verifySummary(summary).requireCryptographic());
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> ReceiptRef.fromSummary(summary));
+  }
+
+  private static void receiptOpaqueRefRequiresExplicitAnchorFacts() throws Exception {
+    var ref = ReceiptRef.fromJSON(fixture("receipt-ref.v4.json"));
+    check(ref.receiptURA().equals("easynet:///r/example/receipt/receipt-1"), "receipt ref URA");
+    check(ref.receiptHashHex().length() == 64, "receipt ref hash");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new ReceiptRef(
+                "easynet:///r/example/receipt/receipt-1",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "inv-example-1",
+                "",
+                0,
+                Map.of()));
+    var client = new ReceiptClient(new ReceiptTransport() {});
+    expectSDKError(ErrorCode.NOT_IMPLEMENTED, () -> client.causalRef(ref));
+  }
+
+  private static ReceiptFetchRequest receiptFetchRequest() {
+    return new ReceiptFetchRequest(
+        "easynet:///r/example/agent/alice.sdk",
+        "easynet:///r/example/device/dev-a",
+        "easynet:///r/example/ability/device.dev-a.invocation.history.get@1.0.0",
+        "easynet:///r/example/device/dev-a",
+        "1.0.0",
+        "AQIDBAUGBwgJCgsMDQ4PEA==",
+        Map.of("form", "none"),
+        "",
+        "inv-example-1",
+        "",
+        Map.of("request_id", "receipt-fetch-1"));
   }
 
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
@@ -487,6 +637,25 @@ public final class RuntimeCoreSeamTest {
     }
   }
 
+  private static final class QueueDirectoryStreamSource implements StreamSource {
+    private final ArrayDeque<StreamEvent> events = new ArrayDeque<>();
+
+    QueueDirectoryStreamSource() {
+      events.add(
+          StreamEvent.data(
+              3,
+              """
+              {"profile":"directory_identity","stream":"directory","kind":"upsert","event_id":"evt-3","phase":"live","cursor":{"stream":"directory","sequence":3,"token":"directory:3"},"resume_token":"directory:3","terminal":false,"metadata":{"source":"directory.subscribe"}}
+              """));
+      events.add(StreamEvent.terminal(4, "Closed"));
+    }
+
+    @Override
+    public StreamEvent next() {
+      return events.removeFirst();
+    }
+  }
+
   private static final class QueueBidiSource implements BidiSource {
     private final ArrayDeque<BidiFrame> frames = new ArrayDeque<>();
 
@@ -552,6 +721,14 @@ public final class RuntimeCoreSeamTest {
 
   private static final class FixtureDirectoryTransport implements DirectoryTransport {
     @Override
+    public byte[] buildDirectorySubscriptionInvocation(byte[] requestJSON) {
+      String request = new String(requestJSON, StandardCharsets.UTF_8);
+      check(request.contains("\"stream\":\"directory\""), "directory subscription stream");
+      check(!request.contains("\"limit\""), "directory subscription omits pagination limit");
+      return fixture("directory-subscription-invocation.v4.json");
+    }
+
+    @Override
     public byte[] buildListDevicesInvocation(byte[] requestJSON) {
       check(new String(requestJSON, StandardCharsets.UTF_8).contains("\"limit\":2"), "device request limit");
       return fixture("directory-list-devices-invocation.v4.json");
@@ -593,6 +770,18 @@ public final class RuntimeCoreSeamTest {
     public byte[] resolve(byte[] requestJSON) {
       return fixture("directory-resolved-ref.v4.json");
     }
+
+    @Override
+    public StreamSource subscribeDirectory(byte[] requestJSON) {
+      String request = new String(requestJSON, StandardCharsets.UTF_8);
+      check(request.contains("\"item_kind\":\"ability\""), "directory subscription item kind");
+      return new QueueDirectoryStreamSource();
+    }
+
+    @Override
+    public byte[] projectSubscription(byte[] subscriptionJSON) {
+      return subscriptionJSON;
+    }
   }
 
   private static final class FixtureIdentityTransport implements IdentityTransport {
@@ -618,6 +807,15 @@ public final class RuntimeCoreSeamTest {
             "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"
           }
           """);
+    }
+  }
+
+  private static final class FixtureReceiptTransport implements ReceiptTransport {
+    @Override
+    public byte[] fetch(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "receipt fetch request");
+      check(request.equals(JsonValueReader.object(fixture("receipt-fetch-request.v4.json"), "receipt fetch fixture")), "receipt fetch request");
+      return fixture("receipt.summary.v4.json");
     }
   }
 }

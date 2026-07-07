@@ -1,6 +1,11 @@
 package run.easynet.daemon;
 
 public interface DirectoryTransport extends AutoCloseable {
+  default byte[] buildDirectorySubscriptionInvocation(byte[] requestJSON) {
+    throw DirectoryIdentitySupport.notImplemented(
+        "directory buildDirectorySubscriptionInvocation is not available");
+  }
+
   default byte[] buildListDevicesInvocation(byte[] requestJSON) {
     throw DirectoryIdentitySupport.notImplemented(
         "directory buildListDevicesInvocation is not available");
@@ -35,6 +40,14 @@ public interface DirectoryTransport extends AutoCloseable {
 
   default byte[] listAbilities(byte[] requestJSON) {
     throw DirectoryIdentitySupport.notImplemented("directory listAbilities is not available");
+  }
+
+  default StreamSource subscribeDirectory(byte[] requestJSON) {
+    throw DirectoryIdentitySupport.notImplemented("directory subscribeDirectory is not available");
+  }
+
+  default byte[] projectSubscription(byte[] subscriptionJSON) {
+    throw DirectoryIdentitySupport.notImplemented("directory projectSubscription is not available");
   }
 
   @Override

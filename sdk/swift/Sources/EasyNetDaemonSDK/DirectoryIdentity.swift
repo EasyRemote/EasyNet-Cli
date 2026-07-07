@@ -150,6 +150,204 @@ public struct AbilityQuery: Sendable, Equatable {
     }
 }
 
+public struct DirectorySubscriptionCursor: Sendable, Equatable {
+    public let stream: String
+    public let sequence: Int
+    public let token: String
+
+    public init(stream: String = "directory", sequence: Int, token: String = "") throws {
+        self.stream = try cleanDirectoryString(stream, "stream")
+        guard self.stream == "directory" else {
+            throw invalidDirectory("directory subscription cursor stream mismatch")
+        }
+        guard sequence >= 0 else {
+            throw invalidDirectory("directory subscription cursor sequence must be non-negative")
+        }
+        let resolvedToken = token.isEmpty ? "\(self.stream):\(sequence)" : try cleanDirectoryString(token, "token")
+        guard resolvedToken == "\(self.stream):\(sequence)" else {
+            throw invalidDirectory("directory subscription cursor token mismatch")
+        }
+        self.sequence = sequence
+        self.token = resolvedToken
+    }
+
+    public func resumeToken() -> String {
+        token
+    }
+
+    func jsonObject() -> [String: JSONValue] {
+        [
+            "stream": .string(stream),
+            "sequence": .number(Double(sequence)),
+            "token": .string(token),
+        ]
+    }
+
+    static func fromObject(_ object: [String: JSONValue]) throws -> DirectorySubscriptionCursor {
+        try DirectorySubscriptionCursor(
+            stream: requiredDirectoryString(object, "stream"),
+            sequence: requiredDirectoryInt(object, "sequence"),
+            token: requiredDirectoryString(object, "token")
+        )
+    }
+}
+
+public struct DirectorySubscriptionRequest: Sendable, Equatable {
+    public let base: DirectoryQueryBase
+    public let stream: String
+    public let realm: String
+    public let ownerURA: String
+    public let deviceURA: String
+    public let agentURA: String
+    public let abilityURA: String
+    public let itemKind: String
+    public let resumeCursor: DirectorySubscriptionCursor?
+    public let heartbeatIntervalMS: Int?
+    public let metadata: [String: JSONValue]
+
+    public init(
+        base: DirectoryQueryBase,
+        stream: String = "directory",
+        realm: String = "",
+        ownerURA: String = "",
+        deviceURA: String = "",
+        agentURA: String = "",
+        abilityURA: String = "",
+        itemKind: String = "",
+        resumeCursor: DirectorySubscriptionCursor? = nil,
+        heartbeatIntervalMS: Int? = nil,
+        metadata: [String: JSONValue] = [:]
+    ) throws {
+        guard base.limit == 0, base.cursor.isEmpty else {
+            throw invalidDirectory("directory subscription uses resume_cursor, not pagination cursor")
+        }
+        self.base = base
+        self.stream = try cleanDirectoryString(stream, "stream")
+        guard self.stream == "directory" else {
+            throw invalidDirectory("directory subscription stream mismatch")
+        }
+        self.realm = try optionalDirectoryString(realm, "realm")
+        self.ownerURA = try optionalDirectoryString(ownerURA, "owner_ura")
+        self.deviceURA = try optionalDirectoryString(deviceURA, "device_ura")
+        self.agentURA = try optionalDirectoryString(agentURA, "agent_ura")
+        self.abilityURA = try optionalDirectoryString(abilityURA, "ability_ura")
+        self.itemKind = try optionalDirectoryString(itemKind, "item_kind")
+        self.resumeCursor = resumeCursor
+        if let heartbeatIntervalMS, heartbeatIntervalMS < 0 {
+            throw invalidDirectory("heartbeat_interval_ms must be non-negative")
+        }
+        self.heartbeatIntervalMS = heartbeatIntervalMS
+        self.metadata = metadata
+    }
+
+    func jsonData() throws -> Data {
+        var object = try base.jsonObject(requireLimit: false)
+        object["stream"] = .string(stream)
+        if !realm.isEmpty { object["realm"] = .string(realm) }
+        if !ownerURA.isEmpty { object["owner_ura"] = .string(ownerURA) }
+        if !deviceURA.isEmpty { object["device_ura"] = .string(deviceURA) }
+        if !agentURA.isEmpty { object["agent_ura"] = .string(agentURA) }
+        if !abilityURA.isEmpty { object["ability_ura"] = .string(abilityURA) }
+        if !itemKind.isEmpty { object["item_kind"] = .string(itemKind) }
+        if let resumeCursor { object["resume_cursor"] = .object(resumeCursor.jsonObject()) }
+        if let heartbeatIntervalMS {
+            object["heartbeat_interval_ms"] = .number(Double(heartbeatIntervalMS))
+        }
+        let mergedMetadata = metadata.isEmpty ? base.metadata : metadata
+        if !mergedMetadata.isEmpty { object["metadata"] = .object(mergedMetadata) }
+        return try encodeJSONObject(object)
+    }
+}
+
+public struct DirectorySubscription: Sendable, Equatable {
+    public static let maxBufferedEvents = 1024
+
+    public let profile: String
+    public let kind: String
+    public let stream: String
+    public let state: String
+    public let cursor: DirectorySubscriptionCursor
+    public let resumeToken: String
+    public let dropCount: Int
+    public let events: [Event]
+    public let metadata: [String: JSONValue]
+
+    public static func fromJSON(_ raw: Data) throws -> DirectorySubscription {
+        let object = try decodeDirectoryObject(raw, label: "directory subscription JSON")
+        let events = try requiredDirectoryArray(object, "events").map { value -> Event in
+            guard case let .object(eventObject) = value else {
+                throw invalidDirectory("directory subscription event must be an object")
+            }
+            return try Event.fromObject(eventObject)
+        }
+        let subscription = try DirectorySubscription(
+            profile: requiredDirectoryString(object, "profile"),
+            kind: requiredDirectoryString(object, "kind"),
+            stream: requiredDirectoryString(object, "stream"),
+            state: requiredDirectoryString(object, "state"),
+            cursor: DirectorySubscriptionCursor.fromObject(requiredDirectoryObject(object, "cursor")),
+            resumeToken: requiredDirectoryString(object, "resume_token"),
+            dropCount: requiredDirectoryInt(object, "drop_count"),
+            events: events,
+            metadata: requiredDirectoryObject(object, "metadata")
+        )
+        try subscription.validate()
+        return subscription
+    }
+
+    private func validate() throws {
+        guard profile == directoryIdentityProfile, kind == "directory_subscription", stream == "directory" else {
+            throw invalidDirectory("directory subscription projection mismatch")
+        }
+        guard ["Opening", "CatchingUp", "Live", "Resuming", "Closed", "Failed"].contains(state) else {
+            throw invalidDirectory("directory subscription state is unsupported")
+        }
+        guard resumeToken == cursor.resumeToken() else {
+            throw invalidDirectory("directory subscription resume token mismatch")
+        }
+        guard dropCount >= 0, events.count <= DirectorySubscription.maxBufferedEvents else {
+            throw invalidDirectory("directory subscription buffered events exceeds bounds")
+        }
+    }
+
+    public struct Event: Sendable, Equatable {
+        public let profile: String
+        public let stream: String
+        public let kind: String
+        public let eventID: String
+        public let phase: String
+        public let itemKind: String?
+        public let item: [String: JSONValue]?
+        public let cursor: DirectorySubscriptionCursor
+        public let resumeToken: String
+        public let terminal: Bool
+        public let metadata: [String: JSONValue]
+
+        static func fromObject(_ object: [String: JSONValue]) throws -> Event {
+            let event = try Event(
+                profile: requiredDirectoryString(object, "profile"),
+                stream: requiredDirectoryString(object, "stream"),
+                kind: requiredDirectoryString(object, "kind"),
+                eventID: requiredDirectoryString(object, "event_id"),
+                phase: requiredDirectoryString(object, "phase"),
+                itemKind: optionalDirectoryJSONString(object["item_kind"], "item_kind"),
+                item: optionalDirectoryObject(object["item"], "item"),
+                cursor: DirectorySubscriptionCursor.fromObject(requiredDirectoryObject(object, "cursor")),
+                resumeToken: requiredDirectoryString(object, "resume_token"),
+                terminal: requiredDirectoryBool(object, "terminal"),
+                metadata: requiredDirectoryObject(object, "metadata")
+            )
+            guard event.profile == directoryIdentityProfile, event.stream == "directory" else {
+                throw invalidDirectory("directory subscription event projection mismatch")
+            }
+            guard event.resumeToken == event.cursor.resumeToken() else {
+                throw invalidDirectory("directory subscription event resume token mismatch")
+            }
+            return event
+        }
+    }
+}
+
 public struct DirectoryPage: Sendable, Equatable {
     public let profile: String
     public let kind: String
@@ -234,6 +432,7 @@ public struct ResolvedRef: Sendable, Equatable {
 }
 
 public protocol DirectoryTransport: AnyObject, Sendable {
+    func buildDirectorySubscriptionInvocation(_ requestJSON: Data) async throws -> Data
     func buildListDevicesInvocation(_ requestJSON: Data) async throws -> Data
     func buildListAgentsInvocation(_ requestJSON: Data) async throws -> Data
     func buildListAbilitiesInvocation(_ requestJSON: Data) async throws -> Data
@@ -242,10 +441,13 @@ public protocol DirectoryTransport: AnyObject, Sendable {
     func listAgents(_ requestJSON: Data) async throws -> Data
     func listAbilities(_ requestJSON: Data) async throws -> Data
     func resolve(_ requestJSON: Data) async throws -> Data
+    func subscribeDirectory(_ requestJSON: Data) async throws -> StreamSource
+    func projectSubscription(_ subscriptionJSON: Data) async throws -> Data
     func close() async throws
 }
 
 public extension DirectoryTransport {
+    func buildDirectorySubscriptionInvocation(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory subscription invocation transport is not available") }
     func buildListDevicesInvocation(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory list-devices invocation transport is not available") }
     func buildListAgentsInvocation(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory list-agents invocation transport is not available") }
     func buildListAbilitiesInvocation(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory list-abilities invocation transport is not available") }
@@ -254,6 +456,8 @@ public extension DirectoryTransport {
     func listAgents(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory list-agents transport is not available") }
     func listAbilities(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory list-abilities transport is not available") }
     func resolve(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("directory resolve transport is not available") }
+    func subscribeDirectory(_ requestJSON: Data) async throws -> StreamSource { throw directoryUnsupported("directory subscribe transport is not available") }
+    func projectSubscription(_ subscriptionJSON: Data) async throws -> Data { throw directoryUnsupported("directory project subscription transport is not available") }
     func close() async throws {}
 }
 
@@ -279,6 +483,33 @@ public final class DirectoryClient: @unchecked Sendable {
 
     public func buildResolveInvocation(_ query: ResolveQuery) async throws -> [String: JSONValue] {
         try await carrier { try await transport.buildResolveInvocation(query.jsonData()) }
+    }
+
+    public func buildDirectorySubscriptionInvocation(_ request: DirectorySubscriptionRequest) async throws -> [String: JSONValue] {
+        try await carrier { try await transport.buildDirectorySubscriptionInvocation(request.jsonData()) }
+    }
+
+    public func subscribeDirectory(_ request: DirectorySubscriptionRequest) async throws -> StreamHandle {
+        try requireOpen()
+        do {
+            return StreamHandle(source: try await transport.subscribeDirectory(request.jsonData()))
+        } catch let error as SDKError {
+            throw error
+        } catch {
+            throw SDKError(
+                code: .transport,
+                stage: "transport",
+                retryHint: .safe,
+                retryable: true,
+                message: "directory subscribe transport failed",
+                details: ["profile": directoryIdentityProfile]
+            )
+        }
+    }
+
+    public func projectSubscription(_ subscriptionJSON: Data) async throws -> DirectorySubscription {
+        let data = try await raw { try await transport.projectSubscription(subscriptionJSON) }
+        return try DirectorySubscription.fromJSON(data)
     }
 
     public func listDevices(_ query: DirectoryQueryBase) async throws -> DirectoryPage {

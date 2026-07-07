@@ -258,6 +258,9 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryQueryBase.java \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryResolveRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryResolvedRef.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectorySubscription.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectorySubscriptionCursor.java \
+  sdk/java/src/main/java/run/easynet/daemon/DirectorySubscriptionRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorClass.java \
   sdk/java/src/main/java/run/easynet/daemon/ErrorCode.java \
@@ -278,6 +281,13 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueReader.java \
   sdk/java/src/main/java/run/easynet/daemon/JsonValueWriter.java \
   sdk/java/src/main/java/run/easynet/daemon/OwnerAbilityRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptFetchRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptRef.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptSummary.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/ReceiptVerification.java \
   sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
   sdk/java/src/main/java/run/easynet/daemon/ResolveQuery.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
@@ -297,6 +307,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/Receipt.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Stream.swift \

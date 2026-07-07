@@ -254,11 +254,14 @@ func jsonValue(_ value: Any) throws -> JSONValue {
     if value is NSNull {
         return .null
     }
+    if let number = value as? NSNumber {
+        if CFGetTypeID(number) == CFBooleanGetTypeID() {
+            return .bool(number.boolValue)
+        }
+        return .number(number.doubleValue)
+    }
     if let bool = value as? Bool {
         return .bool(bool)
-    }
-    if let number = value as? NSNumber {
-        return .number(number.doubleValue)
     }
     if let string = value as? String {
         return .string(string)

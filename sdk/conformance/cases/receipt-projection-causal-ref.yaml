@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Receipt projection normalizes summary DTOs, refuses to claim summary-only cryptographic verification, and builds causal refs only from explicit opaque receipt URA plus hash facts.
 steps:
   - action: project_receipt_summary

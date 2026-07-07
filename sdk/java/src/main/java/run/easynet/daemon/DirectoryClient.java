@@ -42,6 +42,39 @@ public final class DirectoryClient implements AutoCloseable {
     return buildCarrier(query.toJSON(), transport::buildResolveInvocation, "directory resolve carrier failed");
   }
 
+  public Map<String, Object> buildDirectorySubscriptionInvocation(
+      DirectorySubscriptionRequest request) {
+    Objects.requireNonNull(request, "request");
+    return buildCarrier(
+        request.toJSON(),
+        transport::buildDirectorySubscriptionInvocation,
+        "directory subscription carrier failed");
+  }
+
+  public StreamHandle subscribeDirectory(DirectorySubscriptionRequest request) {
+    requireOpen();
+    Objects.requireNonNull(request, "request");
+    try {
+      return new StreamHandle(transport.subscribeDirectory(request.toJSON()));
+    } catch (SDKError error) {
+      throw error;
+    } catch (RuntimeException error) {
+      throw transportFailure("directory subscribe transport failed", error);
+    }
+  }
+
+  public DirectorySubscription projectSubscription(byte[] subscriptionJSON) {
+    requireOpen();
+    Objects.requireNonNull(subscriptionJSON, "subscriptionJSON");
+    try {
+      return DirectorySubscription.fromJSON(transport.projectSubscription(subscriptionJSON));
+    } catch (SDKError error) {
+      throw error;
+    } catch (RuntimeException error) {
+      throw transportFailure("directory project subscription transport failed", error);
+    }
+  }
+
   public DirectoryPage listDevices(DirectoryListRequest request) {
     return listPage(request, transport::listDevices, "directory list devices transport failed");
   }

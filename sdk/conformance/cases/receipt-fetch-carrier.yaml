@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Receipt fetch builds a complete Invocation carrier over daemon invocation.history.get instead of opening the ledger or fabricating receipt URAs.
 steps:
   - action: build_receipt_fetch_invocation
