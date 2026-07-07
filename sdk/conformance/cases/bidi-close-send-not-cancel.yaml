@@ -1,4 +1,4 @@
-id: stream_bidi/lifecycle_state
+id: bidi/close_send_not_cancel
 profile: runtime_core
 required_for:
   - rust
@@ -8,13 +8,8 @@ required_for:
   - node
   - java
   - swift
-description: Stream close and bidi close-send preserve owner scoping, distinguish local release from cancel, and keep bidi receive state alive after local half-close.
+description: Runtime Core bidi close-send is a local half-close, not cancellation, and keeps the receive side alive until a terminal frame or close.
 steps:
-  - action: open_stream
-    fixture: invocation.complete.v4.json
-  - action: project_stream_terminal_event
-    schema: stream-event.schema.json
-  - action: close_stream
   - action: open_bidi
     fixture: invocation.complete.v4.json
   - action: project_bidi_terminal_frame
@@ -23,11 +18,8 @@ steps:
   - action: send_bidi_after_close_send
   - action: close_bidi
 expect:
-  result: lifecycle_observed
-  stream_terminal_schema: stream-event.schema.json
+  result: bidi_half_close_observed
   bidi_terminal_schema: bidi-frame.schema.json
-  stream_close_unknown_is_idempotent: true
-  stream_cross_owner_close_error: ERR_INVALID_HANDLE
   bidi_close_send_keeps_session_registered: true
   bidi_close_send_unknown_error: ERR_INVALID_HANDLE
   bidi_send_after_close_send_error: ERR_CANCELLED

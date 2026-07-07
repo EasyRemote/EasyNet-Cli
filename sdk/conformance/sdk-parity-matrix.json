@@ -112,7 +112,7 @@
     {
       "capability_id": "unary_invoke",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-handle-terminal-monotonicity.yaml"],
+      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-terminal-monotonicity.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -126,7 +126,7 @@
     {
       "capability_id": "stream",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/stream-bidi-lifecycle-state.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
+      "shared_cases": ["sdk/conformance/cases/stream-order-terminal.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/stream_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
@@ -140,7 +140,7 @@
     {
       "capability_id": "bidi",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/stream-bidi-lifecycle-state.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
+      "shared_cases": ["sdk/conformance/cases/bidi-close-send-not-cancel.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/bidi_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]

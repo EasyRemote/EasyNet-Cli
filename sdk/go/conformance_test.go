@@ -662,8 +662,8 @@ func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing
 		t.Fatalf("local signing did not produce SignedInvocation boundary")
 	}
 
-	terminalCase := sharedCase(t, root, "invocation-handle-terminal-monotonicity.yaml")
-	requireCaseID(t, terminalCase, "invocation/handle_terminal_monotonicity")
+	terminalCase := sharedCase(t, root, "invocation-terminal-monotonicity.yaml")
+	requireCaseID(t, terminalCase, "invocation/terminal_monotonicity")
 	for _, action := range []string{
 		"prepare_complete_tuple",
 		"sign_prepared",
@@ -698,36 +698,49 @@ func TestGoRuntimeCoreExecutesSharedInvocationSigningConformanceCases(t *testing
 
 func TestGoRuntimeCoreExecutesSharedStreamBidiLifecycleConformanceCase(t *testing.T) {
 	root := repositoryRoot(t)
-	lifecycleCase := sharedCase(t, root, "stream-bidi-lifecycle-state.yaml")
-	requireCaseID(t, lifecycleCase, "stream_bidi/lifecycle_state")
+	streamCase := sharedCase(t, root, "stream-order-terminal.yaml")
+	requireCaseID(t, streamCase, "stream/order_terminal")
 	for _, action := range []string{
 		"open_stream",
 		"project_stream_terminal_event",
 		"close_stream",
+	} {
+		requireCaseAction(t, streamCase, action)
+	}
+	requireCaseFixture(t, streamCase, "invocation.complete.v4.json")
+	for _, expected := range []string{
+		"stream_terminal_schema: stream-event.schema.json",
+		"terminal_event_count: 1",
+		"stream_close_unknown_is_idempotent: true",
+		"stream_cross_owner_close_error: ERR_INVALID_HANDLE",
+	} {
+		requireCaseExpectation(t, streamCase, expected)
+	}
+
+	bidiCase := sharedCase(t, root, "bidi-close-send-not-cancel.yaml")
+	requireCaseID(t, bidiCase, "bidi/close_send_not_cancel")
+	for _, action := range []string{
 		"open_bidi",
 		"project_bidi_terminal_frame",
 		"close_bidi_send",
 		"send_bidi_after_close_send",
 		"close_bidi",
 	} {
-		requireCaseAction(t, lifecycleCase, action)
+		requireCaseAction(t, bidiCase, action)
 	}
-	requireCaseFixture(t, lifecycleCase, "invocation.complete.v4.json")
+	requireCaseFixture(t, bidiCase, "invocation.complete.v4.json")
 	for _, expected := range []string{
-		"stream_terminal_schema: stream-event.schema.json",
 		"bidi_terminal_schema: bidi-frame.schema.json",
-		"stream_close_unknown_is_idempotent: true",
-		"stream_cross_owner_close_error: ERR_INVALID_HANDLE",
 		"bidi_close_send_keeps_session_registered: true",
 		"bidi_close_send_unknown_error: ERR_INVALID_HANDLE",
 		"bidi_send_after_close_send_error: ERR_CANCELLED",
 		"bidi_close_releases_session: true",
 	} {
-		requireCaseExpectation(t, lifecycleCase, expected)
+		requireCaseExpectation(t, bidiCase, expected)
 	}
 
 	if _, err := NewInvocationDraftFromJSON(sharedFixture(t, root, "invocation.complete.v4.json")); err != nil {
-		t.Fatalf("NewInvocationDraftFromJSON(stream-bidi fixture): %v", err)
+		t.Fatalf("NewInvocationDraftFromJSON(stream/bidi fixture): %v", err)
 	}
 
 	terminalStream, err := NewStreamHandleFromJSON(StreamTransportFunc{

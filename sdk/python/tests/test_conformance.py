@@ -1869,8 +1869,8 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertFalse(local_signed.prepared.submit_ready())
         self.assertIsInstance(local_signed, SignedInvocation)
 
-        terminal_case = shared_case("invocation-handle-terminal-monotonicity.yaml")
-        self._require_case_id(terminal_case, "invocation/handle_terminal_monotonicity")
+        terminal_case = shared_case("invocation-terminal-monotonicity.yaml")
+        self._require_case_id(terminal_case, "invocation/terminal_monotonicity")
         for action in (
             "prepare_complete_tuple",
             "sign_prepared",
@@ -1899,31 +1899,42 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertTrue(events.events[0].terminal)
 
     def test_python_runtime_core_executes_shared_stream_bidi_lifecycle_conformance_case(self) -> None:
-        lifecycle_case = shared_case("stream-bidi-lifecycle-state.yaml")
-        self._require_case_id(lifecycle_case, "stream_bidi/lifecycle_state")
+        stream_case = shared_case("stream-order-terminal.yaml")
+        self._require_case_id(stream_case, "stream/order_terminal")
         for action in (
             "open_stream",
             "project_stream_terminal_event",
             "close_stream",
+        ):
+            self._require_case_action(stream_case, action)
+        self._require_case_fixture(stream_case, "invocation.complete.v4.json")
+        for expectation in (
+            "stream_terminal_schema: stream-event.schema.json",
+            "terminal_event_count: 1",
+            "stream_close_unknown_is_idempotent: true",
+            "stream_cross_owner_close_error: ERR_INVALID_HANDLE",
+        ):
+            self._require_case_expectation(stream_case, expectation)
+
+        bidi_case = shared_case("bidi-close-send-not-cancel.yaml")
+        self._require_case_id(bidi_case, "bidi/close_send_not_cancel")
+        for action in (
             "open_bidi",
             "project_bidi_terminal_frame",
             "close_bidi_send",
             "send_bidi_after_close_send",
             "close_bidi",
         ):
-            self._require_case_action(lifecycle_case, action)
-        self._require_case_fixture(lifecycle_case, "invocation.complete.v4.json")
+            self._require_case_action(bidi_case, action)
+        self._require_case_fixture(bidi_case, "invocation.complete.v4.json")
         for expectation in (
-            "stream_terminal_schema: stream-event.schema.json",
             "bidi_terminal_schema: bidi-frame.schema.json",
-            "stream_close_unknown_is_idempotent: true",
-            "stream_cross_owner_close_error: ERR_INVALID_HANDLE",
             "bidi_close_send_keeps_session_registered: true",
             "bidi_close_send_unknown_error: ERR_INVALID_HANDLE",
             "bidi_send_after_close_send_error: ERR_CANCELLED",
             "bidi_close_releases_session: true",
         ):
-            self._require_case_expectation(lifecycle_case, expectation)
+            self._require_case_expectation(bidi_case, expectation)
 
         InvocationDraft.from_json(shared_fixture("invocation.complete.v4.json"))
 

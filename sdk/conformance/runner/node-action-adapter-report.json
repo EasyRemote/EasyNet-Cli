@@ -232,7 +232,7 @@
       "message": null
     },
     {
-      "case_id": "invocation/handle_terminal_monotonicity",
+      "case_id": "invocation/terminal_monotonicity",
       "profile": "runtime_core",
       "status": "passed",
       "evidence": [
@@ -328,7 +328,7 @@
       "message": null
     },
     {
-      "case_id": "stream_bidi/lifecycle_state",
+      "case_id": "stream/order_terminal",
       "profile": "runtime_core",
       "status": "passed",
       "evidence": [
@@ -337,7 +337,19 @@
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": "Node Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
+    },
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
     },
     {
       "case_id": "surface/page_carriers",

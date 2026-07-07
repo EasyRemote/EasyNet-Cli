@@ -1,4 +1,4 @@
-id: invocation/handle_terminal_monotonicity
+id: invocation/terminal_monotonicity
 profile: runtime_core
 required_for:
   - rust

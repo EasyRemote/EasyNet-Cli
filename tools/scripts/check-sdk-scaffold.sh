@@ -787,7 +787,7 @@ case_files=(
   daemon-control-only.yaml
   invocation-complete-tuple.yaml
   invocation-builder-handle-state.yaml
-  invocation-handle-terminal-monotonicity.yaml
+  invocation-terminal-monotonicity.yaml
   invocation-canonical-material.yaml
   invocation-prepared-not-submittable.yaml
   invocation-presigned-submit.yaml
@@ -803,7 +803,8 @@ case_files=(
   receipt-fetch-carrier.yaml
   receipt-projection-causal-ref.yaml
   receipt-axon-chain-verification.yaml
-  stream-bidi-lifecycle-state.yaml
+  stream-order-terminal.yaml
+  bidi-close-send-not-cancel.yaml
   stream-backpressure-bound.yaml
   host-binding-codec-hash.yaml
   publication-resource-carriers.yaml
