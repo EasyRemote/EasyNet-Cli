@@ -64,6 +64,9 @@ export const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50;
 export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
+export const AUTHORITY_PROFILE = "authority";
+export const DELEGATION_METADATA_KEY = "x-easynet-delegation";
+export const SESSION_AUTHORITY_METADATA_KEY = "x-easynet-session-authority";
 export const EVENTS_PROFILE = "events";
 export const MISSION_PROFILE = "mission";
 export const ADMIN_GATEWAY_PROFILE = "admin_gateway";
@@ -462,6 +465,232 @@ export class IdentityClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("identity client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class AuthorityMetadata {
+  constructor(fields) {
+    const value = objectValue(fields, "authority metadata");
+    this.kind = requiredAuthorityString(value.kind, "kind");
+    this.key = requiredAuthorityString(value.key, "key");
+    this.value = requiredAuthorityString(value.value, "value");
+    validateAuthorityMetadataEnvelope(this.kind, this.key);
+    validateAuthorityMetadata(this.toMetadata());
+  }
+
+  toMetadata() {
+    return { [this.key]: this.value };
+  }
+
+  mergeInto(metadata = {}) {
+    const merged = { ...objectValue(metadata, "metadata"), [this.key]: this.value };
+    validateAuthorityMetadata(merged);
+    return merged;
+  }
+}
+
+export class DelegationProof {
+  constructor(fields) {
+    const value = objectValue(fields, "delegation proof");
+    this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
+    this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
+    this.callerURA = requiredAuthorityString(value.caller_ura, "caller_ura");
+    this.audience = requiredAuthorityString(value.audience, "audience");
+    this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
+    this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
+    this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
+    this.signatureBase64 = requiredAuthorityBase64(value.signature_base64, "signature_base64");
+    this.signature = Buffer.from(this.signatureBase64, "base64");
+    this.metadataValue = authorityOptionalString(value.metadata_value, "metadata_value") ?? "";
+    validateDelegationProof(this);
+  }
+
+  static fromMetadata(value) {
+    const { payload, signatureBase64 } = decodeAuthorityMetadata(value, "delegation");
+    return new DelegationProof({
+      ...payload,
+      signature_base64: signatureBase64,
+      metadata_value: value.trim(),
+    });
+  }
+
+  metadata() {
+    validateDelegationProof(this);
+    if (!this.metadataValue) {
+      throw invalidAuthority("delegation metadata value is required");
+    }
+    return new AuthorityMetadata({
+      kind: "delegation",
+      key: DELEGATION_METADATA_KEY,
+      value: this.metadataValue,
+    });
+  }
+
+  toJSON() {
+    return {
+      issuer_ura: this.issuerURA,
+      subject_ura: this.subjectURA,
+      caller_ura: this.callerURA,
+      audience: this.audience,
+      scopes: [...this.scopes],
+      issued_at_ms: this.issuedAtMS,
+      expires_at_ms: this.expiresAtMS,
+      signature_base64: this.signatureBase64,
+    };
+  }
+}
+
+export class SessionAuthority {
+  constructor(fields) {
+    const value = objectValue(fields, "session authority");
+    this.backendURA = requiredAuthorityString(value.backend_ura, "backend_ura");
+    this.userURA = requiredAuthorityString(value.user_ura, "user_ura");
+    this.sessionID = requiredAuthorityString(value.session_id, "session_id");
+    this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
+    this.audiences = requiredAuthorityStringArray(value.audiences, "audiences");
+    this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
+    this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
+    this.signatureBase64 = requiredAuthorityBase64(value.signature_base64, "signature_base64");
+    this.signature = Buffer.from(this.signatureBase64, "base64");
+    this.metadataValue = authorityOptionalString(value.metadata_value, "metadata_value") ?? "";
+    validateSessionAuthority(this);
+  }
+
+  static fromMetadata(value) {
+    const { payload, signatureBase64 } = decodeAuthorityMetadata(value, "session authority");
+    return new SessionAuthority({
+      ...payload,
+      signature_base64: signatureBase64,
+      metadata_value: value.trim(),
+    });
+  }
+
+  metadata() {
+    validateSessionAuthority(this);
+    if (!this.metadataValue) {
+      throw invalidAuthority("session authority metadata value is required");
+    }
+    return new AuthorityMetadata({
+      kind: "session_authority",
+      key: SESSION_AUTHORITY_METADATA_KEY,
+      value: this.metadataValue,
+    });
+  }
+
+  toJSON() {
+    return {
+      backend_ura: this.backendURA,
+      user_ura: this.userURA,
+      session_id: this.sessionID,
+      scopes: [...this.scopes],
+      audiences: [...this.audiences],
+      issued_at_ms: this.issuedAtMS,
+      expires_at_ms: this.expiresAtMS,
+      signature_base64: this.signatureBase64,
+    };
+  }
+}
+
+export class DelegationRequest {
+  constructor(fields) {
+    const value = objectValue(fields, "delegation request");
+    this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
+    this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
+    this.callerURA = requiredAuthorityString(value.caller_ura, "caller_ura");
+    this.audience = requiredAuthorityString(value.audience, "audience");
+    this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
+    this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
+    this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+    validateDelegationRequest(this);
+  }
+
+  toJSON() {
+    return {
+      issuer_ura: this.issuerURA,
+      subject_ura: this.subjectURA,
+      caller_ura: this.callerURA,
+      audience: this.audience,
+      scopes: [...this.scopes],
+      issued_at_ms: this.issuedAtMS,
+      expires_at_ms: this.expiresAtMS,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class SessionAuthorityRequest {
+  constructor(fields) {
+    const value = objectValue(fields, "session authority request");
+    this.backendURA = requiredAuthorityString(value.backend_ura, "backend_ura");
+    this.userURA = requiredAuthorityString(value.user_ura, "user_ura");
+    this.sessionID = requiredAuthorityString(value.session_id, "session_id");
+    this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
+    this.audiences = requiredAuthorityStringArray(value.audiences, "audiences");
+    this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
+    this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+    validateSessionAuthorityRequest(this);
+  }
+
+  toJSON() {
+    return {
+      backend_ura: this.backendURA,
+      user_ura: this.userURA,
+      session_id: this.sessionID,
+      scopes: [...this.scopes],
+      audiences: [...this.audiences],
+      issued_at_ms: this.issuedAtMS,
+      expires_at_ms: this.expiresAtMS,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class AuthorityClient {
+  constructor(transport) {
+    if (!transport || typeof transport.mintDelegationProof !== "function") {
+      throw invalidSDK("authority transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async mintDelegationProof(request) {
+    const payload = request instanceof DelegationRequest ? request : new DelegationRequest(request);
+    const raw = await this.requireOpen().mintDelegationProof(Buffer.from(JSON.stringify(payload.toJSON())));
+    return DelegationProof.fromMetadata(decodeAuthorityMetadataProjection(raw, DELEGATION_METADATA_KEY, "delegation"));
+  }
+
+  async mintSessionAuthority(request) {
+    const payload = request instanceof SessionAuthorityRequest ? request : new SessionAuthorityRequest(request);
+    const transport = this.requireOpen();
+    if (typeof transport.mintSessionAuthority !== "function") {
+      throw invalidSDK("mintSessionAuthority transport function is required");
+    }
+    const raw = await transport.mintSessionAuthority(Buffer.from(JSON.stringify(payload.toJSON())));
+    return SessionAuthority.fromMetadata(
+      decodeAuthorityMetadataProjection(raw, SESSION_AUTHORITY_METADATA_KEY, "session authority"),
+    );
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("authority client is closed");
     }
     return this.transport;
   }
@@ -3160,6 +3389,7 @@ export class InvocationDraft {
     this.metadata = objectValue(fields.metadata ?? {}, "metadata");
     this.callerSignature = fields.callerSignature ?? null;
     this.hasArgs = Boolean(fields.hasArgs);
+    validateAuthorityMetadata(this.metadata);
     validateInvocationPayloadChoice(this);
     validateBase64(this.nonceBase64, "nonce_base64", 16);
     if (this.argumentsBase64) {
@@ -3282,6 +3512,12 @@ export class InvocationBuilder {
 
   withMetadata(value) {
     this.fields.metadata = objectValue(value, "metadata");
+    return this;
+  }
+
+  withAuthorityMetadata(value) {
+    const authority = value instanceof AuthorityMetadata ? value : new AuthorityMetadata(value);
+    this.fields.metadata = authority.mergeInto(this.fields.metadata ?? {});
     return this;
   }
 
@@ -6561,6 +6797,185 @@ function boolMap(value, field) {
   return map;
 }
 
+function requiredAuthorityString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidAuthority(`${field} is required`);
+  }
+  return value;
+}
+
+function authorityOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidAuthority(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredAuthorityInteger(value, field) {
+  if (!Number.isInteger(value)) {
+    throw invalidAuthority(`${field} must be an integer`);
+  }
+  return value;
+}
+
+function requiredAuthorityStringArray(value, field) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw invalidAuthority(`${field} must be a non-empty string list`);
+  }
+  return value.map((item) => requiredAuthorityString(item, field));
+}
+
+function requiredAuthorityBase64(value, field) {
+  const text = requiredAuthorityString(value, field);
+  decodeAuthorityBase64(text, field);
+  return text;
+}
+
+function decodeAuthorityBase64(value, field) {
+  let decoded;
+  try {
+    decoded = Buffer.from(value, "base64");
+  } catch (cause) {
+    throw invalidAuthority(`${field} must be base64`, { cause: cause.message });
+  }
+  if (decoded.length === 0 || decoded.toString("base64") !== value) {
+    throw invalidAuthority(`${field} must be base64`);
+  }
+  return decoded;
+}
+
+function decodeAuthorityMetadata(value, label) {
+  const text = requiredAuthorityString(value, `${label} metadata value`);
+  const decoded = decodeAuthorityBase64(text, `${label} metadata`);
+  let wire;
+  try {
+    wire = objectValue(JSON.parse(decoded.toString("utf8")), `${label} metadata`);
+  } catch (cause) {
+    if (cause instanceof SDKError) {
+      throw cause;
+    }
+    throw invalidAuthority(`${label} metadata JSON parse failed`, { cause: cause.message });
+  }
+  const payload = objectValue(wire.payload, `${label} metadata payload`);
+  const signatureBase64 = requiredAuthorityBase64(wire.signature, `${label} metadata signature`);
+  return { payload, signatureBase64 };
+}
+
+function decodeAuthorityMetadataProjection(raw, metadataKey, label) {
+  const text = decodeText(raw).trim();
+  if (!text) {
+    throw invalidAuthority(`${label} metadata projection is required`);
+  }
+  if (text.startsWith("{")) {
+    const projection = parseJSON(text, `${label} metadata projection`);
+    for (const key of ["metadata_value", "value"]) {
+      const value = projection[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        return value.trim();
+      }
+    }
+    if (projection.metadata !== undefined) {
+      const value = authorityMetadataValue(objectValue(projection.metadata, "metadata"), metadataKey);
+      if (value) {
+        return value;
+      }
+    }
+    throw invalidAuthority(`${label} metadata projection missing metadata_value`);
+  }
+  if (text.startsWith("\"")) {
+    try {
+      const value = JSON.parse(text);
+      return requiredAuthorityString(value, `${label} metadata value`);
+    } catch (cause) {
+      if (cause instanceof SDKError) {
+        throw cause;
+      }
+      throw invalidAuthority(`${label} metadata value JSON parse failed`, { cause: cause.message });
+    }
+  }
+  return text;
+}
+
+function validateAuthorityMetadataEnvelope(kind, key) {
+  if (kind === "delegation" && key === DELEGATION_METADATA_KEY) {
+    return;
+  }
+  if (kind === "session_authority" && key === SESSION_AUTHORITY_METADATA_KEY) {
+    return;
+  }
+  throw invalidAuthority("authority metadata key does not match authority kind");
+}
+
+function validateDelegationProof(proof) {
+  if (proof.expiresAtMS <= proof.issuedAtMS) {
+    throw invalidAuthority("delegation authority expires_at_ms must be greater than issued_at_ms");
+  }
+  if (proof.signature.length === 0) {
+    throw invalidAuthority("delegation authority signature is required");
+  }
+}
+
+function validateSessionAuthority(authority) {
+  if (authority.expiresAtMS <= authority.issuedAtMS) {
+    throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms");
+  }
+  if (authority.signature.length === 0) {
+    throw invalidAuthority("session authority signature is required");
+  }
+}
+
+function validateDelegationRequest(request) {
+  if (request.expiresAtMS <= request.issuedAtMS) {
+    throw invalidAuthority("delegation authority expires_at_ms must be greater than issued_at_ms");
+  }
+  rejectAuthorityPrivateKeyMetadata(request.metadata);
+}
+
+function validateSessionAuthorityRequest(request) {
+  if (request.expiresAtMS <= request.issuedAtMS) {
+    throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms");
+  }
+  rejectAuthorityPrivateKeyMetadata(request.metadata);
+}
+
+function rejectAuthorityPrivateKeyMetadata(metadata) {
+  for (const key of Object.keys(metadata ?? {})) {
+    switch (key.trim().toLowerCase()) {
+      case "private_key":
+      case "private_key_seed":
+      case "private_key_seed_base64":
+      case "private_key_hex":
+      case "signing_key":
+      case "ed25519_seed":
+        throw invalidAuthority("private key material must not be supplied to authority facade");
+      default:
+        break;
+    }
+  }
+}
+
+function validateAuthorityMetadata(metadata) {
+  const value = objectValue(metadata ?? {}, "metadata");
+  const delegation = authorityMetadataValue(value, DELEGATION_METADATA_KEY);
+  const session = authorityMetadataValue(value, SESSION_AUTHORITY_METADATA_KEY);
+  if (delegation && session) {
+    throw invalidAuthority("invocation authority metadata is ambiguous");
+  }
+}
+
+function authorityMetadataValue(metadata, key) {
+  if (!metadata || !Object.hasOwn(metadata, key) || metadata[key] === null || metadata[key] === undefined) {
+    return "";
+  }
+  if (typeof metadata[key] !== "string") {
+    throw invalidAuthority(`${key} must be a string metadata value`);
+  }
+  return metadata[key].trim();
+}
+
 function withAbortSignal(operation, signal, onAbort) {
   if (!signal) {
     return Promise.resolve(operation);
@@ -6654,6 +7069,10 @@ function invalidHostBinding(message, details = {}) {
 
 function invalidHealth(message, details = {}) {
   return invalidProfile(HEALTH_PROFILE, "decode", message, details);
+}
+
+function invalidAuthority(message, details = {}) {
+  return invalidProfile(AUTHORITY_PROFILE, "authority", message, details);
 }
 
 function invalidEvents(message, details = {}) {

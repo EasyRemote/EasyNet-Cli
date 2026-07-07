@@ -3,11 +3,14 @@ import test from "node:test";
 
 import {
   AdminClient,
+  AuthorityClient,
   Client,
   CompatibilityClient,
+  DELEGATION_METADATA_KEY,
   DEFAULT_DIRECTORY_PAGE_SIZE,
   DEFAULT_EVENT_PAGE_SIZE,
   DEFAULT_SURFACE_PAGE_SIZE,
+  DelegationProof,
   DirectoryClient,
   EventClient,
   ErrorClass,
@@ -33,6 +36,8 @@ import {
   ReceiptRef,
   RuntimeClient,
   SDKError,
+  SESSION_AUTHORITY_METADATA_KEY,
+  SessionAuthority,
   SurfaceClient,
   SurfaceStatus,
   WrapperClient,
@@ -78,6 +83,14 @@ const receiptFetch = () => ({
 });
 
 const receiptHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+const authorityMetadata = (payload, signature) =>
+  Buffer.from(
+    JSON.stringify({
+      payload,
+      signature: Buffer.from(signature).toString("base64"),
+    }),
+  ).toString("base64");
 
 const eventFrame = (overrides = {}) => ({
   profile: "events",
@@ -920,6 +933,128 @@ test("InvocationBuilder validates tuple completeness without descriptor grammar"
         .withCausalContext({ form: "none" })
         .withContentType("application/json")
         .build(),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("Authority metadata projects typed proofs and attaches exactly one authority", async () => {
+  const delegationValue = authorityMetadata(
+    {
+      issuer_ura: "easynet:///r/example/user/alice",
+      subject_ura: "easynet:///r/example/user/alice",
+      caller_ura: "easynet:///r/example/agent/backend",
+      audience: "easynet:///r/example/device/dev-a",
+      scopes: ["device.observe.*"],
+      issued_at_ms: 1000,
+      expires_at_ms: 2000,
+    },
+    "delegation-signature",
+  );
+  const sessionValue = authorityMetadata(
+    {
+      backend_ura: "easynet:///r/example/agent/backend",
+      user_ura: "easynet:///r/example/user/alice",
+      session_id: "sa-example",
+      scopes: ["device.observe.*"],
+      audiences: ["easynet:///r/example/device/dev-a"],
+      issued_at_ms: 1000,
+      expires_at_ms: 2000,
+    },
+    "session-signature",
+  );
+
+  const delegation = DelegationProof.fromMetadata(delegationValue);
+  const session = SessionAuthority.fromMetadata(sessionValue);
+  const draft = new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/backend")
+    .withCalleeURA("easynet:///r/example/device/dev-a")
+    .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+    .withSubjectURA("easynet:///r/example/user/alice")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs({})
+    .withContentType("application/json")
+    .withMetadata({ trace: "authority-1" })
+    .withAuthorityMetadata(delegation.metadata())
+    .build();
+
+  assert.equal(delegation.issuerURA, "easynet:///r/example/user/alice");
+  assert.equal(delegation.signatureBase64, Buffer.from("delegation-signature").toString("base64"));
+  assert.equal(session.backendURA, "easynet:///r/example/agent/backend");
+  assert.equal(session.signatureBase64, Buffer.from("session-signature").toString("base64"));
+  assert.equal(draft.metadata.trace, "authority-1");
+  assert.equal(draft.metadata[DELEGATION_METADATA_KEY], delegationValue);
+
+  assert.throws(
+    () =>
+      new InvocationBuilder()
+        .withCallerURA("easynet:///r/example/agent/backend")
+        .withCalleeURA("easynet:///r/example/device/dev-a")
+        .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+        .withSubjectURA("easynet:///r/example/user/alice")
+        .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({})
+        .withContentType("application/json")
+        .withMetadata({
+          [DELEGATION_METADATA_KEY]: delegationValue,
+          [SESSION_AUTHORITY_METADATA_KEY]: sessionValue,
+        })
+        .build(),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+
+  const seen = [];
+  const authority = new AuthorityClient({
+    mintDelegationProof: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push(["delegation", request]);
+      return JSON.stringify({ metadata_value: delegationValue });
+    },
+    mintSessionAuthority: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push(["session", request]);
+      return JSON.stringify({ metadata: { [SESSION_AUTHORITY_METADATA_KEY]: sessionValue } });
+    },
+  });
+
+  const mintedDelegation = await authority.mintDelegationProof({
+    issuer_ura: "easynet:///r/example/user/alice",
+    subject_ura: "easynet:///r/example/user/alice",
+    caller_ura: "easynet:///r/example/agent/backend",
+    audience: "easynet:///r/example/device/dev-a",
+    scopes: ["device.observe.*"],
+    issued_at_ms: 1000,
+    expires_at_ms: 2000,
+  });
+  const mintedSession = await authority.mintSessionAuthority({
+    backend_ura: "easynet:///r/example/agent/backend",
+    user_ura: "easynet:///r/example/user/alice",
+    session_id: "sa-example",
+    scopes: ["device.observe.*"],
+    audiences: ["easynet:///r/example/device/dev-a"],
+    issued_at_ms: 1000,
+    expires_at_ms: 2000,
+  });
+
+  assert.equal(mintedDelegation.callerURA, "easynet:///r/example/agent/backend");
+  assert.equal(mintedDelegation.metadata().value, delegationValue);
+  assert.equal(mintedSession.sessionID, "sa-example");
+  assert.equal(mintedSession.metadata().value, sessionValue);
+  assert.equal(seen[0][1].caller_ura, "easynet:///r/example/agent/backend");
+  assert.equal(seen[1][1].session_id, "sa-example");
+
+  await assert.rejects(
+    () =>
+      authority.mintDelegationProof({
+        issuer_ura: "easynet:///r/example/user/alice",
+        subject_ura: "easynet:///r/example/user/alice",
+        caller_ura: "easynet:///r/example/agent/backend",
+        audience: "easynet:///r/example/device/dev-a",
+        scopes: [],
+        issued_at_ms: 1000,
+        expires_at_ms: 2000,
+      }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );
 });

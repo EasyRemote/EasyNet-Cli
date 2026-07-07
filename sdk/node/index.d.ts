@@ -47,6 +47,9 @@ export declare const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: 50;
 export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
+export declare const AUTHORITY_PROFILE: "authority";
+export declare const DELEGATION_METADATA_KEY: "x-easynet-delegation";
+export declare const SESSION_AUTHORITY_METADATA_KEY: "x-easynet-session-authority";
 export declare const EVENTS_PROFILE: "events";
 export declare const MISSION_PROFILE: "mission";
 export declare const ADMIN_GATEWAY_PROFILE: "admin_gateway";
@@ -245,6 +248,140 @@ export class IdentityClient {
   ownerAbilityURA(ownerURA: string, abilityName: string): Promise<string>;
   ownerAbilityDescriptorRef(ownerURA: string, abilityName: string, descriptorVersion: string): Promise<string>;
   resourceURA(ownerURA: string, path: string): Promise<string>;
+  close(): Promise<void>;
+}
+
+export interface AuthorityMetadataFields {
+  kind: "delegation" | "session_authority";
+  key: "x-easynet-delegation" | "x-easynet-session-authority";
+  value: string;
+}
+
+export class AuthorityMetadata {
+  kind: string;
+  key: string;
+  value: string;
+  constructor(fields: AuthorityMetadataFields);
+  toMetadata(): Record<string, string>;
+  mergeInto(metadata?: Record<string, unknown>): Record<string, unknown>;
+}
+
+export interface DelegationProofFields {
+  issuer_ura: string;
+  subject_ura: string;
+  caller_ura: string;
+  audience: string;
+  scopes: string[];
+  issued_at_ms: number;
+  expires_at_ms: number;
+  signature_base64: string;
+  metadata_value?: string;
+}
+
+export class DelegationProof {
+  issuerURA: string;
+  subjectURA: string;
+  callerURA: string;
+  audience: string;
+  scopes: string[];
+  issuedAtMS: number;
+  expiresAtMS: number;
+  signatureBase64: string;
+  signature: Uint8Array;
+  metadataValue: string;
+  constructor(fields: DelegationProofFields);
+  static fromMetadata(value: string): DelegationProof;
+  metadata(): AuthorityMetadata;
+  toJSON(): Omit<DelegationProofFields, "metadata_value">;
+}
+
+export interface SessionAuthorityFields {
+  backend_ura: string;
+  user_ura: string;
+  session_id: string;
+  scopes: string[];
+  audiences: string[];
+  issued_at_ms: number;
+  expires_at_ms: number;
+  signature_base64: string;
+  metadata_value?: string;
+}
+
+export class SessionAuthority {
+  backendURA: string;
+  userURA: string;
+  sessionID: string;
+  scopes: string[];
+  audiences: string[];
+  issuedAtMS: number;
+  expiresAtMS: number;
+  signatureBase64: string;
+  signature: Uint8Array;
+  metadataValue: string;
+  constructor(fields: SessionAuthorityFields);
+  static fromMetadata(value: string): SessionAuthority;
+  metadata(): AuthorityMetadata;
+  toJSON(): Omit<SessionAuthorityFields, "metadata_value">;
+}
+
+export interface DelegationRequestFields {
+  issuer_ura: string;
+  subject_ura: string;
+  caller_ura: string;
+  audience: string;
+  scopes: string[];
+  issued_at_ms: number;
+  expires_at_ms: number;
+  metadata?: Record<string, unknown>;
+}
+
+export class DelegationRequest {
+  issuerURA: string;
+  subjectURA: string;
+  callerURA: string;
+  audience: string;
+  scopes: string[];
+  issuedAtMS: number;
+  expiresAtMS: number;
+  metadata: Record<string, unknown>;
+  constructor(fields: DelegationRequestFields);
+  toJSON(): Required<DelegationRequestFields>;
+}
+
+export interface SessionAuthorityRequestFields {
+  backend_ura: string;
+  user_ura: string;
+  session_id: string;
+  scopes: string[];
+  audiences: string[];
+  issued_at_ms: number;
+  expires_at_ms: number;
+  metadata?: Record<string, unknown>;
+}
+
+export class SessionAuthorityRequest {
+  backendURA: string;
+  userURA: string;
+  sessionID: string;
+  scopes: string[];
+  audiences: string[];
+  issuedAtMS: number;
+  expiresAtMS: number;
+  metadata: Record<string, unknown>;
+  constructor(fields: SessionAuthorityRequestFields);
+  toJSON(): Required<SessionAuthorityRequestFields>;
+}
+
+export interface AuthorityTransport {
+  mintDelegationProof(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  mintSessionAuthority?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class AuthorityClient {
+  constructor(transport: AuthorityTransport);
+  mintDelegationProof(request: DelegationRequest | DelegationRequestFields): Promise<DelegationProof>;
+  mintSessionAuthority(request: SessionAuthorityRequest | SessionAuthorityRequestFields): Promise<SessionAuthority>;
   close(): Promise<void>;
 }
 
@@ -2159,6 +2296,7 @@ export class InvocationBuilder {
   withArgumentsBase64(value: string): this;
   withContentType(value: string): this;
   withMetadata(value: Record<string, unknown>): this;
+  withAuthorityMetadata(value: AuthorityMetadata | AuthorityMetadataFields): this;
   inspect(): InvocationDraft;
   build(): InvocationDraft;
 }

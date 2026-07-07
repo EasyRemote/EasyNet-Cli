@@ -5,7 +5,7 @@ developer tooling. It must project the same object graph with promises,
 `AsyncIterable` streams, `AbortSignal` cancellation, and explicit close/cancel
 operations.
 
-Current status: Runtime Core, Health, Directory + Identity, Receipt,
+Current status: Runtime Core, Health, Authority, Directory + Identity, Receipt,
 Publication, Host Binding, Mission, Admin + Gateway, Events, Surface,
 Compatibility, and Wrappers seams.
 `index.js` and `index.d.ts` expose feature discovery, typed errors, profile
@@ -13,7 +13,8 @@ source-ref accessors, Invocation draft construction, RuntimeClient dispatch seam
 SigningMaterial, InvocationSignature, SignedInvocation, stream/bidi lifecycle
 handles, bounded retained stream/bidi history with typed terminal backpressure
 projection, async iteration, `AbortSignal` cancellation, HealthClient runtime health/diagnostics seams,
-InvocationHandle await/cancel/events/free seams,
+InvocationHandle await/cancel/events/free seams, AuthorityClient delegated/session
+authority metadata projection and transport minting seams,
 DirectoryClient read-model resolve/list/subscribe seams, IdentityClient URA/DescriptorRef projection seams,
 ReceiptClient fetch/projection/verification/causal-ref seams,
 PublicationClient resource/package/deploy/unpublish/read-model/lifecycle seams,
@@ -33,7 +34,7 @@ accepts only that submit-ready state. Node does not construct canonical signing
 bytes, acquire signer handles, or perform local daemon signing.
 
 This package has no daemon transport provider, C ABI bridge, local daemon
-signing provider, or package-stability claim yet. Its shared conformance
+signing provider, authority provider, or package-stability claim yet. Its shared conformance
 adapter report covers only declared Runtime Core, Health, Directory + Identity,
 Errors, MEMC, Receipt, Publication, Host Binding, Mission, Admin + Gateway,
 Events, Surface, Compatibility, and Wrappers seam

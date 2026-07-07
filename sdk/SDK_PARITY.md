@@ -11,7 +11,7 @@ method spelling.
 | C ABI | P0 | language binding projection | provider-backed ABI v4 Runtime Core projection for shipped handles and carriers, including authority signing-material and metadata-materialization core helpers |
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
-| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
+| Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | seam for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; provider transports and package stability unsupported |
 | Swift | P1 | macOS/iOS-adjacent clients | unsupported |
 
@@ -489,13 +489,14 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   declared shared case. The aggregate cutover readiness gate now runs EasyRemote and
   backend product test smokes; broader non-P0 language coverage and per-route
   live product smoke evidence remain incomplete.
-- Node/TypeScript now exposes Runtime Core, Health, Directory + Identity,
+- Node/TypeScript now exposes Runtime Core, Health, Authority, Directory + Identity,
   Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface,
   Compatibility, and Wrappers seams with feature discovery, typed errors, Invocation draft construction,
   profile source-ref accessors, RuntimeClient transport delegation, stream/bidi lifecycle handles, async
   iteration, `AbortSignal` cancellation, HealthClient runtime health and
   diagnostics DTOs, InvocationHandle await/cancel/events/free observation
-  seams, DirectoryClient read-model
+  seams, AuthorityClient delegated/session authority metadata projection and
+  injected minting seams, DirectoryClient read-model
   resolve/list/subscribe methods, IdentityClient URA/DescriptorRef projection
   methods, ReceiptClient fetch/projection/verification/causal-ref/history
   methods, opaque ReceiptRef/ReceiptChain helpers, PublicationClient resource,
@@ -511,7 +512,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Runtime Core, Errors, Health, Directory + Identity, MEMC, Receipt, Publication,
   Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility,
   Wrappers, and stream/bidi backpressure seam cases. It is not provider-backed:
-  daemon transports, plugin policy, host binding bridge,
+  daemon transports, authority provider, plugin policy, host binding bridge,
   Axon-backed receipt verification, and package stability remain incomplete.
 
 ## Capability States
