@@ -222,6 +222,7 @@ enum SelfUninstallStage {
     CaptureIdentity,
     ReportHubRemoval,
     StopRuntime,
+    RemoveDesktopCompanions,
     RemoveBinaries,
     RemoveData,
     CleanShellProfile,
@@ -236,6 +237,10 @@ trait UninstallEnvironment {
     fn report_hub_removal(&mut self, identity: &DeviceIdentity) -> HubRemovalReport;
 
     fn stop_runtime_without_revoke(&mut self) -> Result<(), String>;
+
+    fn remove_desktop_companions(&mut self) -> Result<(), String> {
+        Ok(())
+    }
 
     fn binary_paths(&self) -> Vec<PathBuf>;
 
@@ -275,6 +280,14 @@ impl SelfUninstallPlan {
         if let Err(err) = env.stop_runtime_without_revoke() {
             output::warn(&format!(
                 "Runtime stop failed (continuing uninstall): {err}"
+            ));
+        }
+
+        env.record_stage(SelfUninstallStage::RemoveDesktopCompanions);
+        output::step("Removing desktop companions...");
+        if let Err(err) = env.remove_desktop_companions() {
+            output::warn(&format!(
+                "Desktop companion cleanup failed (continuing uninstall): {err}"
             ));
         }
 
@@ -345,6 +358,17 @@ impl UninstallEnvironment for ProductionUninstallEnvironment {
     fn stop_runtime_without_revoke(&mut self) -> Result<(), String> {
         stop::run_with_options(stop::StopArgs {}, StopOptions { skip_revoke: true })
             .map_err(|err| err.to_string())
+    }
+
+    fn remove_desktop_companions(&mut self) -> Result<(), String> {
+        let state = crate::daemon::plugins::default_state().map_err(|err| err.to_string())?;
+        let manager = crate::daemon::plugins::DesktopCompanionManager::current();
+        for package in state.index().packages() {
+            if package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion {
+                manager.remove(package).map_err(|err| err.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     fn binary_paths(&self) -> Vec<PathBuf> {
@@ -536,6 +560,7 @@ mod tests {
                 SelfUninstallStage::CaptureIdentity,
                 SelfUninstallStage::ReportHubRemoval,
                 SelfUninstallStage::StopRuntime,
+                SelfUninstallStage::RemoveDesktopCompanions,
                 SelfUninstallStage::RemoveBinaries,
                 SelfUninstallStage::RemoveData,
                 SelfUninstallStage::CleanShellProfile,

@@ -61,6 +61,8 @@ pub enum PluginHostError {
     InvalidDeclarativeBinding { id: String, reason: String },
     #[error("plugin manifest declares invalid realtime capability for {id}: {reason}")]
     InvalidRealtimeCapability { id: String, reason: String },
+    #[error("plugin manifest declares invalid desktop companion for {id}: {reason}")]
+    InvalidCompanionManifest { id: String, reason: String },
     #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
     ControlPlaneRegistrationFailed { ability: String, reason: String },
     #[error("plugin contribution for {package} ability {ability:?} is invalid: {reason}")]
@@ -218,6 +220,10 @@ impl PartialEq for PluginHostError {
             (
                 InvalidRealtimeCapability { id: ai, reason: ar },
                 InvalidRealtimeCapability { id: bi, reason: br },
+            ) => ai == bi && ar == br,
+            (
+                InvalidCompanionManifest { id: ai, reason: ar },
+                InvalidCompanionManifest { id: bi, reason: br },
             ) => ai == bi && ar == br,
             (
                 InvalidContribution {

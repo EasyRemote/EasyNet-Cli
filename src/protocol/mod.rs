@@ -28,6 +28,7 @@
 
 pub mod admin_gateway_contract;
 pub mod agent_record_contract;
+pub mod companion_contract;
 pub mod compatibility_contract;
 pub mod directory_contract;
 pub mod events_contract;

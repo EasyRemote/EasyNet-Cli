@@ -16,3 +16,5 @@ pub const OPENAI_FILES_DELETE: &str = "openai.files.delete";
 pub const PLUGIN_RELOAD: &str = "plugin.reload";
 pub const PLUGIN_STATUS: &str = "plugin.status";
 pub const PLUGIN_ACTIVATE_REALTIME: &str = "plugin.activate_realtime";
+pub const PLUGIN_COMPANION_STATUS: &str = "plugin.companion_status";
+pub const PLUGIN_COMPANION_RECONCILE: &str = "plugin.companion_reconcile";

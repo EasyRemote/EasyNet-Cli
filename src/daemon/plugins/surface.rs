@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::daemon::plugins::companion::DesktopCompanionManager;
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::index::PluginPackageIndexError;
 use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadStatus};
@@ -37,6 +38,8 @@ pub struct PluginPackageSurfaceRecord {
     pub descriptor_published: bool,
     pub runtime_published: bool,
     pub invokable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub realtime_activation_plans: Vec<PluginRealtimeActivationPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +90,7 @@ pub enum PluginKindView {
     Declarative,
     Sidecar,
     Builtin,
+    DesktopCompanion,
     Unknown,
 }
 
@@ -158,9 +162,11 @@ impl PluginSurfaceProjector {
         index_errors: &[PluginPackageIndexError],
     ) -> Vec<PluginPackageSurfaceRecord> {
         let mut rows = Vec::new();
+        let companion_manager = DesktopCompanionManager::current();
         for package in index.packages() {
-            let planned_load_status = load_plan
-                .entry_for_package(package.id().as_str(), package.version().as_str())
+            let load_entry =
+                load_plan.entry_for_package(package.id().as_str(), package.version().as_str());
+            let planned_load_status = load_entry
                 .map(|entry| status_label(entry.status()))
                 .unwrap_or("not_planned")
                 .to_string();
@@ -174,16 +180,29 @@ impl PluginSurfaceProjector {
                         .unwrap_or(false)
                 })
                 .count();
-            let daemon_runtime_status = match daemon_abilities {
-                Some(_)
+            let has_abilities = !package.manifest().abilities().is_empty();
+            let companion = if package.manifest().kind() == PluginKind::DesktopCompanion {
+                companion_manager
+                    .status_for_package(package)
+                    .ok()
+                    .and_then(|status| serde_json::to_value(status).ok())
+                    .and_then(|value| {
+                        crate::protocol::companion_contract::project_status(&value).ok()
+                    })
+            } else {
+                None
+            };
+            let daemon_runtime_status = match (package.manifest().kind(), daemon_abilities) {
+                (PluginKind::DesktopCompanion, _) if !has_abilities => "n/a",
+                (_, Some(_))
                     if runtime_registered_count == package.manifest().abilities().len()
                         && runtime_registered_count > 0 =>
                 {
                     "loaded"
                 }
-                Some(_) if runtime_registered_count > 0 => "partial",
-                Some(_) => "not_loaded",
-                None => "offline",
+                (_, Some(_)) if runtime_registered_count > 0 => "partial",
+                (_, Some(_)) => "not_loaded",
+                (_, None) => "offline",
             }
             .to_string();
             rows.push(PluginPackageSurfaceRecord {
@@ -194,9 +213,10 @@ impl PluginSurfaceProjector {
                 daemon_runtime_status,
                 load_status: planned_load_status,
                 ability_count: package.manifest().abilities().len(),
-                descriptor_published: true,
+                descriptor_published: has_abilities,
                 runtime_published: runtime_registered_count > 0,
                 invokable: runtime_registered_count > 0,
+                companion,
                 realtime_activation_plans: activation_plans_for_manifest(
                     package.id().as_str(),
                     package.version().as_str(),
@@ -221,6 +241,7 @@ impl PluginSurfaceProjector {
                 descriptor_published: false,
                 runtime_published: false,
                 invokable: false,
+                companion: None,
                 realtime_activation_plans: Vec::new(),
                 error: Some(format!("{}: {}", error.package_dir.display(), error.reason)),
             });
@@ -335,6 +356,9 @@ fn status_label(status: &PluginLoadStatus) -> &'static str {
         PluginLoadStatus::MissingEntrypoint { .. } => "missing_entrypoint",
         PluginLoadStatus::EntrypointNotExecutable { .. } => "entrypoint_not_executable",
         PluginLoadStatus::MissingBuiltinBinding => "missing_builtin_binding",
+        PluginLoadStatus::CompanionUnsupportedPlatform { .. } => "companion_platform_unsupported",
+        PluginLoadStatus::CompanionUnsupportedSession { .. } => "companion_session_unsupported",
+        PluginLoadStatus::CompanionInvalidSpec { .. } => "companion_invalid_spec",
     }
 }
 
@@ -344,6 +368,7 @@ impl From<PluginKind> for PluginKindView {
             PluginKind::Declarative => Self::Declarative,
             PluginKind::Sidecar => Self::Sidecar,
             PluginKind::Builtin => Self::Builtin,
+            PluginKind::DesktopCompanion => Self::DesktopCompanion,
         }
     }
 }
@@ -486,6 +511,29 @@ mod tests {
     }
 
     #[test]
+    fn plugin_host_surface_projects_desktop_companion_as_package_only() {
+        let root = tempfile::tempdir().expect("root");
+        write_companion_package(root.path());
+        let package = PluginPackage::from_installed(root.path(), None).expect("companion package");
+        let index = PluginPackageIndex::from_packages(vec![Arc::new(package)]).expect("index");
+        let plan = PluginLoadPlanner::new("macos").plan(&index);
+
+        let report = PluginSurfaceProjector::project_report(&index, &plan);
+
+        assert!(report.abilities.is_empty());
+        assert_eq!(report.packages.len(), 1);
+        let package = &report.packages[0];
+        assert_eq!(package.kind, PluginKindView::DesktopCompanion);
+        assert_eq!(package.planned_load_status, "loaded");
+        assert_eq!(package.daemon_runtime_status, "n/a");
+        assert_eq!(package.ability_count, 0);
+        assert!(!package.descriptor_published);
+        assert!(!package.runtime_published);
+        assert!(!package.invokable);
+        assert!(package.companion.is_some());
+    }
+
+    #[test]
     fn plugin_host_surface_reports_index_errors_without_runtime_visibility() {
         let index = PluginPackageIndex::default();
         let plan = PluginLoadPlanner::new("linux").plan(&index);
@@ -553,5 +601,49 @@ quick_add = true
             crate::daemon::plugins::package::tests::test_descriptor("test.camera"),
         )
         .expect("descriptor");
+    }
+
+    fn write_companion_package(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS"))
+            .expect("app bundle dir");
+        std::fs::write(
+            root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS/EasyNetMenuBar"),
+            "",
+        )
+        .expect("app executable");
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "state/easynet-menubar.status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect("manifest");
     }
 }

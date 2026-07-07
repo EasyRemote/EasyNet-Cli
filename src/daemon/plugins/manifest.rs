@@ -4,12 +4,14 @@
 // File: src/daemon/plugins/manifest.rs
 // Description: Typed `plugin.toml` package model and validation.
 
+use std::path::{Component, Path};
+
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 
 /// Axon invocation mode required by one plugin-owned ability.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginCallMode {
     /// Unary invoke: one JSON argument object, one JSON result object.
@@ -27,7 +29,7 @@ pub enum PluginCallMode {
 
 /// Wire adapter a bidi plugin ability expects when it crosses the
 /// `session.open` bridge.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginBidiWireKind {
     /// Ability input/output frames are JSON control frames.
@@ -121,7 +123,7 @@ impl PluginRealtimeCapability {
 }
 
 /// Product/runtime layer declared by a plugin-owned ability.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginAbilityLayer {
     Introspection,
@@ -136,6 +138,7 @@ pub enum PluginKind {
     Declarative,
     Sidecar,
     Builtin,
+    DesktopCompanion,
 }
 
 impl<'de> Deserialize<'de> for PluginKind {
@@ -148,10 +151,186 @@ impl<'de> Deserialize<'de> for PluginKind {
             "declarative" => Ok(Self::Declarative),
             "sidecar" => Ok(Self::Sidecar),
             "builtin" | "stateful-device-plugin" => Ok(Self::Builtin),
+            "desktop_companion" => Ok(Self::DesktopCompanion),
             other => Err(serde::de::Error::custom(format!(
                 "unsupported plugin kind {other:?}"
             ))),
         }
+    }
+}
+
+/// Desktop companion lifecycle declared by a plugin package.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCompanionLifecycle {
+    UserSession,
+}
+
+/// Startup policy for a desktop companion process.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCompanionBootPolicy {
+    Manual,
+    EnsureRunningAfterDaemonReady,
+}
+
+/// Stop policy for a desktop companion process.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCompanionStopPolicy {
+    KeepRunning,
+    StopOnRuntimeStop,
+    StopOnPluginDisable,
+}
+
+/// Health observation mode for a desktop companion process.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCompanionHealthMode {
+    ProcessName,
+    StatusFile,
+    LocalIpc,
+}
+
+/// Platform-specific desktop companion supervisor declaration.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginCompanionMacos {
+    bundle_id: String,
+    app_bundle: String,
+    supervisor: String,
+    launch_agent_label: String,
+    session: String,
+}
+
+impl PluginCompanionMacos {
+    pub fn bundle_id(&self) -> &str {
+        &self.bundle_id
+    }
+
+    pub fn app_bundle(&self) -> &str {
+        &self.app_bundle
+    }
+
+    pub fn supervisor(&self) -> &str {
+        &self.supervisor
+    }
+
+    pub fn launch_agent_label(&self) -> &str {
+        &self.launch_agent_label
+    }
+
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+}
+
+/// Platform-specific Windows companion declaration.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginCompanionWindows {
+    exe: String,
+    supervisor: String,
+    task_name: String,
+    session: String,
+}
+
+impl PluginCompanionWindows {
+    pub fn exe(&self) -> &str {
+        &self.exe
+    }
+
+    pub fn supervisor(&self) -> &str {
+        &self.supervisor
+    }
+
+    pub fn task_name(&self) -> &str {
+        &self.task_name
+    }
+
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+}
+
+/// Platform-specific Linux companion declaration.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginCompanionLinux {
+    exe: String,
+    supervisor: String,
+    unit_name: String,
+    session: String,
+}
+
+impl PluginCompanionLinux {
+    pub fn exe(&self) -> &str {
+        &self.exe
+    }
+
+    pub fn supervisor(&self) -> &str {
+        &self.supervisor
+    }
+
+    pub fn unit_name(&self) -> &str {
+        &self.unit_name
+    }
+
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+}
+
+/// Desktop companion metadata declared by a package manifest.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginCompanionManifest {
+    display_name: String,
+    lifecycle: PluginCompanionLifecycle,
+    boot_policy: PluginCompanionBootPolicy,
+    stop_policy: PluginCompanionStopPolicy,
+    health: PluginCompanionHealthMode,
+    #[serde(default)]
+    status_file: Option<String>,
+    #[serde(default)]
+    macos: Option<PluginCompanionMacos>,
+    #[serde(default)]
+    windows: Option<PluginCompanionWindows>,
+    #[serde(default)]
+    linux: Option<PluginCompanionLinux>,
+}
+
+impl PluginCompanionManifest {
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub const fn lifecycle(&self) -> PluginCompanionLifecycle {
+        self.lifecycle
+    }
+
+    pub const fn boot_policy(&self) -> PluginCompanionBootPolicy {
+        self.boot_policy
+    }
+
+    pub const fn stop_policy(&self) -> PluginCompanionStopPolicy {
+        self.stop_policy
+    }
+
+    pub const fn health(&self) -> PluginCompanionHealthMode {
+        self.health
+    }
+
+    pub fn status_file(&self) -> Option<&str> {
+        self.status_file.as_deref()
+    }
+
+    pub fn macos(&self) -> Option<&PluginCompanionMacos> {
+        self.macos.as_ref()
+    }
+
+    pub fn windows(&self) -> Option<&PluginCompanionWindows> {
+        self.windows.as_ref()
+    }
+
+    pub fn linux(&self) -> Option<&PluginCompanionLinux> {
+        self.linux.as_ref()
     }
 }
 
@@ -273,6 +452,7 @@ pub struct PluginPackageManifest {
     platforms: Vec<String>,
     limits: PluginRuntimeLimits,
     declarative: Option<PluginDeclarativeBinding>,
+    companion: Option<PluginCompanionManifest>,
     abilities: Vec<PluginAbilityManifest>,
     realtime_capabilities: Vec<PluginRealtimeCapability>,
 }
@@ -344,6 +524,11 @@ impl PluginPackageManifest {
         self.declarative.as_ref()
     }
 
+    /// Desktop companion metadata, if this package declares a companion process.
+    pub fn companion(&self) -> Option<&PluginCompanionManifest> {
+        self.companion.as_ref()
+    }
+
     /// Ability manifests exported by this package.
     pub fn abilities(&self) -> &[PluginAbilityManifest] {
         &self.abilities
@@ -385,6 +570,8 @@ struct RawPluginToml {
     #[serde(default)]
     declarative: Option<PluginDeclarativeBinding>,
     #[serde(default)]
+    companion: Option<PluginCompanionManifest>,
+    #[serde(default)]
     ability_metadata: Vec<RawPluginAbilityMetadata>,
     #[serde(default)]
     realtime_capability: Vec<PluginRealtimeCapability>,
@@ -410,8 +597,27 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
     if raw.entrypoint.trim().is_empty() {
         return Err(PluginHostError::MissingField("entrypoint"));
     }
-    let descriptor_dir = descriptor_dir_from_ability_patterns(manifest_path, &raw.abilities)?;
-    if raw.ability_metadata.is_empty() {
+    let descriptor_dir = if raw.abilities.is_empty() {
+        String::new()
+    } else {
+        descriptor_dir_from_ability_patterns(manifest_path, &raw.abilities)?
+    };
+    if raw.kind != PluginKind::DesktopCompanion && raw.abilities.is_empty() {
+        return Err(PluginHostError::MissingAbilityPattern);
+    }
+    if raw.kind != PluginKind::DesktopCompanion && raw.ability_metadata.is_empty() {
+        return Err(PluginHostError::MissingAbilityMetadata);
+    }
+    if raw.kind == PluginKind::DesktopCompanion
+        && raw.abilities.is_empty()
+        && !raw.ability_metadata.is_empty()
+    {
+        return Err(PluginHostError::MissingAbilityPattern);
+    }
+    if raw.kind == PluginKind::DesktopCompanion
+        && !raw.abilities.is_empty()
+        && raw.ability_metadata.is_empty()
+    {
         return Err(PluginHostError::MissingAbilityMetadata);
     }
     if raw.limits.max_sessions() == 0 {
@@ -421,6 +627,7 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
         return Err(PluginHostError::InvalidRuntimeLimit("max_frame_queue"));
     }
     validate_declarative_binding(&raw)?;
+    validate_companion_manifest(&raw)?;
     validate_realtime_capabilities(&raw.id, &raw.realtime_capability)?;
 
     let mut seen = std::collections::BTreeSet::new();
@@ -455,9 +662,146 @@ fn parse_plugin_manifest(manifest_path: &str, raw: RawPluginToml) -> Result<Plug
         platforms: raw.platforms,
         limits: raw.limits,
         declarative: raw.declarative,
+        companion: raw.companion,
         abilities,
         realtime_capabilities: raw.realtime_capability,
     })
+}
+
+fn validate_companion_manifest(raw: &RawPluginToml) -> Result<()> {
+    match (raw.kind, raw.companion.as_ref()) {
+        (PluginKind::DesktopCompanion, Some(companion)) => {
+            validate_companion_fields(&raw.id, companion)
+        }
+        (PluginKind::DesktopCompanion, None) => Err(PluginHostError::InvalidCompanionManifest {
+            id: raw.id.clone(),
+            reason: "desktop_companion packages must declare [companion]".to_string(),
+        }),
+        (_, Some(_)) => Err(PluginHostError::InvalidCompanionManifest {
+            id: raw.id.clone(),
+            reason: "only desktop_companion packages may declare [companion]".to_string(),
+        }),
+        (_, None) => Ok(()),
+    }
+}
+
+fn validate_companion_fields(id: &str, companion: &PluginCompanionManifest) -> Result<()> {
+    if companion.display_name.trim().is_empty() {
+        return Err(invalid_companion(id, "display_name must not be empty"));
+    }
+    if companion.health == PluginCompanionHealthMode::LocalIpc {
+        return Err(invalid_companion(
+            id,
+            "health = \"local_ipc\" is reserved for a later release",
+        ));
+    }
+    if companion.health == PluginCompanionHealthMode::StatusFile {
+        let status_file = companion.status_file.as_deref().ok_or_else(|| {
+            invalid_companion(id, "status_file is required for status_file health")
+        })?;
+        validate_relative_manifest_path(id, "status_file", status_file)?;
+    }
+    if companion.macos.is_none() && companion.windows.is_none() && companion.linux.is_none() {
+        return Err(invalid_companion(
+            id,
+            "at least one companion platform section is required",
+        ));
+    }
+    if let Some(macos) = &companion.macos {
+        validate_non_empty(id, "companion.macos.bundle_id", &macos.bundle_id)?;
+        validate_non_empty(
+            id,
+            "companion.macos.launch_agent_label",
+            &macos.launch_agent_label,
+        )?;
+        validate_exact(
+            id,
+            "companion.macos.supervisor",
+            &macos.supervisor,
+            "launch_agent",
+        )?;
+        validate_exact(id, "companion.macos.session", &macos.session, "aqua")?;
+        validate_relative_manifest_path(id, "companion.macos.app_bundle", &macos.app_bundle)?;
+    }
+    if let Some(windows) = &companion.windows {
+        validate_non_empty(id, "companion.windows.task_name", &windows.task_name)?;
+        validate_exact(
+            id,
+            "companion.windows.supervisor",
+            &windows.supervisor,
+            "startup_task",
+        )?;
+        validate_exact(
+            id,
+            "companion.windows.session",
+            &windows.session,
+            "interactive_desktop",
+        )?;
+        validate_relative_manifest_path(id, "companion.windows.exe", &windows.exe)?;
+    }
+    if let Some(linux) = &companion.linux {
+        validate_non_empty(id, "companion.linux.unit_name", &linux.unit_name)?;
+        validate_exact(
+            id,
+            "companion.linux.supervisor",
+            &linux.supervisor,
+            "systemd_user",
+        )?;
+        validate_exact(id, "companion.linux.session", &linux.session, "graphical")?;
+        validate_relative_manifest_path(id, "companion.linux.exe", &linux.exe)?;
+    }
+    Ok(())
+}
+
+fn validate_non_empty(id: &str, field: &'static str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(invalid_companion(id, &format!("{field} must not be empty")));
+    }
+    Ok(())
+}
+
+fn validate_exact(
+    id: &str,
+    field: &'static str,
+    actual: &str,
+    expected: &'static str,
+) -> Result<()> {
+    if actual != expected {
+        return Err(invalid_companion(
+            id,
+            &format!("{field} must be {expected:?}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_relative_manifest_path(id: &str, field: &'static str, raw: &str) -> Result<()> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(invalid_companion(id, &format!("{field} must not be empty")));
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(invalid_companion(
+            id,
+            &format!("{field} must be a package-relative path"),
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_companion(id: &str, reason: &str) -> PluginHostError {
+    PluginHostError::InvalidCompanionManifest {
+        id: id.to_string(),
+        reason: reason.to_string(),
+    }
 }
 
 fn validate_realtime_capabilities(
@@ -824,6 +1168,81 @@ resources = ["camera"]
             format!("{err}").contains("ability_metadata"),
             "wrong error: {err}"
         );
+    }
+
+    #[test]
+    fn manifest_accepts_desktop_companion_without_abilities() {
+        let manifest = PluginPackageManifest::parse(
+            "plugins/easynet.desktop.menubar/plugin.toml",
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "state/easynet-menubar.status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect("desktop companion manifest");
+
+        assert_eq!(manifest.kind(), PluginKind::DesktopCompanion);
+        assert!(manifest.abilities().is_empty());
+        let companion = manifest.companion().expect("companion metadata");
+        assert_eq!(companion.display_name(), "EasyNet Menu Bar");
+        assert_eq!(
+            companion.macos().unwrap().app_bundle(),
+            "dist/macos/EasyNetMenuBar.app"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_desktop_companion_without_companion_section() {
+        let err = PluginPackageManifest::parse(
+            "plugins/easynet.desktop.menubar/plugin.toml",
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = []
+resources = []
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+"#,
+        )
+        .expect_err("companion section is required");
+
+        assert!(matches!(
+            err,
+            PluginHostError::InvalidCompanionManifest { .. }
+        ));
     }
 
     fn test_manifest(extra: &str) -> String {

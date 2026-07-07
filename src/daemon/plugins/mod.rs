@@ -5,6 +5,7 @@
 // Description: Ability extension host for installed and builtin plugins.
 
 pub mod broker;
+pub mod companion;
 pub mod contribution;
 pub mod descriptor;
 pub mod errors;
@@ -25,6 +26,12 @@ pub use broker::{
     PluginRealtimeActivationReport, PluginRealtimeOutcomeStatus, PluginRealtimePermissionReadiness,
     PluginRealtimePermissionStatus, PluginRealtimePublishReadiness, PluginRealtimeResourceMatch,
     PluginRealtimeResourceReadiness, PluginResourceBroker,
+};
+pub use companion::{
+    current_platform as current_companion_platform, CompanionDesiredState, CompanionObservedState,
+    CompanionProjectedState, CompanionSessionStatus, CompanionSupervisorState,
+    DesktopCompanionManager, DesktopCompanionPlan, DesktopCompanionPlanner,
+    DesktopCompanionStateStore, DesktopCompanionStatus, PlatformCompanionSpec,
 };
 pub use contribution::{
     DaemonPluginBinder, PluginAbilityContribution, PluginAbilityHandler, PluginContributionBuilder,
@@ -52,7 +59,7 @@ pub use realtime::{
 };
 pub use runtime_manager::{PluginRuntimeManager, PluginRuntimeState};
 pub use surface::{
-    PluginAbilitySurface, PluginAbilitySurfaceRecord, PluginPackageSurfaceRecord,
+    PluginAbilitySurface, PluginAbilitySurfaceRecord, PluginKindView, PluginPackageSurfaceRecord,
     PluginSurfaceProjector, PluginSurfaceReport,
 };
 pub use wire::PluginWireRegistry;
@@ -71,9 +78,32 @@ use serde_json::Value;
 /// top-level plugin source root.
 pub fn builtin_bindings() -> Vec<BuiltinPluginBinding> {
     vec![
+        desktop_menubar_binding(),
         #[cfg(feature = "remote-desktop")]
         crate::daemon::resources::remote_desktop::binding(),
     ]
+}
+
+fn desktop_menubar_binding() -> BuiltinPluginBinding {
+    fn ability_specs() -> Vec<package::BuiltinPluginAbilitySpec> {
+        Vec::new()
+    }
+
+    fn contribute(
+        _: &mut PluginContributionBuilder,
+        _: PluginRuntimeLimits,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    BuiltinPluginBinding {
+        manifest_path: "plugins/desktop-menubar/plugin.toml",
+        manifest_body: include_str!("../../../plugins/desktop-menubar/plugin.toml"),
+        expected_entrypoint: "dist/macos/EasyNetMenuBar.app",
+        enabled_env_var: None,
+        ability_specs,
+        contribute,
+    }
 }
 
 /// Return true when an ability is exported by a plugin package loaded in this

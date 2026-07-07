@@ -146,9 +146,26 @@ impl RuntimeStatusReport {
             "runtime_status": self.status.as_wire_str(),
             "runtime": self.projection.as_ref().map(RuntimeSessionProjection::to_json),
             "daemon": self.daemon.to_json(),
+            "desktop_companions": desktop_companion_statuses(),
             "product_presence": self.product_presence.as_ref().map(ProductPresenceSnapshot::to_json),
         })
     }
+}
+
+fn desktop_companion_statuses() -> Vec<Value> {
+    let Ok(state) = crate::daemon::plugins::default_state() else {
+        return Vec::new();
+    };
+    let manager = crate::daemon::plugins::DesktopCompanionManager::current();
+    state
+        .index()
+        .packages()
+        .iter()
+        .filter(|package| {
+            package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion
+        })
+        .filter_map(|package| manager.status_json(package).ok())
+        .collect()
 }
 
 fn classify(

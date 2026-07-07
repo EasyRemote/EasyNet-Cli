@@ -106,6 +106,7 @@ impl StopPlan {
         self.stage_legacy_heartbeat_cleanup();
         self.stage_legacy_axon_cleanup();
         let cleanup = self.stage_cleanup_state();
+        self.stage_desktop_companions();
         self.renderer.finish();
         discovery_cleanup?;
         cleanup?;
@@ -160,6 +161,24 @@ impl StopPlan {
         {
             self.renderer
                 .stage_skipped("revoke", "(axon-pb feature disabled)");
+        }
+    }
+
+    fn stage_desktop_companions(&mut self) {
+        self.renderer.set_active("desktop-companions");
+        let Ok(state) = crate::daemon::plugins::default_state() else {
+            self.renderer
+                .stage_skipped("desktop-companions", "(plugin state unavailable)");
+            return;
+        };
+        let warnings = crate::daemon::plugins::DesktopCompanionManager::current()
+            .stop_for_runtime_stop(state.index().packages());
+        if warnings.is_empty() {
+            self.renderer
+                .stage_skipped("desktop-companions", "(no stop_on_runtime_stop companions)");
+        } else {
+            self.renderer
+                .stage_skipped("desktop-companions", &format!("({})", warnings.join("; ")));
         }
     }
 

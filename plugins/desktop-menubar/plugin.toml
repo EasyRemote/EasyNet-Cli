@@ -1,0 +1,34 @@
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/macos/EasyNetMenuBar.app"
+abilities = []
+permissions = ["clipboard_read", "clipboard_write", "global_hotkey"]
+resources = ["desktop_session", "clipboard"]
+platforms = ["macos", "windows"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "state/easynet-menubar.status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+
+[companion.windows]
+exe = "dist/windows/EasyNetTray/EasyNetTray.exe"
+supervisor = "startup_task"
+task_name = "EasyNetTray"
+session = "interactive_desktop"

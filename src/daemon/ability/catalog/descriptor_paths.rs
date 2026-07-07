@@ -175,6 +175,8 @@ impl SystemAbilityDescriptorGroup {
             | integrations::PLUGIN_RELOAD
             | integrations::PLUGIN_STATUS
             | integrations::PLUGIN_ACTIVATE_REALTIME
+            | integrations::PLUGIN_COMPANION_STATUS
+            | integrations::PLUGIN_COMPANION_RECONCILE
             | federation::RUNTIME_INVOKE_REMOTE => Ok(Self::Integrations),
 
             governance::ADMIN_STATUS

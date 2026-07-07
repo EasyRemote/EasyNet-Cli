@@ -363,6 +363,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plugin_host_install_accepts_desktop_companion_package() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), true);
+        let installer = PluginInstaller::new(root.path());
+
+        let record = installer.install(source.path()).expect("install companion");
+
+        assert_eq!(record.id, "test.desktop.menubar");
+        assert_eq!(record.version, "0.1.0");
+        assert!(
+            root.path()
+                .join("installed/test.desktop.menubar/0.1.0/dist/macos/EasyNetMenuBar.app")
+                .exists(),
+            "declared app bundle must be installed"
+        );
+    }
+
+    #[test]
+    fn plugin_host_install_rejects_desktop_companion_with_missing_artifact() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), false);
+        let installer = PluginInstaller::new(root.path());
+
+        let err = installer
+            .install(source.path())
+            .expect_err("missing companion artifact must reject");
+
+        assert!(matches!(err, PluginHostError::ReadFailed { .. }));
+        assert!(
+            !root
+                .path()
+                .join("installed/test.desktop.menubar/0.1.0")
+                .exists(),
+            "rejected companion must not be activated"
+        );
+    }
+
     fn write_sidecar_test_package(root: &Path, version: &str) {
         write_sidecar_test_package_with_id(root, "test.sidecar", version, "test.echo");
     }
@@ -479,6 +519,52 @@ layer = "control"
             test_descriptor("test.declarative_eal"),
         )
         .expect("descriptor");
+    }
+
+    fn write_companion_test_package(root: &Path, include_artifact: bool) {
+        if include_artifact {
+            std::fs::create_dir_all(root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS"))
+                .expect("app bundle dir");
+            std::fs::write(
+                root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS/EasyNetMenuBar"),
+                "",
+            )
+            .expect("app executable");
+        }
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "test.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "state/easynet-menubar.status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect("manifest");
     }
 
     fn write_mcp_declarative_test_package(root: &Path, version: &str) {

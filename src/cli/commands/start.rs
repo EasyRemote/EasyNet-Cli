@@ -200,6 +200,17 @@ fn save_runtime_projection_after_ready(
         .context("persist runtime projection after daemon Ready")
 }
 
+fn ensure_desktop_companions_after_ready() {
+    let Ok(state) = crate::daemon::plugins::default_state() else {
+        return;
+    };
+    let warnings = crate::daemon::plugins::DesktopCompanionManager::current()
+        .ensure_running_after_daemon_ready(state.index().packages());
+    for warning in warnings {
+        output::warn(&format!("desktop companion reconcile warning: {warning}"));
+    }
+}
+
 // ── Device mode ─────────────────────────────────────────────────────────────
 
 fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
@@ -333,6 +344,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         credential_verified: Some(credential_verified),
     };
     save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
+    ensure_desktop_companions_after_ready();
     // The daemon process is up and the local runtime is ready, but the hub
     // `session.open` bidi has NOT been admitted yet — that handshake runs
     // asynchronously in the session initiator. Reporting ConnectedOnline here
@@ -921,6 +933,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
         credential_verified: None, // Not applicable in hub mode.
     };
     save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
+    ensure_desktop_companions_after_ready();
 
     if attached_existing_daemon {
         output::success("EasyNet hub attached");

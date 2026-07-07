@@ -936,7 +936,8 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         governance_names::OBSERVE_HEALTH
         | governance_names::OBSERVE_NETWORK_HEALTH
         | governance_names::ADMIN_STATUS
-        | "plugin.status" => Some(AbilityLayer::Observation),
+        | "plugin.status"
+        | "plugin.companion_status" => Some(AbilityLayer::Observation),
         // ── Operational (per-feature business verbs) ────────
         device_names::SESSION_ATTACH
         | agent_names::AGENT_START
@@ -1104,6 +1105,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // transaction has already committed on disk.
         | "plugin.reload"
         | "plugin.activate_realtime"
+        | "plugin.companion_reconcile"
         => Some(AbilityLayer::Operational),
         // `<user>.api_key.{create,list,revoke}` — user-rooted
         // credential-lifecycle verbs. `<user>` is the active

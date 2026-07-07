@@ -4,6 +4,7 @@
 // File: src/daemon/plugins/load_plan.rs
 // Description: Convert package index entries into per-boot load decisions.
 
+use crate::daemon::plugins::companion::{DesktopCompanionPlan, DesktopCompanionPlanner};
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::SharedPluginPackage;
@@ -18,6 +19,9 @@ pub enum PluginLoadStatus {
     MissingEntrypoint { path: String },
     EntrypointNotExecutable { path: String },
     MissingBuiltinBinding,
+    CompanionUnsupportedPlatform { current: String },
+    CompanionUnsupportedSession { reason: String },
+    CompanionInvalidSpec { reason: String },
 }
 
 /// Load decision for one indexed package.
@@ -25,6 +29,7 @@ pub enum PluginLoadStatus {
 pub struct PluginLoadPlanEntry {
     package: SharedPluginPackage,
     status: PluginLoadStatus,
+    companion_plan: Option<DesktopCompanionPlan>,
 }
 
 impl PluginLoadPlanEntry {
@@ -41,6 +46,13 @@ impl PluginLoadPlanEntry {
     /// Whether this package should register handlers in this boot.
     pub fn is_loaded(&self) -> bool {
         self.status == PluginLoadStatus::Loaded
+            && self.package.manifest().kind() != PluginKind::DesktopCompanion
+    }
+
+    /// Companion plan, when this package declares a user-session UI process
+    /// for the current host platform.
+    pub fn companion_plan(&self) -> Option<&DesktopCompanionPlan> {
+        self.companion_plan.as_ref()
     }
 }
 
@@ -69,13 +81,16 @@ impl PluginLoadPlan {
 pub struct PluginLoadPlanner {
     platform: String,
     respect_env_gates: bool,
+    companion_planner: DesktopCompanionPlanner,
 }
 
 impl PluginLoadPlanner {
     /// Build a planner for a concrete platform string.
     pub fn new(platform: impl Into<String>) -> Self {
+        let platform = platform.into();
         Self {
-            platform: platform.into(),
+            companion_planner: DesktopCompanionPlanner::new(platform.clone()),
+            platform,
             respect_env_gates: true,
         }
     }
@@ -94,6 +109,7 @@ impl PluginLoadPlanner {
         Self {
             platform: current_platform().to_string(),
             respect_env_gates: false,
+            companion_planner: DesktopCompanionPlanner::current(),
         }
     }
 
@@ -104,68 +120,121 @@ impl PluginLoadPlanner {
             .iter()
             .cloned()
             .map(|package| {
-                let status = self.status_for(&package);
-                PluginLoadPlanEntry { package, status }
+                let (status, companion_plan) = self.status_for(&package);
+                PluginLoadPlanEntry {
+                    package,
+                    status,
+                    companion_plan,
+                }
             })
             .collect();
         PluginLoadPlan { entries }
     }
 
-    fn status_for(&self, package: &SharedPluginPackage) -> PluginLoadStatus {
+    fn status_for(
+        &self,
+        package: &SharedPluginPackage,
+    ) -> (PluginLoadStatus, Option<DesktopCompanionPlan>) {
         if !supports_platform(package, &self.platform) {
-            return PluginLoadStatus::PlatformMismatch {
-                current: self.platform.clone(),
-            };
+            return (
+                PluginLoadStatus::PlatformMismatch {
+                    current: self.platform.clone(),
+                },
+                None,
+            );
         }
         let Some(binding) = package.builtin_binding() else {
             return match package.manifest().kind() {
-                PluginKind::Builtin => PluginLoadStatus::MissingBuiltinBinding,
+                PluginKind::Builtin => (PluginLoadStatus::MissingBuiltinBinding, None),
                 PluginKind::Declarative => declarative_load_status(package),
                 PluginKind::Sidecar => sidecar_load_status(package),
+                PluginKind::DesktopCompanion => {
+                    companion_load_status(package, &self.companion_planner)
+                }
             };
         };
         if self.respect_env_gates {
             if let Some(env_var) = binding.enabled_env_var {
                 if env_disabled(env_var) {
-                    return PluginLoadStatus::DisabledByEnv { env_var };
+                    return (PluginLoadStatus::DisabledByEnv { env_var }, None);
                 }
             }
         }
-        PluginLoadStatus::Loaded
+        (PluginLoadStatus::Loaded, None)
     }
 }
 
-fn sidecar_load_status(package: &SharedPluginPackage) -> PluginLoadStatus {
+fn companion_load_status(
+    package: &SharedPluginPackage,
+    planner: &DesktopCompanionPlanner,
+) -> (PluginLoadStatus, Option<DesktopCompanionPlan>) {
+    if package.manifest().companion().is_none() {
+        return (
+            PluginLoadStatus::CompanionInvalidSpec {
+                reason: "desktop_companion package does not declare [companion]".to_string(),
+            },
+            None,
+        );
+    }
+    match planner.plan_package(package) {
+        Ok(plan) => (PluginLoadStatus::Loaded, Some(plan)),
+        Err(reason) => (
+            PluginLoadStatus::CompanionUnsupportedPlatform {
+                current: if reason.is_empty() {
+                    planner.platform().to_string()
+                } else {
+                    format!("{}: {reason}", planner.platform())
+                },
+            },
+            None,
+        ),
+    }
+}
+
+fn sidecar_load_status(
+    package: &SharedPluginPackage,
+) -> (PluginLoadStatus, Option<DesktopCompanionPlan>) {
     let path = package.entrypoint_path();
     let meta = match std::fs::metadata(&path) {
         Ok(meta) => meta,
         Err(_) => {
-            return PluginLoadStatus::MissingEntrypoint {
-                path: path.display().to_string(),
-            };
+            return (
+                PluginLoadStatus::MissingEntrypoint {
+                    path: path.display().to_string(),
+                },
+                None,
+            );
         }
     };
     if !meta.is_file() {
-        return PluginLoadStatus::EntrypointNotExecutable {
-            path: path.display().to_string(),
-        };
+        return (
+            PluginLoadStatus::EntrypointNotExecutable {
+                path: path.display().to_string(),
+            },
+            None,
+        );
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
         if meta.permissions().mode() & 0o111 == 0 {
-            return PluginLoadStatus::EntrypointNotExecutable {
-                path: path.display().to_string(),
-            };
+            return (
+                PluginLoadStatus::EntrypointNotExecutable {
+                    path: path.display().to_string(),
+                },
+                None,
+            );
         }
     }
-    PluginLoadStatus::Loaded
+    (PluginLoadStatus::Loaded, None)
 }
 
-fn declarative_load_status(package: &SharedPluginPackage) -> PluginLoadStatus {
+fn declarative_load_status(
+    package: &SharedPluginPackage,
+) -> (PluginLoadStatus, Option<DesktopCompanionPlan>) {
     match package.manifest().declarative_binding() {
-        Some(PluginDeclarativeBinding::Exec { .. }) => PluginLoadStatus::Loaded,
+        Some(PluginDeclarativeBinding::Exec { .. }) => (PluginLoadStatus::Loaded, None),
         Some(PluginDeclarativeBinding::Eal { .. } | PluginDeclarativeBinding::Mcp { .. })
             if package
                 .manifest()
@@ -173,9 +242,9 @@ fn declarative_load_status(package: &SharedPluginPackage) -> PluginLoadStatus {
                 .iter()
                 .all(|ability| ability.call_mode() == PluginCallMode::Rpc) =>
         {
-            PluginLoadStatus::Loaded
+            (PluginLoadStatus::Loaded, None)
         }
-        Some(_) | None => PluginLoadStatus::NotLoadableInThisRelease,
+        Some(_) | None => (PluginLoadStatus::NotLoadableInThisRelease, None),
     }
 }
 
@@ -217,6 +286,23 @@ fn current_platform() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::plugins::package::PluginPackage;
+
+    #[test]
+    fn desktop_companion_is_planned_but_not_runtime_loaded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_companion_package(dir.path());
+        let package = std::sync::Arc::new(
+            PluginPackage::from_installed(dir.path(), None).expect("companion package"),
+        );
+        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+        let plan = PluginLoadPlanner::new("macos").plan(&index);
+        let entry = plan.entries().first().expect("plan entry");
+
+        assert_eq!(entry.status(), &PluginLoadStatus::Loaded);
+        assert!(entry.companion_plan().is_some());
+        assert!(!entry.is_loaded());
+    }
 
     #[test]
     #[cfg(feature = "remote-desktop")]
@@ -235,5 +321,49 @@ mod tests {
             "Linux Docker daemon builds compile remote-desktop by default, so the manifest \
              must allow the builtin package to register its baseline abilities"
         );
+    }
+
+    fn write_companion_package(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS"))
+            .expect("app bundle dir");
+        std::fs::write(
+            root.join("dist/macos/EasyNetMenuBar.app/Contents/MacOS/EasyNetMenuBar"),
+            "",
+        )
+        .expect("app executable");
+        std::fs::write(
+            root.join("plugin.toml"),
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "platforms/macos/EasyNetMenuBar"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "state/easynet-menubar.status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+"#,
+        )
+        .expect("manifest");
     }
 }

@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::plugins::{
-    PluginActivationBroker, PluginRealtimeActivationReport, PluginRuntimeManager,
+    DesktopCompanionManager, PluginActivationBroker, PluginRealtimeActivationReport,
+    PluginRuntimeManager,
 };
 
 /// Daemon-local ability used by `easynet plugin install/update/remove` after
@@ -24,6 +25,12 @@ pub const STATUS_ABILITY: &str = crate::daemon::ability::names::integrations::PL
 /// a package's realtime declaration into concrete runtime prerequisites.
 pub const ACTIVATE_REALTIME_ABILITY: &str =
     crate::daemon::ability::names::integrations::PLUGIN_ACTIVATE_REALTIME;
+/// Daemon-local ability used by companion-aware CLI/SDK status calls.
+pub const COMPANION_STATUS_ABILITY: &str =
+    crate::daemon::ability::names::integrations::PLUGIN_COMPANION_STATUS;
+/// Daemon-local ability used by daemon post-ready and local CLI reconciliation.
+pub const COMPANION_RECONCILE_ABILITY: &str =
+    crate::daemon::ability::names::integrations::PLUGIN_COMPANION_RECONCILE;
 
 pub type SharedPluginRegistryCell = OnceLock<Arc<AxonAbilityCatalog>>;
 
@@ -55,6 +62,18 @@ pub fn register(
         Arc::new(move |args| {
             activate_realtime(args, &activate_registry, &activate_runtime_manager)
         }),
+    );
+    let companion_status_runtime_manager = Arc::clone(&plugin_runtime_manager);
+    reg.register_rpc_with_owner(
+        COMPANION_STATUS_ABILITY,
+        OwnerKind::Device,
+        Arc::new(move |args| companion_status(args, &companion_status_runtime_manager)),
+    );
+    let companion_reconcile_runtime_manager = Arc::clone(&plugin_runtime_manager);
+    reg.register_rpc_with_owner(
+        COMPANION_RECONCILE_ABILITY,
+        OwnerKind::Device,
+        Arc::new(move |args| companion_reconcile(args, &companion_reconcile_runtime_manager)),
     );
 }
 
@@ -104,6 +123,14 @@ pub fn activate_realtime_input_schema() -> Value {
             }
         }
     })
+}
+
+pub fn companion_status_description() -> &'static str {
+    "Report one local desktop companion plugin status through the shared companion DTO contract."
+}
+
+pub fn companion_reconcile_description() -> &'static str {
+    "Reconcile one local desktop companion plugin against desired state and boot policy."
 }
 
 fn reload_plugins(
@@ -190,9 +217,48 @@ fn activate_realtime(
     .map_err(Into::into)
 }
 
+fn companion_status(args: Value, plugin_runtime_manager: &PluginRuntimeManager) -> anyhow::Result<Value> {
+    let request = parse_companion_request(args, COMPANION_STATUS_ABILITY)?;
+    let state = plugin_runtime_manager.state()?;
+    let package = resolve_package(
+        &state,
+        &request.package_id,
+        request.package_version.as_deref(),
+        COMPANION_STATUS_ABILITY,
+    )?;
+    DesktopCompanionManager::current()
+        .status_json(&package)
+        .map_err(Into::into)
+}
+
+fn companion_reconcile(
+    args: Value,
+    plugin_runtime_manager: &PluginRuntimeManager,
+) -> anyhow::Result<Value> {
+    let request = parse_companion_request(args, COMPANION_RECONCILE_ABILITY)?;
+    let state = plugin_runtime_manager.state()?;
+    let package = resolve_package(
+        &state,
+        &request.package_id,
+        request.package_version.as_deref(),
+        COMPANION_RECONCILE_ABILITY,
+    )?;
+    DesktopCompanionManager::current()
+        .reconcile(&package)
+        .map_err(Into::into)
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ActivateRealtimeRequest {
+    package_id: String,
+    #[serde(default)]
+    package_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CompanionRequest {
     package_id: String,
     #[serde(default)]
     package_version: Option<String>,
@@ -215,6 +281,57 @@ fn parse_activate_realtime_args(args: Value) -> anyhow::Result<ActivateRealtimeR
         }
     }
     Ok(request)
+}
+
+fn parse_companion_request(args: Value, ability: &str) -> anyhow::Result<CompanionRequest> {
+    if args.is_null() {
+        anyhow::bail!("{ability} requires a package_id");
+    }
+    let mut request: CompanionRequest =
+        serde_json::from_value(args).map_err(|err| anyhow::anyhow!("{ability} args invalid: {err}"))?;
+    request.package_id = request.package_id.trim().to_string();
+    if request.package_id.is_empty() {
+        anyhow::bail!("{ability} package_id must not be empty");
+    }
+    if let Some(version) = &mut request.package_version {
+        *version = version.trim().to_string();
+        if version.is_empty() {
+            anyhow::bail!("{ability} package_version must not be empty");
+        }
+    }
+    Ok(request)
+}
+
+fn resolve_package(
+    state: &crate::daemon::plugins::PluginRuntimeState,
+    package_id: &str,
+    package_version: Option<&str>,
+    ability: &str,
+) -> anyhow::Result<crate::daemon::plugins::package::SharedPluginPackage> {
+    let matches = state
+        .index()
+        .packages()
+        .iter()
+        .filter(|package| {
+            package.id().as_str() == package_id
+                && package_version
+                    .map(|version| package.version().as_str() == version)
+                    .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [package] if package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion => {
+            Ok(package.clone())
+        }
+        [package] => anyhow::bail!(
+            "{ability}: package {}@{} is not a desktop_companion",
+            package.id().as_str(),
+            package.version().as_str()
+        ),
+        [] => anyhow::bail!("{ability}: no package found for {package_id}"),
+        _ => anyhow::bail!("{ability}: multiple package versions found for {package_id}; pass package_version"),
+    }
 }
 
 #[cfg(test)]
@@ -365,6 +482,7 @@ quick_add = true
             descriptor_published: true,
             runtime_published: true,
             invokable: true,
+            companion: None,
             realtime_activation_plans: activation_plans_for_manifest(
                 "easynet.remote_desktop",
                 "0.1.0",
@@ -456,6 +574,7 @@ quick_add = true
             descriptor_published: true,
             runtime_published: true,
             invokable: true,
+            companion: None,
             realtime_activation_plans: activation_plans_for_manifest(
                 "easynet.camera",
                 "0.1.0",

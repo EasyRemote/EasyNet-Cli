@@ -28,8 +28,11 @@ import Carbon.HIToolbox
 import CryptoKit
 
 private let appName = "EasyNet"
+private let companionPackageId = "easynet.desktop.menubar"
+private let companionPackageVersion = "0.1.0"
 private let hotKeySignature = fourCharCode("ENCB")
 private let hotKeyIdValue: UInt32 = 1
+private let statusIconPointSize: CGFloat = 18
 
 struct ClipEntry: Decodable {
     let id: String
@@ -152,6 +155,59 @@ final class DaemonStatusProbe {
             return false
         }
     }
+}
+
+final class CompanionHeartbeatWriter {
+    private let statusURL: URL
+
+    init(homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        statusURL = homeURL
+            .appendingPathComponent(".easynet/companions", isDirectory: true)
+            .appendingPathComponent(companionPackageId, isDirectory: true)
+            .appendingPathComponent("status.json", isDirectory: false)
+    }
+
+    func write(daemonRunning: Bool) {
+        let now = UInt64(Date().timeIntervalSince1970 * 1000)
+        let payload: [String: Any] = [
+            "schema_version": "1",
+            "package_id": companionPackageId,
+            "package_version": companionPackageVersion,
+            "app": "EasyNetMenuBar",
+            "pid": Int(ProcessInfo.processInfo.processIdentifier),
+            "started_at_unix_ms": CompanionProcessStart.startedAtUnixMs,
+            "last_seen_unix_ms": now,
+            "daemon": [
+                "runtime_status": daemonRunning ? "running" : "stopped",
+                "control_accepting": daemonRunning,
+                "invocation_accepting": daemonRunning,
+            ],
+        ]
+        do {
+            try FileManager.default.createDirectory(
+                at: statusURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            let tempURL = statusURL.deletingLastPathComponent()
+                .appendingPathComponent(".\(statusURL.lastPathComponent).tmp", isDirectory: false)
+            try data.write(to: tempURL, options: [.atomic])
+            if FileManager.default.fileExists(atPath: statusURL.path) {
+                try FileManager.default.removeItem(at: statusURL)
+            }
+            try FileManager.default.moveItem(at: tempURL, to: statusURL)
+        } catch {
+            // Heartbeat failure must not break the local UI process.
+        }
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: statusURL)
+    }
+}
+
+enum CompanionProcessStart {
+    static let startedAtUnixMs = UInt64(Date().timeIntervalSince1970 * 1000)
 }
 
 final class ClipboardPanelController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
@@ -368,6 +424,7 @@ final class ClipboardPanelController: NSWindowController, NSTableViewDataSource,
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = ClipboardHistoryStore()
     private let statusProbe = DaemonStatusProbe()
+    private let heartbeat = CompanionHeartbeatWriter()
     private var panelController: ClipboardPanelController?
     private var statusItem: NSStatusItem?
     private var statusMenu: NSMenu?
@@ -392,6 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
         }
+        heartbeat.remove()
     }
 
     @objc private func showClipboardHistory() {
@@ -411,15 +469,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: 92)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
 
         if let button = item.button {
             button.image = statusImage()
-            button.title = appName
-            button.imagePosition = .imageLeading
-            button.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyDown
             button.alignment = .center
+            button.setAccessibilityLabel(appName)
         }
 
         let menu = NSMenu()
@@ -499,6 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateDaemonStatus() {
         let running = statusProbe.isRunning()
+        heartbeat.write(daemonRunning: running)
         daemonStatusItem?.title = running ? "Daemon: running" : "Daemon: stopped"
         statusItem?.button?.toolTip = running
             ? "EasyNet is running in the background"
@@ -506,19 +565,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.alphaValue = running ? 1.0 : 0.38
     }
 
-    private func statusImage() -> NSImage? {
-        let bundleImage = Bundle.main.url(forResource: "easynet-status", withExtension: "png")
-            .flatMap { NSImage(contentsOf: $0) }
-            ?? Bundle.main.url(forResource: "easynet-template", withExtension: "png")
-            .flatMap { NSImage(contentsOf: $0) }
-        let fallback = NSImage(
-            systemSymbolName: "bolt.horizontal.circle",
-            accessibilityDescription: appName
-        )
-        let image = bundleImage ?? fallback
-        image?.isTemplate = true
-        image?.size = NSSize(width: 18, height: 18)
+    private func statusImage() -> NSImage {
+        let size = NSSize(width: statusIconPointSize, height: statusIconPointSize)
+        let image = NSImage(size: size, flipped: false) { rect in
+            Self.drawEasyNetStatusGlyph(in: rect.insetBy(dx: 1.2, dy: 1.4))
+            return true
+        }
+        image.isTemplate = true
+        image.size = size
+        image.accessibilityDescription = appName
         return image
+    }
+
+    private static func drawEasyNetStatusGlyph(in rect: NSRect) {
+        NSColor.black.setStroke()
+        NSColor.black.setFill()
+
+        let left = rect.minX + 3.1
+        let hubX = rect.minX + 5.5
+        let topY = rect.maxY - 3.2
+        let midY = rect.midY
+        let botY = rect.minY + 3.2
+        let topEnd = rect.maxX - 3.9
+        let midEnd = rect.maxX - 2.2
+        let botEnd = rect.maxX - 3.9
+
+        let circuits = NSBezierPath()
+        circuits.lineWidth = 1.85
+        circuits.lineCapStyle = .round
+        circuits.lineJoinStyle = .round
+        circuits.move(to: NSPoint(x: left, y: topY))
+        circuits.line(to: NSPoint(x: hubX, y: topY))
+        circuits.line(to: NSPoint(x: hubX + 2.4, y: midY))
+        circuits.line(to: NSPoint(x: hubX, y: botY))
+        circuits.line(to: NSPoint(x: left, y: botY))
+        circuits.move(to: NSPoint(x: hubX, y: topY))
+        circuits.curve(
+            to: NSPoint(x: topEnd, y: topY),
+            controlPoint1: NSPoint(x: hubX + 3.0, y: topY + 1.2),
+            controlPoint2: NSPoint(x: topEnd - 2.1, y: topY + 1.0)
+        )
+        circuits.move(to: NSPoint(x: hubX + 2.4, y: midY))
+        circuits.line(to: NSPoint(x: midEnd, y: midY))
+        circuits.move(to: NSPoint(x: hubX, y: botY))
+        circuits.curve(
+            to: NSPoint(x: botEnd, y: botY),
+            controlPoint1: NSPoint(x: hubX + 3.0, y: botY - 1.2),
+            controlPoint2: NSPoint(x: botEnd - 2.1, y: botY - 1.0)
+        )
+        circuits.stroke()
+
+        let nodeRadius: CGFloat = 1.45
+        [
+            NSPoint(x: topEnd, y: topY),
+            NSPoint(x: midEnd, y: midY),
+            NSPoint(x: botEnd, y: botY),
+        ].forEach { point in
+            NSBezierPath(
+                ovalIn: NSRect(
+                    x: point.x - nodeRadius,
+                    y: point.y - nodeRadius,
+                    width: nodeRadius * 2,
+                    height: nodeRadius * 2
+                )
+            ).fill()
+        }
+
+        let spine = NSBezierPath()
+        spine.lineWidth = 1.35
+        spine.lineCapStyle = .round
+        spine.move(to: NSPoint(x: left, y: botY))
+        spine.curve(
+            to: NSPoint(x: left, y: topY),
+            controlPoint1: NSPoint(x: rect.minX + 0.1, y: rect.minY + 5.4),
+            controlPoint2: NSPoint(x: rect.minX + 0.1, y: rect.maxY - 5.4)
+        )
+        spine.stroke()
     }
 }
 

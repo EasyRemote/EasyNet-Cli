@@ -211,6 +211,14 @@ fn collect_package_contribution(
             let mut sink = ContributionRegistrationSink::new(&mut builder, impl_source);
             contribute_declarative_package(package, &mut sink)?;
         }
+        PluginKind::DesktopCompanion => {
+            return Err(PluginHostError::InvalidContribution {
+                package: format!("{}@{}", package.id().as_str(), package.version().as_str()),
+                ability: "<package>".to_string(),
+                reason: "desktop companion packages do not contribute ability implementations"
+                    .to_string(),
+            });
+        }
     }
 
     builder.finish()

@@ -537,12 +537,13 @@ fn validate_builtin_specs(
     Ok(())
 }
 
-/// Compute SHA-256 over `plugin.toml`, `abilities/`, and `bin/`.
+/// Compute SHA-256 over the package executable surface.
 pub fn hash_installable_surface(root: &Path) -> Result<PackageHash> {
     let mut files = Vec::new();
     collect_existing_files(root, Path::new("plugin.toml"), &mut files)?;
     collect_existing_files(root, Path::new("abilities"), &mut files)?;
     collect_existing_files(root, Path::new("bin"), &mut files)?;
+    collect_existing_files(root, Path::new("dist"), &mut files)?;
     files.sort();
 
     let mut hasher = Sha256::new();
@@ -776,6 +777,19 @@ layer = "control"
             err,
             PluginHostError::PackagePathEscapesRoot { .. }
         ));
+    }
+
+    #[test]
+    fn plugin_host_hash_includes_dist_artifacts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::create_dir_all(dir.path().join("dist/macos/Test.app")).expect("dist dir");
+        std::fs::write(dir.path().join("dist/macos/Test.app/app"), "one").expect("dist file");
+        let first = hash_installable_surface(dir.path()).expect("first hash");
+        std::fs::write(dir.path().join("dist/macos/Test.app/app"), "two").expect("dist change");
+        let second = hash_installable_surface(dir.path()).expect("second hash");
+
+        assert_ne!(first.as_str(), second.as_str());
     }
 
     pub(crate) fn write_test_package(root: &Path, version: &str) {

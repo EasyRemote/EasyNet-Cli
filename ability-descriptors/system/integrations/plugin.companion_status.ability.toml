@@ -1,0 +1,16 @@
+schema_version = "1"
+name = "plugin.companion_status"
+description = "Report one local desktop companion plugin status through the shared companion DTO contract."
+
+[input_schema]
+type = "object"
+additionalProperties = false
+required = ["package_id"]
+
+[input_schema.properties.package_id]
+type = "string"
+minLength = 1
+
+[input_schema.properties.package_version]
+type = "string"
+minLength = 1

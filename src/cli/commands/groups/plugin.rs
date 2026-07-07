@@ -10,11 +10,11 @@ use clap::{Args, Subcommand};
 
 use crate::daemon::plugins::index::default_plugin_root;
 use crate::daemon::plugins::{
-    PluginInstaller, PluginLoadPlanner, PluginPackageIndex, PluginPackageSurfaceRecord,
-    PluginRealtimeActivationOutcome, PluginRealtimeActivationReport, PluginRealtimeKind,
-    PluginRealtimeMode, PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus,
-    PluginRealtimeTransport, PluginRealtimeTransportReadinessStatus, PluginSurfaceProjector,
-    PluginSurfaceReport,
+    DesktopCompanionManager, PluginInstaller, PluginKind, PluginKindView, PluginLoadPlanner,
+    PluginPackageIndex, PluginPackageSurfaceRecord, PluginRealtimeActivationOutcome,
+    PluginRealtimeActivationReport, PluginRealtimeKind, PluginRealtimeMode,
+    PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus, PluginRealtimeTransport,
+    PluginRealtimeTransportReadinessStatus, PluginSurfaceProjector, PluginSurfaceReport,
 };
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -39,6 +39,12 @@ pub enum PluginAction {
     Update(PackageSourceArgs),
     /// Remove one installed package version transactionally.
     Remove(RemoveArgs),
+    /// Enable a desktop companion plugin.
+    Enable(CompanionPackageArgs),
+    /// Disable a desktop companion plugin.
+    Disable(CompanionPackageArgs),
+    /// Show one plugin package status.
+    Status(PluginStatusArgs),
     /// Check whether a package's realtime capability can be activated now.
     ActivateRealtime(ActivateRealtimeArgs),
 }
@@ -65,6 +71,27 @@ pub struct RemoveArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct CompanionPackageArgs {
+    /// Plugin package id.
+    pub id: String,
+    /// Optional plugin package version.
+    #[arg(long)]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginStatusArgs {
+    /// Plugin package id.
+    pub id: String,
+    /// Optional plugin package version.
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Output JSON instead of an operator table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct ActivateRealtimeArgs {
     /// Plugin package id.
     pub id: String,
@@ -82,6 +109,9 @@ pub fn run(args: PluginArgs) -> anyhow::Result<()> {
         PluginAction::Install(args) => run_install(args),
         PluginAction::Update(args) => run_update(args),
         PluginAction::Remove(args) => run_remove(args),
+        PluginAction::Enable(args) => run_enable(args),
+        PluginAction::Disable(args) => run_disable(args),
+        PluginAction::Status(args) => run_status(args),
         PluginAction::ActivateRealtime(args) => run_activate_realtime(args),
     }
 }
@@ -113,19 +143,28 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 "runtime",
                 "invoke",
                 "realtime",
+                "companion",
+                "supervisor",
+                "observed",
             ]);
             for package in report.packages {
                 let realtime = realtime_label(&package);
+                let companion = companion_field(&package, "projected_state");
+                let supervisor = companion_field(&package, "supervisor_state");
+                let observed = companion_field(&package, "observed_state");
                 package_table.add_row([
                     package.package_id,
                     package.package_version,
-                    format!("{:?}", package.kind).to_ascii_lowercase(),
+                    plugin_kind_label(package.kind).to_string(),
                     package.planned_load_status,
                     package.daemon_runtime_status,
                     package.ability_count.to_string(),
                     bool_label(package.runtime_published),
                     bool_label(package.invokable),
                     realtime,
+                    companion,
+                    supervisor,
+                    observed,
                 ]);
             }
             println!("{package_table}");
@@ -147,7 +186,7 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                     row.package_id,
                     row.package_version,
                     row.ability,
-                    format!("{:?}", row.kind).to_ascii_lowercase(),
+                    plugin_kind_label(row.kind).to_string(),
                     format!("{:?}", row.call_mode).to_ascii_lowercase(),
                     row.planned_load_status,
                     row.daemon_runtime_status,
@@ -184,10 +223,82 @@ fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, Some(&args.version)).ok();
+    if let Some(package) = &package {
+        if package.manifest().kind() == PluginKind::DesktopCompanion {
+            DesktopCompanionManager::current().remove(package)?;
+        }
+    }
     let installer = PluginInstaller::new(default_plugin_root());
     installer.remove(&args.id, &args.version)?;
     output::success(&format!("removed plugin {}@{}", args.id, args.version));
     notify_daemon_reload()?;
+    Ok(())
+}
+
+fn run_enable(args: CompanionPackageArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, args.version.as_deref())?;
+    let result = DesktopCompanionManager::current().enable(&package)?;
+    output::success(&format!(
+        "enabled companion {}@{}",
+        package.id().as_str(),
+        package.version().as_str()
+    ));
+    output::detail("result", &result.to_string());
+    notify_daemon_reload()?;
+    Ok(())
+}
+
+fn run_disable(args: CompanionPackageArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, args.version.as_deref())?;
+    let result = DesktopCompanionManager::current().disable(&package)?;
+    output::success(&format!(
+        "disabled companion {}@{}",
+        package.id().as_str(),
+        package.version().as_str()
+    ));
+    output::detail("result", &result.to_string());
+    notify_daemon_reload()?;
+    Ok(())
+}
+
+fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, args.version.as_deref())?;
+    if package.manifest().kind() == PluginKind::DesktopCompanion {
+        let status = match invoke_companion_status(&args.id, args.version.as_deref())? {
+            Some(status) => status,
+            None => DesktopCompanionManager::current().status_json(&package)?,
+        };
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        } else {
+            print_companion_status(&status);
+        }
+        return Ok(());
+    }
+
+    let report = offline_plugin_surface_report()?;
+    let Some(row) = report.packages.into_iter().find(|row| {
+        row.package_id == args.id
+            && args
+                .version
+                .as_deref()
+                .map(|version| row.package_version == version)
+                .unwrap_or(true)
+    }) else {
+        anyhow::bail!("plugin package not found: {}", args.id);
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&row)?);
+    } else {
+        output::kv_section(&[
+            ("Package", row.package_id.as_str()),
+            ("Version", row.package_version.as_str()),
+            ("Kind", plugin_kind_label(row.kind)),
+            ("Planned", row.planned_load_status.as_str()),
+            ("Daemon", row.daemon_runtime_status.as_str()),
+        ]);
+    }
     Ok(())
 }
 
@@ -209,6 +320,16 @@ fn bool_label(value: bool) -> String {
         "yes".to_string()
     } else {
         "no".to_string()
+    }
+}
+
+fn plugin_kind_label(kind: PluginKindView) -> &'static str {
+    match kind {
+        PluginKindView::Declarative => "declarative",
+        PluginKindView::Sidecar => "sidecar",
+        PluginKindView::Builtin => "builtin",
+        PluginKindView::DesktopCompanion => "desktop_companion",
+        PluginKindView::Unknown => "unknown",
     }
 }
 
@@ -238,6 +359,76 @@ fn realtime_label(row: &PluginPackageSurfaceRecord) -> String {
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn companion_field(row: &PluginPackageSurfaceRecord, field: &str) -> String {
+    row.companion
+        .as_ref()
+        .and_then(|value| value.get(field))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn print_companion_status(status: &serde_json::Value) {
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    rows.push(("Package", string_json(status, "package_id")));
+    rows.push(("Version", string_json(status, "package_version")));
+    rows.push(("Display", string_json(status, "display_name")));
+    rows.push(("Platform", string_json(status, "platform")));
+    rows.push(("State", string_json(status, "projected_state")));
+    rows.push(("Desired", string_json(status, "desired_state")));
+    rows.push(("Supervisor", string_json(status, "supervisor_state")));
+    rows.push(("Observed", string_json(status, "observed_state")));
+    let kv = rows
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect::<Vec<_>>();
+    output::kv_section(&kv);
+}
+
+fn string_json(value: &serde_json::Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn offline_plugin_surface_report() -> anyhow::Result<PluginSurfaceReport> {
+    let index_report = PluginPackageIndex::load_default_resilient()?;
+    let (index, index_errors) = index_report.into_parts();
+    let plan = PluginLoadPlanner::current().plan(&index);
+    Ok(PluginSurfaceProjector::project_report_with_daemon(
+        &index,
+        &plan,
+        None,
+        &index_errors,
+    ))
+}
+
+fn resolve_package(
+    id: &str,
+    version: Option<&str>,
+) -> anyhow::Result<crate::daemon::plugins::package::SharedPluginPackage> {
+    let index_report = PluginPackageIndex::load_default_resilient()?;
+    let (index, _) = index_report.into_parts();
+    let matches = index
+        .packages()
+        .iter()
+        .filter(|package| {
+            package.id().as_str() == id
+                && version
+                    .map(|version| package.version().as_str() == version)
+                    .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [package] => Ok(package.clone()),
+        [] => anyhow::bail!("plugin package not found: {id}"),
+        _ => anyhow::bail!("multiple plugin versions found for {id}; pass --version"),
+    }
 }
 
 fn print_activation_report(report: &PluginRealtimeActivationReport) {
@@ -439,6 +630,20 @@ fn invoke_plugin_activate_realtime(
         return Ok(None);
     };
     Ok(Some(serde_json::from_value(value)?))
+}
+
+fn invoke_companion_status(
+    id: &str,
+    version: Option<&str>,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let mut body = serde_json::json!({ "package_id": id });
+    if let Some(version) = version {
+        body["package_version"] = serde_json::json!(version);
+    }
+    invoke_plugin_control_ability(
+        crate::daemon::ability::builtins::integrations::plugins::COMPANION_STATUS_ABILITY,
+        body,
+    )
 }
 
 fn invoke_plugin_control_ability(
