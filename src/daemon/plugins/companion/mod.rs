@@ -430,8 +430,8 @@ impl DesktopCompanionManager {
 
     pub fn remove(&self, package: &SharedPluginPackage) -> Result<()> {
         let plan = self.plan_package(package)?;
-        let _ = self.supervisor.stop(&plan);
-        let _ = self.supervisor.remove(&plan);
+        self.supervisor.stop(&plan)?;
+        self.supervisor.remove(&plan)?;
         self.state_store
             .remove(&plan.package_id, &plan.package_version)
     }

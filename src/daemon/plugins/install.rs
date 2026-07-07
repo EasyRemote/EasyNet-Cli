@@ -255,8 +255,8 @@ impl PluginInstaller {
             )));
         }
         let previous_state = self.read_state()?;
-        self.remove_record(id, version)?;
         let backup = rollback_dir(&self.root, id, version)?;
+        self.remove_record(id, version)?;
         if let Err(err) = fs::rename(&target, &backup) {
             let _ = self.write_state(&previous_state);
             return Err(PluginHostError::WriteFailed {
@@ -271,6 +271,46 @@ impl PluginInstaller {
                 path: backup,
                 source: err,
             });
+        }
+        Ok(())
+    }
+
+    /// Remove an installed package version and clean desktop companion
+    /// supervisor state under the same transaction owner.
+    pub fn remove_with_companion_manager(
+        &self,
+        id: &str,
+        version: &str,
+        companion_manager: &DesktopCompanionManager,
+    ) -> Result<()> {
+        let target = self.package_dir(id, version);
+        if !target.exists() {
+            return Err(PluginHostError::PackageNotInstalled(format!(
+                "{id}@{version}"
+            )));
+        }
+        let package = Arc::new(PluginPackage::from_installed(&target, None)?);
+        if package.manifest().kind() != PluginKind::DesktopCompanion {
+            return self.remove(id, version);
+        }
+        let previous_status = companion_manager.status_for_package(&package).ok();
+        companion_manager.remove(&package)?;
+        if let Err(err) = self.remove(id, version) {
+            let remove_error = err.to_string();
+            if let Some(previous_status) = previous_status.as_ref() {
+                if let Err(rollback_err) =
+                    companion_manager.restore_package_after_failed_update(&package, previous_status)
+                {
+                    return Err(PluginHostError::CompanionRemoveRollbackFailed {
+                        id: id.to_string(),
+                        version: version.to_string(),
+                        remove_error,
+                        rollback_error: rollback_err.to_string(),
+                        stale_path: target,
+                    });
+                }
+            }
+            return Err(err);
         }
         Ok(())
     }
@@ -736,6 +776,151 @@ mod tests {
     }
 
     #[test]
+    fn plugin_host_remove_allocates_rollback_before_removing_state_record() {
+        let root = tempfile::tempdir().expect("root");
+        let source_v1 = tempfile::tempdir().expect("source v1");
+        write_sidecar_test_package(source_v1.path(), "0.1.0");
+        let installer = PluginInstaller::new(root.path());
+        installer.install(source_v1.path()).expect("install");
+        std::fs::write(root.path().join(".rollback"), "not a directory")
+            .expect("poison rollback root");
+
+        let err = installer
+            .remove("test.sidecar", "0.1.0")
+            .expect_err("rollback allocation failure must abort remove");
+
+        assert!(matches!(err, PluginHostError::WriteFailed { .. }));
+        assert!(root
+            .path()
+            .join("installed/test.sidecar/0.1.0/plugin.toml")
+            .exists());
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).expect("plugin state");
+        assert!(plugin_state.contains("test.sidecar"));
+        assert!(plugin_state.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn plugin_host_remove_commits_desktop_companion_supervisor_cleanup() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), true);
+        let installer = PluginInstaller::new(root.path());
+        let (manager, calls) =
+            recording_companion_manager(root.path().join("companions/state.toml"), false);
+        installer
+            .install_with_companion_manager(source.path(), &manager)
+            .expect("install companion");
+        calls.lock().expect("calls").clear();
+
+        installer
+            .remove_with_companion_manager("test.desktop.menubar", "0.1.0", &manager)
+            .expect("remove companion");
+
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["stop", "remove"],
+            "companion remove must stop and remove supervisor artifacts"
+        );
+        assert!(
+            !root
+                .path()
+                .join("installed/test.desktop.menubar/0.1.0")
+                .exists(),
+            "successful companion remove must delete package directory"
+        );
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).unwrap_or_default();
+        assert!(!plugin_state.contains("test.desktop.menubar"));
+        let companion_state =
+            std::fs::read_to_string(root.path().join("companions/state.toml")).unwrap_or_default();
+        assert!(!companion_state.contains("test.desktop.menubar"));
+    }
+
+    #[test]
+    fn plugin_host_remove_keeps_desktop_companion_package_when_supervisor_cleanup_fails() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), true);
+        let installer = PluginInstaller::new(root.path());
+        let (ok_manager, _) =
+            recording_companion_manager(root.path().join("companions/state.toml"), false);
+        installer
+            .install_with_companion_manager(source.path(), &ok_manager)
+            .expect("install companion");
+        let (failing_manager, calls) = recording_companion_manager_with_failures(
+            root.path().join("companions/state.toml"),
+            false,
+            true,
+        );
+
+        let err = installer
+            .remove_with_companion_manager("test.desktop.menubar", "0.1.0", &failing_manager)
+            .expect_err("supervisor cleanup failure must abort package remove");
+
+        assert!(matches!(
+            err,
+            PluginHostError::InvalidCompanionManifest { .. }
+        ));
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["stop", "remove"],
+            "failed supervisor cleanup must happen before package removal"
+        );
+        assert!(root
+            .path()
+            .join("installed/test.desktop.menubar/0.1.0/plugin.toml")
+            .exists());
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).expect("plugin state");
+        assert!(plugin_state.contains("test.desktop.menubar"));
+        assert!(plugin_state.contains("version = \"0.1.0\""));
+        let companion_state = std::fs::read_to_string(root.path().join("companions/state.toml"))
+            .expect("companion state");
+        assert!(companion_state.contains("test.desktop.menubar"));
+        assert!(companion_state.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn plugin_host_remove_restores_desktop_companion_when_package_remove_fails() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), true);
+        let installer = PluginInstaller::new(root.path());
+        let (manager, calls) =
+            recording_companion_manager(root.path().join("companions/state.toml"), false);
+        installer
+            .install_with_companion_manager(source.path(), &manager)
+            .expect("install companion");
+        calls.lock().expect("calls").clear();
+        std::fs::write(root.path().join(".rollback"), "not a directory")
+            .expect("poison rollback root");
+
+        let err = installer
+            .remove_with_companion_manager("test.desktop.menubar", "0.1.0", &manager)
+            .expect_err("package remove failure must restore companion state");
+
+        assert!(matches!(err, PluginHostError::WriteFailed { .. }));
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["stop", "remove", "install", "enable"],
+            "package remove failure after companion cleanup must restore supervisor state"
+        );
+        assert!(root
+            .path()
+            .join("installed/test.desktop.menubar/0.1.0/plugin.toml")
+            .exists());
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).expect("plugin state");
+        assert!(plugin_state.contains("test.desktop.menubar"));
+        assert!(plugin_state.contains("version = \"0.1.0\""));
+        let companion_state = std::fs::read_to_string(root.path().join("companions/state.toml"))
+            .expect("companion state");
+        assert!(companion_state.contains("test.desktop.menubar"));
+        assert!(companion_state.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
     fn plugin_host_install_rejects_desktop_companion_with_missing_artifact() {
         let root = tempfile::tempdir().expect("root");
         let source = tempfile::tempdir().expect("source");
@@ -969,9 +1154,18 @@ layer = "control"
         state_path: PathBuf,
         fail_enable: bool,
     ) -> (DesktopCompanionManager, Arc<Mutex<Vec<&'static str>>>) {
+        recording_companion_manager_with_failures(state_path, fail_enable, false)
+    }
+
+    fn recording_companion_manager_with_failures(
+        state_path: PathBuf,
+        fail_enable: bool,
+        fail_remove: bool,
+    ) -> (DesktopCompanionManager, Arc<Mutex<Vec<&'static str>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let supervisor = RecordingCompanionSupervisor {
             fail_next_enable: Arc::new(Mutex::new(fail_enable)),
+            fail_next_remove: Arc::new(Mutex::new(fail_remove)),
             calls: calls.clone(),
         };
         (
@@ -986,6 +1180,7 @@ layer = "control"
 
     struct RecordingCompanionSupervisor {
         fail_next_enable: Arc<Mutex<bool>>,
+        fail_next_remove: Arc<Mutex<bool>>,
         calls: Arc<Mutex<Vec<&'static str>>>,
     }
 
@@ -1029,6 +1224,14 @@ layer = "control"
 
         fn remove(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
             self.record("remove");
+            let mut fail_next = self.fail_next_remove.lock().expect("fail flag");
+            if *fail_next {
+                *fail_next = false;
+                return Err(PluginHostError::InvalidCompanionManifest {
+                    id: "test.desktop.menubar".to_string(),
+                    reason: "injected supervisor remove failure".to_string(),
+                });
+            }
             Ok(CompanionActionReport::changed("removed"))
         }
 

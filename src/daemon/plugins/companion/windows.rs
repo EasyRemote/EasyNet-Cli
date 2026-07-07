@@ -129,7 +129,7 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     }
 
     fn remove(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
-        let _ = self.disable(plan);
+        self.disable(plan)?;
         if let PlatformCompanionSpec::Windows { exe, .. } = &plan.spec {
             let target_dir = installed_windows_app_dir(exe);
             if target_dir.exists() {

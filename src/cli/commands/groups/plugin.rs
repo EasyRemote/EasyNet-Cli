@@ -225,14 +225,9 @@ fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    let package = resolve_package(&args.id, Some(&args.version)).ok();
-    if let Some(package) = &package {
-        if package.manifest().kind() == PluginKind::DesktopCompanion {
-            DesktopCompanionManager::current().remove(package)?;
-        }
-    }
     let installer = PluginInstaller::new(default_plugin_root());
-    installer.remove(&args.id, &args.version)?;
+    let companion_manager = DesktopCompanionManager::current();
+    installer.remove_with_companion_manager(&args.id, &args.version, &companion_manager)?;
     output::success(&format!("removed plugin {}@{}", args.id, args.version));
     notify_daemon_reload()?;
     Ok(())

@@ -100,7 +100,7 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
     }
 
     fn remove(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
-        let _ = self.disable(plan);
+        self.disable(plan)?;
         let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
             return Ok(CompanionActionReport::unchanged(
                 "not a macOS companion plan",
