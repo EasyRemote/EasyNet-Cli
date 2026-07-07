@@ -47,6 +47,14 @@ impl CompanionStatusFileObserver {
         }
 
         match value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("1") => {}
+            _ => return Some(self.health_error(plan, "status_file_invalid")),
+        }
+
+        match value
             .get("package_version")
             .and_then(serde_json::Value::as_str)
         {
@@ -55,6 +63,17 @@ impl CompanionStatusFileObserver {
             None => return Some(self.health_error(plan, "status_file_invalid")),
         }
 
+        let pid = match value.get("pid").and_then(serde_json::Value::as_u64) {
+            Some(pid) => pid,
+            None => return Some(self.health_error(plan, "status_file_invalid")),
+        };
+        if value
+            .get("started_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .is_none()
+        {
+            return Some(self.health_error(plan, "status_file_invalid"));
+        }
         let last_seen = value
             .get("last_seen_unix_ms")
             .and_then(serde_json::Value::as_u64);
@@ -68,7 +87,7 @@ impl CompanionStatusFileObserver {
 
         Some(CompanionObservation {
             observed_state,
-            pid: value.get("pid").and_then(serde_json::Value::as_u64),
+            pid: Some(pid),
             version: value
                 .get("package_version")
                 .and_then(serde_json::Value::as_str)
@@ -186,10 +205,95 @@ mod tests {
             "package_id": "test.desktop.companion",
             "package_version": version,
             "pid": pid,
+            "started_at_unix_ms": 900,
             "last_seen_unix_ms": last_seen_unix_ms,
         }))
         .expect("json");
         std::fs::write(path, body).expect("write");
+    }
+
+    #[test]
+    fn missing_schema_version_projects_health_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("status.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "package_id": "test.desktop.companion",
+                "package_version": "0.1.0",
+                "pid": 1234,
+                "started_at_unix_ms": 900,
+                "last_seen_unix_ms": 1_000,
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+
+        let observation = CompanionStatusFileObserver::at(1_500)
+            .observe_path(&test_plan(), &path)
+            .expect("observation");
+
+        assert_eq!(
+            observation.observed_state,
+            CompanionObservedState::HealthError
+        );
+        assert_eq!(observation.error.as_deref(), Some("status_file_invalid"));
+    }
+
+    #[test]
+    fn missing_pid_projects_health_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("status.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "schema_version": "1",
+                "package_id": "test.desktop.companion",
+                "package_version": "0.1.0",
+                "started_at_unix_ms": 900,
+                "last_seen_unix_ms": 1_000,
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+
+        let observation = CompanionStatusFileObserver::at(1_500)
+            .observe_path(&test_plan(), &path)
+            .expect("observation");
+
+        assert_eq!(
+            observation.observed_state,
+            CompanionObservedState::HealthError
+        );
+        assert_eq!(observation.error.as_deref(), Some("status_file_invalid"));
+    }
+
+    #[test]
+    fn missing_started_at_projects_health_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("status.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&json!({
+                "schema_version": "1",
+                "package_id": "test.desktop.companion",
+                "package_version": "0.1.0",
+                "pid": 1234,
+                "last_seen_unix_ms": 1_000,
+            }))
+            .expect("json"),
+        )
+        .expect("write");
+
+        let observation = CompanionStatusFileObserver::at(1_500)
+            .observe_path(&test_plan(), &path)
+            .expect("observation");
+
+        assert_eq!(
+            observation.observed_state,
+            CompanionObservedState::HealthError
+        );
+        assert_eq!(observation.error.as_deref(), Some("status_file_invalid"));
     }
 
     fn test_plan() -> DesktopCompanionPlan {
