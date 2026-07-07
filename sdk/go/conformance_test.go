@@ -356,6 +356,53 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 		t.Fatalf("unexpected shared timeout error: %#v", timeout)
 	}
 
+	retryCase := sharedCase(t, root, "error-retry-hint.yaml")
+	requireCaseID(t, retryCase, "error/retry_hint")
+	for _, action := range []string{
+		"decode_retry_never_error",
+		"decode_retry_safe_error",
+		"decode_retry_after_backoff_error",
+		"decode_retry_unknown_error",
+		"reject_invalid_retry_hint",
+		"reject_legacy_error_code_alias",
+	} {
+		requireCaseAction(t, retryCase, action)
+	}
+	for _, expected := range []string{
+		"schema: error.schema.json",
+		"never_retryable: false",
+		"safe_retryable: true",
+		"after_backoff_retryable: true",
+		"unknown_retryable: false",
+		"invalid_retry_hint_error: INVALID_ARGUMENT",
+		"legacy_error_code_alias_error: INVALID_ARGUMENT",
+		"human_message_parse_required: false",
+	} {
+		requireCaseExpectation(t, retryCase, expected)
+	}
+	retryHints := map[RetryHint]bool{
+		RetryNever:        false,
+		RetrySafe:         true,
+		RetryAfterBackoff: true,
+		RetryUnknown:      false,
+	}
+	for hint, wantRetryable := range retryHints {
+		raw := []byte(fmt.Sprintf(`{"code":"TIMEOUT","stage":"runtime","message":"retry hint","retry":%q,"source":"daemon","details":{}}`, hint))
+		decoded, err := DecodeDaemonErrorJSON(raw)
+		if err != nil {
+			t.Fatalf("DecodeDaemonErrorJSON(%s): %v", hint, err)
+		}
+		if decoded.Retry != hint || decoded.Retryable != wantRetryable {
+			t.Fatalf("retry hint %s projected as retry=%s retryable=%v, want retryable=%v", hint, decoded.Retry, decoded.Retryable, wantRetryable)
+		}
+	}
+	if _, err := DecodeDaemonErrorJSON([]byte(`{"code":"TIMEOUT","stage":"runtime","message":"bad retry","retry":"later","details":{}}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("invalid retry hint error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := DecodeDaemonErrorJSON([]byte(`{"code":"InvalidArgument","stage":"runtime","message":"legacy code","retry":"never","details":{}}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("legacy error code alias error = %v, want %s", err, ErrInvalidArgument)
+	}
+
 	profileErrorCase := sharedCase(t, root, "error-profile-source-refs.yaml")
 	requireCaseID(t, profileErrorCase, "error/profile_source_refs")
 	requireCaseAction(t, profileErrorCase, "trigger_profile_validation_error")

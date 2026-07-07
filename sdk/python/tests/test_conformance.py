@@ -1596,6 +1596,61 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self.assertEqual(timeout.retry, RetryHint.SAFE)
         self.assertTrue(timeout.retryable)
 
+        retry_case = shared_case("error-retry-hint.yaml")
+        self._require_case_id(retry_case, "error/retry_hint")
+        for action in (
+            "decode_retry_never_error",
+            "decode_retry_safe_error",
+            "decode_retry_after_backoff_error",
+            "decode_retry_unknown_error",
+            "reject_invalid_retry_hint",
+            "reject_legacy_error_code_alias",
+        ):
+            self._require_case_action(retry_case, action)
+        for expectation in (
+            "schema: error.schema.json",
+            "never_retryable: false",
+            "safe_retryable: true",
+            "after_backoff_retryable: true",
+            "unknown_retryable: false",
+            "invalid_retry_hint_error: INVALID_ARGUMENT",
+            "legacy_error_code_alias_error: INVALID_ARGUMENT",
+            "human_message_parse_required: false",
+        ):
+            self._require_case_expectation(retry_case, expectation)
+        for hint, expected_retryable in (
+            (RetryHint.NEVER, False),
+            (RetryHint.SAFE, True),
+            (RetryHint.AFTER_BACKOFF, True),
+            (RetryHint.UNKNOWN, False),
+        ):
+            decoded = SDKError.from_json(
+                f"""{{
+                    "code": "TIMEOUT",
+                    "stage": "runtime",
+                    "message": "retry hint",
+                    "retry": "{hint.value}",
+                    "source": "daemon",
+                    "details": {{}}
+                }}"""
+            )
+            self.assertIsNotNone(decoded)
+            assert decoded is not None
+            self.assertEqual(decoded.retry, hint)
+            self.assertEqual(decoded.retryable, expected_retryable)
+        with self.assertRaises(SDKError) as invalid_retry:
+            SDKError.from_json(
+                b'{"code":"TIMEOUT","stage":"runtime","message":"bad retry",'
+                b'"retry":"later","details":{}}'
+            )
+        self.assertEqual(invalid_retry.exception.code, ErrorCode.INVALID_ARGUMENT)
+        with self.assertRaises(SDKError) as legacy_code:
+            SDKError.from_json(
+                b'{"code":"InvalidArgument","stage":"runtime",'
+                b'"message":"legacy code","retry":"never","details":{}}'
+            )
+        self.assertEqual(legacy_code.exception.code, ErrorCode.INVALID_ARGUMENT)
+
         profile_error_case = shared_case("error-profile-source-refs.yaml")
         self._require_case_id(profile_error_case, "error/profile_source_refs")
         self._require_case_action(

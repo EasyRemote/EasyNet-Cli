@@ -1,0 +1,32 @@
+id: error/retry_hint
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Typed SDK errors project retry hints consistently without parsing human messages or accepting legacy code aliases.
+steps:
+  - action: decode_retry_never_error
+    schema: error.schema.json
+  - action: decode_retry_safe_error
+    schema: error.schema.json
+  - action: decode_retry_after_backoff_error
+    schema: error.schema.json
+  - action: decode_retry_unknown_error
+    schema: error.schema.json
+  - action: reject_invalid_retry_hint
+  - action: reject_legacy_error_code_alias
+expect:
+  result: retry_hint_projected
+  schema: error.schema.json
+  never_retryable: false
+  safe_retryable: true
+  after_backoff_retryable: true
+  unknown_retryable: false
+  invalid_retry_hint_error: INVALID_ARGUMENT
+  legacy_error_code_alias_error: INVALID_ARGUMENT
+  human_message_parse_required: false

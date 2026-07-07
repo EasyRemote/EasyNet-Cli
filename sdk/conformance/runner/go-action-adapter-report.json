@@ -160,6 +160,18 @@
       "message": null
     },
     {
+      "case_id": "error/retry_hint",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go"
+        }
+      ],
+      "message": "Go typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages or legacy error-code aliases."
+    },
+    {
       "case_id": "events/device_invocation_history",
       "profile": "events",
       "status": "passed",

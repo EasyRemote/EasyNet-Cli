@@ -296,43 +296,29 @@ func runtimeFailureCode(code string, fallback ErrorCode) ErrorCode {
 	if err == nil {
 		return parsed
 	}
-	if isLegacyErrorCodeAlias(code) {
-		return ErrProtocolMismatch
+	if isCanonicalExtensionErrorCode(code) {
+		return ErrorCode(code)
 	}
-	return ErrorCode(code)
+	return ErrProtocolMismatch
 }
 
-func isLegacyErrorCodeAlias(code string) bool {
+func isCanonicalExtensionErrorCode(code string) bool {
 	switch code {
-	case "InvalidArgument",
-		"InvalidHandle",
-		"NullPointer",
-		"InvalidUTF8",
-		"NotInitialized",
-		"AlreadyInit",
-		"DaemonDown",
-		"DAEMON_DOWN",
-		"PermissionDenied",
-		"AdmissionDenied",
-		"AbilityNotFound",
-		"RouteUnavailable",
-		"Timeout",
-		"Cancelled",
-		"InvalidInvocation",
-		"ProtocolMismatch",
-		"VersionMismatch",
-		"VersionIncompatible",
-		"ControlOnly",
-		"Transport",
-		"Protocol",
-		"NotFound",
-		"AbilityFailed",
-		"NotImplemented",
-		"Generic":
-		return true
-	default:
+	case "DAEMON_DOWN":
 		return false
 	}
+	hasLetter := false
+	for _, r := range code {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= '0' && r <= '9':
+		case r == '_':
+		default:
+			return false
+		}
+	}
+	return hasLetter
 }
 
 func profileErrorDetails(profile string, details map[string]any) map[string]any {

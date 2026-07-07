@@ -796,6 +796,7 @@ case_files=(
   authority-mutual-exclusion.yaml
   invocation-descriptor-ref-helper-delegation.yaml
   error-typed-json.yaml
+  error-retry-hint.yaml
   error-profile-source-refs.yaml
   backend-sdk-only-import-ban.yaml
   backend-route-family-coverage.yaml
