@@ -275,9 +275,9 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 		"schema: feature-discovery.schema.json",
 		"abi_version: 4",
 		"sdk_version_required: true",
-		"runtime_core_profile: partial",
-		"authority_profile: cabi_core",
-		"receipt_profile: fetch_projection_partial",
+		"runtime_core_profile: provider-backed",
+		"authority_profile: provider-backed",
+		"receipt_profile: provider-backed",
 		"daemon_lifecycle_symbol: true",
 		"typed_error_json_symbol: true",
 		"runtime_health_symbol: false",
@@ -299,9 +299,9 @@ func TestGoRuntimeCoreExecutesSharedLifecycleVersionErrorConformanceCases(t *tes
 	if featureSet.ABIVersion != 4 || featureSet.SDKVersion == "" {
 		t.Fatalf("unexpected shared feature version facts: %#v", featureSet.Version())
 	}
-	if featureSet.Profiles["runtime_core"] != "partial" ||
-		featureSet.Profiles["authority"] != "cabi_core" ||
-		featureSet.Profiles["receipt"] != "fetch_projection_partial" {
+	if featureSet.Profiles["runtime_core"] != "provider-backed" ||
+		featureSet.Profiles["authority"] != "provider-backed" ||
+		featureSet.Profiles["receipt"] != "provider-backed" {
 		t.Fatalf("unexpected shared feature profiles: %#v", featureSet.Profiles)
 	}
 	if !featureSet.Symbols["daemon_lifecycle"] ||

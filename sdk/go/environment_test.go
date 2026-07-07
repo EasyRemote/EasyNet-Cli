@@ -19,7 +19,7 @@ func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 	discovery := &memoryDiscoveryTransport{payload: []byte(`{
 		"abi_version": 4,
 		"sdk_version": "0.91.30",
-		"profiles": {"runtime_core": "partial"},
+		"profiles": {"runtime_core": "provider-backed"},
 		"symbols": {"runtime_health": true}
 	}`)}
 	daemon := &closeableDaemonTransport{memoryDaemonTransport: &memoryDaemonTransport{

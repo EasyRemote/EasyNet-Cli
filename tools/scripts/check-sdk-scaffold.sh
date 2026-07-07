@@ -543,6 +543,24 @@ validate_json_file sdk/conformance/fixture-schema-bindings.json
 validate_fixture_schema_bindings
 validate_c_abi_header
 validate_json_file sdk/conformance/sdk-parity-matrix.json
+require_literal sdk/conformance/fixtures/feature-discovery.v4.json '"runtime_core": "provider-backed"'
+require_literal sdk/conformance/fixtures/feature-discovery.v4.json '"invocation_dispatch_v4": true'
+require_literal src/ffi/features.rs '("runtime_core", "provider-backed")'
+require_literal src/ffi/features.rs '"invocation_dispatch_v4"'
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json '"partial"'
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json "carrier_partial"
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json "carrier_projection_partial"
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json "fetch_projection_partial"
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json "read_model_subscription_projection_partial"
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json "cabi_core"
+reject_literal sdk/conformance/fixtures/feature-discovery.v4.json "invocation_dispatch_v3"
+reject_literal src/ffi/features.rs '"partial"'
+reject_literal src/ffi/features.rs "carrier_partial"
+reject_literal src/ffi/features.rs "carrier_projection_partial"
+reject_literal src/ffi/features.rs "fetch_projection_partial"
+reject_literal src/ffi/features.rs "read_model_subscription_projection_partial"
+reject_literal src/ffi/features.rs "cabi_core"
+reject_literal src/ffi/features.rs "invocation_dispatch_v3"
 validate_json_file sdk/conformance/runner/rust-action-adapter-report.json
 validate_json_file sdk/conformance/runner/c-abi-action-adapter-report.json
 validate_json_file sdk/conformance/runner/go-action-adapter-report.json
@@ -795,6 +813,7 @@ case_files=(
   version-abi-incompatible.yaml
   environment-process-root.yaml
   daemon-control-only.yaml
+  daemon-permission-denied.yaml
   invocation-complete-tuple.yaml
   invocation-builder-handle-state.yaml
   invocation-terminal-monotonicity.yaml
@@ -815,8 +834,10 @@ case_files=(
   receipt-projection-causal-ref.yaml
   receipt-axon-chain-verification.yaml
   stream-order-terminal.yaml
+  bidi-frame0-required.yaml
   bidi-close-send-not-cancel.yaml
   stream-backpressure-bound.yaml
+  aggregate-partial-result.yaml
   host-binding-codec-hash.yaml
   publication-resource-carriers.yaml
   mission-carrier-status.yaml
@@ -853,6 +874,10 @@ for case_file in "${case_files[@]}"; do
   require_literal "$path" "expect:"
 done
 validate_declared_file_list case_files sdk/conformance/cases .yaml
+require_file sdk/conformance/spec-section27-coverage.json
+validate_json_file sdk/conformance/spec-section27-coverage.json
+require_file tools/scripts/check-sdk-section27-coverage.sh
+require_literal tools/scripts/check-sdk-cutover-readiness.sh "SDK section 27 coverage"
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null

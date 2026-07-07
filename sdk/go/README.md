@@ -10,7 +10,7 @@ errors/connect-local lifecycle composition/invocation-draft/unary/stream/bidi/ha
 Directory + Identity, Receipt, Publication, Host Binding, Mission,
 Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compatibility
 OpenAI adapter seam, and Convenience Wrapper execution seam
-partial. The package exposes typed
+provider-backed. The package exposes typed
 feature/version discovery with root client close and optional `easynet_cabi,cgo`
 C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health,
 unary invoke, stream/bidi callback, prepare/sign/submit-handle,

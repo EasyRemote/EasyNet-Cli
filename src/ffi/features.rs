@@ -9,26 +9,23 @@ use serde_json::{json, Value};
 use super::EASYNET_ABI_VERSION;
 
 pub const PROFILES: &[(&str, &str)] = &[
-    ("runtime_core", "partial"),
-    ("authority", "cabi_core"),
-    ("receipt", "fetch_projection_partial"),
-    (
-        "directory_identity",
-        "read_model_subscription_projection_partial",
-    ),
-    ("publication", "carrier_partial"),
-    ("host_binding", "codec_partial"),
-    ("mission", "carrier_status_partial"),
-    ("events", "directory_session_stream_partial"),
-    ("admin_gateway", "carrier_status_partial"),
-    ("surface", "carrier_projection_partial"),
-    ("compatibility", "carrier_projection_partial"),
-    ("wrappers", "carrier_record_projection_partial"),
+    ("runtime_core", "provider-backed"),
+    ("authority", "provider-backed"),
+    ("receipt", "provider-backed"),
+    ("directory_identity", "provider-backed"),
+    ("publication", "provider-backed"),
+    ("host_binding", "provider-backed"),
+    ("mission", "provider-backed"),
+    ("events", "provider-backed"),
+    ("admin_gateway", "provider-backed"),
+    ("surface", "provider-backed"),
+    ("compatibility", "provider-backed"),
+    ("wrappers", "provider-backed"),
 ];
 
 pub const ALWAYS_ON_SYMBOLS: &[&str] = &[
     "daemon_lifecycle",
-    "invocation_dispatch_v3",
+    "invocation_dispatch_v4",
     "typed_error_json",
     "receipt_fetch",
     "receipt_projection",

@@ -298,8 +298,8 @@ class FakeRawCABI:
             out_ptr,
             b'{"abi_version":4,"sdk_version":"0.91.30",'
             b'"profiles":{"directory_identity":'
-            b'"read_model_subscription_projection_partial",'
-            b'"authority":"cabi_core"},'
+            b'"provider-backed",'
+            b'"authority":"provider-backed"},'
             b'"symbols":{"directory_identity_projection":true,'
             b'"identity_signing_key_lifecycle":true,'
             b'"directory_subscription_projection":true,'

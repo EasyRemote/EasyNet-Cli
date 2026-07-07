@@ -1525,9 +1525,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
             "schema: feature-discovery.schema.json",
             "abi_version: 4",
             "sdk_version_required: true",
-            "runtime_core_profile: partial",
-            "authority_profile: cabi_core",
-            "receipt_profile: fetch_projection_partial",
+            "runtime_core_profile: provider-backed",
+            "authority_profile: provider-backed",
+            "receipt_profile: provider-backed",
             "daemon_lifecycle_symbol: true",
             "typed_error_json_symbol: true",
             "runtime_health_symbol: false",
@@ -1540,11 +1540,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         feature_set = feature_client.feature_discovery()
         self.assertEqual(feature_set.abi_version, 4)
         self.assertTrue(feature_set.sdk_version)
-        self.assertEqual(feature_set.profiles["runtime_core"], "partial")
-        self.assertEqual(feature_set.profiles["authority"], "cabi_core")
-        self.assertEqual(
-            feature_set.profiles["receipt"], "fetch_projection_partial"
-        )
+        self.assertEqual(feature_set.profiles["runtime_core"], "provider-backed")
+        self.assertEqual(feature_set.profiles["authority"], "provider-backed")
+        self.assertEqual(feature_set.profiles["receipt"], "provider-backed")
         self.assertTrue(feature_set.symbols["daemon_lifecycle"])
         self.assertTrue(feature_set.symbols["typed_error_json"])
         self.assertFalse(feature_set.symbols["runtime_health"])

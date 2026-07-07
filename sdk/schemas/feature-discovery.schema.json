@@ -26,18 +26,18 @@
         "wrappers"
       ],
       "properties": {
-        "runtime_core": {"type": "string", "enum": ["partial", "available", "cutover_ready"]},
-        "authority": {"type": "string"},
-        "receipt": {"type": "string"},
-        "directory_identity": {"type": "string"},
-        "publication": {"type": "string"},
-        "host_binding": {"type": "string"},
-        "mission": {"type": "string"},
-        "events": {"type": "string"},
-        "admin_gateway": {"type": "string"},
-        "surface": {"type": "string"},
-        "compatibility": {"type": "string"},
-        "wrappers": {"type": "string"}
+        "runtime_core": {"$ref": "#/$defs/profile_status"},
+        "authority": {"$ref": "#/$defs/profile_status"},
+        "receipt": {"$ref": "#/$defs/profile_status"},
+        "directory_identity": {"$ref": "#/$defs/profile_status"},
+        "publication": {"$ref": "#/$defs/profile_status"},
+        "host_binding": {"$ref": "#/$defs/profile_status"},
+        "mission": {"$ref": "#/$defs/profile_status"},
+        "events": {"$ref": "#/$defs/profile_status"},
+        "admin_gateway": {"$ref": "#/$defs/profile_status"},
+        "surface": {"$ref": "#/$defs/profile_status"},
+        "compatibility": {"$ref": "#/$defs/profile_status"},
+        "wrappers": {"$ref": "#/$defs/profile_status"}
       }
     },
     "symbols": {
@@ -45,7 +45,7 @@
       "additionalProperties": false,
       "required": [
         "daemon_lifecycle",
-        "invocation_dispatch_v3",
+        "invocation_dispatch_v4",
         "typed_error_json",
         "receipt_fetch",
         "receipt_projection",
@@ -82,7 +82,7 @@
       ],
       "properties": {
         "daemon_lifecycle": {"type": "boolean"},
-        "invocation_dispatch_v3": {"type": "boolean"},
+        "invocation_dispatch_v4": {"type": "boolean"},
         "typed_error_json": {"type": "boolean"},
         "receipt_fetch": {"type": "boolean"},
         "receipt_projection": {"type": "boolean"},
@@ -119,5 +119,11 @@
       }
     },
     "axon_pb": {"type": "boolean"}
+  },
+  "$defs": {
+    "profile_status": {
+      "type": "string",
+      "enum": ["unsupported", "seam", "provider-backed", "cutover-ready"]
+    }
   }
 }
