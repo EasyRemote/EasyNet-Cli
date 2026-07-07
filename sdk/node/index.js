@@ -64,8 +64,13 @@ export const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE = 50;
 export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
+export const EVENTS_PROFILE = "events";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
+export const DEFAULT_EVENT_PAGE_SIZE = 50;
+export const MAX_EVENT_PAGE_SIZE = 500;
+export const MIN_EVENT_HEARTBEAT_INTERVAL_MS = 1000;
+export const MAX_EVENT_HEARTBEAT_INTERVAL_MS = 300000;
 export const HOST_STREAM_FRAME_SCHEMA = "host-stream-frame.schema.json";
 export const HOST_STREAM_HASH_ALGORITHM = "sha256(prev_hash || seq_be || canonical_json(value))";
 export const HOST_STREAM_EMPTY_OUTPUT_HASH =
@@ -566,6 +571,294 @@ export class DirectoryClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("directory client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class EventCursor {
+  constructor(fields) {
+    const value = objectValue(fields, "event cursor");
+    this.stream = requiredEventStream(value.stream, "stream");
+    this.sequence = eventNonNegativeInteger(value.sequence, "sequence");
+    this.token = cleanOptionalString(value.token ?? `${this.stream}:${this.sequence}`, "token");
+    validateEventCursor(this);
+  }
+
+  static fromJSON(raw) {
+    return new EventCursor(parseJSON(raw, "event cursor"));
+  }
+
+  resumeToken() {
+    return this.token || `${this.stream}:${this.sequence}`;
+  }
+
+  toJSON() {
+    return {
+      stream: this.stream,
+      sequence: this.sequence,
+      token: this.resumeToken(),
+    };
+  }
+}
+
+export class EventFrame {
+  constructor(fields) {
+    const value = objectValue(fields, "event frame");
+    this.profile = requiredEventString(value.profile, "profile");
+    if (this.profile !== EVENTS_PROFILE) {
+      throw invalidEvents("invalid event frame projection");
+    }
+    this.stream = requiredEventStream(value.stream, "stream");
+    this.kind = requiredEventString(value.kind, "kind");
+    this.eventId = requiredEventString(value.event_id, "event_id");
+    this.cursor = new EventCursor(objectValue(value.cursor, "cursor"));
+    if (this.cursor.stream !== this.stream) {
+      throw invalidEvents("event cursor stream mismatch");
+    }
+    this.resumeToken = requiredEventString(value.resume_token, "resume_token");
+    this.occurredUnixMS = eventNonNegativeInteger(value.occurred_unix_ms, "occurred_unix_ms");
+    this.occurredAt = requiredEventString(value.occurred_at, "occurred_at");
+    this.subjectRef = value.subject_ref ?? null;
+    this.tenantRef = value.tenant_ref ?? null;
+    this.payload = Object.hasOwn(value, "payload") ? value.payload : null;
+    this.droppedCount = eventNonNegativeInteger(value.dropped_count, "dropped_count");
+    this.reconnectAfterMS = eventOptionalNonNegativeInteger(
+      value.reconnect_after_ms,
+      "reconnect_after_ms",
+    );
+    validateEventReconnectAfterMS(this.reconnectAfterMS);
+    this.terminal = eventBoolean(value.terminal, "terminal");
+    this.metadata = objectValue(value.metadata, "metadata");
+    validateEventFrame(this);
+  }
+
+  static fromJSON(raw) {
+    return new EventFrame(parseJSON(raw, "event frame"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      stream: this.stream,
+      kind: this.kind,
+      event_id: this.eventId,
+      cursor: this.cursor.toJSON(),
+      resume_token: this.resumeToken,
+      occurred_unix_ms: this.occurredUnixMS,
+      occurred_at: this.occurredAt,
+      subject_ref: this.subjectRef,
+      tenant_ref: this.tenantRef,
+      payload: this.payload,
+      dropped_count: this.droppedCount,
+      reconnect_after_ms: this.reconnectAfterMS,
+      terminal: this.terminal,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class DeviceEventPage {
+  constructor(fields) {
+    const value = objectValue(fields, "device event page");
+    this.profile = requiredEventString(value.profile, "profile");
+    this.stream = requiredEventStream(value.stream, "stream");
+    if (this.profile !== EVENTS_PROFILE || this.stream !== "device") {
+      throw invalidEvents("invalid device event page projection");
+    }
+    this.itemKind = requiredEventString(value.item_kind, "item_kind");
+    const items = value.items;
+    if (!Array.isArray(items)) {
+      throw invalidEvents("items must be a list");
+    }
+    this.items = items.map((item) => {
+      const frame = new EventFrame(item);
+      if (frame.stream !== "device") {
+        throw invalidEvents("device event page item stream mismatch");
+      }
+      return frame;
+    });
+    this.nextCursor = eventOptionalString(value.next_cursor, "next_cursor");
+    this.hasMore = eventBoolean(value.has_more, "has_more");
+    this.limit = eventPositiveBoundedInteger(value.limit, "limit", MAX_EVENT_PAGE_SIZE);
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new DeviceEventPage(parseJSON(raw, "device event page"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      stream: this.stream,
+      item_kind: this.itemKind,
+      items: this.items.map((item) => item.toJSON()),
+      next_cursor: this.nextCursor,
+      has_more: this.hasMore,
+      limit: this.limit,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class EventStream {
+  constructor(stream, handle, open = {}) {
+    this.stream = requiredEventStream(stream, "stream");
+    if (!(handle instanceof StreamHandle)) {
+      throw invalidEvents("runtime stream handle is required");
+    }
+    const value = objectValue(open, "event stream");
+    if (value.stream !== undefined && value.stream !== this.stream) {
+      throw invalidEvents("event stream projection mismatch");
+    }
+    this.handle = handle;
+    this.state = eventOptionalString(value.state, "state") ?? "Live";
+    this.streamId = eventOptionalString(value.stream_id, "stream_id") ?? "";
+    this.resumeToken = eventOptionalString(value.resume_token, "resume_token") ?? "";
+    this.metadata = objectValue(value.metadata ?? { profile: EVENTS_PROFILE }, "metadata");
+  }
+
+  static fromTransportResult(result, stream) {
+    const value = objectValue(result, "event stream transport result");
+    const open = parseJSON(value.open, "event stream open");
+    return new EventStream(stream, new StreamHandle(value.transport, open), open);
+  }
+
+  async receive(options = {}) {
+    const raw = await this.handle.receive(options);
+    const frame = new EventFrame(raw);
+    this.state = this.handle.terminal ? "Terminal" : this.state;
+    return frame;
+  }
+
+  async *events(options = {}) {
+    try {
+      while (!this.handle.closed && !this.handle.terminal) {
+        yield await this.receive(options);
+      }
+    } finally {
+      if (options.closeOnReturn !== false) {
+        await this.close();
+      }
+    }
+  }
+
+  [Symbol.asyncIterator]() {
+    return this.events();
+  }
+
+  async cancel(reason = "") {
+    await this.handle.cancel(reason);
+    this.state = "Cancelled";
+  }
+
+  async close() {
+    await this.handle.close();
+    this.state = "Closed";
+  }
+
+  terminalEvent() {
+    const raw = this.handle.terminalEvent();
+    return raw ? new EventFrame(raw) : null;
+  }
+}
+
+export class EventClient {
+  constructor(transport) {
+    if (!transport || typeof transport.buildDirectorySubscriptionInvocation !== "function") {
+      throw invalidSDK("events transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async buildDirectorySubscriptionInvocation(request) {
+    return this.buildSubscriptionInvocation("buildDirectorySubscriptionInvocation", request, "directory");
+  }
+
+  async buildDeviceSubscriptionInvocation(request) {
+    return this.buildSubscriptionInvocation("buildDeviceSubscriptionInvocation", request, "device");
+  }
+
+  async buildSessionSubscriptionInvocation(request) {
+    return this.buildSubscriptionInvocation("buildSessionSubscriptionInvocation", request, "session");
+  }
+
+  async buildInvocationSubscriptionInvocation(request) {
+    return this.buildSubscriptionInvocation("buildInvocationSubscriptionInvocation", request, "invocation");
+  }
+
+  async buildSubscriptionInvocation(method, request, stream) {
+    const payload = eventsSubscriptionRequest(request, stream);
+    return InvocationDraft.fromJSON(await callRaw(this.requireOpen(), method, payload));
+  }
+
+  async subscribeDirectory(request) {
+    return this.subscribe("subscribeDirectory", request, "directory");
+  }
+
+  async subscribeDevices(request) {
+    return this.subscribe("subscribeDevices", request, "device");
+  }
+
+  async subscribeSessions(request) {
+    return this.subscribe("subscribeSessions", request, "session");
+  }
+
+  async subscribeInvocations(request) {
+    return this.subscribe("subscribeInvocations", request, "invocation");
+  }
+
+  async subscribe(method, request, stream) {
+    const payload = eventsSubscriptionRequest(request, stream);
+    const transport = this.requireOpen();
+    if (typeof transport[method] !== "function") {
+      throw invalidSDK(`${method} transport function is required`);
+    }
+    return EventStream.fromTransportResult(await transport[method](Buffer.from(JSON.stringify(payload))), stream);
+  }
+
+  async listDeviceEvents(request) {
+    const payload = eventsDeviceEventListRequest(request);
+    return DeviceEventPage.fromJSON(await callRaw(this.requireOpen(), "listDeviceEvents", payload));
+  }
+
+  async projectDirectoryEvent(input) {
+    const payload = eventProjectionInput(input, "directory");
+    return EventFrame.fromJSON(await callRaw(this.requireOpen(), "projectDirectoryEvent", payload));
+  }
+
+  async projectLiveEvent(input) {
+    const payload = eventProjectionInput(input);
+    return EventFrame.fromJSON(await callRaw(this.requireOpen(), "projectLiveEvent", payload));
+  }
+
+  async projectDropReport(input) {
+    const payload = eventDropReportInput(input);
+    return EventFrame.fromJSON(await callRaw(this.requireOpen(), "projectDropReport", payload));
+  }
+
+  async projectTerminal(input) {
+    const payload = eventTerminalInput(input);
+    return EventFrame.fromJSON(await callRaw(this.requireOpen(), "projectTerminal", payload));
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("events client is closed");
     }
     return this.transport;
   }
@@ -2094,6 +2387,309 @@ function receiptCarrierBaseFields() {
   ];
 }
 
+function eventsCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+  ];
+}
+
+function eventsSubscriptionRequest(value, expectedStream) {
+  requiredEventStream(expectedStream, "stream");
+  const payload = eventsRequest(value, [
+    ...eventsCarrierBaseFields(),
+    "stream",
+    "filter",
+    "realm",
+    "owner_ura",
+    "device_ura",
+    "agent_ura",
+    "session_id",
+    "session_ura",
+    "invocation_id",
+    "resume_cursor",
+    "heartbeat_interval_ms",
+  ], "events subscription request");
+  if (payload.stream === undefined || payload.stream === "") {
+    payload.stream = expectedStream;
+  }
+  if (payload.stream !== expectedStream) {
+    throw invalidEvents("event subscription stream mismatch");
+  }
+  validateEventsCarrierBase(payload);
+  normalizeEventFilterFields(payload);
+  if (payload.resume_cursor !== undefined && payload.resume_cursor !== null) {
+    const cursor = new EventCursor(payload.resume_cursor);
+    if (cursor.stream !== expectedStream) {
+      throw invalidEvents("resume cursor stream mismatch");
+    }
+    payload.resume_cursor = cursor.toJSON();
+  }
+  if (expectedStream === "session") {
+    if (payload.session_ura !== undefined && payload.session_ura !== "") {
+      throw invalidEvents("session_ura cannot be converted into daemon session_id");
+    }
+    requiredNoWhitespaceEventString(payload.session_id, "session_id");
+  }
+  if (expectedStream === "invocation") {
+    requiredNoWhitespaceEventString(payload.invocation_id, "invocation_id");
+  }
+  if (payload.heartbeat_interval_ms !== undefined) {
+    eventHeartbeatInterval(payload.heartbeat_interval_ms, "heartbeat_interval_ms");
+  }
+  return payload;
+}
+
+function eventsDeviceEventListRequest(value) {
+  const payload = eventsRequest(value, [
+    ...eventsCarrierBaseFields(),
+    "filter",
+    "device_ura",
+    "limit",
+    "cursor",
+  ], "events device event list request");
+  validateEventsCarrierBase(payload);
+  normalizeEventFilterFields(payload);
+  if (payload.limit === undefined || payload.limit === 0) {
+    payload.limit = DEFAULT_EVENT_PAGE_SIZE;
+  }
+  eventPositiveBoundedInteger(payload.limit, "limit", MAX_EVENT_PAGE_SIZE);
+  if (payload.cursor !== undefined) {
+    cleanOptionalString(payload.cursor, "cursor");
+  }
+  return payload;
+}
+
+function eventProjectionInput(value, expectedStream = "") {
+  const payload = eventsRequest(value, [
+    "cursor",
+    "event",
+    "event_id",
+    "resume_token",
+    "tenant_ref",
+  ], "event projection input");
+  const cursor = new EventCursor(payload.cursor);
+  if (expectedStream && cursor.stream !== expectedStream) {
+    throw invalidEvents("event cursor stream mismatch");
+  }
+  payload.cursor = cursor.toJSON();
+  objectValue(payload.event, "event");
+  return payload;
+}
+
+function eventDropReportInput(value) {
+  const payload = eventsRequest(value, [
+    "cursor",
+    "occurred_unix_ms",
+    "dropped_count",
+    "reconnect_after_ms",
+    "reason",
+    "event_id",
+    "resume_token",
+    "tenant_ref",
+  ], "event drop report input");
+  const cursor = new EventCursor(payload.cursor);
+  if (cursor.stream !== "directory") {
+    throw invalidEvents("event cursor stream mismatch");
+  }
+  payload.cursor = cursor.toJSON();
+  eventNonNegativeInteger(payload.occurred_unix_ms, "occurred_unix_ms");
+  if (!Number.isInteger(payload.dropped_count) || payload.dropped_count <= 0) {
+    throw invalidEvents("dropped_count must be greater than zero");
+  }
+  validateEventReconnectAfterMS(eventOptionalNonNegativeInteger(payload.reconnect_after_ms, "reconnect_after_ms"));
+  return payload;
+}
+
+function eventTerminalInput(value) {
+  const payload = eventsRequest(value, [
+    "cursor",
+    "occurred_unix_ms",
+    "reconnect_after_ms",
+    "reason",
+    "event_id",
+    "resume_token",
+    "tenant_ref",
+  ], "event terminal input");
+  const cursor = new EventCursor(payload.cursor);
+  if (cursor.stream !== "directory") {
+    throw invalidEvents("event cursor stream mismatch");
+  }
+  payload.cursor = cursor.toJSON();
+  eventNonNegativeInteger(payload.occurred_unix_ms, "occurred_unix_ms");
+  validateEventReconnectAfterMS(eventOptionalNonNegativeInteger(payload.reconnect_after_ms, "reconnect_after_ms"));
+  return payload;
+}
+
+function eventsRequest(value, allowed, label) {
+  const payload = objectValue(value, label);
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(payload)) {
+    if (!allowedSet.has(key)) {
+      throw invalidEvents(`${key} is not an events field`);
+    }
+  }
+  for (const [key, raw] of Object.entries(payload)) {
+    if (typeof raw === "string" && raw.trim() !== raw) {
+      throw invalidEvents(`${key} must not contain surrounding whitespace`);
+    }
+  }
+  return payload;
+}
+
+function validateEventsCarrierBase(payload) {
+  cleanRequiredString(payload.caller_ura, "caller_ura");
+  cleanRequiredString(payload.callee_ura, "callee_ura");
+  cleanRequiredString(payload.subject_ura, "subject_ura");
+  cleanRequiredString(payload.descriptor_version, "descriptor_version");
+  cleanRequiredString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+}
+
+function normalizeEventFilterFields(payload) {
+  const filter = payload.filter === undefined || payload.filter === null
+    ? {}
+    : objectValue(payload.filter, "filter");
+  const fields = ["realm", "owner_ura", "device_ura", "agent_ura", "session_id", "invocation_id"];
+  for (const field of fields) {
+    if (filter[field] !== undefined) {
+      const filtered = cleanOptionalString(filter[field], `filter.${field}`);
+      if (field === "realm" || field === "session_id" || field === "invocation_id") {
+        rejectEventWhitespace(filtered, field);
+      }
+      if (payload[field] !== undefined && payload[field] !== "" && payload[field] !== filtered) {
+        throw invalidEvents(`${field} conflicts with filter field`);
+      }
+      payload[field] = payload[field] || filtered;
+      filter[field] = filtered;
+    } else if (payload[field] !== undefined && payload[field] !== "") {
+      filter[field] = payload[field];
+    }
+  }
+  if (Object.keys(filter).length > 0) {
+    payload.filter = filter;
+  }
+  for (const field of fields) {
+    if (payload[field] !== undefined && payload[field] !== "") {
+      cleanOptionalString(payload[field], field);
+      if (field === "realm" || field === "session_id" || field === "invocation_id") {
+        rejectEventWhitespace(payload[field], field);
+      }
+    }
+  }
+}
+
+function validateEventCursor(cursor) {
+  requiredEventStream(cursor.stream, "stream");
+  eventNonNegativeInteger(cursor.sequence, "sequence");
+  const token = cursor.resumeToken();
+  requiredEventString(token, "token");
+  rejectEventWhitespace(cursor.stream, "stream");
+  rejectEventWhitespace(token, "token");
+  if (token !== `${cursor.stream}:${cursor.sequence}`) {
+    throw invalidEvents("event cursor token must match stream sequence");
+  }
+}
+
+function validateEventFrame(frame) {
+  if (frame.kind.includes("drop_report") && frame.droppedCount === 0) {
+    throw invalidEvents("dropped_count must be greater than zero");
+  }
+  if (frame.kind.includes("terminal") && !frame.terminal) {
+    throw invalidEvents("terminal event frame must be terminal");
+  }
+}
+
+function requiredEventStream(value, field) {
+  const stream = requiredEventString(value, field);
+  if (!["directory", "device", "session", "invocation"].includes(stream)) {
+    throw invalidEvents("unsupported event stream");
+  }
+  return stream;
+}
+
+function requiredEventString(value, field) {
+  if (typeof value !== "string" || value === "") {
+    throw invalidEvents(`${field} is required`);
+  }
+  return value;
+}
+
+function requiredNoWhitespaceEventString(value, field) {
+  const text = requiredEventString(value, field);
+  rejectEventWhitespace(text, field);
+  return text;
+}
+
+function eventOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw invalidEvents(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function eventBoolean(value, field) {
+  if (typeof value !== "boolean") {
+    throw invalidEvents(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function eventNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidEvents(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function eventOptionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return eventNonNegativeInteger(value, field);
+}
+
+function eventPositiveBoundedInteger(value, field, max) {
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw invalidEvents(`${field} exceeds bounds`);
+  }
+  return value;
+}
+
+function eventHeartbeatInterval(value, field) {
+  if (
+    !Number.isInteger(value) ||
+    value < MIN_EVENT_HEARTBEAT_INTERVAL_MS ||
+    value > MAX_EVENT_HEARTBEAT_INTERVAL_MS
+  ) {
+    throw invalidEvents(`${field} exceeds bounds`);
+  }
+  return value;
+}
+
+function validateEventReconnectAfterMS(value) {
+  if (value !== null && value > MAX_EVENT_HEARTBEAT_INTERVAL_MS) {
+    throw invalidEvents("reconnect_after_ms exceeds bounds");
+  }
+}
+
+function rejectEventWhitespace(value, field) {
+  if (typeof value === "string" && /\s/.test(value)) {
+    throw invalidEvents(`${field} must not contain whitespace`);
+  }
+}
+
 function receiptFetchRequest(value) {
   const payload = requestObject(
     value,
@@ -3243,6 +3839,10 @@ function invalidHostBinding(message, details = {}) {
 
 function invalidHealth(message, details = {}) {
   return invalidProfile(HEALTH_PROFILE, "decode", message, details);
+}
+
+function invalidEvents(message, details = {}) {
+  return invalidProfile(EVENTS_PROFILE, "events", message, details);
 }
 
 function invalidProfile(profile, stage, message, details = {}) {

@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   Client,
   DEFAULT_DIRECTORY_PAGE_SIZE,
+  DEFAULT_EVENT_PAGE_SIZE,
   DirectoryClient,
+  EventClient,
   ErrorClass,
   ErrorCode,
   HOST_STREAM_EMPTY_OUTPUT_HASH,
@@ -69,6 +71,46 @@ const receiptFetch = () => ({
 });
 
 const receiptHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+const eventFrame = (overrides = {}) => ({
+  profile: "events",
+  stream: "directory",
+  kind: "directory.agent_advertised",
+  event_id: "evt-directory-8",
+  cursor: { stream: "directory", sequence: 8, token: "directory:8" },
+  resume_token: "directory:8",
+  occurred_unix_ms: 1783100000123,
+  occurred_at: "2026-07-03T17:33:20.123Z",
+  subject_ref: {
+    kind: "ura",
+    ura: "easynet:///r/example/agent/alice.main",
+    role: "agent",
+  },
+  tenant_ref: { kind: "realm", realm: "example" },
+  payload: {
+    type: "agent_advertised",
+    agent_ura: "easynet:///r/example/agent/alice.main",
+  },
+  dropped_count: 0,
+  reconnect_after_ms: null,
+  terminal: false,
+  metadata: {
+    profile: "events",
+    stream: "directory",
+    carrier_owner: "daemon_sdk",
+  },
+  ...overrides,
+});
+
+const eventCarrier = () => ({
+  ...directoryBase(),
+  stream: "directory",
+  realm: "example",
+  agent_ura: "easynet:///r/example/agent/alice.main",
+  resume_cursor: { stream: "directory", sequence: 7 },
+  heartbeat_interval_ms: 30000,
+  metadata: { request_id: "events-directory-subscribe-1" },
+});
 
 const publicationResourceRef = () => ({
   resource_ura: "easynet:///r/example/resource/fs.local.pkg",
@@ -1026,6 +1068,208 @@ test("DirectoryClient exposes subscription as StreamHandle seam", async () => {
     phases.push(event.phase);
   }
   assert.deepEqual(phases, ["live", "terminal"]);
+});
+
+test("EventClient delegates event carriers, projections, history, and streams", async () => {
+  const seen = [];
+  const streamEvents = [
+    eventFrame(),
+    eventFrame({
+      kind: "directory.terminal",
+      event_id: "evt-directory-9",
+      cursor: { stream: "directory", sequence: 9, token: "directory:9" },
+      resume_token: "directory:9",
+      payload: { reason: "client_closed" },
+      terminal: true,
+    }),
+  ];
+  const events = new EventClient({
+    buildDirectorySubscriptionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "directory_carrier", request });
+      return completeDraft().build().toJSONString();
+    },
+    buildDeviceSubscriptionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "device_carrier", request });
+      return completeDraft().build().toJSONString();
+    },
+    buildSessionSubscriptionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "session_carrier", request });
+      return completeDraft().build().toJSONString();
+    },
+    buildInvocationSubscriptionInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "invocation_carrier", request });
+      return completeDraft().build().toJSONString();
+    },
+    subscribeDirectory: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "directory_stream", request });
+      return {
+        open: JSON.stringify({
+          stream: "directory",
+          state: "Live",
+          metadata: { profile: "events" },
+          max_buffered_events: 4,
+        }),
+        transport: {
+          receive: () => JSON.stringify(streamEvents.shift()),
+          close: () => {},
+        },
+      };
+    },
+    listDeviceEvents: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "device_history", request });
+      return JSON.stringify({
+        profile: "events",
+        stream: "device",
+        item_kind: "device_event",
+        items: [
+          eventFrame({
+            stream: "device",
+            kind: "device.status_changed",
+            event_id: "evt-device-8",
+            cursor: { stream: "device", sequence: 8, token: "device:8" },
+            resume_token: "device:8",
+            subject_ref: {
+              kind: "ura",
+              ura: "easynet:///r/example/device/dev-a",
+              role: "device",
+            },
+            payload: { state: "online" },
+          }),
+        ],
+        next_cursor: null,
+        has_more: false,
+        limit: request.limit,
+        metadata: { profile: "events", source: "device_event_history" },
+      });
+    },
+    projectDirectoryEvent: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_directory", request });
+      return JSON.stringify(eventFrame({ cursor: request.cursor, payload: request.event }));
+    },
+    projectLiveEvent: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_live", request });
+      return JSON.stringify(eventFrame({
+        stream: request.cursor.stream,
+        kind: `${request.cursor.stream}.live`,
+        cursor: request.cursor,
+        resume_token: request.cursor.token,
+        payload: request.event,
+      }));
+    },
+    projectDropReport: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_drop", request });
+      return JSON.stringify(eventFrame({
+        kind: "directory.drop_report",
+        event_id: "evt-directory-10",
+        cursor: request.cursor,
+        resume_token: request.cursor.token,
+        payload: { reason: request.reason, dropped_count: request.dropped_count },
+        dropped_count: request.dropped_count,
+        reconnect_after_ms: request.reconnect_after_ms,
+      }));
+    },
+    projectTerminal: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_terminal", request });
+      return JSON.stringify(eventFrame({
+        kind: "directory.terminal",
+        event_id: "evt-directory-11",
+        cursor: request.cursor,
+        resume_token: request.cursor.token,
+        payload: { reason: request.reason },
+        terminal: true,
+      }));
+    },
+  });
+
+  const directoryCarrier = await events.buildDirectorySubscriptionInvocation(eventCarrier());
+  const deviceCarrier = await events.buildDeviceSubscriptionInvocation({
+    ...directoryBase(),
+    stream: "device",
+    filter: { device_ura: "easynet:///r/example/device/dev-a" },
+    device_ura: "easynet:///r/example/device/dev-a",
+    resume_cursor: { stream: "device", sequence: 2 },
+    heartbeat_interval_ms: 30000,
+  });
+  const sessionCarrier = await events.buildSessionSubscriptionInvocation({
+    ...directoryBase(),
+    stream: "session",
+    session_id: "run-1",
+    resume_cursor: { stream: "session", sequence: 4 },
+  });
+  const invocationCarrier = await events.buildInvocationSubscriptionInvocation({
+    ...directoryBase(),
+    stream: "invocation",
+    filter: { invocation_id: "inv-1" },
+    invocation_id: "inv-1",
+    resume_cursor: { stream: "invocation", sequence: 9 },
+  });
+  const page = await events.listDeviceEvents({
+    ...directoryBase(),
+    filter: { device_ura: "easynet:///r/example/device/dev-a" },
+    device_ura: "easynet:///r/example/device/dev-a",
+  });
+  const projected = await events.projectDirectoryEvent({
+    cursor: { stream: "directory", sequence: 8 },
+    event: { type: "agent_advertised" },
+  });
+  const live = await events.projectLiveEvent({
+    cursor: { stream: "device", sequence: 8 },
+    event: { state: "online" },
+  });
+  const drop = await events.projectDropReport({
+    cursor: { stream: "directory", sequence: 10 },
+    occurred_unix_ms: 1783100000123,
+    dropped_count: 4,
+    reconnect_after_ms: 1000,
+    reason: "consumer_lagged",
+  });
+  const terminal = await events.projectTerminal({
+    cursor: { stream: "directory", sequence: 11 },
+    occurred_unix_ms: 1783100000123,
+    reason: "client_closed",
+  });
+  const stream = await events.subscribeDirectory(eventCarrier());
+  const streamKinds = [];
+  for await (const frame of stream.events()) {
+    streamKinds.push(frame.kind);
+  }
+
+  assert.equal(directoryCarrier.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+  assert.equal(deviceCarrier.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+  assert.equal(sessionCarrier.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+  assert.equal(invocationCarrier.descriptorRef, "opaque-descriptor-ref-from-identity-profile");
+  assert.equal(page.limit, DEFAULT_EVENT_PAGE_SIZE);
+  assert.equal(page.items[0].stream, "device");
+  assert.equal(projected.cursor.resumeToken(), "directory:8");
+  assert.equal(live.stream, "device");
+  assert.equal(drop.droppedCount, 4);
+  assert.equal(terminal.terminal, true);
+  assert.deepEqual(streamKinds, ["directory.agent_advertised", "directory.terminal"]);
+  assert.equal(seen[0].request.stream, "directory");
+  assert.equal(seen[0].request.resume_cursor.token, "directory:7");
+  assert.equal(seen[1].request.filter.device_ura, "easynet:///r/example/device/dev-a");
+  assert.equal(seen[2].request.session_id, "run-1");
+  assert.equal(seen[3].request.invocation_id, "inv-1");
+  assert.equal(seen[4].request.limit, DEFAULT_EVENT_PAGE_SIZE);
+
+  await assert.rejects(
+    () => events.buildSessionSubscriptionInvocation({
+      ...directoryBase(),
+      stream: "session",
+      session_ura: "easynet:///r/example/resource/session.run-1",
+    }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
 });
 
 test("ReceiptClient delegates fetch, projection, and causal refs without verification claims", async () => {

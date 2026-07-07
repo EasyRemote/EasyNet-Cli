@@ -47,8 +47,13 @@ export declare const DEFAULT_PUBLISHED_ABILITY_PAGE_SIZE: 50;
 export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
+export declare const EVENTS_PROFILE: "events";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
 export declare const MAX_BIDI_BUFFERED_FRAMES: 1024;
+export declare const DEFAULT_EVENT_PAGE_SIZE: 50;
+export declare const MAX_EVENT_PAGE_SIZE: 500;
+export declare const MIN_EVENT_HEARTBEAT_INTERVAL_MS: 1000;
+export declare const MAX_EVENT_HEARTBEAT_INTERVAL_MS: 300000;
 export declare const HOST_STREAM_FRAME_SCHEMA: "host-stream-frame.schema.json";
 export declare const HOST_STREAM_HASH_ALGORITHM: "sha256(prev_hash || seq_be || canonical_json(value))";
 export declare const HOST_STREAM_EMPTY_OUTPUT_HASH: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -301,6 +306,233 @@ export class DirectoryClient {
   listAbilities(query: AbilityQuery): Promise<Record<string, unknown>>;
   buildDirectorySubscriptionInvocation(request: DirectorySubscriptionRequest): Promise<Record<string, unknown>>;
   subscribeDirectory(request: DirectorySubscriptionRequest): Promise<StreamHandle>;
+  close(): Promise<void>;
+}
+
+export type EventStreamKind = "directory" | "device" | "session" | "invocation";
+
+export interface EventsCarrierBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface EventCursorFields {
+  stream: EventStreamKind;
+  sequence: number;
+  token?: string;
+}
+
+export interface EventFilter {
+  realm?: string;
+  owner_ura?: string;
+  device_ura?: string;
+  agent_ura?: string;
+  session_id?: string;
+  invocation_id?: string;
+}
+
+export interface EventsSubscriptionRequest extends EventsCarrierBase {
+  stream?: EventStreamKind;
+  filter?: EventFilter;
+  realm?: string;
+  owner_ura?: string;
+  device_ura?: string;
+  agent_ura?: string;
+  session_id?: string;
+  session_ura?: string;
+  invocation_id?: string;
+  resume_cursor?: EventCursorFields;
+  heartbeat_interval_ms?: number;
+}
+
+export type EventsDirectorySubscriptionRequest = EventsSubscriptionRequest;
+export type EventsDeviceSubscriptionRequest = EventsSubscriptionRequest;
+export type EventsSessionSubscriptionRequest = EventsSubscriptionRequest;
+export type EventsInvocationSubscriptionRequest = EventsSubscriptionRequest;
+export type DirectoryEventQuery = EventsDirectorySubscriptionRequest;
+export type DeviceEventQuery = EventsDeviceSubscriptionRequest;
+export type SessionEventQuery = EventsSessionSubscriptionRequest;
+export type InvocationEventQuery = EventsInvocationSubscriptionRequest;
+
+export interface EventsDeviceEventListRequest extends EventsCarrierBase {
+  filter?: EventFilter;
+  device_ura?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface EventProjectionInput {
+  cursor: EventCursorFields;
+  event: Record<string, unknown>;
+  event_id?: string;
+  resume_token?: string;
+  tenant_ref?: unknown;
+}
+
+export interface EventDropReportInput {
+  cursor: EventCursorFields;
+  occurred_unix_ms: number;
+  dropped_count: number;
+  reconnect_after_ms?: number | null;
+  reason?: string;
+  event_id?: string;
+  resume_token?: string;
+  tenant_ref?: unknown;
+}
+
+export interface EventTerminalInput {
+  cursor: EventCursorFields;
+  occurred_unix_ms: number;
+  reconnect_after_ms?: number | null;
+  reason?: string;
+  event_id?: string;
+  resume_token?: string;
+  tenant_ref?: unknown;
+}
+
+export interface EventFrameFields {
+  profile: "events";
+  stream: EventStreamKind;
+  kind: string;
+  event_id: string;
+  cursor: EventCursorFields;
+  resume_token: string;
+  occurred_unix_ms: number;
+  occurred_at: string;
+  subject_ref: unknown;
+  tenant_ref: unknown;
+  payload: unknown;
+  dropped_count: number;
+  reconnect_after_ms: number | null;
+  terminal: boolean;
+  metadata: Record<string, unknown>;
+}
+
+export class EventCursor {
+  stream: EventStreamKind;
+  sequence: number;
+  token: string;
+  constructor(fields: EventCursorFields);
+  static fromJSON(raw: Uint8Array | string): EventCursor;
+  resumeToken(): string;
+  toJSON(): Required<EventCursorFields>;
+}
+
+export class EventFrame {
+  profile: "events";
+  stream: EventStreamKind;
+  kind: string;
+  eventId: string;
+  cursor: EventCursor;
+  resumeToken: string;
+  occurredUnixMS: number;
+  occurredAt: string;
+  subjectRef: unknown;
+  tenantRef: unknown;
+  payload: unknown;
+  droppedCount: number;
+  reconnectAfterMS: number | null;
+  terminal: boolean;
+  metadata: Record<string, unknown>;
+  constructor(fields: EventFrameFields);
+  static fromJSON(raw: Uint8Array | string): EventFrame;
+  toJSON(): EventFrameFields;
+}
+
+export type DirectoryEvent = EventFrame;
+export type DeviceEvent = EventFrame;
+export type SessionEvent = EventFrame;
+export type InvocationEvent = EventFrame;
+export type EventDropReport = EventFrame;
+
+export interface DeviceEventPageFields {
+  profile: "events";
+  stream: "device";
+  item_kind: string;
+  items: EventFrameFields[];
+  next_cursor: string | null;
+  has_more: boolean;
+  limit: number;
+  metadata: Record<string, unknown>;
+}
+
+export class DeviceEventPage {
+  profile: "events";
+  stream: "device";
+  itemKind: string;
+  items: DeviceEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  limit: number;
+  metadata: Record<string, unknown>;
+  constructor(fields: DeviceEventPageFields);
+  static fromJSON(raw: Uint8Array | string): DeviceEventPage;
+  toJSON(): DeviceEventPageFields;
+}
+
+export interface EventStreamOpen {
+  stream?: EventStreamKind;
+  state?: string;
+  stream_id?: string;
+  resume_token?: string;
+  metadata?: Record<string, unknown>;
+  max_buffered_events?: number;
+}
+
+export class EventStream {
+  stream: EventStreamKind;
+  state: string;
+  streamId: string;
+  resumeToken: string;
+  metadata: Record<string, unknown>;
+  handle: StreamHandle;
+  constructor(stream: EventStreamKind, handle: StreamHandle, open?: EventStreamOpen);
+  static fromTransportResult(result: { transport: StreamTransport; open: Uint8Array | string }, stream: EventStreamKind): EventStream;
+  receive(options?: ReceiveOptions): Promise<EventFrame>;
+  events(options?: AsyncIterationOptions): AsyncIterableIterator<EventFrame>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<EventFrame>;
+  terminalEvent(): EventFrame | null;
+  cancel(reason?: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface EventTransport {
+  buildDirectorySubscriptionInvocation(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildDeviceSubscriptionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildSessionSubscriptionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildInvocationSubscriptionInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  subscribeDirectory?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
+  subscribeDevices?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
+  subscribeSessions?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
+  subscribeInvocations?(requestJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
+  listDeviceEvents?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectDirectoryEvent?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectLiveEvent?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectDropReport?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectTerminal?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class EventClient {
+  constructor(transport: EventTransport);
+  buildDirectorySubscriptionInvocation(request: EventsDirectorySubscriptionRequest): Promise<InvocationDraft>;
+  buildDeviceSubscriptionInvocation(request: EventsDeviceSubscriptionRequest): Promise<InvocationDraft>;
+  buildSessionSubscriptionInvocation(request: EventsSessionSubscriptionRequest): Promise<InvocationDraft>;
+  buildInvocationSubscriptionInvocation(request: EventsInvocationSubscriptionRequest): Promise<InvocationDraft>;
+  subscribeDirectory(request: EventsDirectorySubscriptionRequest): Promise<EventStream>;
+  subscribeDevices(request: EventsDeviceSubscriptionRequest): Promise<EventStream>;
+  subscribeSessions(request: EventsSessionSubscriptionRequest): Promise<EventStream>;
+  subscribeInvocations(request: EventsInvocationSubscriptionRequest): Promise<EventStream>;
+  listDeviceEvents(request: EventsDeviceEventListRequest): Promise<DeviceEventPage>;
+  projectDirectoryEvent(input: EventProjectionInput): Promise<DirectoryEvent>;
+  projectLiveEvent(input: EventProjectionInput): Promise<EventFrame>;
+  projectDropReport(input: EventDropReportInput): Promise<EventDropReport>;
+  projectTerminal(input: EventTerminalInput): Promise<EventFrame>;
   close(): Promise<void>;
 }
 

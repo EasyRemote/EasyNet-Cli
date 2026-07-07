@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: EventClient builds daemon-owned device and invocation stream Invocation carriers, projects bounded device event history pages, and routes Python C ABI execution through Runtime Core instead of SDK-local event semantics.
 steps:
   - action: build_device_subscription_invocation

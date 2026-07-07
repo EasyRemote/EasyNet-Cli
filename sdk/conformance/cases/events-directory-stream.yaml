@@ -5,6 +5,7 @@ required_for:
   - c_abi
   - go
   - python
+  - node
 description: EventClient builds complete Invocation carriers for the daemon directory stream and projects DirectoryEvent frames, dropped-event reports, and terminal frames into typed EventFrame DTOs with explicit cursors.
 steps:
   - action: build_directory_subscription_invocation
