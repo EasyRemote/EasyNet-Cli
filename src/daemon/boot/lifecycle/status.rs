@@ -92,6 +92,7 @@ pub struct RuntimeStatusReport {
     projection: Option<RuntimeSessionProjection>,
     daemon: DaemonDiscoverySnapshot,
     product_presence: Option<ProductPresenceSnapshot>,
+    desktop_companions: Vec<Value>,
     status: RuntimeLifecycleStatus,
 }
 
@@ -110,11 +111,22 @@ impl RuntimeStatusReport {
         daemon: DaemonDiscoverySnapshot,
         product_presence: Option<ProductPresenceSnapshot>,
     ) -> Self {
+        Self::from_parts_with_observations(projection, daemon, product_presence, Vec::new())
+    }
+
+    /// Build a report from all captured runtime-status observations.
+    pub fn from_parts_with_observations(
+        projection: Option<RuntimeSessionProjection>,
+        daemon: DaemonDiscoverySnapshot,
+        product_presence: Option<ProductPresenceSnapshot>,
+        desktop_companions: Vec<Value>,
+    ) -> Self {
         let status = classify(projection.as_ref(), &daemon);
         Self {
             projection,
             daemon,
             product_presence,
+            desktop_companions,
             status,
         }
     }
@@ -139,6 +151,11 @@ impl RuntimeStatusReport {
         self.product_presence.as_ref()
     }
 
+    /// Desktop companion DTOs captured for runtime status.
+    pub fn desktop_companions(&self) -> &[Value] {
+        &self.desktop_companions
+    }
+
     /// JSON representation used by `easynet runtime status --json`.
     pub fn to_json(&self, connection: Value) -> Value {
         json!({
@@ -146,13 +163,13 @@ impl RuntimeStatusReport {
             "runtime_status": self.status.as_wire_str(),
             "runtime": self.projection.as_ref().map(RuntimeSessionProjection::to_json),
             "daemon": self.daemon.to_json(),
-            "desktop_companions": desktop_companion_statuses(),
+            "desktop_companions": self.desktop_companions.clone(),
             "product_presence": self.product_presence.as_ref().map(ProductPresenceSnapshot::to_json),
         })
     }
 }
 
-fn desktop_companion_statuses() -> Vec<Value> {
+pub(super) fn desktop_companion_statuses() -> Vec<Value> {
     let Ok(state) = crate::daemon::plugins::default_state() else {
         return Vec::new();
     };
@@ -253,6 +270,29 @@ mod tests {
         })
     }
 
+    fn companion_status_dto() -> Value {
+        crate::protocol::companion_contract::project_status(&json!({
+            "package_id": "easynet.desktop.menubar",
+            "package_version": "0.1.0",
+            "display_name": "EasyNet Menu Bar",
+            "platform": "macos",
+            "desired_state": "enabled",
+            "supervisor_state": "installed_enabled",
+            "observed_state": "running",
+            "projected_state": "running",
+            "boot_policy": "ensure_running_after_daemon_ready",
+            "stop_policy": "keep_running",
+            "health": "status_file",
+            "pid": 12345,
+            "version": "0.1.0",
+            "last_seen_unix_ms": 1783411200000_u64,
+            "launch_method": "launch_agent",
+            "error": null,
+            "metadata": {"source": "runtime_status_test"}
+        }))
+        .expect("companion DTO")
+    }
+
     #[test]
     fn status_classifier_detects_projection_missing_live_daemon() {
         let report = RuntimeStatusReport::from_parts(None, daemon_with_facts(false, false));
@@ -277,6 +317,26 @@ mod tests {
         assert!(payload["runtime"].is_null());
         assert_eq!(payload["daemon"]["pid_alive"], true);
         assert_eq!(payload["daemon"]["identity"]["mode"], "device");
+    }
+
+    #[test]
+    fn json_payload_exposes_companion_status_contract_shape() {
+        let report = RuntimeStatusReport::from_parts_with_observations(
+            Some(projection()),
+            daemon_with_facts(true, true),
+            None,
+            vec![companion_status_dto()],
+        );
+
+        let payload = report.to_json(json!({"state": "test"}));
+        let companion = &payload["desktop_companions"][0];
+
+        assert_eq!(report.desktop_companions().len(), 1);
+        assert_eq!(companion["profile"], "desktop_companion");
+        assert_eq!(companion["kind"], "desktop_companion_status");
+        assert_eq!(companion["package_id"], "easynet.desktop.menubar");
+        assert_eq!(companion["projected_state"], "running");
+        assert_eq!(companion["metadata"]["source"], "runtime_status_test");
     }
 
     #[test]
