@@ -458,6 +458,68 @@ impl DesktopCompanionManager {
             .remove(&plan.package_id, &plan.package_version)
     }
 
+    pub fn cleanup_for_self_uninstall(&self, packages: &[SharedPluginPackage]) -> Vec<String> {
+        let records = match self.state_store.read() {
+            Ok(state) => state.companion,
+            Err(err) => {
+                return vec![format!("state_read_failed: {err}")];
+            }
+        };
+        let mut warnings = Vec::new();
+        for record in records {
+            let package = packages.iter().find(|package| {
+                package.manifest().kind() == PluginKind::DesktopCompanion
+                    && package.id().as_str() == record.id
+                    && package.version().as_str() == record.version
+            });
+            if let Some(package) = package {
+                if let Err(err) = self.remove(package) {
+                    warnings.push(format!(
+                        "{}@{} remove_failed: {err}",
+                        record.id, record.version
+                    ));
+                }
+                continue;
+            }
+            if let Err(err) = self.remove_orphan_state_and_status(&record) {
+                warnings.push(format!(
+                    "{}@{} orphan_cleanup_failed: {err}",
+                    record.id, record.version
+                ));
+            } else {
+                warnings.push(format!(
+                    "{}@{} package_missing: removed desired state and status files only",
+                    record.id, record.version
+                ));
+            }
+        }
+        warnings
+    }
+
+    fn remove_orphan_state_and_status(
+        &self,
+        record: &state_store::CompanionStateRecord,
+    ) -> Result<()> {
+        let status_dir = self.companion_status_dir(&record.id);
+        if status_dir.exists() {
+            std::fs::remove_dir_all(&status_dir).map_err(|source| {
+                PluginHostError::WriteFailed {
+                    path: status_dir.clone(),
+                    source,
+                }
+            })?;
+        }
+        self.state_store.remove(&record.id, &record.version)
+    }
+
+    fn companion_status_dir(&self, package_id: &str) -> std::path::PathBuf {
+        self.state_store
+            .path()
+            .parent()
+            .map(|parent| parent.join(package_id))
+            .unwrap_or_else(|| std::path::PathBuf::from(package_id))
+    }
+
     pub fn stop_for_runtime_stop(&self, packages: &[SharedPluginPackage]) -> Vec<String> {
         let mut warnings = Vec::new();
         for package in packages {
@@ -722,6 +784,84 @@ mod tests {
 
         assert_eq!(error["code"], "status_file_invalid");
         assert_eq!(error["message"], "status_file_invalid");
+    }
+
+    #[test]
+    fn self_uninstall_cleanup_enumerates_desired_state_records() {
+        let root = tempfile::tempdir().expect("package root");
+        write_companion_test_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let state_root = tempfile::tempdir().expect("state root");
+        let state_path = state_root.path().join("state.toml");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(&state_path),
+        );
+        manager
+            .state_store
+            .set_desired_state(
+                "test.desktop.menubar",
+                "0.1.0",
+                CompanionDesiredState::Enabled,
+                "enable",
+                None,
+            )
+            .expect("desired state");
+
+        let warnings = manager.cleanup_for_self_uninstall(&[package]);
+
+        assert!(warnings.is_empty());
+        assert_eq!(*calls.lock().expect("calls"), vec!["stop", "remove"]);
+        assert!(manager
+            .state_store
+            .read()
+            .expect("state")
+            .companion
+            .is_empty());
+    }
+
+    #[test]
+    fn self_uninstall_cleanup_removes_orphan_state_and_status_directory() {
+        let state_root = tempfile::tempdir().expect("state root");
+        let state_path = state_root.path().join("state.toml");
+        let status_dir = state_root.path().join("orphan.desktop.companion");
+        std::fs::create_dir_all(&status_dir).expect("status dir");
+        std::fs::write(status_dir.join("status.json"), "{}").expect("status file");
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let manager = DesktopCompanionManager::new(
+            DesktopCompanionPlanner::new("macos"),
+            Box::new(RecordingSupervisor {
+                calls: Arc::clone(&calls),
+            }),
+            DesktopCompanionStateStore::new(&state_path),
+        );
+        manager
+            .state_store
+            .set_desired_state(
+                "orphan.desktop.companion",
+                "9.9.9",
+                CompanionDesiredState::Enabled,
+                "enable",
+                None,
+            )
+            .expect("desired state");
+
+        let warnings = manager.cleanup_for_self_uninstall(&[]);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("package_missing"));
+        assert!(calls.lock().expect("calls").is_empty());
+        assert!(!status_dir.exists());
+        assert!(manager
+            .state_store
+            .read()
+            .expect("state")
+            .companion
+            .is_empty());
     }
 
     #[test]

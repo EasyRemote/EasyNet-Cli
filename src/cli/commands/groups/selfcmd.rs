@@ -363,12 +363,12 @@ impl UninstallEnvironment for ProductionUninstallEnvironment {
     fn remove_desktop_companions(&mut self) -> Result<(), String> {
         let state = crate::daemon::plugins::default_state().map_err(|err| err.to_string())?;
         let manager = crate::daemon::plugins::DesktopCompanionManager::current();
-        for package in state.index().packages() {
-            if package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion {
-                manager.remove(package).map_err(|err| err.to_string())?;
-            }
+        let warnings = manager.cleanup_for_self_uninstall(state.index().packages());
+        if warnings.is_empty() {
+            Ok(())
+        } else {
+            Err(warnings.join("; "))
         }
-        Ok(())
     }
 
     fn binary_paths(&self) -> Vec<PathBuf> {
