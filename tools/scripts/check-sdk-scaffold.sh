@@ -234,8 +234,31 @@ for path in \
   tools/scripts/check-sdk-parity-matrix.sh \
   tools/scripts/check-sdk-product-smokes.sh \
   tools/scripts/check-sdk-ura-naming.sh \
+  tools/scripts/check-java-sdk-seam.sh \
   tools/scripts/go-sdk-live-smoke.sh \
   tools/scripts/python-sdk-live-smoke.sh \
+  sdk/java/README.md \
+  sdk/java/src/main/java/run/easynet/daemon/BidiFrame.java \
+  sdk/java/src/main/java/run/easynet/daemon/BidiSession.java \
+  sdk/java/src/main/java/run/easynet/daemon/BidiSource.java \
+  sdk/java/src/main/java/run/easynet/daemon/Client.java \
+  sdk/java/src/main/java/run/easynet/daemon/DiscoveryTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/ErrorClass.java \
+  sdk/java/src/main/java/run/easynet/daemon/ErrorCode.java \
+  sdk/java/src/main/java/run/easynet/daemon/FeatureSet.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationBuilder.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationDraft.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationTerminalState.java \
+  sdk/java/src/main/java/run/easynet/daemon/InvocationTuple.java \
+  sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
+  sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/RuntimeTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/SDKError.java \
+  sdk/java/src/main/java/run/easynet/daemon/StreamEvent.java \
+  sdk/java/src/main/java/run/easynet/daemon/StreamHandle.java \
+  sdk/java/src/main/java/run/easynet/daemon/StreamSource.java \
+  sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
@@ -992,11 +1015,13 @@ require_literal sdk/README.md "sdk/conformance/sdk-parity-matrix.json"
 require_literal sdk/README.md "Go facade | provider-backed"
 require_literal sdk/README.md "Python facade | provider-backed"
 require_literal sdk/README.md "Node / TypeScript facade | Runtime Core seam"
+require_literal sdk/README.md "Java / JVM facade | Runtime Core seam"
 require_literal sdk/README.md "P0 consumer cutover readiness"
 require_literal sdk/README.md "Rust/C ABI/Go/Python action-adapter reports"
 require_literal sdk/SDK_PARITY.md "P0 consumer cutover readiness is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null
+bash "$ROOT/tools/scripts/check-java-sdk-seam.sh" >/dev/null
 
 if [[ "${#failures[@]}" -eq 0 ]]; then
   printf 'check-sdk-scaffold ok\n'
