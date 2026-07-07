@@ -12,8 +12,8 @@ method spelling.
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
-| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
-| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
+| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
 
 ## Capability Matrix
 
@@ -105,11 +105,11 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   list/show/enable/disable through Runtime Core and C ABI lifecycle projections.
   Plugin/skill lifecycle policy, host binding bridge, backend publication
   cutover, and broader non-P0 language facades remain incomplete.
-- Host Binding codec/hash guardrails exist for Rust/C ABI, and Go/Python expose
-  conformance-pinned local transports plus SDK-owned lifecycle providers for
-  readiness and cleanup state transitions; product host process startup,
-  user-code execution, and downstream product cutover remain outside the daemon
-  SDK.
+- Host Binding codec/hash guardrails exist for Rust/C ABI; Go/Python expose
+  conformance-pinned local transports plus SDK-owned lifecycle providers, and
+  Node/Java/Swift expose seam DTO/client lifecycle, frame, and hash guardrails
+  over injected transports. Product host process startup, user-code execution,
+  and downstream product cutover remain outside the daemon SDK.
 - Mission carrier/status/events guardrails exist for Rust/C ABI over
   `mission.run/track/cancel/events`; Go has Runtime Core-backed
   run/run-file/track/cancel/events execution and event streams, Python has

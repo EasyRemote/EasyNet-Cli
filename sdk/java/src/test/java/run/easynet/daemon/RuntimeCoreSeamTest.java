@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -33,6 +34,7 @@ public final class RuntimeCoreSeamTest {
     receiptRejectsInvalidSelectorAndSummaryVerification();
     receiptOpaqueRefRequiresExplicitAnchorFacts();
     publicationProfileDelegatesResourceValidationAndCarriers();
+    hostBindingProfileDelegatesCodecHashAndLifecycle();
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
     surfaceProfileDelegatesCarriersAndProjections();
   }
@@ -737,6 +739,94 @@ public final class RuntimeCoreSeamTest {
         () -> publication.buildLocalResourceRef(new LocalResourceRefRequest("/tmp/easynet-weather-package", "read")));
   }
 
+  private static void hostBindingProfileDelegatesCodecHashAndLifecycle() throws Exception {
+    var provider = new FixtureHostLifecycleProvider();
+    var hostBinding = new HostBindingClient(new FixtureHostBindingTransport(), provider);
+    var binding = hostBinding.buildHostStreamBinding(hostStreamBindingRequest());
+    check(binding.lifecycle().get("frame_contract_owner").equals("daemon_sdk"), "host binding lifecycle owner");
+    check(binding.metadata().get("hash_algorithm").equals(HostBindingSupport.HASH_ALGORITHM), "host binding hash algorithm");
+
+    var request =
+        hostBinding.decodeRequest(
+            new HostStreamEnvelope(
+                new HostStreamEnvelope.HostStreamEnvelopeRequest(
+                    "weather.stream",
+                    Map.of("city", "Singapore"),
+                    "call-weather-1",
+                    "easynet:///r/example/user/alice")));
+    check(request.function().equals("weather.stream"), "host binding request function");
+    check(request.metadata().get("wire").equals("host_stream_request_v1"), "host binding request wire");
+
+    var value = new LinkedHashMap<String, Object>();
+    value.put("token", "hello");
+    var item = hostBinding.encodeItem(0, value);
+    check(item.frameType().equals("item") && item.seq() == 0, "host binding item frame");
+    var errorFrame = hostBinding.encodeError(SDKError.validation("host", "bad input"));
+    check(
+        errorFrame.frameType().equals("error") && errorFrame.error().code() == ErrorCode.INVALID_ARGUMENT,
+        "host binding error frame");
+    var folded = hostBinding.foldOutputHash(HostStreamHashState.initial(), 0, value);
+    check(
+        folded.outputHash().equals("sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15"),
+        "host binding folded hash");
+    check(folded.equals(hostBinding.foldOutputHashLocal(HostStreamHashState.initial(), 0, value)), "host binding local hash");
+    var terminal =
+        hostBinding.encodeTerminal(HostStreamTerminalSummary.fromJSON(fixture("host-stream-terminal.v4.json")));
+    check(
+        terminal.frameType().equals("terminal") && terminal.outputHash().equals(folded.outputHash()),
+        "host binding terminal frame");
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            hostBinding.buildHostStreamBinding(
+                new HostStreamBindingRequest(
+                    "binding-weather-1",
+                    "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+                    "tmp/easynet-weather.sock",
+                    HostBindingSupport.FRAME_SCHEMA,
+                    Map.of("mode", "unlink_socket"),
+                    30000L,
+                    readinessDeclared(),
+                    Map.of("owner", "easyremote"))));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            hostBinding.buildHostStreamBinding(
+                new HostStreamBindingRequest(
+                    "binding-weather-1",
+                    "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+                    "/tmp/easynet-weather.sock",
+                    "drift.schema.json",
+                    Map.of("mode", "unlink_socket"),
+                    30000L,
+                    readinessDeclared(),
+                    Map.of("owner", "easyremote"))));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> hostBinding.foldOutputHash(HostStreamHashState.fromJSON(fixture("host-stream-hash-state.v4.json")), 2, value));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> HostStreamHashState.fromJSON(fixture("host-stream-hash-state-corrupted-zero.v4.json")));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> HostStreamHashState.fromJSON(fixture("host-stream-hash-state-corrupted-gap.v4.json")));
+
+    var lifecycle = hostBinding.openLifecycle(binding, null);
+    var checked = lifecycle.checkReadiness();
+    var cleanup = lifecycle.cleanup();
+    var cleanupAgain = lifecycle.cleanup();
+    check(checked.state().equals("ready") && Boolean.TRUE.equals(checked.endpointReady()), "host binding ready");
+    check(cleanup.mode().equals("unlink_socket") && cleanup.metadata().get("cleaned").equals(true), "host binding cleanup");
+    check(cleanupAgain.metadata().get("cleaned").equals(true), "host binding cleanup idempotent");
+    check(provider.cleanupCalls == 1, "host binding cleanup once");
+    lifecycle.close();
+    check(lifecycle.state() == HostStreamLifecycleState.CLOSED, "host binding lifecycle closed");
+
+    hostBinding.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> hostBinding.encodeItem(0, value));
+  }
+
   private static void eventsProfileDelegatesCarriersProjectionsHistoryAndStreams() throws Exception {
     var events = new EventClient(new FixtureEventTransport());
     var base = eventsCarrierBase(Map.of("request_id", "events-directory-subscribe-1"));
@@ -1000,6 +1090,26 @@ public final class RuntimeCoreSeamTest {
         "AQIDBAUGBwgJCgsMDQ4PEA==",
         Map.of("form", "none"),
         metadata);
+  }
+
+  private static HostStreamBindingRequest hostStreamBindingRequest() {
+    return new HostStreamBindingRequest(
+        "binding-weather-1",
+        "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+        "/tmp/easynet-weather.sock",
+        HostBindingSupport.FRAME_SCHEMA,
+        Map.of("mode", "unlink_socket"),
+        30000L,
+        readinessDeclared(),
+        Map.of("owner", "easyremote"));
+  }
+
+  private static Map<String, Object> readinessDeclared() {
+    LinkedHashMap<String, Object> readiness = new LinkedHashMap<>();
+    readiness.put("state", "declared");
+    readiness.put("checked", false);
+    readiness.put("endpoint_ready", null);
+    return readiness;
   }
 
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
@@ -1329,6 +1439,102 @@ public final class RuntimeCoreSeamTest {
       var request = JsonValueReader.object(requestJSON, "publication unpublish request");
       check(request.get("ability_ura").equals("easynet:///r/example/ability/device.dev-a.er.weather"), "publication unpublish ability");
       return fixture("publication-unpublish-invocation.v4.json");
+    }
+  }
+
+  private static final class FixtureHostBindingTransport implements HostBindingTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    @Override
+    public byte[] buildHostStreamBinding(byte[] requestJSON) {
+      expectRequest(requestJSON, "host-stream-binding-request.v4.json", "host binding request");
+      return fixture("host-stream-binding.v4.json");
+    }
+
+    @Override
+    public byte[] decodeRequest(byte[] envelopeJSON) {
+      var envelope = JsonValueReader.object(envelopeJSON, "host stream envelope");
+      @SuppressWarnings("unchecked")
+      var request = (Map<String, Object>) envelope.get("request");
+      check(request.get("fn").equals("weather.stream"), "host binding envelope function");
+      return fixture("host-stream-request.v4.json");
+    }
+
+    @Override
+    public byte[] encodeItem(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "host stream item request");
+      check(request.get("seq").equals(0L), "host binding item seq");
+      return fixture("host-stream-frame.v4.json");
+    }
+
+    @Override
+    public byte[] encodeError(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "host stream error request");
+      @SuppressWarnings("unchecked")
+      var error = (Map<String, Object>) request.get("error");
+      check(error.get("code").equals("INVALID_ARGUMENT"), "host binding error code");
+      return bytes(
+          """
+          {
+            "frame_type": "error",
+            "seq": null,
+            "value": null,
+            "error": {
+              "code": "INVALID_ARGUMENT",
+              "stage": "host",
+              "message": "bad input",
+              "retry": "never",
+              "details": {}
+            },
+            "terminal": null,
+            "output_hash": null
+          }
+          """);
+    }
+
+    @Override
+    public byte[] encodeTerminal(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "host stream terminal request");
+      @SuppressWarnings("unchecked")
+      var summary = (Map<String, Object>) request.get("summary");
+      check(
+          summary.equals(JsonValueReader.object(fixture("host-stream-terminal.v4.json"), "host terminal fixture")),
+          "host binding terminal summary");
+      LinkedHashMap<String, Object> frame = new LinkedHashMap<>();
+      frame.put("frame_type", "terminal");
+      frame.put("seq", summary.get("frames"));
+      frame.put("value", null);
+      frame.put("error", null);
+      frame.put("terminal", summary);
+      frame.put("output_hash", summary.get("output_hash"));
+      return JsonValueWriter.object(frame);
+    }
+
+    @Override
+    public byte[] foldOutputHash(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "host stream hash request");
+      check(request.get("seq").equals(0L), "host binding hash seq");
+      return fixture("host-stream-hash-state.v4.json");
+    }
+  }
+
+  private static final class FixtureHostLifecycleProvider implements HostStreamLifecycleProvider {
+    int cleanupCalls;
+
+    @Override
+    public HostStreamReadiness checkReadiness(HostStreamBinding binding) {
+      return new HostStreamReadiness(
+          "ready", true, true, Map.of("endpoint", binding.endpoint()));
+    }
+
+    @Override
+    public HostStreamCleanup cleanup(HostStreamBinding binding) {
+      cleanupCalls++;
+      return new HostStreamCleanup("unlink_socket", Map.of("cleaned", true));
     }
   }
 

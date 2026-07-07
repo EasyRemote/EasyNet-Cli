@@ -2,7 +2,7 @@
 
 Swift is a P1 facade for macOS/iOS-adjacent clients.
 
-Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Events plus Surface seam. The package exposes dependency-free Swift
+Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Events plus Surface seam. The package exposes dependency-free Swift
 types for typed SDK errors, feature discovery, complete Invocation draft
 construction, `PreparedInvocation`/`SigningMaterial`/`SignedInvocation`
 prepare-sign-submit seams over injected transports, `RuntimeClient` dispatch,
@@ -18,7 +18,11 @@ receipts, and require explicit receipt URA plus hash facts for causal refs.
 Publication DTOs and `PublicationClient` build daemon-authored resource-ref
 requests, package validation inputs, and complete deploy/unpublish Invocation
 carriers over injected transports without package inspection or product catalog
-state. It also exposes Events request/filter/cursor/frame/page DTOs and `EventClient`
+state. Host Binding DTOs and `HostBindingClient` build host-stream binding
+requests, decode request envelopes, project item/error/terminal frames, validate
+output-hash cursor state, and drive explicit readiness/cleanup lifecycle
+providers without owning product host process warmth or user-code execution. It
+also exposes Events request/filter/cursor/frame/page DTOs and `EventClient`
 carrier/projection/stream methods over injected transports without SDK-owned
 event fan-out. Surface DTOs and `SurfaceClient` build page, manifest, and health
 carriers and project daemon page facts without backend rendering or HTTP route

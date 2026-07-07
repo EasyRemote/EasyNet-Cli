@@ -631,6 +631,115 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testHostBindingProfileDelegatesCodecHashAndLifecycle() async throws {
+        let lifecycleProvider = FixtureHostLifecycleProvider()
+        let hostBinding = HostBindingClient(
+            transport: FixtureHostBindingTransport(),
+            lifecycleProvider: lifecycleProvider
+        )
+        let binding = try await hostBinding.buildHostStreamBinding(HostStreamBindingRequest(
+            bindingID: "binding-weather-1",
+            descriptorRef: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+            endpoint: "/tmp/easynet-weather.sock",
+            frameSchema: hostStreamFrameSchema,
+            cleanup: ["mode": .string("unlink_socket")],
+            timeoutMS: 30000,
+            readiness: ["state": .string("declared"), "checked": .bool(false), "endpoint_ready": .null],
+            metadata: ["owner": .string("easyremote")]
+        ))
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(binding.lifecycle["frame_contract_owner"], "frame_contract_owner"),
+            "daemon_sdk"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(binding.metadata["hash_algorithm"], "hash_algorithm"),
+            hostStreamHashAlgorithm
+        )
+
+        let request = try await hostBinding.decodeRequest(HostStreamEnvelope(
+            function: "weather.stream",
+            args: .object(["city": .string("Singapore")]),
+            callID: "call-weather-1",
+            caller: "easynet:///r/example/user/alice"
+        ))
+        XCTAssertEqual(request.function, "weather.stream")
+        XCTAssertEqual(try optionalDirectoryJSONString(request.metadata["wire"], "wire"), "host_stream_request_v1")
+
+        let item = try await hostBinding.encodeItem(seq: 0, value: .object(["token": .string("hello")]))
+        XCTAssertEqual(item.frameType, "item")
+        XCTAssertEqual(item.seq, 0)
+        let error = try await hostBinding.encodeError(SDKError.validation("host", "bad input"))
+        XCTAssertEqual(error.frameType, "error")
+        XCTAssertEqual(try optionalDirectoryJSONString(error.error["code"], "code"), "INVALID_ARGUMENT")
+        let folded = try await hostBinding.foldOutputHash(
+            state: HostStreamHashState.initial(),
+            seq: 0,
+            value: .object(["token": .string("hello")])
+        )
+        XCTAssertEqual(folded.outputHash, "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15")
+        XCTAssertEqual(
+            folded,
+            try hostBinding.foldOutputHashLocal(
+                state: HostStreamHashState.initial(),
+                seq: 0,
+                value: .object(["token": .string("hello")])
+            )
+        )
+        let terminal = try await hostBinding.encodeTerminal(
+            HostStreamTerminalSummary.fromJSON(fixture("host-stream-terminal.v4.json"))
+        )
+        XCTAssertEqual(terminal.frameType, "terminal")
+        XCTAssertEqual(terminal.outputHash, folded.outputHash)
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try HostStreamBindingRequest(
+                bindingID: "binding-weather-1",
+                descriptorRef: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+                endpoint: "tmp/easynet-weather.sock",
+                frameSchema: hostStreamFrameSchema
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try HostStreamBindingRequest(
+                bindingID: "binding-weather-1",
+                descriptorRef: "easynet:///r/example/ability/device.dev-a.weather.stream@1.0.0",
+                endpoint: "/tmp/easynet-weather.sock",
+                frameSchema: "drift.schema.json"
+            )
+        }
+        await expectSDKError(.invalidArgument) {
+            _ = try await hostBinding.foldOutputHash(
+                state: HostStreamHashState.fromJSON(fixture("host-stream-hash-state.v4.json")),
+                seq: 2,
+                value: .object(["token": .string("skip")])
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try HostStreamHashState.fromJSON(fixture("host-stream-hash-state-corrupted-zero.v4.json"))
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try HostStreamHashState.fromJSON(fixture("host-stream-hash-state-corrupted-gap.v4.json"))
+        }
+
+        let lifecycle = try hostBinding.openLifecycle(binding)
+        let readiness = try await lifecycle.checkReadiness()
+        let cleanup = try await lifecycle.cleanup()
+        let cleanupAgain = try await lifecycle.cleanup()
+        XCTAssertEqual(readiness.state, "ready")
+        XCTAssertEqual(readiness.endpointReady, true)
+        XCTAssertEqual(cleanup.mode, "unlink_socket")
+        XCTAssertEqual(cleanup.metadata["cleaned"], .bool(true))
+        XCTAssertEqual(cleanupAgain.metadata["cleaned"], .bool(true))
+        XCTAssertEqual(lifecycleProvider.cleanupCalls, 1)
+        try await lifecycle.close()
+        XCTAssertEqual(lifecycle.state, .closed)
+
+        try await hostBinding.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await hostBinding.encodeItem(seq: 0, value: .object(["token": .string("hello")]))
+        }
+    }
+
     func testEventsProfileDelegatesCarriersProjectionsHistoryAndStreams() async throws {
         let events = EventClient(transport: FixtureEventTransport())
         let base = try eventsCarrierBase(metadata: ["request_id": .string("events-directory-subscribe-1")])
@@ -1176,6 +1285,92 @@ final class FixturePublicationTransport: PublicationTransport, @unchecked Sendab
         let request = try decodedObject(data)
         let expected = try decodedObject(fixture(fixtureName))
         XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+}
+
+final class FixtureHostBindingTransport: HostBindingTransport, @unchecked Sendable {
+    func buildHostStreamBinding(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "host-stream-binding-request.v4.json")
+        return fixture("host-stream-binding.v4.json")
+    }
+
+    func decodeRequest(_ envelopeJSON: Data) async throws -> Data {
+        let envelope = try decodedObject(envelopeJSON)
+        let request = try XCTUnwrap(envelope["request"] as? [String: Any])
+        XCTAssertEqual(request["fn"] as? String, "weather.stream")
+        return fixture("host-stream-request.v4.json")
+    }
+
+    func encodeItem(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        XCTAssertEqual((request["seq"] as? NSNumber)?.intValue, 0)
+        return fixture("host-stream-frame.v4.json")
+    }
+
+    func encodeError(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        let error = try XCTUnwrap(request["error"] as? [String: Any])
+        XCTAssertEqual(error["code"] as? String, "INVALID_ARGUMENT")
+        return Data("""
+        {
+          "frame_type": "error",
+          "seq": null,
+          "value": null,
+          "error": {
+            "code": "INVALID_ARGUMENT",
+            "stage": "host",
+            "message": "bad input",
+            "retry": "never",
+            "details": {}
+          },
+          "terminal": null,
+          "output_hash": null
+        }
+        """.utf8)
+    }
+
+    func encodeTerminal(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        let summary = try XCTUnwrap(request["summary"] as? [String: Any])
+        XCTAssertEqual(summary as NSDictionary, try decodedObject(fixture("host-stream-terminal.v4.json")) as NSDictionary)
+        return try JSONSerialization.data(withJSONObject: [
+            "frame_type": "terminal",
+            "seq": summary["frames"] as Any,
+            "value": NSNull(),
+            "error": NSNull(),
+            "terminal": summary,
+            "output_hash": summary["output_hash"] as Any,
+        ], options: [.sortedKeys])
+    }
+
+    func foldOutputHash(_ requestJSON: Data) async throws -> Data {
+        let request = try decodedObject(requestJSON)
+        XCTAssertEqual((request["seq"] as? NSNumber)?.intValue, 0)
+        return fixture("host-stream-hash-state.v4.json")
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
+    }
+}
+
+final class FixtureHostLifecycleProvider: HostStreamLifecycleProvider, @unchecked Sendable {
+    var cleanupCalls = 0
+
+    func checkReadiness(_ binding: HostStreamBinding) async throws -> HostStreamReadiness {
+        try HostStreamReadiness(
+            state: "ready",
+            checked: true,
+            endpointReady: true,
+            metadata: ["endpoint": .string(binding.endpoint)]
+        )
+    }
+
+    func cleanup(_ binding: HostStreamBinding) async throws -> HostStreamCleanup {
+        cleanupCalls += 1
+        return try HostStreamCleanup(mode: "unlink_socket", metadata: ["cleaned": .bool(true)])
     }
 }
 

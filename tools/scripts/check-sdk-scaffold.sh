@@ -286,6 +286,21 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticsTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/HealthClient.java \
   sdk/java/src/main/java/run/easynet/daemon/HealthTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostBindingClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostBindingSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostBindingTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamBinding.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamBindingRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamCleanup.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamEnvelope.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamFrame.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamHashState.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamLifecycleController.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamLifecycleProvider.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamLifecycleState.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamReadiness.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/HostStreamTerminalSummary.java \
   sdk/java/src/main/java/run/easynet/daemon/IdentityClient.java \
   sdk/java/src/main/java/run/easynet/daemon/IdentityProjection.java \
   sdk/java/src/main/java/run/easynet/daemon/IdentityTransport.java \
@@ -351,6 +366,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Health.swift \
+  sdk/swift/Sources/EasyNetDaemonSDK/HostBinding.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Invocation.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Publication.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Receipt.swift \
