@@ -1,10 +1,11 @@
 package run.easynet.daemon;
 
 import java.util.ArrayDeque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 
-public final class BidiSession implements AutoCloseable {
+public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
   public static final int MAX_RETAINED_FRAMES = 1024;
 
   private final BidiSource source;
@@ -24,6 +25,12 @@ public final class BidiSession implements AutoCloseable {
     source.send(Objects.requireNonNull(frame, "frame"));
   }
 
+  @Override
+  public boolean hasNext() {
+    return !closed && terminal == null;
+  }
+
+  @Override
   public BidiFrame next() {
     requireOpen();
     if (terminal != null) {

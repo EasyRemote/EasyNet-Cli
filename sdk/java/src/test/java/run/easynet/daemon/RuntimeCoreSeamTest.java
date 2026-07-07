@@ -1,12 +1,17 @@
 package run.easynet.daemon;
 
 import java.util.ArrayDeque;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class RuntimeCoreSeamTest {
   public static void main(String[] args) throws Exception {
     featureDiscoveryAndTypedErrors();
     completeInvocationDraftAndRuntimeDispatch();
+    asyncRuntimeUsesCompletableFutureAndCancellation();
     streamHistoryIsBounded();
     bidiHistoryIsBounded();
   }
@@ -57,9 +62,69 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_HANDLE, runtime::newInvocation);
   }
 
+  private static void asyncRuntimeUsesCompletableFutureAndCancellation() throws Exception {
+    var executor = Executors.newSingleThreadExecutor();
+    try {
+      var async = new AsyncRuntimeClient(new MemoryRuntimeTransport(), executor);
+      var draft =
+          async
+              .newInvocation()
+              .caller("easynet:///r/example/agent/alice")
+              .callee("easynet:///r/example/agent/bob")
+              .descriptor("easynet:///r/example/ability/bob.echo@1.0.0")
+              .subject("easynet:///r/example/resource/message")
+              .nonce("n-2")
+              .causalContext("root")
+              .argsJson("{\"text\":\"async\"}")
+              .inspect();
+
+      var result = async.invokeAsync(draft).get(5, TimeUnit.SECONDS);
+      check(result.terminalState() == InvocationTerminalState.COMPLETED, "async invoke result");
+
+      var stream = async.openStreamAsync(draft).get(5, TimeUnit.SECONDS);
+      check(stream instanceof Iterator<?>, "stream exposes iterator");
+      check(stream.hasNext(), "stream iterator starts open");
+      async.cancelStreamAsync(stream, "stop").get(5, TimeUnit.SECONDS);
+      check(stream.terminalEvent() != null, "async stream cancel terminal");
+
+      async.close();
+      expectSDKError(ErrorCode.INVALID_HANDLE, () -> async.invokeAsync(draft));
+    } finally {
+      executor.shutdownNow();
+    }
+
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var executor2 = Executors.newSingleThreadExecutor();
+    try {
+      var async = new AsyncRuntimeClient(new BlockingRuntimeTransport(entered, release), executor2);
+      var draft =
+          async
+              .newInvocation()
+              .caller("easynet:///r/example/agent/alice")
+              .callee("easynet:///r/example/agent/bob")
+              .descriptor("easynet:///r/example/ability/bob.echo@1.0.0")
+              .subject("easynet:///r/example/resource/message")
+              .nonce("n-3")
+              .causalContext("root")
+              .argsJson("{\"text\":\"cancel\"}")
+              .inspect();
+      var future = async.invokeAsync(draft);
+      check(entered.await(5, TimeUnit.SECONDS), "blocking transport entered");
+      check(future.cancel(true), "future cancel accepted");
+      check(future.isCancelled(), "future cancellation observable");
+      release.countDown();
+      async.close();
+    } finally {
+      release.countDown();
+      executor2.shutdownNow();
+    }
+  }
+
   private static void streamHistoryIsBounded() throws Exception {
     var source = new QueueStreamSource(StreamHandle.MAX_RETAINED_EVENTS + 2);
     var handle = new StreamHandle(source);
+    check(handle instanceof Iterator<?>, "stream handle is iterator");
     for (int i = 0; i < StreamHandle.MAX_RETAINED_EVENTS + 2; i++) {
       handle.next();
     }
@@ -72,6 +137,7 @@ public final class RuntimeCoreSeamTest {
   private static void bidiHistoryIsBounded() throws Exception {
     var source = new QueueBidiSource(BidiSession.MAX_RETAINED_FRAMES + 2);
     var session = new BidiSession(source);
+    check(session instanceof Iterator<?>, "bidi session is iterator");
     session.send(BidiFrame.data(0, "{\"hello\":true}"));
     for (int i = 0; i < BidiSession.MAX_RETAINED_FRAMES + 2; i++) {
       session.next();
@@ -108,6 +174,49 @@ public final class RuntimeCoreSeamTest {
   private static final class MemoryRuntimeTransport implements RuntimeTransport {
     @Override
     public InvocationResult invoke(InvocationDraft draft) {
+      return new InvocationResult(
+          true, InvocationTerminalState.COMPLETED, "{\"ok\":true}", null, Map.of());
+    }
+
+    @Override
+    public StreamSource openStream(InvocationDraft draft) {
+      return new QueueStreamSource(1);
+    }
+
+    @Override
+    public BidiSource openBidi(InvocationDraft draft, BidiFrame frame0) {
+      return new QueueBidiSource(1);
+    }
+  }
+
+  private static final class BlockingRuntimeTransport implements RuntimeTransport {
+    private final CountDownLatch entered;
+    private final CountDownLatch release;
+
+    BlockingRuntimeTransport(CountDownLatch entered, CountDownLatch release) {
+      this.entered = entered;
+      this.release = release;
+    }
+
+    @Override
+    public InvocationResult invoke(InvocationDraft draft) {
+      entered.countDown();
+      try {
+        release.await(5, TimeUnit.SECONDS);
+      } catch (InterruptedException error) {
+        Thread.currentThread().interrupt();
+        throw new SDKError(
+            ErrorCode.CANCELLED,
+            "runtime",
+            RetryHint.NEVER,
+            false,
+            "async runtime interrupted",
+            "",
+            "",
+            "",
+            Map.of(),
+            error);
+      }
       return new InvocationResult(
           true, InvocationTerminalState.COMPLETED, "{\"ok\":true}", null, Map.of());
     }

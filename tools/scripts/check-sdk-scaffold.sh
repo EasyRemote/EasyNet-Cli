@@ -241,6 +241,7 @@ for path in \
   sdk/java/README.md \
   sdk/java/.gitignore \
   sdk/java/pom.xml \
+  sdk/java/src/main/java/run/easynet/daemon/AsyncRuntimeClient.java \
   sdk/java/src/main/java/run/easynet/daemon/BidiFrame.java \
   sdk/java/src/main/java/run/easynet/daemon/BidiSession.java \
   sdk/java/src/main/java/run/easynet/daemon/BidiSource.java \
@@ -256,6 +257,7 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/InvocationTuple.java \
   sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/SDKError.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamEvent.java \

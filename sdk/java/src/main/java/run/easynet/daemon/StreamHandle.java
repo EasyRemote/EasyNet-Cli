@@ -1,10 +1,11 @@
 package run.easynet.daemon;
 
 import java.util.ArrayDeque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 
-public final class StreamHandle implements AutoCloseable {
+public final class StreamHandle implements AutoCloseable, Iterator<StreamEvent> {
   public static final int MAX_RETAINED_EVENTS = 1024;
 
   private final StreamSource source;
@@ -16,6 +17,12 @@ public final class StreamHandle implements AutoCloseable {
     this.source = Objects.requireNonNull(source, "source");
   }
 
+  @Override
+  public boolean hasNext() {
+    return !closed && terminal == null;
+  }
+
+  @Override
   public StreamEvent next() {
     requireOpen();
     if (terminal != null) {
