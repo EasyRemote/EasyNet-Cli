@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"time"
 
@@ -11,6 +12,13 @@ import (
 // DelegationProofRaw is the SDK facade for Axon's canonical raw
 // delegation-proof encoding.
 type DelegationProofRaw struct {
+	Payload   json.RawMessage `json:"payload"`
+	Signature string          `json:"signature"`
+}
+
+// SessionAuthorityRaw is the SDK facade for canonical raw session-authority
+// encoding.
+type SessionAuthorityRaw struct {
 	Payload   json.RawMessage `json:"payload"`
 	Signature string          `json:"signature"`
 }
@@ -92,6 +100,138 @@ func (p *DelegationProof) IsExpired(now time.Time) bool {
 	}
 	proof := p.toAxonDelegationProof()
 	return (&proof).IsExpired(now)
+}
+
+// CanonicalPayload returns the canonical authority payload bytes signed by the
+// session authority issuer.
+func (a *SessionAuthority) CanonicalPayload() ([]byte, error) {
+	if a == nil {
+		return nil, invalidInvocation("session authority is required", nil)
+	}
+	shape := *a
+	if len(shape.Signature) == 0 {
+		shape.Signature = []byte("shape-only")
+	}
+	if err := validateSessionAuthority(shape); err != nil {
+		return nil, err
+	}
+	payload := map[string]any{
+		"audience":      a.Audience,
+		"expires_at_ms": a.ExpiresAtMS,
+		"issued_at_ms":  a.IssuedAtMS,
+		"issuer_ura":    a.IssuerURA,
+		"scopes":        append([]string(nil), a.Scopes...),
+		"subject_ura":   a.SubjectURA,
+	}
+	return json.Marshal(payload)
+}
+
+// Sign signs this session-authority payload with the issuer private key.
+func (a *SessionAuthority) Sign(privateKey ed25519.PrivateKey) error {
+	if a == nil {
+		return invalidInvocation("session authority is required", nil)
+	}
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return invalidInvocation("session authority private key has invalid size", nil)
+	}
+	payload, err := a.CanonicalPayload()
+	if err != nil {
+		return err
+	}
+	a.Signature = append(a.Signature[:0], ed25519.Sign(privateKey, payload)...)
+	a.metadataValue = ""
+	return nil
+}
+
+// Verify verifies this session-authority payload against the issuer public key.
+func (a *SessionAuthority) Verify(publicKey ed25519.PublicKey) error {
+	if a == nil {
+		return invalidInvocation("session authority is required", nil)
+	}
+	if len(publicKey) != ed25519.PublicKeySize {
+		return invalidInvocation("session authority public key has invalid size", nil)
+	}
+	payload, err := a.CanonicalPayload()
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(publicKey, payload, a.Signature) {
+		return invalidInvocation("session authority signature does not verify", nil)
+	}
+	return nil
+}
+
+// MarshalRaw returns the daemon authority metadata wire payload.
+func (a *SessionAuthority) MarshalRaw() ([]byte, error) {
+	if a == nil {
+		return nil, invalidInvocation("session authority is required", nil)
+	}
+	payload, err := a.CanonicalPayload()
+	if err != nil {
+		return nil, err
+	}
+	if len(a.Signature) == 0 {
+		return nil, invalidInvocation("session authority signature is required", nil)
+	}
+	return json.Marshal(SessionAuthorityRaw{
+		Payload:   payload,
+		Signature: base64.StdEncoding.EncodeToString(a.Signature),
+	})
+}
+
+// UnmarshalRawSessionAuthority decodes daemon authority metadata wire payload.
+func UnmarshalRawSessionAuthority(data []byte) (*SessionAuthority, error) {
+	var raw SessionAuthorityRaw
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	var payload sessionAuthorityPayload
+	if err := json.Unmarshal(raw.Payload, &payload); err != nil {
+		return nil, err
+	}
+	signature, err := base64.StdEncoding.DecodeString(raw.Signature)
+	if err != nil {
+		return nil, err
+	}
+	out := &SessionAuthority{
+		IssuerURA:   payload.IssuerURA,
+		SubjectURA:  payload.SubjectURA,
+		Audience:    payload.Audience,
+		Scopes:      append([]string(nil), payload.Scopes...),
+		IssuedAtMS:  payload.IssuedAtMS,
+		ExpiresAtMS: payload.ExpiresAtMS,
+		Signature:   signature,
+	}
+	if err := validateSessionAuthority(*out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a *SessionAuthority) MatchesScope(ability string) bool {
+	if a == nil {
+		return false
+	}
+	for _, scope := range a.Scopes {
+		if axonsdk.MatchScopePattern(scope, ability) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *SessionAuthority) MatchesAudience(callee string) bool {
+	if a == nil {
+		return false
+	}
+	return a.Audience == "*" || a.Audience == callee || axonsdk.StrictPrefixMatch(a.Audience, callee)
+}
+
+func (a *SessionAuthority) IsExpired(now time.Time) bool {
+	if a == nil {
+		return true
+	}
+	return now.UnixMilli() >= a.ExpiresAtMS
 }
 
 func (p DelegationProof) toAxonDelegationProof() axonsdk.DelegationProof {

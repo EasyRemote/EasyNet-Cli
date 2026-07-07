@@ -2,9 +2,11 @@ package easynet
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestDelegationProofFromMetadataProjectsTypedAuthority(t *testing.T) {
@@ -60,6 +62,67 @@ func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	}
 	if metadata.Key() != SessionAuthorityMetadataKey || metadata.Value() != value {
 		t.Fatalf("metadata key/value = %q/%q", metadata.Key(), metadata.Value())
+	}
+}
+
+func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	authority := &SessionAuthority{
+		IssuerURA:   "easynet:///r/example/agent/backend",
+		SubjectURA:  "easynet:///r/example/user/alice",
+		Audience:    "easynet:///r/example/device/dev-a",
+		Scopes:      []string{"device.observe.*"},
+		IssuedAtMS:  1000,
+		ExpiresAtMS: 2000,
+	}
+
+	payload, err := authority.CanonicalPayload()
+	if err != nil {
+		t.Fatalf("CanonicalPayload: %v", err)
+	}
+	var projected map[string]any
+	if err := json.Unmarshal(payload, &projected); err != nil {
+		t.Fatalf("decode canonical payload: %v", err)
+	}
+	if projected["issuer_ura"] != authority.IssuerURA || projected["subject_ura"] != authority.SubjectURA {
+		t.Fatalf("canonical payload used non-generic authority fields: %#v", projected)
+	}
+
+	if err := authority.Sign(privateKey); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if len(authority.Signature) == 0 {
+		t.Fatalf("Sign did not populate signature")
+	}
+	if err := authority.Verify(publicKey); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	raw, err := authority.MarshalRaw()
+	if err != nil {
+		t.Fatalf("MarshalRaw: %v", err)
+	}
+	decoded, err := UnmarshalRawSessionAuthority(raw)
+	if err != nil {
+		t.Fatalf("UnmarshalRawSessionAuthority: %v", err)
+	}
+	if decoded.IssuerURA != authority.IssuerURA || decoded.SubjectURA != authority.SubjectURA || decoded.Audience != authority.Audience {
+		t.Fatalf("unexpected decoded authority: %#v", decoded)
+	}
+	if err := decoded.Verify(publicKey); err != nil {
+		t.Fatalf("decoded Verify: %v", err)
+	}
+	if !decoded.MatchesScope("device.observe.health") || decoded.MatchesScope("device.write.health") {
+		t.Fatalf("scope matching drifted for decoded authority")
+	}
+	if !decoded.MatchesAudience("easynet:///r/example/device/dev-a") ||
+		decoded.MatchesAudience("easynet:///r/example/device/dev-b") {
+		t.Fatalf("audience matching drifted for decoded authority")
+	}
+	if decoded.IsExpired(time.UnixMilli(1999)) || !decoded.IsExpired(time.UnixMilli(2000)) {
+		t.Fatalf("expiry boundary drifted for decoded authority")
 	}
 }
 
