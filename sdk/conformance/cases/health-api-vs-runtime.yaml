@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: Health distinguishes API liveness from daemon runtime readiness.
 steps:
   - action: read_health

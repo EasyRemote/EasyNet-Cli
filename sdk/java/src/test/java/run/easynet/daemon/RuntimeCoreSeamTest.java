@@ -1,5 +1,6 @@
 package run.easynet.daemon;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Iterator;
 import java.util.Map;
@@ -14,6 +15,11 @@ public final class RuntimeCoreSeamTest {
     asyncRuntimeUsesCompletableFutureAndCancellation();
     streamHistoryIsBounded();
     bidiHistoryIsBounded();
+    runtimeHealthDistinguishesLivenessFromReadiness();
+    runtimeDiagnosticsRequireTransportCapability();
+    runtimeHealthWrapsTransportFailures();
+    runtimeHealthRejectsMalformedPayload();
+    runtimeHealthRejectsClosedClient();
   }
 
   private static void featureDiscoveryAndTypedErrors() throws Exception {
@@ -148,6 +154,104 @@ public final class RuntimeCoreSeamTest {
     session.close();
   }
 
+  private static void runtimeHealthDistinguishesLivenessFromReadiness() throws Exception {
+    var client =
+        new HealthClient(
+            new MemoryHealthTransport(
+                """
+                {
+                  "api_ready": true,
+                  "daemon_ready": true,
+                  "invocation_ready": false,
+                  "directory_ready": true,
+                  "trust_ready": true,
+                  "runtime_ready": false,
+                  "version": "0.0.0-seam",
+                  "abi_version": 4,
+                  "mismatch": null,
+                  "diagnostics": ["invocation endpoint unavailable"]
+                }
+                """,
+                """
+                {
+                  "profile": "health",
+                  "kind": "diagnostics_report",
+                  "state": "Running",
+                  "ready": true,
+                  "version": "0.0.0-seam",
+                  "abi_version": 4,
+                  "control_endpoint": "/tmp/easynet/control.json",
+                  "invocation_endpoint": "/tmp/easynet/daemon.sock",
+                  "checks": [{"name": "runtime", "ready": true, "message": null}],
+                  "diagnostics": []
+                }
+                """));
+
+    RuntimeHealth health = client.runtimeHealth();
+    check(health.apiAlive(), "health api liveness");
+    check(!health.ready(), "health runtime readiness");
+    check(!health.invocationReady(), "health invocation readiness");
+    check(health.abiVersion() == 4, "health ABI version");
+
+    DiagnosticsReport diagnostics = client.diagnostics();
+    check(diagnostics.kind().equals("diagnostics_report"), "diagnostics kind");
+    check(diagnostics.checks().size() == 1, "diagnostics checks");
+  }
+
+  private static void runtimeDiagnosticsRequireTransportCapability() throws Exception {
+    var client =
+        new HealthClient(
+            () ->
+                bytes(
+                    """
+                    {
+                      "api_ready": true,
+                      "daemon_ready": true,
+                      "invocation_ready": true,
+                      "directory_ready": true,
+                      "trust_ready": true,
+                      "runtime_ready": true,
+                      "diagnostics": []
+                    }
+                    """));
+    expectSDKError(ErrorCode.NOT_IMPLEMENTED, client::diagnostics);
+  }
+
+  private static void runtimeHealthWrapsTransportFailures() throws Exception {
+    var client =
+        new HealthClient(
+            () -> {
+              throw new IllegalStateException("transport down");
+            });
+    expectSDKError(ErrorCode.TRANSPORT, client::runtimeHealth);
+  }
+
+  private static void runtimeHealthRejectsMalformedPayload() throws Exception {
+    var client = new HealthClient(() -> bytes("{\"api_ready\": true, \"runtime_ready\": false}"));
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, client::runtimeHealth);
+  }
+
+  private static void runtimeHealthRejectsClosedClient() throws Exception {
+    var transport =
+        new MemoryHealthTransport(
+            """
+            {
+              "api_ready": true,
+              "daemon_ready": true,
+              "invocation_ready": true,
+              "directory_ready": true,
+              "trust_ready": true,
+              "runtime_ready": true,
+              "diagnostics": []
+            }
+            """,
+            null);
+    var client = new HealthClient(transport);
+    client.close();
+    check(transport.closed, "health transport closed");
+    expectSDKError(ErrorCode.INVALID_HANDLE, client::runtimeHealth);
+  }
+
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
     try {
       action.run();
@@ -263,5 +367,42 @@ public final class RuntimeCoreSeamTest {
     public BidiFrame next() {
       return frames.isEmpty() ? BidiFrame.terminal(9999, "completed") : frames.removeFirst();
     }
+  }
+
+  private static final class MemoryHealthTransport
+      implements HealthTransport, DiagnosticsTransport {
+    private final String health;
+    private final String diagnostics;
+    private boolean closed;
+
+    MemoryHealthTransport(String health, String diagnostics) {
+      this.health = health;
+      this.diagnostics = diagnostics;
+    }
+
+    @Override
+    public byte[] runtimeHealth() {
+      if (closed) {
+        throw SDKError.closed("health_transport");
+      }
+      return bytes(health);
+    }
+
+    @Override
+    public byte[] runtimeDiagnostics() {
+      if (diagnostics == null) {
+        throw SDKError.validation("health", "diagnostics fixture is required");
+      }
+      return bytes(diagnostics);
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+    }
+  }
+
+  private static byte[] bytes(String value) {
+    return value.getBytes(StandardCharsets.UTF_8);
   }
 }

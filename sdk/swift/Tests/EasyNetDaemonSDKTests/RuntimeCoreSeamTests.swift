@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import EasyNetDaemonSDK
 
@@ -93,6 +94,102 @@ final class RuntimeCoreSeamTests: XCTestCase {
         try await session.close()
     }
 
+    func testRuntimeHealthDistinguishesLivenessFromReadiness() async throws {
+        let client = HealthClient(transport: MemoryHealthTransport(
+            healthJSON: """
+            {
+              "api_ready": true,
+              "daemon_ready": true,
+              "invocation_ready": false,
+              "directory_ready": true,
+              "trust_ready": true,
+              "runtime_ready": false,
+              "version": "0.0.0-seam",
+              "abi_version": 4,
+              "mismatch": null,
+              "diagnostics": ["invocation endpoint unavailable"]
+            }
+            """,
+            diagnosticsJSON: """
+            {
+              "profile": "health",
+              "kind": "diagnostics_report",
+              "state": "Running",
+              "ready": true,
+              "version": "0.0.0-seam",
+              "abi_version": 4,
+              "control_endpoint": "/tmp/easynet/control.json",
+              "invocation_endpoint": "/tmp/easynet/daemon.sock",
+              "checks": [{"name": "runtime", "ready": true, "message": null}],
+              "diagnostics": []
+            }
+            """
+        ))
+
+        let health = try await client.runtimeHealth()
+        XCTAssertTrue(health.apiAlive)
+        XCTAssertFalse(health.ready)
+        XCTAssertFalse(health.invocationReady)
+        XCTAssertEqual(health.abiVersion, 4)
+
+        let diagnostics = try await client.diagnostics()
+        XCTAssertEqual(diagnostics.kind, "diagnostics_report")
+        XCTAssertEqual(diagnostics.checks.count, 1)
+    }
+
+    func testRuntimeDiagnosticsRequireTransportCapability() async throws {
+        let client = HealthClient(transport: HealthOnlyTransport(healthJSON: """
+        {
+          "api_ready": true,
+          "daemon_ready": true,
+          "invocation_ready": true,
+          "directory_ready": true,
+          "trust_ready": true,
+          "runtime_ready": true,
+          "diagnostics": []
+        }
+        """))
+        await expectSDKError(.notImplemented) {
+            _ = try await client.diagnostics()
+        }
+    }
+
+    func testRuntimeHealthWrapsTransportFailures() async throws {
+        let client = HealthClient(transport: FailingHealthTransport())
+        await expectSDKError(.transport) {
+            _ = try await client.runtimeHealth()
+        }
+    }
+
+    func testRuntimeHealthRejectsMalformedPayload() async throws {
+        let client = HealthClient(transport: HealthOnlyTransport(
+            healthJSON: "{\"api_ready\": true, \"runtime_ready\": false}"
+        ))
+        await expectSDKError(.invalidArgument) {
+            _ = try await client.runtimeHealth()
+        }
+    }
+
+    func testRuntimeHealthRejectsClosedClient() async throws {
+        let transport = HealthOnlyTransport(healthJSON: """
+        {
+          "api_ready": true,
+          "daemon_ready": true,
+          "invocation_ready": true,
+          "directory_ready": true,
+          "trust_ready": true,
+          "runtime_ready": true,
+          "diagnostics": []
+        }
+        """)
+        let client = HealthClient(transport: transport)
+        try await client.close()
+        XCTAssertTrue(transport.closed)
+        await expectSDKError(.invalidHandle) {
+            _ = try await client.runtimeHealth()
+        }
+    }
+
     private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
@@ -183,4 +280,57 @@ final class QueueBidiSource: BidiSource, @unchecked Sendable {
         }
         return frames.removeFirst()
     }
+}
+
+final class MemoryHealthTransport: HealthTransport, DiagnosticsTransport, @unchecked Sendable {
+    private let healthJSON: String
+    private let diagnosticsJSON: String
+    var closed = false
+
+    init(healthJSON: String, diagnosticsJSON: String) {
+        self.healthJSON = healthJSON
+        self.diagnosticsJSON = diagnosticsJSON
+    }
+
+    func runtimeHealth() async throws -> Data {
+        if closed {
+            throw SDKError.closed("health_transport")
+        }
+        return Data(healthJSON.utf8)
+    }
+
+    func runtimeDiagnostics() async throws -> Data {
+        Data(diagnosticsJSON.utf8)
+    }
+
+    func close() async throws {
+        closed = true
+    }
+}
+
+final class HealthOnlyTransport: HealthTransport, @unchecked Sendable {
+    private let healthJSON: String
+    var closed = false
+
+    init(healthJSON: String) {
+        self.healthJSON = healthJSON
+    }
+
+    func runtimeHealth() async throws -> Data {
+        Data(healthJSON.utf8)
+    }
+
+    func close() async throws {
+        closed = true
+    }
+}
+
+final class FailingHealthTransport: HealthTransport, @unchecked Sendable {
+    func runtimeHealth() async throws -> Data {
+        throw FixtureFailure.down
+    }
+}
+
+enum FixtureFailure: Error {
+    case down
 }
