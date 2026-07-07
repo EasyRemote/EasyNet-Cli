@@ -48,6 +48,7 @@ export declare const MAX_PUBLISHED_ABILITY_PAGE_SIZE: 500;
 export declare const HOST_BINDING_PROFILE: "host_binding";
 export declare const HEALTH_PROFILE: "health";
 export declare const EVENTS_PROFILE: "events";
+export declare const MISSION_PROFILE: "mission";
 export declare const SURFACE_PROFILE: "surface";
 export declare const COMPATIBILITY_PROFILE: "compatibility";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
@@ -537,6 +538,225 @@ export class EventClient {
   projectLiveEvent(input: EventProjectionInput): Promise<EventFrame>;
   projectDropReport(input: EventDropReportInput): Promise<EventDropReport>;
   projectTerminal(input: EventTerminalInput): Promise<EventFrame>;
+  close(): Promise<void>;
+}
+
+export interface MissionCarrierBase {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  descriptor_version: string;
+  nonce_base64: string;
+  causal_context: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MissionRunRequest extends MissionCarrierBase {
+  source: string;
+  label?: string;
+}
+
+export interface MissionRunFileRequest extends MissionCarrierBase {
+  path: string;
+  label?: string;
+}
+
+export interface MissionTrackRequest extends MissionCarrierBase {
+  mission_id: string;
+}
+
+export interface MissionCancelRequest extends MissionCarrierBase {
+  mission_id: string;
+}
+
+export interface MissionEventListRequest extends MissionCarrierBase {
+  mission_id: string;
+  cursor_sequence?: number;
+  limit?: number;
+}
+
+export interface MissionChildInvocation {
+  step_id?: string | null;
+  request_id?: string | null;
+  trace_id?: string | null;
+  ability?: string | null;
+  invocation_ura?: string | null;
+  caller_ura?: string | null;
+  callee_ura?: string | null;
+  subject_ura?: string | null;
+  metadata_state?: string | null;
+  ledger_state?: unknown;
+  receipt?: Record<string, unknown> | null;
+}
+
+export interface MissionChildReceipt {
+  step_id?: string | null;
+  invocation_ura?: string | null;
+  receipt_ura: string;
+  receipt_hash: string;
+}
+
+export interface MissionOutputRef {
+  kind: string;
+  path?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MissionStatusFields {
+  profile: "mission";
+  kind: "mission_status";
+  mission_id: string;
+  state: "running" | "ok" | "partial" | "error" | "cancelled";
+  terminal: boolean;
+  partial_failures: number;
+  cancelled: boolean;
+  parent_invocation_id?: string | null;
+  parent_receipt_ura?: string | null;
+  parent_invocation?: Record<string, unknown> | null;
+  child_invocations: MissionChildInvocation[];
+  child_receipts: MissionChildReceipt[];
+  output_refs: MissionOutputRef[];
+  error?: unknown;
+  metadata: Record<string, unknown>;
+}
+
+export class MissionStatus {
+  profile: "mission";
+  kind: "mission_status";
+  missionID: string;
+  state: "running" | "ok" | "partial" | "error" | "cancelled";
+  terminal: boolean;
+  partialFailures: number;
+  cancelled: boolean;
+  parentInvocationID: string | null;
+  parentReceiptURA: string | null;
+  parentInvocation: Record<string, unknown> | null;
+  childInvocations: MissionChildInvocation[];
+  childReceipts: MissionChildReceipt[];
+  outputRefs: MissionOutputRef[];
+  error: unknown | null;
+  metadata: Record<string, unknown>;
+  constructor(fields: MissionStatusFields);
+  static fromJSON(raw: Uint8Array | string): MissionStatus;
+  toJSON(): MissionStatusFields;
+}
+
+export class MissionRun {
+  status: MissionStatus;
+  constructor(status: MissionStatus | MissionStatusFields);
+  static fromJSON(raw: Uint8Array | string): MissionRun;
+  toJSON(): { status: MissionStatusFields };
+}
+
+export declare const MissionCancelResult: typeof MissionStatus;
+
+export interface MissionEventFields {
+  profile: "mission";
+  kind: "mission_event";
+  mission_id: string;
+  sequence: number;
+  event_type: string;
+  occurred_unix_ms: number;
+  terminal: boolean;
+  payload: Record<string, unknown>;
+  receipt: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export class MissionEvent {
+  profile: "mission";
+  kind: "mission_event";
+  missionID: string;
+  sequence: number;
+  eventType: string;
+  occurredUnixMS: number;
+  terminal: boolean;
+  payload: Record<string, unknown>;
+  receipt: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  constructor(fields: MissionEventFields);
+  static fromJSON(raw: Uint8Array | string): MissionEvent;
+  toJSON(): MissionEventFields;
+}
+
+export interface MissionEventPageFields {
+  profile: "mission";
+  kind: "mission_event_page";
+  mission_id: string;
+  cursor_sequence: number;
+  next_cursor_sequence?: number | null;
+  has_more: boolean;
+  dropped_count: number;
+  events: MissionEventFields[];
+  metadata: Record<string, unknown>;
+}
+
+export class MissionEventPage {
+  profile: "mission";
+  kind: "mission_event_page";
+  missionID: string;
+  cursorSequence: number;
+  nextCursorSequence: number | null;
+  hasMore: boolean;
+  droppedCount: number;
+  events: MissionEvent[];
+  metadata: Record<string, unknown>;
+  constructor(fields: MissionEventPageFields);
+  static fromJSON(raw: Uint8Array | string): MissionEventPage;
+  toJSON(): MissionEventPageFields;
+}
+
+export class MissionEventStream {
+  handle: StreamHandle;
+  constructor(handle: StreamHandle);
+  readonly streamId: string;
+  readonly state: string;
+  receive(options?: ReceiveOptions): Promise<MissionEvent>;
+  events(options?: AsyncIterationOptions): AsyncIterableIterator<MissionEvent>;
+  [Symbol.asyncIterator](): AsyncIterableIterator<MissionEvent>;
+  cancel(reason?: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+export type MissionProjectionInput =
+  | Uint8Array
+  | string
+  | Record<string, unknown>
+  | MissionStatus
+  | MissionEventPage;
+
+export interface MissionTransport {
+  buildRunEALInvocation(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildRunFileInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildTrackInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildCancelInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  buildEventsInvocation?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  runEAL?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  runFile?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  track?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  cancel?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  events?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  openEventStream?(requestJSON: Uint8Array): Promise<StreamHandle | { transport: StreamTransport; open: Uint8Array | string }> | StreamHandle | { transport: StreamTransport; open: Uint8Array | string };
+  projectStatus?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  projectEvents?(requestJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
+  close?(): Promise<void> | void;
+}
+
+export class MissionClient {
+  constructor(transport: MissionTransport);
+  buildRunEALInvocation(request: MissionRunRequest): Promise<InvocationDraft>;
+  buildRunFileInvocation(request: MissionRunFileRequest): Promise<InvocationDraft>;
+  buildTrackInvocation(request: MissionTrackRequest): Promise<InvocationDraft>;
+  buildCancelInvocation(request: MissionCancelRequest): Promise<InvocationDraft>;
+  buildEventsInvocation(request: MissionEventListRequest): Promise<InvocationDraft>;
+  runEAL(request: MissionRunRequest): Promise<MissionRun>;
+  runFile(request: MissionRunFileRequest): Promise<MissionRun>;
+  track(request: MissionTrackRequest): Promise<MissionStatus>;
+  cancel(request: MissionCancelRequest): Promise<MissionStatus>;
+  events(request: MissionEventListRequest): Promise<MissionEventPage>;
+  openEventStream(request: MissionEventListRequest): Promise<MissionEventStream>;
+  projectStatus(value: MissionProjectionInput): Promise<MissionStatus>;
+  projectEvents(value: MissionProjectionInput): Promise<MissionEventPage>;
   close(): Promise<void>;
 }
 

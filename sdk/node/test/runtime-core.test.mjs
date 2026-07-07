@@ -24,6 +24,7 @@ import {
   LocalHostBindingTransport,
   MAX_BIDI_BUFFERED_FRAMES,
   MAX_STREAM_BUFFERED_EVENTS,
+  MissionClient,
   PreparedInvocation,
   PublicationClient,
   ReceiptChain,
@@ -115,6 +116,156 @@ const eventCarrier = () => ({
   heartbeat_interval_ms: 30000,
   metadata: { request_id: "events-directory-subscribe-1" },
 });
+
+const missionBase = () => ({
+  caller_ura: "easynet:///r/example/agent/alice.sdk",
+  callee_ura: "easynet:///r/example/device/dev-a",
+  subject_ura: "easynet:///r/example/device/dev-a",
+  descriptor_version: "1.0.0",
+  nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+  causal_context: { form: "none" },
+  metadata: { request_id: "mission-1" },
+});
+
+const missionID = "2026-07-04_010203_weather";
+
+const missionStatus = () => ({
+  profile: "mission",
+  kind: "mission_status",
+  mission_id: missionID,
+  state: "partial",
+  terminal: true,
+  partial_failures: 1,
+  cancelled: false,
+  parent_invocation_id: null,
+  parent_receipt_ura: "easynet:///r/example/receipt/parent",
+  parent_invocation: {
+    caller: "easynet:///r/example/agent/alice.sdk",
+    callee: "easynet:///r/example/device/dev-a",
+    ability: "mission.run",
+    subject: "easynet:///r/example/device/dev-a",
+    causal_context: {
+      form: "scalar",
+      receipt_ura: "easynet:///r/example/receipt/parent",
+      receipt_hash_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+  },
+  child_invocations: [
+    {
+      step_id: "s1",
+      request_id: "req-1",
+      trace_id: missionID,
+      ability: "observe.health",
+      invocation_ura: "easynet:///r/example/invocation/req-1",
+      caller_ura: "easynet:///r/example/device/dev-a",
+      callee_ura: "easynet:///r/example/device/dev-a",
+      subject_ura: "easynet:///r/example/device/dev-a",
+      metadata_state: "receipt_backed",
+      ledger_state: "completed",
+      receipt: {
+        receipt_ura: "easynet:///r/example/receipt/child",
+        receipt_hash: "bbbb",
+        head_receipt_hash: "bbbb",
+      },
+    },
+  ],
+  child_receipts: [
+    {
+      step_id: "s1",
+      invocation_ura: "easynet:///r/example/invocation/req-1",
+      receipt_ura: "easynet:///r/example/receipt/child",
+      receipt_hash: "bbbb",
+    },
+  ],
+  output_refs: [
+    {
+      kind: "run_dir",
+      path: `/tmp/easynet/missions/runs/${missionID}`,
+    },
+  ],
+  metadata: {
+    profile: "mission",
+    carrier_owner: "daemon_sdk",
+    status_source: "mission_result",
+    running: false,
+    name: "weather",
+    trace_id: missionID,
+  },
+});
+
+const missionEvent = (overrides = {}) => ({
+  profile: "mission",
+  kind: "mission_event",
+  mission_id: missionID,
+  sequence: 4,
+  event_type: "progress",
+  occurred_unix_ms: 1783126923000,
+  terminal: false,
+  payload: {
+    step_id: "s1",
+    state: "running",
+    message: "observe.health started",
+  },
+  receipt: {},
+  metadata: {
+    profile: "mission",
+    carrier_owner: "daemon_sdk",
+  },
+  ...overrides,
+});
+
+const missionEventPage = () => ({
+  profile: "mission",
+  kind: "mission_event_page",
+  mission_id: missionID,
+  cursor_sequence: 4,
+  next_cursor_sequence: 7,
+  has_more: false,
+  dropped_count: 0,
+  events: [
+    missionEvent(),
+    missionEvent({
+      sequence: 6,
+      event_type: "completed",
+      terminal: true,
+      payload: {
+        state: "partial",
+        partial_failures: 1,
+        steps_completed: 1,
+        steps_failed: 1,
+      },
+      receipt: {
+        receipt_ura: "easynet:///r/example/receipt/parent",
+        receipt_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        head_receipt_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+      metadata: {
+        profile: "mission",
+        carrier_owner: "daemon_sdk",
+        status_source: "mission_result",
+      },
+    }),
+  ],
+  metadata: {
+    profile: "mission",
+    carrier_owner: "daemon_sdk",
+    status_source: "mission_event_log",
+  },
+});
+
+const missionDraftJSON = (descriptorRef, args = {}) =>
+  new InvocationBuilder()
+    .withCallerURA("easynet:///r/example/agent/alice.sdk")
+    .withCalleeURA("easynet:///r/example/device/dev-a")
+    .withDescriptorRef(descriptorRef)
+    .withSubjectURA("easynet:///r/example/device/dev-a")
+    .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
+    .withCausalContext({ form: "none" })
+    .withJSONArgs(args)
+    .withContentType("application/json")
+    .withMetadata({ profile: "mission" })
+    .build()
+    .toJSONString();
 
 const surfaceBase = () => ({
   caller_ura: "easynet:///r/example/agent/alice.sdk",
@@ -1487,6 +1638,181 @@ test("EventClient delegates event carriers, projections, history, and streams", 
       ...directoryBase(),
       stream: "session",
       session_ura: "easynet:///r/example/resource/session.run-1",
+    }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+});
+
+test("MissionClient delegates carriers, status projections, and event streams without execution policy", async () => {
+  const seen = [];
+  const streamFrames = [missionEvent(), missionEvent({ sequence: 5, event_type: "completed", terminal: true })];
+  const mission = new MissionClient({
+    buildRunEALInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_run", request });
+      return missionDraftJSON("easynet:///r/example/ability/device.dev-a.mission.run@1.0.0", {
+        source: request.source,
+        label: request.label,
+      });
+    },
+    buildRunFileInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_run_file", request });
+      return missionDraftJSON("easynet:///r/example/ability/device.dev-a.mission.run@1.0.0", {
+        path: request.path,
+        label: request.label,
+      });
+    },
+    buildTrackInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_track", request });
+      return missionDraftJSON("easynet:///r/example/ability/device.dev-a.mission.track@1.0.0", {
+        run_id: request.mission_id,
+      });
+    },
+    buildCancelInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_cancel", request });
+      return missionDraftJSON("easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0", {
+        run_id: request.mission_id,
+      });
+    },
+    buildEventsInvocation: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "build_events", request });
+      return missionDraftJSON("easynet:///r/example/ability/device.dev-a.mission.events@1.0.0", {
+        run_id: request.mission_id,
+        cursor_sequence: request.cursor_sequence,
+        limit: request.limit,
+      });
+    },
+    runEAL: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "run", request });
+      return JSON.stringify(missionStatus());
+    },
+    runFile: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "run_file", request });
+      return JSON.stringify(missionStatus());
+    },
+    track: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "track", request });
+      return JSON.stringify(missionStatus());
+    },
+    cancel: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "cancel", request });
+      return JSON.stringify({ ...missionStatus(), state: "cancelled", cancelled: true });
+    },
+    events: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "events", request });
+      return JSON.stringify(missionEventPage());
+    },
+    openEventStream: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "stream", request });
+      return {
+        open: JSON.stringify({ stream_id: "mission-stream-1", state: "Open" }),
+        transport: {
+          receive: () => JSON.stringify(streamFrames.shift()),
+          close: () => {},
+        },
+      };
+    },
+    projectStatus: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_status", request });
+      return JSON.stringify(request);
+    },
+    projectEvents: (requestJSON) => {
+      const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      seen.push({ method: "project_events", request });
+      return JSON.stringify(request);
+    },
+  });
+
+  const runDraft = await mission.buildRunEALInvocation({
+    ...missionBase(),
+    source: "mission weather\nlet r = local.observe_health()",
+    label: "weather",
+  });
+  const fileDraft = await mission.buildRunFileInvocation({
+    ...missionBase(),
+    path: "/tmp/easynet-sdk-demo.eal",
+    label: "file-weather",
+  });
+  const trackDraft = await mission.buildTrackInvocation({ ...missionBase(), mission_id: missionID });
+  const cancelDraft = await mission.buildCancelInvocation({ ...missionBase(), mission_id: missionID });
+  const eventsDraft = await mission.buildEventsInvocation({
+    ...missionBase(),
+    mission_id: missionID,
+    cursor_sequence: 4,
+    limit: 100,
+  });
+  const run = await mission.runEAL({
+    ...missionBase(),
+    source: "mission weather\nlet r = local.observe_health()",
+    label: "weather",
+  });
+  const runFile = await mission.runFile({
+    ...missionBase(),
+    path: "/tmp/easynet-sdk-demo.eal",
+    label: "file-weather",
+  });
+  const tracked = await mission.track({ ...missionBase(), mission_id: missionID });
+  const cancelled = await mission.cancel({ ...missionBase(), mission_id: missionID });
+  const page = await mission.events({ ...missionBase(), mission_id: missionID, cursor_sequence: 4, limit: 100 });
+  const stream = await mission.openEventStream({
+    ...missionBase(),
+    mission_id: missionID,
+    cursor_sequence: 4,
+    limit: 100,
+  });
+  const streamed = [];
+  for await (const event of stream.events()) {
+    streamed.push(event);
+  }
+  const projectedStatus = await mission.projectStatus(tracked);
+  const projectedEvents = await mission.projectEvents(page.toJSON());
+
+  assert.equal(runDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0");
+  assert.equal(fileDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.mission.run@1.0.0");
+  assert.equal(trackDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.mission.track@1.0.0");
+  assert.equal(cancelDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.mission.cancel@1.0.0");
+  assert.equal(eventsDraft.descriptorRef, "easynet:///r/example/ability/device.dev-a.mission.events@1.0.0");
+  assert.equal(run.status.missionID, missionID);
+  assert.equal(runFile.status.outputRefs[0].kind, "run_dir");
+  assert.equal(tracked.childReceipts[0].receipt_ura, "easynet:///r/example/receipt/child");
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(page.events.length, 2);
+  assert.equal(page.events[1].terminal, true);
+  assert.equal(streamed.length, 2);
+  assert.equal(streamed[1].terminal, true);
+  assert.equal(projectedStatus.state, "partial");
+  assert.equal(projectedEvents.nextCursorSequence, 7);
+  assert.equal(seen[0].request.source, "mission weather\nlet r = local.observe_health()");
+  assert.equal(seen[1].request.path, "/tmp/easynet-sdk-demo.eal");
+  assert.equal(seen[4].request.limit, 100);
+  assert.equal(seen.at(-1).method, "project_events");
+
+  await assert.rejects(
+    () => mission.buildTrackInvocation({ ...missionBase(), mission_id: "../bad" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => mission.buildRunFileInvocation({ ...missionBase(), path: "relative.eal" }),
+    (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
+  );
+  await assert.rejects(
+    () => new MissionClient({
+      buildRunEALInvocation: () => completeDraft().build().toJSONString(),
+      projectStatus: () => JSON.stringify({ ...missionStatus(), parent_receipt_ura: null }),
+    }).projectStatus({
+      ...missionStatus(),
+      parent_receipt_ura: null,
     }),
     (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
   );

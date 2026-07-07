@@ -65,6 +65,7 @@ export const MAX_PUBLISHED_ABILITY_PAGE_SIZE = 500;
 export const HOST_BINDING_PROFILE = "host_binding";
 export const HEALTH_PROFILE = "health";
 export const EVENTS_PROFILE = "events";
+export const MISSION_PROFILE = "mission";
 export const SURFACE_PROFILE = "surface";
 export const COMPATIBILITY_PROFILE = "compatibility";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
@@ -863,6 +864,306 @@ export class EventClient {
   requireOpen() {
     if (this.closed || !this.transport) {
       throw invalidSDK("events client is closed");
+    }
+    return this.transport;
+  }
+}
+
+export class MissionStatus {
+  constructor(fields) {
+    const value = objectValue(fields, "mission status");
+    this.profile = requiredMissionString(value.profile, "profile");
+    this.kind = requiredMissionString(value.kind, "kind");
+    if (this.profile !== MISSION_PROFILE || this.kind !== "mission_status") {
+      throw invalidMission("invalid mission status projection");
+    }
+    this.missionID = requiredMissionID(value.mission_id, "mission_id");
+    this.state = requiredMissionState(value.state, "state");
+    this.terminal = missionBoolean(value.terminal, "terminal");
+    this.partialFailures = missionNonNegativeInteger(value.partial_failures, "partial_failures");
+    this.cancelled = missionBoolean(value.cancelled, "cancelled");
+    this.parentInvocationID = missionOptionalString(value.parent_invocation_id, "parent_invocation_id");
+    this.parentReceiptURA = missionOptionalString(value.parent_receipt_ura, "parent_receipt_ura");
+    this.parentInvocation = value.parent_invocation === null || value.parent_invocation === undefined
+      ? null
+      : objectValue(value.parent_invocation, "parent_invocation");
+    this.childInvocations = missionObjectArray(value.child_invocations, "child_invocations");
+    this.childReceipts = missionObjectArray(value.child_receipts, "child_receipts");
+    this.outputRefs = missionObjectArray(value.output_refs, "output_refs");
+    this.error = value.error ?? null;
+    this.metadata = objectValue(value.metadata, "metadata");
+    validateMissionStatus(this);
+  }
+
+  static fromJSON(raw) {
+    return new MissionStatus(parseJSON(raw, "mission status"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      mission_id: this.missionID,
+      state: this.state,
+      terminal: this.terminal,
+      partial_failures: this.partialFailures,
+      cancelled: this.cancelled,
+      parent_invocation_id: this.parentInvocationID,
+      parent_receipt_ura: this.parentReceiptURA,
+      parent_invocation: this.parentInvocation,
+      child_invocations: this.childInvocations,
+      child_receipts: this.childReceipts,
+      output_refs: this.outputRefs,
+      ...(this.error ? { error: this.error } : {}),
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class MissionRun {
+  constructor(status) {
+    this.status = status instanceof MissionStatus ? status : new MissionStatus(status);
+  }
+
+  static fromJSON(raw) {
+    return new MissionRun(MissionStatus.fromJSON(raw));
+  }
+
+  toJSON() {
+    return {
+      status: this.status.toJSON(),
+    };
+  }
+}
+
+export const MissionCancelResult = MissionStatus;
+
+export class MissionEvent {
+  constructor(fields) {
+    const value = objectValue(fields, "mission event");
+    this.profile = requiredMissionString(value.profile, "profile");
+    this.kind = requiredMissionString(value.kind, "kind");
+    if (this.profile !== MISSION_PROFILE || this.kind !== "mission_event") {
+      throw invalidMission("invalid mission event projection");
+    }
+    this.missionID = requiredMissionID(value.mission_id, "mission_id");
+    this.sequence = missionNonNegativeInteger(value.sequence, "sequence");
+    this.eventType = requiredMissionString(value.event_type, "event_type");
+    this.occurredUnixMS = missionNonNegativeInteger(value.occurred_unix_ms, "occurred_unix_ms");
+    this.terminal = missionBoolean(value.terminal, "terminal");
+    this.payload = objectValue(value.payload, "payload");
+    this.receipt = objectValue(value.receipt, "receipt");
+    this.metadata = objectValue(value.metadata, "metadata");
+  }
+
+  static fromJSON(raw) {
+    return new MissionEvent(parseJSON(raw, "mission event"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      mission_id: this.missionID,
+      sequence: this.sequence,
+      event_type: this.eventType,
+      occurred_unix_ms: this.occurredUnixMS,
+      terminal: this.terminal,
+      payload: this.payload,
+      receipt: this.receipt,
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class MissionEventPage {
+  constructor(fields) {
+    const value = objectValue(fields, "mission event page");
+    this.profile = requiredMissionString(value.profile, "profile");
+    this.kind = requiredMissionString(value.kind, "kind");
+    if (this.profile !== MISSION_PROFILE || this.kind !== "mission_event_page") {
+      throw invalidMission("invalid mission event page projection");
+    }
+    this.missionID = requiredMissionID(value.mission_id, "mission_id");
+    this.cursorSequence = missionNonNegativeInteger(value.cursor_sequence, "cursor_sequence");
+    this.nextCursorSequence = missionOptionalNonNegativeInteger(value.next_cursor_sequence, "next_cursor_sequence");
+    this.hasMore = missionBoolean(value.has_more, "has_more");
+    this.droppedCount = missionNonNegativeInteger(value.dropped_count, "dropped_count");
+    if (!Array.isArray(value.events)) {
+      throw invalidMission("mission events must be an array");
+    }
+    this.events = value.events.map((item) => new MissionEvent(item));
+    this.metadata = objectValue(value.metadata, "metadata");
+    validateMissionEventPage(this);
+  }
+
+  static fromJSON(raw) {
+    return new MissionEventPage(parseJSON(raw, "mission event page"));
+  }
+
+  toJSON() {
+    return {
+      profile: this.profile,
+      kind: this.kind,
+      mission_id: this.missionID,
+      cursor_sequence: this.cursorSequence,
+      next_cursor_sequence: this.nextCursorSequence,
+      has_more: this.hasMore,
+      dropped_count: this.droppedCount,
+      events: this.events.map((event) => event.toJSON()),
+      metadata: this.metadata,
+    };
+  }
+}
+
+export class MissionEventStream {
+  constructor(handle) {
+    if (!(handle instanceof StreamHandle)) {
+      throw invalidMission("mission event stream handle is required");
+    }
+    this.handle = handle;
+  }
+
+  get streamId() {
+    return missionOptionalString(this.handle.open.stream_id, "stream_id") ?? "";
+  }
+
+  get state() {
+    return missionOptionalString(this.handle.open.state, "state") ?? "";
+  }
+
+  async receive(options = {}) {
+    const frame = await this.handle.receive(options);
+    if (frame && typeof frame === "object" && frame.profile === MISSION_PROFILE) {
+      return new MissionEvent(frame);
+    }
+    if (frame && typeof frame === "object" && frame.payload_json !== undefined) {
+      return MissionEvent.fromJSON(frame.payload_json);
+    }
+    if (frame && typeof frame === "object" && frame.payload !== undefined) {
+      return new MissionEvent(objectValue(frame.payload, "mission event payload"));
+    }
+    throw invalidMission("mission event stream frame payload is required");
+  }
+
+  async *events(options = {}) {
+    try {
+      while (!this.handle.closed && !this.handle.terminal) {
+        const event = await this.receive(options);
+        yield event;
+        if (event.terminal) {
+          break;
+        }
+      }
+    } finally {
+      if (options.closeOnReturn !== false) {
+        await this.close();
+      }
+    }
+  }
+
+  [Symbol.asyncIterator]() {
+    return this.events();
+  }
+
+  async cancel(reason = "") {
+    return this.handle.cancel(reason);
+  }
+
+  async close() {
+    await this.handle.close();
+  }
+}
+
+export class MissionClient {
+  constructor(transport) {
+    if (!transport || typeof transport.buildRunEALInvocation !== "function") {
+      throw invalidSDK("mission transport is required");
+    }
+    this.transport = transport;
+    this.closed = false;
+  }
+
+  async buildRunEALInvocation(request) {
+    return this.buildInvocation("buildRunEALInvocation", missionRunRequest(request));
+  }
+
+  async buildRunFileInvocation(request) {
+    return this.buildInvocation("buildRunFileInvocation", missionRunFileRequest(request));
+  }
+
+  async buildTrackInvocation(request) {
+    return this.buildInvocation("buildTrackInvocation", missionTrackRequest(request));
+  }
+
+  async buildCancelInvocation(request) {
+    return this.buildInvocation("buildCancelInvocation", missionCancelRequest(request));
+  }
+
+  async buildEventsInvocation(request) {
+    return this.buildInvocation("buildEventsInvocation", missionEventsRequest(request));
+  }
+
+  async buildInvocation(method, payload) {
+    return InvocationDraft.fromJSON(await callRaw(this.requireOpen(), method, payload));
+  }
+
+  async runEAL(request) {
+    return MissionRun.fromJSON(await callRaw(this.requireOpen(), "runEAL", missionRunRequest(request)));
+  }
+
+  async runFile(request) {
+    return MissionRun.fromJSON(await callRaw(this.requireOpen(), "runFile", missionRunFileRequest(request)));
+  }
+
+  async track(request) {
+    return MissionStatus.fromJSON(await callRaw(this.requireOpen(), "track", missionTrackRequest(request)));
+  }
+
+  async cancel(request) {
+    return MissionStatus.fromJSON(await callRaw(this.requireOpen(), "cancel", missionCancelRequest(request)));
+  }
+
+  async events(request) {
+    return MissionEventPage.fromJSON(await callRaw(this.requireOpen(), "events", missionEventsRequest(request)));
+  }
+
+  async openEventStream(request) {
+    const transport = this.requireOpen();
+    if (typeof transport.openEventStream !== "function") {
+      throw invalidSDK("mission event stream transport function is required");
+    }
+    const result = await transport.openEventStream(Buffer.from(JSON.stringify(missionEventsRequest(request))));
+    if (result instanceof StreamHandle) {
+      return new MissionEventStream(result);
+    }
+    const value = objectValue(result, "mission event stream transport result");
+    return new MissionEventStream(new StreamHandle(value.transport, parseJSON(value.open, "mission event stream open")));
+  }
+
+  async projectStatus(value) {
+    return MissionStatus.fromJSON(await callMissionProjection(this.requireOpen(), "projectStatus", value));
+  }
+
+  async projectEvents(value) {
+    return MissionEventPage.fromJSON(await callMissionProjection(this.requireOpen(), "projectEvents", value));
+  }
+
+  async close() {
+    if (this.closed) {
+      return;
+    }
+    const transport = this.transport;
+    this.closed = true;
+    this.transport = null;
+    if (transport && typeof transport.close === "function") {
+      await transport.close();
+    }
+  }
+
+  requireOpen() {
+    if (this.closed || !this.transport) {
+      throw invalidSDK("mission client is closed");
     }
     return this.transport;
   }
@@ -3164,6 +3465,169 @@ function surfaceCarrierBaseFields() {
   ];
 }
 
+function missionCarrierBaseFields() {
+  return [
+    "caller_ura",
+    "callee_ura",
+    "subject_ura",
+    "descriptor_version",
+    "nonce_base64",
+    "causal_context",
+    "metadata",
+  ];
+}
+
+function missionRunRequest(value) {
+  const payload = missionRequest(
+    value,
+    [...missionCarrierBaseFields(), "source", "label"],
+    "mission run request",
+  );
+  validateMissionCarrierBase(payload);
+  requiredMissionString(payload.source, "source");
+  if (payload.label !== undefined) {
+    requiredMissionString(payload.label, "label");
+  }
+  return payload;
+}
+
+function missionRunFileRequest(value) {
+  const payload = missionRequest(
+    value,
+    [...missionCarrierBaseFields(), "path", "label"],
+    "mission run file request",
+  );
+  validateMissionCarrierBase(payload);
+  const path = requiredMissionString(payload.path, "path");
+  if (!path.startsWith("/")) {
+    throw invalidMission("absolute mission file path is required");
+  }
+  if (payload.label !== undefined) {
+    requiredMissionString(payload.label, "label");
+  }
+  return payload;
+}
+
+function missionTrackRequest(value) {
+  const payload = missionRequest(
+    value,
+    [...missionCarrierBaseFields(), "mission_id"],
+    "mission track request",
+  );
+  validateMissionCarrierBase(payload);
+  requiredMissionID(payload.mission_id, "mission_id");
+  return payload;
+}
+
+function missionCancelRequest(value) {
+  const payload = missionRequest(
+    value,
+    [...missionCarrierBaseFields(), "mission_id"],
+    "mission cancel request",
+  );
+  validateMissionCarrierBase(payload);
+  requiredMissionID(payload.mission_id, "mission_id");
+  return payload;
+}
+
+function missionEventsRequest(value) {
+  const payload = missionRequest(
+    value,
+    [...missionCarrierBaseFields(), "mission_id", "cursor_sequence", "limit"],
+    "mission events request",
+  );
+  validateMissionCarrierBase(payload);
+  requiredMissionID(payload.mission_id, "mission_id");
+  if (payload.cursor_sequence !== undefined) {
+    missionNonNegativeInteger(payload.cursor_sequence, "cursor_sequence");
+  }
+  if (payload.limit !== undefined) {
+    missionPositiveBoundedInteger(payload.limit, "limit", 1000);
+  }
+  return payload;
+}
+
+function missionRequest(value, allowed, label) {
+  const payload = objectValue(value, label);
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(payload)) {
+    if (!allowedSet.has(key)) {
+      throw invalidMission(`${key} is not a mission field`);
+    }
+  }
+  for (const [key, raw] of Object.entries(payload)) {
+    if (typeof raw === "string" && raw.trim() !== raw) {
+      throw invalidMission(`${key} must not contain surrounding whitespace`);
+    }
+  }
+  return payload;
+}
+
+function validateMissionCarrierBase(payload) {
+  requiredMissionURA(payload.caller_ura, "caller_ura");
+  requiredMissionURA(payload.callee_ura, "callee_ura");
+  requiredMissionURA(payload.subject_ura, "subject_ura");
+  requiredMissionString(payload.descriptor_version, "descriptor_version");
+  requiredMissionString(payload.nonce_base64, "nonce_base64");
+  objectValue(payload.causal_context, "causal_context");
+  if (payload.metadata !== undefined) {
+    objectValue(payload.metadata, "metadata");
+  }
+}
+
+function validateMissionStatus(status) {
+  if (status.childReceipts.length > 0 && !status.parentReceiptURA) {
+    throw invalidMission("child receipts require a parent receipt anchor");
+  }
+  for (const receipt of status.childReceipts) {
+    requiredMissionString(receipt.receipt_ura, "receipt_ura");
+    requiredMissionString(receipt.receipt_hash, "receipt_hash");
+  }
+  for (const child of status.childInvocations) {
+    if (child.receipt !== undefined && child.receipt !== null) {
+      objectValue(child.receipt, "child receipt");
+    }
+  }
+}
+
+function validateMissionEventPage(page) {
+  if (page.nextCursorSequence !== null && page.nextCursorSequence < page.cursorSequence) {
+    throw invalidMission("next_cursor_sequence must not go backwards");
+  }
+  let previous = null;
+  for (const event of page.events) {
+    if (event.missionID !== page.missionID) {
+      throw invalidMission("mission event page mission_id mismatch");
+    }
+    if (previous !== null && event.sequence <= previous) {
+      throw invalidMission("mission events must be strictly ordered by sequence");
+    }
+    previous = event.sequence;
+  }
+}
+
+function callMissionProjection(transport, method, value) {
+  if (typeof transport[method] !== "function") {
+    throw invalidSDK(`${method} transport function is required`);
+  }
+  if (value instanceof MissionStatus || value instanceof MissionEventPage) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value.toJSON()))));
+  }
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (typeof value === "string") {
+    if (value.trim() === "") {
+      throw invalidMission("mission projection JSON is required");
+    }
+    return Promise.resolve(transport[method](Buffer.from(value)));
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Promise.resolve(transport[method](Buffer.from(JSON.stringify(value))));
+  }
+  throw invalidMission("mission projection must be bytes, string, or object");
+}
+
 function compatibilityCarrierBaseFields() {
   return [
     "caller_ura",
@@ -3886,6 +4350,82 @@ function surfacePositiveBoundedInteger(value, field, max) {
     throw invalidSurface(`${field} exceeds bounds`);
   }
   return value;
+}
+
+function requiredMissionString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw invalidMission(`${field} is required`);
+  }
+  return value;
+}
+
+function missionOptionalString(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw invalidMission(`${field} must be a string or null`);
+  }
+  return value;
+}
+
+function requiredMissionURA(value, field) {
+  const text = requiredMissionString(value, field);
+  if (!text.startsWith("easynet:///r/")) {
+    throw invalidMission(`${field} must be a URA`);
+  }
+  return text;
+}
+
+function requiredMissionID(value, field) {
+  const text = requiredMissionString(value, field);
+  if (/[\\/]/.test(text)) {
+    throw invalidMission(`${field} must not be path-like`);
+  }
+  return text;
+}
+
+function requiredMissionState(value, field) {
+  const text = requiredMissionString(value, field);
+  if (!["running", "ok", "partial", "error", "cancelled"].includes(text)) {
+    throw invalidMission(`${field} is not a mission state`);
+  }
+  return text;
+}
+
+function missionBoolean(value, field) {
+  if (typeof value !== "boolean") {
+    throw invalidMission(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function missionNonNegativeInteger(value, field) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw invalidMission(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function missionOptionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return missionNonNegativeInteger(value, field);
+}
+
+function missionPositiveBoundedInteger(value, field, max) {
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw invalidMission(`${field} exceeds bounds`);
+  }
+  return value;
+}
+
+function missionObjectArray(value, field) {
+  if (!Array.isArray(value)) {
+    throw invalidMission(`${field} must be an array`);
+  }
+  return value.map((item) => objectValue(item, field));
 }
 
 function requiredCompatibilityString(value, field) {
@@ -5096,6 +5636,10 @@ function invalidHealth(message, details = {}) {
 
 function invalidEvents(message, details = {}) {
   return invalidProfile(EVENTS_PROFILE, "events", message, details);
+}
+
+function invalidMission(message, details = {}) {
+  return invalidProfile(MISSION_PROFILE, "mission", message, details);
 }
 
 function invalidSurface(message, details = {}) {

@@ -268,6 +268,18 @@
       "message": null
     },
     {
+      "case_id": "mission/carrier_status",
+      "profile": "mission",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null
+    },
+    {
       "case_id": "publication/resource_carriers",
       "profile": "publication",
       "status": "passed",
