@@ -13,7 +13,7 @@ method spelling.
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
 | Java/JVM | P1 | enterprise and Android-adjacent integrations | seam for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; provider transports and package stability unsupported |
-| Swift | P1 | macOS/iOS-adjacent clients | seam for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; provider transports and package stability unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, injected runtime transport, and bounded stream/bidi state; provider transports and stable release support unsupported |
 
 ## Capability Matrix
 
@@ -485,7 +485,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   behavior, Surface page carrier/projection behavior, Compatibility OpenAI
   carrier/projection behavior, Host Binding codec/hash behavior, Receipt
   projection, and Wrapper record projection. The shared conformance runner now
-  validates Rust/C ABI/Go/Python/Node action-adapter reports against every
+  validates Rust/C ABI/Go/Python/Node/Java/Swift action-adapter reports against every
   declared shared case. The aggregate cutover readiness gate now runs EasyRemote and
   backend product test smokes; broader non-P0 language coverage and per-route
   live product smoke evidence remain incomplete.

@@ -2,7 +2,7 @@
 
 ## Decision 1: Seam Before Provider
 
-Swift now has a Runtime Core seam instead of remaining a placeholder. The implementation stops at dependency-free public DTOs and injected transports because provider-backed support requires a stable daemon/C ABI adapter and conformance report.
+Swift now has a Runtime Core seam instead of remaining a placeholder. The implementation stops at dependency-free public DTOs and injected transports because provider-backed support requires a stable daemon/C ABI adapter and conformance report. Swift Package Manager metadata exists only as the package boundary for this seam.
 
 ## Decision 2: Generic Feature Discovery
 

@@ -1,27 +1,23 @@
-import Foundation
+import XCTest
+@testable import EasyNetDaemonSDK
 
-@main
-struct RuntimeCoreSeamTest {
-    static func main() async throws {
-        try await featureDiscoveryAndTypedErrors()
-        try await completeInvocationDraftAndRuntimeDispatch()
-        try await streamHistoryIsBounded()
-        try await bidiHistoryIsBounded()
-    }
-
-    static func featureDiscoveryAndTypedErrors() async throws {
+final class RuntimeCoreSeamTests: XCTestCase {
+    func testFeatureDiscoveryAndTypedErrors() async throws {
         let transport = MemoryDiscoveryTransport()
         let client = Client(transport: transport)
         let features = try await client.requireABI(4)
-        check(features.profiles["runtime_core"] == "seam", "feature profile")
+        XCTAssertEqual(features.profiles["runtime_core"], "seam")
+        await expectSDKError(.versionIncompatible) {
+            _ = try await client.requireABI(5)
+        }
         try await client.close()
         await expectSDKError(.invalidHandle) {
             _ = try await client.featureDiscovery()
         }
-        check(SDKError.validation("x", "bad").errorClass == .validation, "error class")
+        XCTAssertEqual(SDKError.validation("x", "bad").errorClass, .validation)
     }
 
-    static func completeInvocationDraftAndRuntimeDispatch() async throws {
+    func testCompleteInvocationDraftAndRuntimeDispatch() async throws {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport())
         let draft = try runtime.newInvocation()
             .withCallerURA("easynet:///r/example/agent/alice")
@@ -32,9 +28,9 @@ struct RuntimeCoreSeamTest {
             .withCausalContext("root")
             .withArgsJSON("{\"text\":\"hi\"}")
             .build()
-        check(draft.inspectTuple().descriptorRef.hasSuffix("@1.0.0"), "descriptor preserved")
+        XCTAssertTrue(draft.inspectTuple().descriptorRef.hasSuffix("@1.0.0"))
         let result = try await runtime.invoke(draft)
-        check(result.terminalState == .completed, "invoke result")
+        XCTAssertEqual(result.terminalState, .completed)
         expectSyncSDKError(.invalidArgument) {
             _ = try InvocationBuilder().withCallerURA("x").build()
         }
@@ -44,55 +40,51 @@ struct RuntimeCoreSeamTest {
         }
     }
 
-    static func streamHistoryIsBounded() async throws {
+    func testStreamHistoryIsBounded() async throws {
         let handle = StreamHandle(source: QueueStreamSource(count: StreamHandle.maxRetainedEvents + 2))
         for _ in 0..<(StreamHandle.maxRetainedEvents + 2) {
             _ = try await handle.next()
         }
-        check(handle.terminalEvent()?.error?.code == .transport, "stream typed overflow")
-        check(handle.retainedEvents().count == StreamHandle.maxRetainedEvents + 1, "stream bound")
+        XCTAssertEqual(handle.terminalEvent()?.error?.code, .transport)
+        XCTAssertEqual(handle.retainedEvents().count, StreamHandle.maxRetainedEvents + 1)
         try await handle.close()
     }
 
-    static func bidiHistoryIsBounded() async throws {
+    func testBidiHistoryIsBounded() async throws {
         let session = BidiSession(source: QueueBidiSource(count: BidiSession.maxRetainedFrames + 2))
         try await session.send(.data(0, payloadJSON: "{\"hello\":true}"))
         for _ in 0..<(BidiSession.maxRetainedFrames + 2) {
             _ = try await session.next()
         }
-        check(session.terminalFrame()?.kind == "backpressure_terminated", "bidi overflow")
-        check(session.retainedFrames().count == BidiSession.maxRetainedFrames + 1, "bidi bound")
+        XCTAssertEqual(session.terminalFrame()?.kind, "backpressure_terminated")
+        XCTAssertEqual(session.retainedFrames().count, BidiSession.maxRetainedFrames + 1)
         try await session.close()
     }
 
-    static func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
+    private func expectSyncSDKError(_ code: SDKErrorCode, _ action: () throws -> Void) {
         do {
             try action()
         } catch let error as SDKError {
-            check(error.code == code, "expected \(code), got \(error.code)")
+            XCTAssertEqual(error.code, code)
             return
         } catch {
-            fatalError("expected SDKError, got \(error)")
+            XCTFail("expected SDKError, got \(error)")
+            return
         }
-        fatalError("expected SDKError \(code)")
+        XCTFail("expected SDKError \(code)")
     }
 
-    static func expectSDKError(_ code: SDKErrorCode, _ action: () async throws -> Void) async {
+    private func expectSDKError(_ code: SDKErrorCode, _ action: () async throws -> Void) async {
         do {
             try await action()
         } catch let error as SDKError {
-            check(error.code == code, "expected \(code), got \(error.code)")
+            XCTAssertEqual(error.code, code)
             return
         } catch {
-            fatalError("expected SDKError, got \(error)")
+            XCTFail("expected SDKError, got \(error)")
+            return
         }
-        fatalError("expected SDKError \(code)")
-    }
-
-    static func check(_ condition: Bool, _ message: String) {
-        if !condition {
-            fatalError(message)
-        }
+        XCTFail("expected SDKError \(code)")
     }
 }
 

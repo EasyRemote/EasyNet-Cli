@@ -260,6 +260,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/StreamHandle.java \
   sdk/java/src/main/java/run/easynet/daemon/StreamSource.java \
   sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
+  sdk/swift/.gitignore \
+  sdk/swift/Package.swift \
   sdk/swift/README.md \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Client.swift \
@@ -267,7 +269,7 @@ for path in \
   sdk/swift/Sources/EasyNetDaemonSDK/Runtime.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/SDKError.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Stream.swift \
-  sdk/swift/Tests/RuntimeCoreSeamTest.swift \
+  sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift \
   sdk/conformance/backend-route-family-coverage.json \
   sdk/conformance/fixture-schema-bindings.json \
   sdk/conformance/sdk-parity-matrix.json \
@@ -276,6 +278,8 @@ for path in \
   sdk/conformance/runner/go-action-adapter-report.json \
   sdk/conformance/runner/python-action-adapter-report.json \
   sdk/conformance/runner/node-action-adapter-report.json \
+  sdk/conformance/runner/java-action-adapter-report.json \
+  sdk/conformance/runner/swift-action-adapter-report.json \
   sdk/python/pyproject.toml \
   sdk/python/easynet_sdk/client.py \
   sdk/python/easynet_sdk/_cabi.py \
@@ -341,6 +345,8 @@ validate_json_file sdk/conformance/runner/c-abi-action-adapter-report.json
 validate_json_file sdk/conformance/runner/go-action-adapter-report.json
 validate_json_file sdk/conformance/runner/python-action-adapter-report.json
 validate_json_file sdk/conformance/runner/node-action-adapter-report.json
+validate_json_file sdk/conformance/runner/java-action-adapter-report.json
+validate_json_file sdk/conformance/runner/swift-action-adapter-report.json
 
 schema_files=(
   invocation.schema.json
@@ -1027,7 +1033,7 @@ require_literal sdk/README.md "Node / TypeScript facade | Runtime Core seam"
 require_literal sdk/README.md "Java / JVM facade | Runtime Core seam"
 require_literal sdk/README.md "Swift facade | Runtime Core seam"
 require_literal sdk/README.md "P0 consumer cutover readiness"
-require_literal sdk/README.md "Rust/C ABI/Go/Python action-adapter reports"
+require_literal sdk/README.md "Node/Java/Swift seam action-adapter reports"
 require_literal sdk/SDK_PARITY.md "P0 consumer cutover readiness is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
 bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null
