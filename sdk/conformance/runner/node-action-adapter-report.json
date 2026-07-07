@@ -16,6 +16,18 @@
       "message": null
     },
     {
+      "case_id": "authority/mutual_exclusion",
+      "profile": "runtime_core",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node Authority projects delegated/session authority metadata, delegates minting through injected transports, preserves unrelated Invocation metadata, and rejects ambiguous authority metadata."
+    },
+    {
       "case_id": "directory/list_pagination",
       "profile": "directory_identity",
       "status": "passed",
