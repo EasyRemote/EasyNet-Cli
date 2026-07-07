@@ -2760,7 +2760,7 @@ The SDK repo MUST provide these gates before backend cutover:
 1. Golden conformance cases for Invocation JSON, URA/DescriptorRef validation,
    and Axon/daemon-obtained canonical signing material.
 2. Rust, C ABI, Go, and Python parity tests for the same Invocation fixture.
-3. ABI v3 header/export/version checks.
+3. ABI v4 header/export/version checks.
 4. SDK URA naming gate: public SDK docs, C ABI headers, FFI surfaces,
    conformance artifacts, schemas, and all maintained SDK language facades must
    not reintroduce retired address-era identifiers or aliases.
