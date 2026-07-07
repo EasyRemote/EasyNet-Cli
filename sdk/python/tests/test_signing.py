@@ -101,7 +101,8 @@ class SigningTests(unittest.TestCase):
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "causal_context": {"form": "none"},
                     "args": {},
-                    "content_type": "application/json"
+                    "content_type": "application/json",
+                    "args_digest_hex": "00"
                 },
                 "signing_material": {
                     "canonical_bytes_base64": "ZXhhbXBsZQ==",

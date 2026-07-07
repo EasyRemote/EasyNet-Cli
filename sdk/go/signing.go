@@ -534,7 +534,24 @@ func requiredDraft(fields map[string]json.RawMessage, name string) (InvocationDr
 	if !ok {
 		return InvocationDraft{}, invalidInvocation(fmt.Sprintf("%s is required", name), nil)
 	}
-	return NewInvocationDraftFromJSON(raw)
+	var tupleFields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tupleFields); err != nil {
+		return InvocationDraft{}, invalidInvocation(fmt.Sprintf("%s must be an object", name), err)
+	}
+	for _, materialField := range []string{
+		"args_digest_hex",
+		"descriptor_hash_hex",
+		"schema_hash_hex",
+		"canonical_hash_hex",
+		"expires_at_unix_ms",
+	} {
+		delete(tupleFields, materialField)
+	}
+	normalized, err := json.Marshal(tupleFields)
+	if err != nil {
+		return InvocationDraft{}, invalidInvocation(fmt.Sprintf("normalize %s: %v", name, err), err)
+	}
+	return NewInvocationDraftFromJSON(normalized)
 }
 
 func requiredSigningMaterial(fields map[string]json.RawMessage, name string) (SigningMaterial, error) {

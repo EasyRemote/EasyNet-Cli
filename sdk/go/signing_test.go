@@ -60,7 +60,8 @@ func TestPreparedInvocationRejectsMissingCanonicalBytes(t *testing.T) {
 			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 			"causal_context": {"form": "none"},
 			"args": {},
-			"content_type": "application/json"
+			"content_type": "application/json",
+			"args_digest_hex": "00"
 		},
 		"signing_material": {
 			"args_digest_hex": "00",

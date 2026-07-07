@@ -59,7 +59,9 @@ class PreparedInvocation:
         if decoded.get("submit_ready") is True:
             raise _invalid_prepared("PreparedInvocation must not be submit-ready")
 
-        draft = InvocationDraft.from_json(json.dumps(_required_object(decoded, "tuple")))
+        draft = InvocationDraft.from_json(
+            json.dumps(_prepared_tuple_object(decoded, "tuple"))
+        )
         material = _signing_material(_required_object(decoded, "signing_material"))
         if material.descriptor_ref != draft.descriptor_ref:
             raise _invalid_prepared(
@@ -512,6 +514,21 @@ def _required_object(decoded: Mapping[str, object], field_name: str) -> Mapping[
     value = decoded.get(field_name)
     if not isinstance(value, dict):
         raise _invalid_prepared(f"{field_name} must be an object")
+    return value
+
+
+def _prepared_tuple_object(
+    decoded: Mapping[str, object], field_name: str
+) -> Mapping[str, object]:
+    value = dict(_required_object(decoded, field_name))
+    for material_field in (
+        "args_digest_hex",
+        "descriptor_hash_hex",
+        "schema_hash_hex",
+        "canonical_hash_hex",
+        "expires_at_unix_ms",
+    ):
+        value.pop(material_field, None)
     return value
 
 
