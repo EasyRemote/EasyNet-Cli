@@ -19,7 +19,9 @@ use crate::daemon::plugins::manifest::{
 };
 use crate::daemon::plugins::package::SharedPluginPackage;
 
-pub use planner::{current_platform, DesktopCompanionPlan, DesktopCompanionPlanner, PlatformCompanionSpec};
+pub use planner::{
+    current_platform, DesktopCompanionPlan, DesktopCompanionPlanner, PlatformCompanionSpec,
+};
 pub use state_store::DesktopCompanionStateStore;
 pub use status::{
     boot_policy_wire, health_wire, project_state, stop_policy_wire, CompanionDesiredState,
@@ -93,12 +95,12 @@ impl DesktopCompanionManager {
     }
 
     pub fn plan_package(&self, package: &SharedPluginPackage) -> Result<DesktopCompanionPlan> {
-        self.planner
-            .plan_package(package)
-            .map_err(|reason| PluginHostError::InvalidCompanionManifest {
+        self.planner.plan_package(package).map_err(|reason| {
+            PluginHostError::InvalidCompanionManifest {
                 id: package.id().as_str().to_string(),
                 reason,
-            })
+            }
+        })
     }
 
     pub fn status_for_package(
@@ -129,7 +131,10 @@ impl DesktopCompanionManager {
         Ok(status_from_parts(plan, desired, supervisor, observation))
     }
 
-    pub fn ensure_running_after_daemon_ready(&self, packages: &[SharedPluginPackage]) -> Vec<String> {
+    pub fn ensure_running_after_daemon_ready(
+        &self,
+        packages: &[SharedPluginPackage],
+    ) -> Vec<String> {
         let mut warnings = Vec::new();
         for package in packages {
             if package.manifest().kind() != PluginKind::DesktopCompanion {
@@ -177,6 +182,25 @@ impl DesktopCompanionManager {
         }
         let after = self.status_for_plan(&plan).ok();
         action_result(&plan.package_id, "enable", before, after, true, None)
+    }
+
+    pub fn commit_package_install(
+        &self,
+        package: &SharedPluginPackage,
+    ) -> Result<serde_json::Value> {
+        let plan = self.plan_package(package)?;
+        let before = self.status_for_plan(&plan).ok();
+        self.supervisor.install(&plan)?;
+        self.supervisor.enable(&plan)?;
+        self.state_store.set_desired_state(
+            &plan.package_id,
+            &plan.package_version,
+            CompanionDesiredState::Enabled,
+            "install",
+            None,
+        )?;
+        let after = self.status_for_plan(&plan).ok();
+        action_result(&plan.package_id, "install", before, after, true, None)
     }
 
     pub fn status_json(&self, package: &SharedPluginPackage) -> Result<serde_json::Value> {
@@ -243,7 +267,8 @@ impl DesktopCompanionManager {
         let plan = self.plan_package(package)?;
         let _ = self.supervisor.stop(&plan);
         let _ = self.supervisor.remove(&plan);
-        self.state_store.remove(&plan.package_id, &plan.package_version)
+        self.state_store
+            .remove(&plan.package_id, &plan.package_version)
     }
 
     pub fn stop_for_runtime_stop(&self, packages: &[SharedPluginPackage]) -> Vec<String> {
@@ -292,7 +317,9 @@ fn status_from_parts(
         version: observation.version,
         last_seen_unix_ms: observation.last_seen_unix_ms,
         launch_method: Some(plan.spec.launch_method().to_string()),
-        error: observation.error.map(|message| json!({ "message": message })),
+        error: observation
+            .error
+            .map(|message| json!({ "message": message })),
     }
 }
 

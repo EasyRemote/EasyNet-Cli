@@ -203,7 +203,8 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 
 fn run_install(args: PackageSourceArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let record = installer.install(&args.path)?;
+    let companion_manager = DesktopCompanionManager::current();
+    let record = installer.install_with_companion_manager(&args.path, &companion_manager)?;
     output::success(&format!(
         "installed plugin {}@{}",
         record.id, record.version

@@ -49,7 +49,8 @@ impl PlatformCompanionSpec {
                 .map(|stem| app_bundle.join("Contents/MacOS").join(stem)),
             Self::Windows { exe, .. } | Self::Linux { exe, .. } => Some(exe.clone()),
         }?;
-        path.file_stem().map(|name| name.to_string_lossy().to_string())
+        path.file_stem()
+            .map(|name| name.to_string_lossy().to_string())
     }
 }
 
@@ -89,7 +90,10 @@ impl DesktopCompanionPlanner {
         &self.platform
     }
 
-    pub fn plan_package(&self, package: &SharedPluginPackage) -> Result<DesktopCompanionPlan, String> {
+    pub fn plan_package(
+        &self,
+        package: &SharedPluginPackage,
+    ) -> Result<DesktopCompanionPlan, String> {
         let manifest = package.manifest();
         let companion = manifest
             .companion()
@@ -101,11 +105,13 @@ impl DesktopCompanionPlanner {
                 launch_agent_label: macos.launch_agent_label().to_string(),
                 session: macos.session().to_string(),
             }),
-            "windows" => companion.windows().map(|windows| PlatformCompanionSpec::Windows {
-                exe: package.root().join(windows.exe()),
-                task_name: windows.task_name().to_string(),
-                session: windows.session().to_string(),
-            }),
+            "windows" => companion
+                .windows()
+                .map(|windows| PlatformCompanionSpec::Windows {
+                    exe: package.root().join(windows.exe()),
+                    task_name: windows.task_name().to_string(),
+                    session: windows.session().to_string(),
+                }),
             "linux" => companion.linux().map(|linux| PlatformCompanionSpec::Linux {
                 exe: package.root().join(linux.exe()),
                 unit_name: linux.unit_name().to_string(),

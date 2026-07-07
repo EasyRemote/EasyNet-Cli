@@ -46,11 +46,15 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
 
     fn install(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
-            return Ok(CompanionActionReport::unchanged("not a macOS companion plan"));
+            return Ok(CompanionActionReport::unchanged(
+                "not a macOS companion plan",
+            ));
         };
         let target = installed_app_path(app_bundle);
         if target.exists() {
-            return Ok(CompanionActionReport::unchanged("app bundle already installed"));
+            return Ok(CompanionActionReport::unchanged(
+                "app bundle already installed",
+            ));
         }
         copy_dir(app_bundle, &target)?;
         Ok(CompanionActionReport::changed(format!(
@@ -82,7 +86,9 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
     fn disable(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         let plist = launch_agent_path(plan)?;
         if !plist.exists() {
-            return Ok(CompanionActionReport::unchanged("LaunchAgent already absent"));
+            return Ok(CompanionActionReport::unchanged(
+                "LaunchAgent already absent",
+            ));
         }
         std::fs::remove_file(&plist).map_err(|source| PluginHostError::WriteFailed {
             path: plist.clone(),
@@ -94,7 +100,9 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
     fn remove(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         let _ = self.disable(plan);
         let PlatformCompanionSpec::Macos { app_bundle, .. } = &plan.spec else {
-            return Ok(CompanionActionReport::unchanged("not a macOS companion plan"));
+            return Ok(CompanionActionReport::unchanged(
+                "not a macOS companion plan",
+            ));
         };
         let target = installed_app_path(app_bundle);
         if target.exists() {
@@ -105,7 +113,9 @@ impl DesktopCompanionSupervisor for MacosDesktopCompanionSupervisor {
         }
         let status_file = companion_status_file(&plan.package_id);
         let _ = std::fs::remove_file(status_file);
-        Ok(CompanionActionReport::changed("removed macOS companion artifacts"))
+        Ok(CompanionActionReport::changed(
+            "removed macOS companion artifacts",
+        ))
     }
 
     fn start(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
@@ -316,10 +326,12 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
         })?;
         let from = entry.path();
         let to = target.join(entry.file_name());
-        let meta = entry.metadata().map_err(|err| PluginHostError::ReadFailed {
-            path: from.clone(),
-            source: err,
-        })?;
+        let meta = entry
+            .metadata()
+            .map_err(|err| PluginHostError::ReadFailed {
+                path: from.clone(),
+                source: err,
+            })?;
         if meta.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {

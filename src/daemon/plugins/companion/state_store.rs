@@ -60,10 +60,11 @@ impl DesktopCompanionStateStore {
         if !self.path.exists() {
             return Ok(CompanionStateToml::default());
         }
-        let body = std::fs::read_to_string(&self.path).map_err(|source| PluginHostError::ReadFailed {
-            path: self.path.clone(),
-            source,
-        })?;
+        let body =
+            std::fs::read_to_string(&self.path).map_err(|source| PluginHostError::ReadFailed {
+                path: self.path.clone(),
+                source,
+            })?;
         toml::from_str(&body).map_err(|source| PluginHostError::InvalidCompanionManifest {
             id: "state_store".to_string(),
             reason: format!("parse {}: {source}", self.path.display()),

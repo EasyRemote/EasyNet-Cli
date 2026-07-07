@@ -63,6 +63,16 @@ pub enum PluginHostError {
     InvalidRealtimeCapability { id: String, reason: String },
     #[error("plugin manifest declares invalid desktop companion for {id}: {reason}")]
     InvalidCompanionManifest { id: String, reason: String },
+    #[error(
+        "desktop companion install rollback failed for {id}@{version}: install_error={install_error}; rollback_error={rollback_error}; stale_path={stale_path}"
+    )]
+    CompanionInstallRollbackFailed {
+        id: String,
+        version: String,
+        install_error: String,
+        rollback_error: String,
+        stale_path: PathBuf,
+    },
     #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
     ControlPlaneRegistrationFailed { ability: String, reason: String },
     #[error("plugin contribution for {package} ability {ability:?} is invalid: {reason}")]
@@ -225,6 +235,22 @@ impl PartialEq for PluginHostError {
                 InvalidCompanionManifest { id: ai, reason: ar },
                 InvalidCompanionManifest { id: bi, reason: br },
             ) => ai == bi && ar == br,
+            (
+                CompanionInstallRollbackFailed {
+                    id: ai,
+                    version: av,
+                    install_error: aierr,
+                    rollback_error: arerr,
+                    stale_path: ap,
+                },
+                CompanionInstallRollbackFailed {
+                    id: bi,
+                    version: bv,
+                    install_error: bierr,
+                    rollback_error: brerr,
+                    stale_path: bp,
+                },
+            ) => ai == bi && av == bv && aierr == bierr && arerr == brerr && ap == bp,
             (
                 InvalidContribution {
                     package: ap,

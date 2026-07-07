@@ -47,7 +47,9 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
         #[cfg(target_os = "windows")]
         {
             let PlatformCompanionSpec::Windows { exe, task_name, .. } = &plan.spec else {
-                return Ok(CompanionActionReport::unchanged("not a Windows companion plan"));
+                return Ok(CompanionActionReport::unchanged(
+                    "not a Windows companion plan",
+                ));
             };
             let status = Command::new("reg")
                 .args([
@@ -85,7 +87,9 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
         #[cfg(target_os = "windows")]
         {
             let PlatformCompanionSpec::Windows { task_name, .. } = &plan.spec else {
-                return Ok(CompanionActionReport::unchanged("not a Windows companion plan"));
+                return Ok(CompanionActionReport::unchanged(
+                    "not a Windows companion plan",
+                ));
             };
             let _ = Command::new("reg")
                 .args([
@@ -108,12 +112,16 @@ impl DesktopCompanionSupervisor for WindowsDesktopCompanionSupervisor {
     fn remove(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         let _ = self.disable(plan);
         let _ = std::fs::remove_file(companion_status_file(&plan.package_id));
-        Ok(CompanionActionReport::changed("removed Windows companion state"))
+        Ok(CompanionActionReport::changed(
+            "removed Windows companion state",
+        ))
     }
 
     fn start(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
         let PlatformCompanionSpec::Windows { exe, .. } = &plan.spec else {
-            return Ok(CompanionActionReport::unchanged("not a Windows companion plan"));
+            return Ok(CompanionActionReport::unchanged(
+                "not a Windows companion plan",
+            ));
         };
         Command::new(exe)
             .spawn()

@@ -217,7 +217,10 @@ fn activate_realtime(
     .map_err(Into::into)
 }
 
-fn companion_status(args: Value, plugin_runtime_manager: &PluginRuntimeManager) -> anyhow::Result<Value> {
+fn companion_status(
+    args: Value,
+    plugin_runtime_manager: &PluginRuntimeManager,
+) -> anyhow::Result<Value> {
     let request = parse_companion_request(args, COMPANION_STATUS_ABILITY)?;
     let state = plugin_runtime_manager.state()?;
     let package = resolve_package(
@@ -287,8 +290,8 @@ fn parse_companion_request(args: Value, ability: &str) -> anyhow::Result<Compani
     if args.is_null() {
         anyhow::bail!("{ability} requires a package_id");
     }
-    let mut request: CompanionRequest =
-        serde_json::from_value(args).map_err(|err| anyhow::anyhow!("{ability} args invalid: {err}"))?;
+    let mut request: CompanionRequest = serde_json::from_value(args)
+        .map_err(|err| anyhow::anyhow!("{ability} args invalid: {err}"))?;
     request.package_id = request.package_id.trim().to_string();
     if request.package_id.is_empty() {
         anyhow::bail!("{ability} package_id must not be empty");
@@ -321,7 +324,10 @@ fn resolve_package(
         .cloned()
         .collect::<Vec<_>>();
     match matches.as_slice() {
-        [package] if package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion => {
+        [package]
+            if package.manifest().kind()
+                == crate::daemon::plugins::PluginKind::DesktopCompanion =>
+        {
             Ok(package.clone())
         }
         [package] => anyhow::bail!(
@@ -330,7 +336,9 @@ fn resolve_package(
             package.version().as_str()
         ),
         [] => anyhow::bail!("{ability}: no package found for {package_id}"),
-        _ => anyhow::bail!("{ability}: multiple package versions found for {package_id}; pass package_version"),
+        _ => anyhow::bail!(
+            "{ability}: multiple package versions found for {package_id}; pass package_version"
+        ),
     }
 }
 

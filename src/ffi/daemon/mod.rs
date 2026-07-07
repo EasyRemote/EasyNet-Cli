@@ -611,7 +611,10 @@ where
         let package_id = read_required_cstr(package_id, label, "package_id")?;
         let version = read_optional_cstr(version_or_null, label, "version_or_null")?;
         let package = resolve_companion_package(&package_id, version.as_deref(), label)?;
-        action(crate::daemon::plugins::DesktopCompanionManager::current(), package)
+        action(
+            crate::daemon::plugins::DesktopCompanionManager::current(),
+            package,
+        )
     })
 }
 
@@ -675,10 +678,12 @@ fn read_required_cstr(
     })?;
     let value = raw.trim();
     if value.is_empty() {
-        return Err(crate::daemon::plugins::PluginHostError::InvalidCompanionManifest {
-            id: label.to_string(),
-            reason: format!("{field} must not be empty"),
-        });
+        return Err(
+            crate::daemon::plugins::PluginHostError::InvalidCompanionManifest {
+                id: label.to_string(),
+                reason: format!("{field} must not be empty"),
+            },
+        );
     }
     Ok(value.to_string())
 }
@@ -714,7 +719,8 @@ fn resolve_companion_package(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [package]
-            if package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion =>
+            if package.manifest().kind()
+                == crate::daemon::plugins::PluginKind::DesktopCompanion =>
         {
             Ok(package.clone())
         }

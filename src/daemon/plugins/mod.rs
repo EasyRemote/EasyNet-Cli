@@ -89,10 +89,7 @@ fn desktop_menubar_binding() -> BuiltinPluginBinding {
         Vec::new()
     }
 
-    fn contribute(
-        _: &mut PluginContributionBuilder,
-        _: PluginRuntimeLimits,
-    ) -> Result<()> {
+    fn contribute(_: &mut PluginContributionBuilder, _: PluginRuntimeLimits) -> Result<()> {
         Ok(())
     }
 

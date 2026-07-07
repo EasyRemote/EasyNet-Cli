@@ -63,7 +63,10 @@ impl CompanionSupervisorState {
     }
 
     pub const fn is_error(self) -> bool {
-        matches!(self, Self::InstallError | Self::EnableError | Self::DisableError)
+        matches!(
+            self,
+            Self::InstallError | Self::EnableError | Self::DisableError
+        )
     }
 }
 
@@ -198,7 +201,9 @@ pub fn project_state(
         return CompanionProjectedState::Disabled;
     }
     match supervisor {
-        CompanionSupervisorState::UnsupportedPlatform => CompanionProjectedState::UnsupportedPlatform,
+        CompanionSupervisorState::UnsupportedPlatform => {
+            CompanionProjectedState::UnsupportedPlatform
+        }
         CompanionSupervisorState::UnsupportedSession => CompanionProjectedState::UnsupportedSession,
         CompanionSupervisorState::NotInstalled => CompanionProjectedState::NotInstalled,
         CompanionSupervisorState::InstalledDisabled => CompanionProjectedState::InstalledDisabled,

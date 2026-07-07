@@ -12,12 +12,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::daemon::plugins::companion::DesktopCompanionManager;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::install::state::PluginStateStore;
 pub use crate::daemon::plugins::install::state::{InstalledPluginRecord, PluginStateToml};
 use crate::daemon::plugins::install::transaction::{copy_tree, rollback_dir, txn_dir};
 use crate::daemon::plugins::install::validation::validate_installable_in_this_release;
+use crate::daemon::plugins::manifest::PluginKind;
 use crate::daemon::plugins::package::PluginPackage;
 
 const INSTALLED_DIR: &str = "installed";
@@ -35,6 +37,24 @@ impl PluginInstaller {
 
     /// Install a package from an unpacked source directory.
     pub fn install(&self, source: &Path) -> Result<InstalledPluginRecord> {
+        self.install_with_companion_commit(source, None)
+    }
+
+    /// Install a package and commit companion supervisor artifacts when the
+    /// package kind participates in the desktop companion lifecycle.
+    pub fn install_with_companion_manager(
+        &self,
+        source: &Path,
+        companion_manager: &DesktopCompanionManager,
+    ) -> Result<InstalledPluginRecord> {
+        self.install_with_companion_commit(source, Some(companion_manager))
+    }
+
+    fn install_with_companion_commit(
+        &self,
+        source: &Path,
+        companion_manager: Option<&DesktopCompanionManager>,
+    ) -> Result<InstalledPluginRecord> {
         let txn = txn_dir(&self.root, "install")?;
         copy_tree(source, &txn)?;
         let package = PluginPackage::from_installed(&txn, None)?;
@@ -65,11 +85,34 @@ impl PluginInstaller {
             path: target.clone(),
             source,
         })?;
-        let installed =
-            InstalledPluginRecord::from_package(&PluginPackage::from_installed(&target, None)?);
+        let installed_package = PluginPackage::from_installed(&target, None)?;
+        let installed = InstalledPluginRecord::from_package(&installed_package);
         if let Err(err) = self.commit_record(installed.clone()) {
             let _ = fs::remove_dir_all(&target);
             return Err(err);
+        }
+        if let Some(companion_manager) = companion_manager {
+            if installed_package.manifest().kind() == PluginKind::DesktopCompanion {
+                let shared_package = Arc::new(installed_package);
+                if let Err(err) = companion_manager.commit_package_install(&shared_package) {
+                    let install_error = err.to_string();
+                    if let Err(rollback_error) = self.rollback_failed_companion_install(
+                        &target,
+                        &installed,
+                        &shared_package,
+                        companion_manager,
+                    ) {
+                        return Err(PluginHostError::CompanionInstallRollbackFailed {
+                            id: installed.id,
+                            version: installed.version,
+                            install_error,
+                            rollback_error,
+                            stale_path: target,
+                        });
+                    }
+                    return Err(err);
+                }
+            }
         }
         Ok(installed)
     }
@@ -212,11 +255,44 @@ impl PluginInstaller {
     fn package_dir(&self, id: &str, version: &str) -> PathBuf {
         self.root.join(INSTALLED_DIR).join(id).join(version)
     }
+
+    fn rollback_failed_companion_install(
+        &self,
+        target: &Path,
+        installed: &InstalledPluginRecord,
+        package: &Arc<PluginPackage>,
+        companion_manager: &DesktopCompanionManager,
+    ) -> std::result::Result<(), String> {
+        let mut failures = Vec::new();
+        if let Err(err) = companion_manager.remove(package) {
+            failures.push(format!("companion_remove={err}"));
+        }
+        if let Err(err) = self.remove_record(&installed.id, &installed.version) {
+            failures.push(format!("state_remove={err}"));
+        }
+        if target.exists() {
+            if let Err(err) = fs::remove_dir_all(target) {
+                failures.push(format!("package_remove={err}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use crate::daemon::plugins::companion::{
+        CompanionActionReport, CompanionObservation, CompanionObservedState,
+        CompanionSessionStatus, CompanionSupervisorState, DesktopCompanionPlan,
+        DesktopCompanionPlanner, DesktopCompanionStateStore, DesktopCompanionSupervisor,
+    };
     use crate::daemon::plugins::package::tests::write_test_package;
 
     #[test]
@@ -379,6 +455,78 @@ mod tests {
                 .join("installed/test.desktop.menubar/0.1.0/dist/macos/EasyNetMenuBar.app")
                 .exists(),
             "declared app bundle must be installed"
+        );
+    }
+
+    #[test]
+    fn plugin_host_install_commits_desktop_companion_supervisor_artifacts() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), true);
+        let installer = PluginInstaller::new(root.path());
+        let (manager, calls) =
+            recording_companion_manager(root.path().join("companions/state.toml"), false);
+
+        let record = installer
+            .install_with_companion_manager(source.path(), &manager)
+            .expect("install companion with supervisor commit");
+
+        assert_eq!(record.id, "test.desktop.menubar");
+        assert_eq!(record.version, "0.1.0");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["install", "enable"],
+            "package install must commit supervisor install and enablement"
+        );
+        let companion_state = std::fs::read_to_string(root.path().join("companions/state.toml"))
+            .expect("companion desired state");
+        assert!(companion_state.contains("desired_state = \"enabled\""));
+        assert!(root
+            .path()
+            .join("installed/test.desktop.menubar/0.1.0/plugin.toml")
+            .exists());
+    }
+
+    #[test]
+    fn plugin_host_install_rolls_back_desktop_companion_package_when_supervisor_commit_fails() {
+        let root = tempfile::tempdir().expect("root");
+        let source = tempfile::tempdir().expect("source");
+        write_companion_test_package(source.path(), true);
+        let installer = PluginInstaller::new(root.path());
+        let (manager, calls) =
+            recording_companion_manager(root.path().join("companions/state.toml"), true);
+
+        let err = installer
+            .install_with_companion_manager(source.path(), &manager)
+            .expect_err("supervisor failure must abort install");
+
+        assert!(matches!(
+            err,
+            PluginHostError::InvalidCompanionManifest { .. }
+        ));
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec!["install", "enable", "stop", "remove"],
+            "failed supervisor commit must be followed by companion cleanup"
+        );
+        assert!(
+            !root
+                .path()
+                .join("installed/test.desktop.menubar/0.1.0")
+                .exists(),
+            "failed companion commit must remove the activated package directory"
+        );
+        let plugin_state =
+            std::fs::read_to_string(root.path().join("state/plugins.toml")).unwrap_or_default();
+        assert!(
+            !plugin_state.contains("test.desktop.menubar"),
+            "failed companion commit must remove the package lock row"
+        );
+        let companion_state =
+            std::fs::read_to_string(root.path().join("companions/state.toml")).unwrap_or_default();
+        assert!(
+            !companion_state.contains("test.desktop.menubar"),
+            "failed companion commit must remove desired companion state"
         );
     }
 
@@ -604,6 +752,93 @@ layer = "control"
             test_descriptor("test.declarative_mcp"),
         )
         .expect("descriptor");
+    }
+
+    fn recording_companion_manager(
+        state_path: PathBuf,
+        fail_enable: bool,
+    ) -> (DesktopCompanionManager, Arc<Mutex<Vec<&'static str>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let supervisor = RecordingCompanionSupervisor {
+            fail_enable,
+            calls: calls.clone(),
+        };
+        (
+            DesktopCompanionManager::new(
+                DesktopCompanionPlanner::new("macos"),
+                Box::new(supervisor),
+                DesktopCompanionStateStore::new(state_path),
+            ),
+            calls,
+        )
+    }
+
+    struct RecordingCompanionSupervisor {
+        fail_enable: bool,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingCompanionSupervisor {
+        fn record(&self, action: &'static str) {
+            self.calls.lock().expect("calls").push(action);
+        }
+    }
+
+    impl DesktopCompanionSupervisor for RecordingCompanionSupervisor {
+        fn platform(&self) -> &'static str {
+            "macos"
+        }
+
+        fn probe_session(&self) -> CompanionSessionStatus {
+            CompanionSessionStatus::Available
+        }
+
+        fn install(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("install");
+            Ok(CompanionActionReport::changed("installed"))
+        }
+
+        fn enable(&self, plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("enable");
+            if self.fail_enable {
+                return Err(PluginHostError::InvalidCompanionManifest {
+                    id: plan.package_id.clone(),
+                    reason: "injected supervisor failure".to_string(),
+                });
+            }
+            Ok(CompanionActionReport::changed("enabled"))
+        }
+
+        fn disable(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("disable");
+            Ok(CompanionActionReport::changed("disabled"))
+        }
+
+        fn remove(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("remove");
+            Ok(CompanionActionReport::changed("removed"))
+        }
+
+        fn start(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("start");
+            Ok(CompanionActionReport::changed("started"))
+        }
+
+        fn stop(&self, _plan: &DesktopCompanionPlan) -> Result<CompanionActionReport> {
+            self.record("stop");
+            Ok(CompanionActionReport::changed("stopped"))
+        }
+
+        fn supervisor_state(&self, _plan: &DesktopCompanionPlan) -> CompanionSupervisorState {
+            CompanionSupervisorState::InstalledEnabled
+        }
+
+        fn observe(&self, _plan: &DesktopCompanionPlan) -> CompanionObservation {
+            CompanionObservation {
+                observed_state: CompanionObservedState::NotRunning,
+                ..CompanionObservation::default()
+            }
+        }
     }
 
     fn write_executable(path: impl AsRef<Path>, body: &str) {
